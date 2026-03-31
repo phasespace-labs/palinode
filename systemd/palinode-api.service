@@ -1,0 +1,19 @@
+[Unit]
+Description=Palinode API Server (FastAPI)
+After=network.target
+
+[Service]
+Type=simple
+User=user
+Group=user
+WorkingDirectory=/path/to/palinode
+Environment="PALINODE_DIR=/path/to/palinode"
+Environment="OLLAMA_URL=http://localhost:11434"
+Environment="EMBEDDING_MODEL=bge-m3"
+
+ExecStart=/path/to/palinode/venv/bin/uvicorn palinode.api.server:app --host 127.0.0.1 --port 6340
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

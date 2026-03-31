@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "palinode"
+version = "0.5.0"
+description = "Persistent memory that makes AI agents smarter over time."
+authors = [
+  {name = "Paul Kyle"}
+]
+readme = "README.md"
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "sqlite-vec",
+    "watchdog",
+    "pyyaml",
+    "httpx",
+    "python-frontmatter",
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "mcp"
+]
+
+[project.urls]
+"Homepage" = "https://github.com/Paul-Kyle/palinode"
+
+[project.scripts]
+palinode-watcher = "palinode.indexer.watcher:main"
+palinode-api = "palinode.api.server:main"
+palinode-cli = "palinode.cli:main"
+palinode-mcp = "palinode.mcp:main"
+
+[tool.setuptools]
+packages = ["palinode", "palinode.core", "palinode.indexer", "palinode.api", "palinode.ingest", "palinode.consolidation", "palinode.migration"]

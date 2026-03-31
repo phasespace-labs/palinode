@@ -1,0 +1,332 @@
+# =============================================================================
+# Palinode Configuration
+# =============================================================================
+# Copy this file to `palinode.config.yaml` in your Palinode directory.
+# All values shown are defaults — only override what you need.
+
+# -----------------------------------------------------------------------------
+# Memory Directory
+# -----------------------------------------------------------------------------
+# Where Palinode stores markdown memory files and the SQLite-vec index.
+# All paths below are relative to this directory unless absolute.
+memory_dir: "~/palinode"
+
+# SQLite-vec database location (relative to memory_dir)
+db_path: ".palinode.db"
+
+# -----------------------------------------------------------------------------
+# Recall (Context Injection)
+# -----------------------------------------------------------------------------
+# Controls what gets injected into the agent's context each turn.
+recall:
+  enabled: true
+
+  # Phase 1: Core memory (files with `core: true` in frontmatter)
+  core:
+    # Maximum characters per core file before truncation
+    max_chars_per_file: 3000
+    # Maximum total characters for all core files combined
+    max_total_chars: 8000
+    # Directories to scan for core files
+    directories:
+      - people
+      - projects
+      - decisions
+      - insights
+
+  # Tiered injection to save tokens on non-first turns
+  tiering:
+    # Turn 1: full core content. Full core re-injected every N turns.
+    # Primary trigger: full core is always injected on turn 1 AND after
+    # any session compaction (context was summarized, injection was lost).
+    # The turn counter is a last-resort fallback if compaction hooks fail.
+    full_refresh_every_n_turns: 200   # Fallback only — set high, compaction hook is primary
+    # What to inject on turns between full refreshes:
+    #   "none"    — skip core entirely (default). Model has it from turn 1.
+    #              Saves ~200 tokens/turn. Works because context persists until compaction.
+    #   "summary" — inject one-line summaries of core files (~200 tokens).
+    #   "full"    — inject full core every turn (~2K tokens). Very expensive.
+    mid_turn_mode: "none"
+    # If mid_turn_mode is "summary": skip files without a summary: field
+    skip_unsummarized: true
+
+  # Phase 2: Semantic search based on user's message
+  search:
+    enabled: true
+    # Number of results to inject
+    top_k: 3
+    # Maximum characters per search result chunk
+    max_chars_per_chunk: 500
+    # Similarity threshold (0.0 = everything, 1.0 = exact match)
+    threshold: 0.4
+    # Skip search for messages shorter than this (trivial acks)
+    min_query_length: 15
+    # Skip search for these exact messages (case-insensitive)
+    trivial_patterns:
+      - "ok"
+      - "yep"
+      - "sure"
+      - "thanks"
+      - "thx"
+      - "cool"
+      - "got it"
+      - "nice"
+      - "lol"
+      - "k"
+      - "np"
+
+# -----------------------------------------------------------------------------
+# Capture (Session-End Extraction)
+# -----------------------------------------------------------------------------
+capture:
+  enabled: true
+
+  # Session-end extraction
+  extraction:
+    # Maximum memories to extract per session
+    max_items_per_session: 5
+    # Minimum session turns before extraction fires
+    min_turns: 3
+    # Memory types to auto-extract
+    types:
+      - Decision
+      - ProjectSnapshot
+      - Insight
+      - PersonMemory
+      - ActionItem
+
+  # Daily notes (session logging)
+  daily:
+    enabled: true
+    # Max recent messages to append to daily notes
+    max_messages: 10
+    # Max total characters per session append
+    max_chars: 2000
+
+  # -es quick capture flag
+  quick_capture:
+    enabled: true
+    # Minimum input length for -es to fire
+    min_chars: 5
+    # Chars above which text is treated as ResearchRef
+    long_text_threshold: 500
+
+# -----------------------------------------------------------------------------
+# Ingestion Pipeline
+# -----------------------------------------------------------------------------
+ingestion:
+  # Inbox directory for dropped files (relative to memory_dir)
+  inbox_dir: "inbox/raw"
+  processed_dir: "inbox/processed"
+
+  # Maximum characters to extract from PDFs
+  pdf_max_chars: 10000
+  # Maximum characters to extract from URLs
+  url_max_chars: 10000
+
+  # Transcriptor API for audio/video files
+  transcriptor:
+    url: "http://localhost:8787"
+    timeout_seconds: 600
+
+# -----------------------------------------------------------------------------
+# Embeddings
+# -----------------------------------------------------------------------------
+embeddings:
+  # Primary embedding backend (used for all core memory)
+  primary:
+    provider: "ollama"
+    model: "bge-m3"
+    url: "http://localhost:11434"
+    dimensions: 1024
+    # Timeout for first call (model loading)
+    timeout_seconds: 120
+    connect_timeout_seconds: 10
+
+  # Secondary embedding backend (used for research ingestion)
+  # Set enabled: false to use primary for everything
+  research:
+    enabled: false
+    provider: "gemini"
+    model: "gemini-embedding-2-preview"
+    dimensions: 768
+    # API key from environment: GEMINI_API_KEY
+    timeout_seconds: 30
+
+# -----------------------------------------------------------------------------
+# Auto-Summary
+# -----------------------------------------------------------------------------
+auto_summary:
+  enabled: true
+  # Model used for generating summaries (should be fast and small)
+  model: "llama3.2:3b"
+  # Maximum summary length in characters
+  max_chars: 120
+  # Minimum content length to trigger summary generation
+  min_content_chars: 200
+  # Ollama URL for summary generation (uses embeddings.primary.url if not set)
+  # ollama_url: "http://localhost:11434"
+
+# -----------------------------------------------------------------------------
+# Search Defaults
+# -----------------------------------------------------------------------------
+search:
+  # Hybrid search combines vector similarity with BM25 keyword matching.
+  # This catches exact terms (model names, IDs, code) that vectors miss.
+  hybrid_enabled: true
+  # Balance: 0.0 = vector only, 1.0 = BM25 only, 0.5 = equal weight
+  hybrid_weight: 0.5
+  # Default threshold for MCP server searches (lower = more results)
+  mcp_threshold: 0.4
+  # Default threshold for FastAPI searches (higher = more precision)
+  api_threshold: 0.6
+  # Default number of results
+  default_limit: 10
+  # Status values to exclude from search results
+  exclude_status:
+    - "archived"
+
+# -----------------------------------------------------------------------------
+# Consolidation (Phase 2 — not yet implemented)
+# -----------------------------------------------------------------------------
+consolidation:
+  enabled: true
+  # Cron expression for weekly consolidation
+  schedule: "0 3 * * 0"  # Sunday 3am UTC
+  # How many days of daily notes to process
+  lookback_days: 7
+  # Maximum daily files to process per run
+  max_files: 30
+  # LLM API for consolidation
+  llm_url: "http://localhost:8000"  # vLLM or other OpenAI-compatible server
+  # llm_model: path to model or model identifier for your LLM backend
+  # Examples:
+  #   vLLM:  "http://localhost:8000" (set via VLLM_BASE_URL env var instead)
+  #   Ollama: "llama3.1:8b"
+  llm_model: "/model"
+  llm_temperature: 0.3
+  llm_max_tokens: 2000
+
+# -----------------------------------------------------------------------------
+# Compaction
+# -----------------------------------------------------------------------------
+compaction:
+  allowed_ops: ["KEEP", "UPDATE", "MERGE", "SUPERSEDE", "ARCHIVE"]
+  aggressiveness: "moderate"  # conservative | moderate | aggressive
+
+  # Layer split heuristics — these keywords classify ## section headings
+  # into Identity (slow-changing) vs Status (fast-changing) layers.
+  #
+  # HOW THESE WERE DETERMINED:
+  # Initial guesses based on common markdown heading conventions.
+  # Not scientifically derived — tune them to match your actual file structure.
+  #
+  # HOW TO EVOLVE THEM:
+  # 1. Run: curl -X POST http://localhost:6340/split-layers
+  # 2. Run: git -C ~/palinode-data diff  (see what was classified)
+  # 3. Add/remove keywords below to correct misclassifications
+  # 4. Or: add `layer_hint: status` to a file's frontmatter to force-override
+  #
+  layer_split:
+    identity_keywords:
+      - "architecture"
+      - "context"
+      - "people"
+      - "canon"
+      - "what this is"
+      - "key decisions"
+      - "overview"
+      - "about"
+      - "design"
+      - "stack"
+      - "key files"
+      - "follow-up"
+      - "who"
+      - "background"
+      - "principles"
+    status_keywords:
+      - "current"
+      - "status"
+      - "milestone"
+      - "active"
+      - "this week"
+      - "open"
+      - "consolidation log"
+      - "todo"
+      - "in progress"
+      - "recent"
+      - "progress"
+      - "now"
+      - "today"
+      - "next"
+      - "blocking"
+    # Fallback: sections with a date like 2026-03-29 → Status
+    date_pattern: "\\d{4}-\\d{2}-\\d{2}"
+
+# -----------------------------------------------------------------------------
+# Temporal Decay
+# -----------------------------------------------------------------------------
+# Time constants (tau) in days describing how fast memories decay
+decay:
+  enabled: false
+  # Core unchanging facts
+  tau_critical: 180
+  # Significant architectural decisions
+  tau_decisions: 60
+  # General insights and observations
+  tau_insights: 90
+  # Default standard notes
+  tau_general: 30
+  # Weekly statuses and ephemeral updates
+  tau_status: 7
+  # Daily logs not meant for long term without consolidation
+  tau_ephemeral: 1
+
+# -----------------------------------------------------------------------------
+# Services
+# -----------------------------------------------------------------------------
+services:
+  # FastAPI server
+  api:
+    host: "127.0.0.1"  # SECURITY: bind to localhost only. Set to 0.0.0.0 only if you need LAN access.
+    port: 6340
+    log_level: "INFO"
+
+  # File watcher daemon
+  watcher:
+    # Debounce: ignore rapid file changes within this window
+    debounce_seconds: 1.0
+
+# -----------------------------------------------------------------------------
+# Security
+# -----------------------------------------------------------------------------
+security:
+  # YAML file with regex patterns to scrub before context injection
+  scrub_patterns_file: "specs/scrub-patterns.yaml"
+  # If true, never include file paths containing these strings in search results
+  # (defense in depth — scrub_patterns handles content, this handles file selection)
+  exclude_paths:
+    - ".secrets"
+    - "credentials"
+    - "passwords"
+
+# -----------------------------------------------------------------------------
+# Git Integration
+# -----------------------------------------------------------------------------
+git:
+  # Auto-commit after saves
+  auto_commit: true
+  # Auto-push after commits (requires remote configured)
+  auto_push: false
+  # Commit message prefix
+  commit_prefix: "palinode"
+
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
+logging:
+  level: "INFO"
+  # JSONL operation log (relative to memory_dir)
+  operations_log: "logs/operations.jsonl"
+  # Log to stdout as well
+  console: true

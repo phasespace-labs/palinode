@@ -1,0 +1,19 @@
+[Unit]
+Description=Palinode File Watcher & Indexer Daemon
+After=network.target
+
+[Service]
+Type=simple
+User=user
+Group=user
+WorkingDirectory=/path/to/palinode
+Environment="PALINODE_DIR=/path/to/palinode"
+Environment="OLLAMA_URL=http://localhost:11434"
+Environment="EMBEDDING_MODEL=bge-m3"
+
+ExecStart=/path/to/palinode/venv/bin/python -m palinode.indexer.watcher
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

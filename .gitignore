@@ -1,0 +1,39 @@
+# ============================================================
+# PRIVATE DATA — never commit to public repo
+# ============================================================
+# Memory directories contain personal data. They stay local only.
+people/
+projects/
+decisions/
+insights/
+daily/
+archive/
+inbox/
+migration/
+research/
+
+# ============================================================
+# Derived / Operational
+# ============================================================
+# Rebuildable from files
+.palinode.db
+.palinode.db-journal
+.palinode.db-wal
+.palinode.db-shm
+.engram.db
+
+# Logs
+logs/
+server.log
+nohup.out
+
+# OS
+.DS_Store
+
+# Build artifacts
+plugin/node_modules/
+plugin/dist/
+palinode.egg-info/
+__pycache__/
+*.pyc
+venv/
