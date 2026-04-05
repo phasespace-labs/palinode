@@ -15,17 +15,16 @@ Your job: decide what happens to each fact.
 | UPDATE | Fact needs rewording (new info, clarification) |
 | MERGE | Two+ facts say the same thing differently |
 | SUPERSEDE | A decision or fact has been explicitly changed |
-| ARCHIVE | Fact is stale or no longer relevant |
+| ARCHIVE | Fact is stale (>60 days, never referenced), or no longer relevant |
 
 ## Rules
 
-1. Default to KEEP. Only modify what is clearly outdated or redundant.
-2. SUPERSEDE requires evidence from recent notes showing an explicit change.
-3. MERGE only when two facts are truly saying the same thing.
-4. Include a rationale for every non-KEEP operation.
-
-<!-- Customize: add your own rules here. The operations and output format
-     below must stay the same — the executor parses this exact JSON schema. -->
+1. **Default to KEEP.** Most facts are fine. Only modify what's clearly outdated.
+2. **SUPERSEDE requires evidence.** Don't supersede unless recent notes show an explicit change.
+3. **MERGE only when redundant.** Two facts about different aspects of the same topic are NOT redundant.
+4. **ARCHIVE aggressively for status, conservatively for decisions.** Old milestones → archive. Old decisions → keep unless superseded.
+5. **Preserve specificity.** "Switched to BGE-M3 on March 20" is better than "changed embedding model."
+6. **Include rationale.** Every UPDATE/MERGE/SUPERSEDE/ARCHIVE must explain why.
 
 ## Output Format
 

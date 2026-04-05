@@ -126,6 +126,7 @@ graph TD
 | CLI | Click (wraps REST API) | Agents, scripts, cron — 8x fewer tokens than MCP |
 | MCP | Python MCP SDK (stdio) | IDEs only (Claude Desktop, Antigravity, Cursor) |
 | Plugin | OpenClaw Plugin SDK | Lifecycle hooks for session inject/extract |
+| Behavior | [`PROGRAM.md`](PROGRAM.md) | What to remember, how to extract, consolidation rules |
 | Config | `palinode.config.yaml` | All settings — models, endpoints, search, consolidation schedule |
 
 ---
