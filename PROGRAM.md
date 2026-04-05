@@ -42,14 +42,14 @@ Extract only things that will be useful **across sessions** — facts that a fut
 
 **Project state changes** — status shifts, milestones reached, blockers discovered, architecture changes. Not every line of work — the *transitions*.
 
-- *Example:* "M5 Phase 1 voice LoRAs complete. All 9 adapters trained and deployed on vLLM." → ProjectSnapshot update.
-- *Example:* "Week 7 class: round-tripping didn't happen, pushed to Week 8. Lookbook presentations happened instead." → ProjectSnapshot update for color-class.
+- *Example:* "Phase 1 voice LoRAs complete. All 9 adapters trained and deployed." → ProjectSnapshot update.
+- *Example:* "Week 7 class: round-tripping didn't happen, pushed to Week 8. Presentations happened instead." → ProjectSnapshot update.
 - *Example:* "QC MCP was down — forgot to restart after updates. Back online now." → Infrastructure status change.
 
 **Lessons learned** — things that prevent repeating mistakes.
 
 - *Example:* "Curation > volume for LoRA training. 90 curated Thomas samples >> 1,623 raw Mary samples." → Insight.
-- *Example:* "Don't inject speech_style or dialogue_rules.yaml into agent prompts — crashed beat fire from 76% to 5%." → Insight (MM-KMD specific).
+- *Example:* "Don't inject style rules directly into agent prompts — broke the scoring pipeline from 76% to 5%." → Insight.
 - *Example:* "Mem0 autorecall at 0.5 threshold gives trash results. Trying 0.7." → Insight about tooling.
 
 **Commitments and action items** — things promised to people, deadlines agreed to, follow-ups needed.
@@ -61,19 +61,19 @@ Extract only things that will be useful **across sessions** — facts that a fut
 
 **Preferences** — but only when explicitly stated or clearly demonstrated over multiple sessions.
 
-- *Example:* "Alice uses Antigravity IDE + Gemini 3.1 Pro (High) as default for executing milestone build specs." → Preference (tool + workflow).
+- *Example:* "Uses VS Code + Claude as default for executing milestone build specs." → Preference (tool + workflow).
 - *Example:* "Don't comment on time of day or suggest quitting." → Preference (communication). Already known — likely NOOP.
-- *NOT example:* Paul used vim once in a session → don't infer "prefers vim." Single instances aren't preferences.
+- *NOT example:* The user used vim once in a session → don't infer "prefers vim." Single instances aren't preferences.
 
 **Technical context** — extract when it represents a *decision*, not just mentioned in passing.
 
-- *Example:* "vLLM running on 5090 with --max-loras 4 --max-lora-rank 16. OOM at 12×r64." → Decision about infrastructure config.
+- *Example:* "Model server running with --max-loras 4 --max-lora-rank 16. OOM at 12×r64." → Decision about infrastructure config.
 - *NOT example:* "Running `git status`" → not a memory.
 
 **Creative direction** — for projects where narrative/artistic choices carry weight.
 
-- *Example:* "Level 3 identity: rich narrative identity where speech patterns are implied, no instructions needed. YAML=DNA, AI=Life." → Decision about MM-KMD character design philosophy.
-- *Example:* "Student from Bollywood described her own chromophobia — anxiety about using color in Western film school context." → Insight from color class.
+- *Example:* "Level 3 identity: rich narrative identity where speech patterns are implied, no instructions needed." → Decision about character design philosophy.
+- *Example:* "Student described her own chromophobia — anxiety about using color in a Western film school context." → Insight from class.
 
 ### Never extract
 
@@ -120,7 +120,7 @@ id: person-{slug}
 category: person
 name: Full Name
 aliases: [nickname, shortened]
-role: their relationship to Paul
+role: their relationship to the user
 core: false  # set true for inner circle
 entities: [project/related-project]
 last_contact: 2026-03-22
@@ -129,7 +129,7 @@ last_updated: 2026-03-22T16:00:00Z
 # Full Name
 
 ## Context
-Who they are, how Paul knows them, what their role is.
+Who they are, how the user knows them, what their role is.
 
 ## Preferences & Communication
 How they like to work, communication style, things to remember.
@@ -170,8 +170,8 @@ Who's involved and what their role is. Link to person files.
 Key technical or structural decisions that shape how work gets done.
 (Only for technical projects. Update when architecture changes, not every session.)
 - LangGraph StateGraph for orchestration
-- Ollama for M0-M4, vLLM for M5
-- Tension-based steering (DiriGent-inspired)
+- Ollama for dev, vLLM for production
+- Custom steering logic
 
 ## Status
 Current state in 2-3 sentences. (Updated by consolidation weekly.)
@@ -251,7 +251,7 @@ Action items are not standalone files. They're checkboxes in the relevant person
 ```markdown
 ## Follow-ups
 - [ ] Send Alice the new checkout flow (due: 2026-03-25)
-- [x] Review M5 Phase 1 voice LoRA results ~~(done 2026-03-20)~~
+- [x] Review Phase 1 model fine-tune results ~~(done 2026-03-20)~~
 ```
 
 ### ResearchRef → `research/{date}-{slug}.md`
@@ -275,7 +275,7 @@ last_updated: 2026-03-22T16:00:00Z
 - Bullet list of the important takeaways.
 
 ## Relevance
-Why this matters for Paul's work.
+Why this matters for the user's work.
 ```
 
 ---
@@ -333,7 +333,7 @@ Feed all recent notes to a pattern-detection pass:
 
 - Look for: recurring themes, repeated frustrations, things mentioned 3+ times across different contexts
 - Each pattern → an Insight with evidence_refs
-- "You've mentioned context window limitations across MM-KMD, Palinode, and class prep — this is a pattern"
+- "You've mentioned context window limitations across three different projects — this is a pattern"
 
 ### Entity maintenance
 
@@ -388,7 +388,7 @@ A bad memory is:
 - Vague ("we talked about the project")
 - Duplicate (already in another file with the same content)
 - Ephemeral (true today, irrelevant tomorrow, with no lasting value)
-- Unlinked (mentions Peter but no entity reference — invisible to cross-reference)
+- Unlinked (mentions a person but no entity reference — invisible to cross-reference)
 
 ---
 
@@ -427,8 +427,8 @@ PROGRAM.md defines behavior
 PROGRAM.md is not a static document. It's the experiment log for memory behavior. Every edit to this file should include a comment explaining what changed and why:
 
 ```markdown
-<!-- 2026-04-15: Added "infrastructure state" to Sometimes Extract after 3 sessions 
-     where vLLM/Ollama config changes weren't captured and had to be re-explained -->
+<!-- 2026-04-15: Added "infrastructure state" to Sometimes Extract after 3 sessions
+     where model server config changes weren't captured and had to be re-explained -->
 ```
 
 This turns PROGRAM.md into a history of how the memory system learned to think — the same way Karpathy's `results.tsv` tracks how the training code evolved.
