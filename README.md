@@ -434,6 +434,37 @@ embeddings:
 
 See [palinode.config.yaml.example](palinode.config.yaml.example) for the complete reference with all defaults.
 
+### Swapping Models
+
+All models are configured in `palinode.config.yaml`. No code changes needed.
+
+**Embeddings** — any Ollama model that outputs vectors:
+```yaml
+embeddings:
+  primary:
+    provider: ollama
+    model: bge-m3              # or nomic-embed-text, mxbai-embed-large, etc.
+    url: http://localhost:11434
+```
+
+**Consolidation LLM** — any OpenAI-compatible endpoint (Ollama, vLLM, OpenRouter):
+```yaml
+consolidation:
+  llm_model: "llama3.1:8b"              # any chat model that outputs JSON
+  llm_url: "http://localhost:11434"      # Ollama, vLLM, or any OpenAI-compat server
+
+  # Optional fallback chain — tried in order if primary fails
+  llm_fallbacks:
+    - model: "qwen2.5:14b-instruct"
+      url: "http://localhost:11434"
+    - model: "llama3.1:8b"
+      url: "http://backup-server:11434"
+```
+
+**Consolidation prompts** — `specs/prompts/compaction.md` and `specs/prompts/update.md` define how the LLM makes compaction decisions. The included starters work out of the box; customize the rules to tune behavior for your use case.
+
+> Smaller models (7-8B) work but may produce less reliable JSON for compaction operations. The `json-repair` library (included) catches most malformed output. 14B+ models are recommended for production consolidation.
+
 ---
 
 ## Tools

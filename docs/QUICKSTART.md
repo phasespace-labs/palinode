@@ -155,6 +155,7 @@ Content here.
 ├── insights/*.md           ← lessons learned
 ├── research/*.md           ← reference material
 ├── daily/*.md              ← session logs
+├── specs/prompts/*.md      ← consolidation prompts (customizable)
 └── palinode.config.yaml    ← all settings (models, search, consolidation)
 ```
 

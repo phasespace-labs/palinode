@@ -187,25 +187,38 @@ search:
     - "archived"
 
 # -----------------------------------------------------------------------------
-# Consolidation (Phase 2 — not yet implemented)
+# Consolidation (Weekly Memory Compaction)
 # -----------------------------------------------------------------------------
+# The LLM proposes operations (KEEP/UPDATE/MERGE/SUPERSEDE/ARCHIVE) as JSON.
+# A deterministic executor applies them. The LLM never touches your files directly.
+#
+# Prompts: specs/prompts/compaction.md and specs/prompts/update.md
+# Customize the prompts to tune compaction behavior for your use case.
 consolidation:
   enabled: true
   # Cron expression for weekly consolidation
-  schedule: "0 3 * * 0"  # Sunday 3am UTC
+  schedule: "0 3 * * 0"  # Sunday 3am
   # How many days of daily notes to process
   lookback_days: 7
   # Maximum daily files to process per run
   max_files: 30
-  # LLM API for consolidation
-  llm_url: "http://localhost:8000"  # vLLM or other OpenAI-compatible server
-  # llm_model: path to model or model identifier for your LLM backend
-  # Examples:
-  #   vLLM:  "http://localhost:8000" (set via VLLM_BASE_URL env var instead)
-  #   Ollama: "llama3.1:8b"
-  llm_model: "/model"
+
+  # --- Primary LLM (used for compaction and update decisions) ---
+  # Any OpenAI-compatible endpoint works: Ollama, vLLM, OpenRouter, etc.
+  llm_model: "llama3.1:8b"
+  llm_url: "http://localhost:11434"    # Ollama default
   llm_temperature: 0.3
   llm_max_tokens: 2000
+
+  # --- Fallback chain (optional) ---
+  # If the primary model fails, try these in order. Each entry needs
+  # both `model` and `url`. Remove this section to disable fallbacks.
+  #
+  # llm_fallbacks:
+  #   - model: "qwen2.5:14b-instruct"
+  #     url: "http://localhost:11434"
+  #   - model: "llama3.1:8b"
+  #     url: "http://backup-server:11434"
 
 # -----------------------------------------------------------------------------
 # Compaction
