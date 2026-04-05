@@ -6,7 +6,7 @@
 
 ## Decision
 
-Palinode's primary value is its **14 MCP tools + file-based storage + git versioning**, not its 4-phase injection pipeline. The pipeline is scaffolding for current models. The tools survive any model upgrade.
+Palinode's primary value is its **17 MCP tools + file-based storage + git versioning**, not its 4-phase injection pipeline. The pipeline is scaffolding for current models. The tools survive any model upgrade.
 
 ## Context
 
@@ -22,8 +22,15 @@ Applied to Palinode:
 - `palinode_search` — find relevant memories
 - `palinode_save` — store typed memories
 - `palinode_session_end` — capture session outcomes
+- `palinode_list/read` — browse the memory directory
 - `palinode_diff/blame/rollback/push` — git operations
+- `palinode_history/timeline` — file-level provenance
 - `palinode_trigger` — prospective recall
+- `palinode_entities` — entity graph
+- `palinode_consolidate` — trigger compaction
+- `palinode_lint` — structural health checks
+- `palinode_ingest` — capture from URLs
+- `palinode_status` — system health
 - Deterministic executor (validates LLM output, applies ops)
 - Markdown files as source of truth
 - Git versioning
@@ -39,7 +46,7 @@ Applied to Palinode:
 ## Consequences
 
 ### Positioning
-Lead with: "14 tools + a memory directory your agent uses however it wants."
+Lead with: "17 tools + a memory directory your agent uses however it wants."
 Not: "4-phase injection pipeline."
 
 The pipeline is an implementation detail. The tools are the interface.
@@ -61,5 +68,5 @@ Run the compaction pipeline with prompt sections deleted. Measure what gets wors
 
 ## References
 - Nate B Jones, "Every workaround you built for the last model is now breaking the next one" (April 2026)
-- Issue #56
+- Internal design discussion on tools-first architecture
 - Cursor's Planner-Worker-Judge convergence (same structural pattern across Anthropic, DeepMind, OpenAI)
