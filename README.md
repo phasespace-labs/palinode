@@ -227,7 +227,7 @@ palinode search "LoRA training curation"
 palinode search "Peter" --type PersonMemory --top-k 5
 
 # Save a memory
-palinode save "Qwen 14B replaces 7B on 5060 GPU" --type Decision --entity infra/5060
+palinode save "Qwen 14B replaces 7B on GPU server" --type Decision --entity infra/gpu-server
 
 # Check system health
 palinode status
@@ -431,9 +431,6 @@ embeddings:
     model: bge-m3
     url: http://localhost:11434
 ```
-
-### Remote Model Endpoints (Mac Studio)
-If you are running the `start_mlx_servers.sh` script on the Mac Studio, the following MLX models are exposed on the network:
 
 See [palinode.config.yaml.example](palinode.config.yaml.example) for the complete reference with all defaults.
 

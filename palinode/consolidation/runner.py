@@ -103,7 +103,7 @@ def _collect_daily_notes(lookback_days: int) -> list[dict]:
                 "project/mm-kmd": ["MM-KMD", "MM_KMD", "Kill My Darlings", "murder mystery", "OLMo", "LoRA", "vLLM", "LangGraph", "character agent", "Director", "mastermind"],
                 "project/palinode": ["Palinode", "palinode", "memory system", "SQLite-vec", "BGE-M3", "palinode_search"],
                 "project/color-class": ["FPFV", "color grading", "DaVinci Resolve", "Color Class", "RAW grading", "Yumi"],
-                "project/infrastructure": ["server", "5090", "5060", "Ollama", "homelab"],
+                "project/infrastructure": ["server", "GPU", "Ollama", "homelab"],
             }
             content_lower = content.lower()
             for project_ref, keywords in keyword_map.items():

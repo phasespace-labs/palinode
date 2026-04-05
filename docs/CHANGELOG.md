@@ -7,7 +7,7 @@
   - Commands: search, save, status, diff, consolidate, trigger, doctor
   - TTY-aware output (human text vs piped JSON)
   - Remote access via `PALINODE_API` env var or SSH
-- **5060 GPU usage plane spec** (`specs/5060-usage-plane.md`) — VRAM budget for embeddings + transcription + general LLM
+- **GPU usage plane spec** (`specs/palinode-gpu-spec.md`) — VRAM budget for embeddings + transcription + general LLM
 - **Architecture decision: CLI vs MCP** — CLI for agents/scripts/cron (8x fewer tokens), MCP for IDEs only
 - Updated README architecture diagram to show CLI path
 - Updated ROADMAP with Phase 1.25 (CLI + interface rationalization)
@@ -19,7 +19,7 @@
 - Removed API keys from systemd service files — all inference uses local Ollama/vLLM
 
 ### Infrastructure
-- Configured Palinode MCP on calarts-mbp for Claude Desktop, Claude CLI, Antigravity IDE, Cursor
+- Configured Palinode MCP for Claude Desktop, Claude CLI, Antigravity IDE, Cursor
 
 ## [0.1.0] — 2026-03-22
 
@@ -56,7 +56,7 @@
 |---|---|---|
 | Source of truth | Markdown files, git-versioned | Human-readable, survives everything |
 | Vector store | SQLite-vec (embedded) | No server, matches file-based philosophy |
-| Embeddings (core) | BGE-M3 via Ollama on ***REMOVED***61 | Local, private, top-tier for structured text |
+| Embeddings (core) | BGE-M3 via Ollama (local) | Local, private, top-tier for structured text |
 | Embeddings (future) | gemini-embedding-2-preview | Multimodal, Matryoshka dims, for research ingestion |
 | OpenClaw integration | General plugin (not memory slot) | Runs alongside Mem0 during transition |
 | Prompts | Read from specs/prompts/*.md files | Version-controlled, editable, diffable |

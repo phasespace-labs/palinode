@@ -22,7 +22,7 @@ def session_end(summary, decision, blocker, project, source, fmt):
 
         palinode session-end "Implemented CLI wrapper with 22 commands"
 
-        palinode session-end "Fixed 5060 VRAM budget" -d "Use qwen2.5:14b" -b "Test under load" -p palinode
+        palinode session-end "Fixed GPU VRAM budget" -d "Use qwen2.5:14b" -b "Test under load" -p palinode
     """
     now = datetime.now(timezone.utc)
     today = now.strftime("%Y-%m-%d")

@@ -13,7 +13,7 @@ Add this to `~/.claude/claude_desktop_config.json` on your Mac or remote server:
         "-o", "StrictHostKeyChecking=no",
         "-o", "BatchMode=yes",
         "user@your-palinode-server",
-        "cd ***REMOVED***/clawd/palinode && venv/bin/python -m palinode.mcp"
+        "cd /path/to/palinode && venv/bin/python -m palinode.mcp"
       ]
     }
   }
@@ -29,7 +29,7 @@ Or by IP (if hostname doesn't resolve):
       "args": [
         "-o", "StrictHostKeyChecking=no",
         "user@your-palinode-server",
-        "cd ***REMOVED***/clawd/palinode && venv/bin/python -m palinode.mcp"
+        "cd /path/to/palinode && venv/bin/python -m palinode.mcp"
       ]
     }
   }
