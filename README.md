@@ -24,7 +24,7 @@ If every service crashes, `cat` still works. No external database. No cloud depe
 
 Most agent memory systems are opaque databases you can't inspect, flat files that don't scale, or graph stores that require infrastructure. Palinode is **memory with provenance** — the only system where you can `git blame` every fact your agent knows.
 
-- **Git blame/diff/rollback as agent tools** — not just git-compatible files, but `palinode_diff`, `palinode_blame`, and `palinode_rollback` as first-class MCP tools your agent can call. [DiffMem](https://github.com/search?q=diffmem) and Git-Context-Controller are PoCs; Palinode ships 14 MCP tools including 5 git operations.
+- **Git blame/diff/rollback as agent tools** — not just git-compatible files, but `palinode_diff`, `palinode_blame`, and `palinode_rollback` as first-class MCP tools your agent can call. [DiffMem](https://github.com/search?q=diffmem) and Git-Context-Controller are PoCs; Palinode ships 15 MCP tools including 5 git operations.
 
 - **Operation-based compaction with a deterministic executor** — the LLM outputs structured ops (KEEP/UPDATE/MERGE/SUPERSEDE/ARCHIVE), a deterministic executor applies them. The LLM never touches your files directly. [All-Mem](https://arxiv.org/search/?query=all-mem+memory) does something similar on graph nodes; Palinode does it on plain markdown with git commits.
 
@@ -70,7 +70,7 @@ Most agent memory systems are opaque databases you can't inspect, flat files tha
 
 ### Integration ✅
 - **OpenClaw plugin** — lifecycle hooks for inject, extract, and capture
-- **MCP server** — 14 tools for Claude Code and any MCP client
+- **MCP server** — 15 tools for Claude Code and any MCP client
 - **FastAPI server** — HTTP API for programmatic access
 - **CLI** — command-line search, stats, reindex
 
@@ -247,7 +247,7 @@ Output is TTY-aware: human-readable text in a terminal, JSON when piped. Overrid
 **Remote usage** (from another machine on your network):
 ```bash
 # Option A: SSH
-ssh user@your-server 'palinode search "query"'
+ssh clawd@your-server 'palinode search "query"'
 
 # Option B: Point at remote API
 export PALINODE_API=http://your-server:6340
@@ -459,6 +459,7 @@ Available in OpenClaw conversations and Claude Code (via MCP):
 | `palinode_push` | Sync memory to a remote git repository |
 | `palinode_trigger` | Add or list prospective narrative triggers |
 | `palinode_list` | Browse memory files by category, filter by core status |
+| `palinode_lint` | Scan memory health: orphans, stale files, missing fields, contradictions |
 
 ---
 
@@ -530,7 +531,7 @@ Palinode is informed by research and ideas from several projects in the agent me
 
 ### Architecture Inspiration
 
-- **[LLM Knowledge Bases](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)** (Andrej Karpathy, April 2026) — The "compile, don't retrieve" pattern: LLM incrementally builds a structured markdown wiki from raw sources. Palinode implements this with git provenance, deterministic compaction, and 14 MCP tools.
+- **[LLM Knowledge Bases](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)** (Andrej Karpathy, April 2026) — The "compile, don't retrieve" pattern: LLM incrementally builds a structured markdown wiki from raw sources. Palinode implements this with git provenance, deterministic compaction, and 15 MCP tools.
 
 - **[OpenClaw](https://github.com/openclaw/openclaw)** — The plugin SDK, lifecycle hooks, and `MEMORY.md` pattern that Palinode extends and replaces. Palinode started as a better memory system for OpenClaw agents.
 
