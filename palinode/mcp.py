@@ -64,7 +64,7 @@ def _format_results(results: list[dict[str, Any]]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-def _save_memory(content: str, category_type: str, slug: str | None, entities: list[str], core: bool | None = None) -> str:
+def _save_memory(content: str, category_type: str, slug: str | None, entities: list[str], core: bool | None = None, source: str = "mcp") -> str:
     """Write a memory file explicitly defining categories schemas formats target layouts blocks and return the absolute pathway string logic footprints payloads logic paths targets payloads.
 
     Mirrors FastAPI `/save` overarching logics targeting DB disk persistence targets schemas block outputs schemas formats.
@@ -107,7 +107,7 @@ def _save_memory(content: str, category_type: str, slug: str | None, entities: l
         "type": category_type,
         "entities": entities or [],
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "source": "mcp",
+        "source": source,
     }
     if core is not None:
         frontmatter["core"] = core
@@ -145,6 +145,45 @@ async def list_tools() -> list[types.Tool]:
         list[types.Tool]: MCP payload array logically declaring interface logic mappings blocks schema schemas paths target formatting schemas formats schemas.
     """
     return [
+        types.Tool(
+            name="palinode_list",
+            description=(
+                "List memory files, optionally filtered by category or core status. "
+                "Use to browse what memories exist before reading or searching."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "description": "Filter by category: people, projects, decisions, insights, research",
+                        "enum": ["people", "projects", "decisions", "insights", "research"],
+                    },
+                    "core_only": {
+                        "type": "boolean",
+                        "description": "If true, only return files with core: true in frontmatter",
+                        "default": False,
+                    },
+                },
+            },
+        ),
+        types.Tool(
+            name="palinode_read",
+            description=(
+                "Read the full contents of a memory file. Use after palinode_list or palinode_search "
+                "to see the complete content of a specific file."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Relative path to the memory file (e.g., 'people/alice.md', 'projects/palinode-status.md')",
+                    },
+                },
+                "required": ["file_path"],
+            },
+        ),
         types.Tool(
             name="palinode_search",
             description=(
@@ -212,6 +251,10 @@ async def list_tools() -> list[types.Tool]:
                         "items": {"type": "string"},
                         "description": "Related entity refs e.g. ['person/alice', 'project/alpha']",
                     },
+                    "source": {
+                        "type": "string",
+                        "description": "Source surface that created this memory (e.g., 'claude-code', 'antigravity', 'roo-code', 'openclaw-attractor'). Auto-detected if omitted.",
+                    },
                 },
                 "required": ["content", "type"],
             },
@@ -272,6 +315,14 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(
             name="palinode_consolidate",
             description="Run a manual knowledge consolidation pass.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
+        types.Tool(
+            name="palinode_lint",
+            description="Scan memory files and report health issues (orphaned files, stale files, missing fields).",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -394,7 +445,7 @@ async def list_tools() -> list[types.Tool]:
                     },
                     "memory_file": {
                         "type": "string",
-                        "description": "For 'create': Relative path to the memory file to inject when fired (e.g., 'projects/mm-kmd.md')",
+                        "description": "For 'create': Relative path to the memory file to inject when fired (e.g., 'projects/my-app.md')",
                     },
                     "trigger_id": {
                         "type": "string",
@@ -402,6 +453,42 @@ async def list_tools() -> list[types.Tool]:
                     },
                 },
                 "required": ["action"],
+            },
+        ),
+        types.Tool(
+            name="palinode_session_end",
+            description=(
+                "Call at the end of a coding or chat session to capture key outcomes to persistent memory. "
+                "Writes a session summary to today's daily notes and appends status to relevant project files. "
+                "Provide a brief summary of what was accomplished, decisions made, and any blockers."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "description": "What was accomplished in this session (1-3 sentences)",
+                    },
+                    "decisions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Key decisions made (optional)",
+                    },
+                    "blockers": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Open blockers or next steps (optional)",
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": "Project slug to append status to (e.g., 'palinode'). Auto-detected if omitted.",
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "Source surface that created this memory (e.g., 'claude-code', 'antigravity', 'roo-code', 'openclaw-attractor'). Auto-detected if omitted.",
+                    },
+                },
+                "required": ["summary"],
             },
         ),
     ]
@@ -421,7 +508,38 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
         list[types.TextContent]: Standard MCP layout structure logic strings safely encapsulating return target outputs schemas mapped perfectly formats blocks layouts targets sequences frameworks layouts.
     """
     try:
-        if name == "palinode_search":
+        if name == "palinode_list":
+            category = arguments.get("category")
+            core_only = arguments.get("core_only", False)
+            import httpx
+            api_port = config.services.api.port
+            params = {}
+            if category: params["category"] = category
+            if core_only: params["core_only"] = "true"
+            
+            resp = httpx.get(f"http://localhost:{api_port}/list", params=params, timeout=30.0)
+            if resp.status_code == 200:
+                data = resp.json()
+                if not data:
+                    return [types.TextContent(type="text", text="No files found.")]
+                parts = []
+                for f in data:
+                    c_tag = " [core]" if f.get("core") else ""
+                    parts.append(f"{f['file']} — {f['summary']}{c_tag}")
+                return [types.TextContent(type="text", text="\n".join(parts))]
+            return [types.TextContent(type="text", text=f"API Error: {resp.text}")]
+
+        elif name == "palinode_read":
+            file_path = arguments["file_path"]
+            import httpx
+            api_port = config.services.api.port
+            resp = httpx.get(f"http://localhost:{api_port}/read", params={"file_path": file_path, "meta": "true"}, timeout=30.0)
+            if resp.status_code == 200:
+                data = resp.json()
+                return [types.TextContent(type="text", text=data["content"])]
+            return [types.TextContent(type="text", text=f"Error reading file: {resp.text}")]
+
+        elif name == "palinode_search":
             query = arguments["query"]
             category = arguments.get("category")
             limit = int(arguments.get("limit", config.search.default_limit))
@@ -467,11 +585,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
             slug = arguments.get("slug")
             core = arguments.get("core")
             entities = arguments.get("entities", [])
+            source = arguments.get("source", "mcp")
 
             loop = asyncio.get_event_loop()
             file_path = await loop.run_in_executor(
                 None,
-                lambda: _save_memory(content, category_type, slug, entities, core),
+                lambda: _save_memory(content, category_type, slug, entities, core, source),
             )
             rel = file_path.replace(config.palinode_dir + "/", "")
             return [types.TextContent(type="text", text=f"Saved to {rel}")]
@@ -582,6 +701,19 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
             ]
             return [types.TextContent(type="text", text="\n".join(lines))]
 
+        elif name == "palinode_lint":
+            import json
+            import httpx
+            api_port = config.services.api.port
+            try:
+                resp = httpx.post(f"http://localhost:{api_port}/lint", timeout=30.0)
+                if resp.status_code == 200:
+                    return [types.TextContent(type="text", text=json.dumps(resp.json(), indent=2))]
+                return [types.TextContent(type="text", text=f"Error running lint: {resp.text}")]
+            except httpx.RequestError:
+                from palinode.core.lint import run_lint_pass
+                return [types.TextContent(type="text", text=json.dumps(run_lint_pass(), indent=2))]
+
         elif name == "palinode_diff":
             from palinode.core import git_tools
             days = int(arguments.get("days", 7))
@@ -643,6 +775,56 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
                     lambda: store.add_trigger(tid, desc, mem, emb)
                 )
                 return [types.TextContent(type="text", text=f"Created trigger {tid} for {mem}")]
+
+        elif name == "palinode_session_end":
+            summary = arguments.get("summary", "")
+            decisions = arguments.get("decisions", [])
+            blockers = arguments.get("blockers", [])
+            project = arguments.get("project")
+            source = arguments.get("source", "mcp")
+
+            from datetime import datetime
+            today = datetime.utcnow().strftime("%Y-%m-%d")
+            now_iso = datetime.utcnow().isoformat() + "Z"
+
+            # Build session entry
+            parts = [f"## Session End — {now_iso}\n"]
+            parts.append(f"**Source:** {source}\n")
+            parts.append(f"**Summary:** {summary}\n")
+            if decisions:
+                parts.append("**Decisions:**")
+                for d in decisions:
+                    parts.append(f"- {d}")
+                parts.append("")
+            if blockers:
+                parts.append("**Blockers/Next:**")
+                for b in blockers:
+                    parts.append(f"- {b}")
+                parts.append("")
+
+            session_entry = "\n".join(parts)
+
+            # Write to daily notes
+            daily_dir = os.path.join(config.memory_dir, "daily")
+            os.makedirs(daily_dir, exist_ok=True)
+            daily_path = os.path.join(daily_dir, f"{today}.md")
+            with open(daily_path, "a") as f:
+                f.write(f"\n{session_entry}\n")
+
+            # Append status to project -status.md if project specified or detectable
+            status_msg = ""
+            if project:
+                status_path = os.path.join(config.memory_dir, "projects", f"{project}-status.md")
+                if os.path.exists(status_path):
+                    one_liner = summary.replace("\n", " ").strip()[:200]
+                    with open(status_path, "a") as f:
+                        f.write(f"\n- [{today}] {one_liner}\n")
+                    status_msg = f" + status → {project}-status.md"
+
+            return [types.TextContent(
+                type="text",
+                text=f"Session captured → daily/{today}.md{status_msg}\n\n{session_entry}",
+            )]
 
         else:
             return [types.TextContent(type="text", text=f"Unknown tool: {name}")]

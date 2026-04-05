@@ -79,7 +79,7 @@ palinode_trigger(action="add", description="LoRA training curation",
 
 Triggers fire when the user's message semantically matches `description`. Good for:
 - "whenever we talk about LoRA training, surface the curation insight"
-- "when Alice's project decisions come up, surface the relevant context"
+- "when Peter's canon decisions come up, surface the character relationships"
 
 ## Git Tools
 

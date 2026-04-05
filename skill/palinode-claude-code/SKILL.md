@@ -92,4 +92,4 @@ palinode_trigger(
 Good patterns:
 - Project-specific risks → `"when working on [project], surface [file]"`
 - Recurring gotchas → `"when deploying vLLM, surface memory/vllm-oom-lessons.md"`
-- People context → `"when Alice's preferences come up, surface people/alice.md"`
+- People context → `"when Peter's canon comes up, surface people/peter.md"`

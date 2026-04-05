@@ -25,17 +25,17 @@ Return a JSON array of memory items. Each item must match one of these schemas:
 [
   {
     "type": "PersonMemory",
-    "name": "Alice",
+    "name": "Peter",
     "slug": "peter",
-    "content": "Alice wants single-page checkout instead of multi-step.",
+    "content": "Peter wants the game to run 5 acts instead of 3.",
     "entities": ["project/mm-kmd"],
     "confidence": 0.92
   },
   {
     "type": "Decision",
     "slug": "kmd-five-acts",
-    "content": "my-app will use single-page checkout instead of multi-step.",
-    "rationale": "Alice's product direction — multi-step checkout has too much drop-off for mobile users.",
+    "content": "MM-KMD will use 5 acts instead of 3.",
+    "rationale": "Peter's creative direction — 3 acts doesn't give enough room for the full murder mystery arc.",
     "entities": ["project/mm-kmd", "person/peter"],
     "confidence": 0.88
   },
@@ -56,8 +56,8 @@ Return a JSON array of memory items. Each item must match one of these schemas:
   {
     "type": "ActionItem",
     "slug": "send-peter-5act-proposal",
-    "content": "Send Alice the checkout flow proposal",
-    "assignee": "Alice",
+    "content": "Send Peter the 5-act structure proposal",
+    "assignee": "Paul",
     "due": "2026-03-25",
     "entities": ["person/peter", "project/mm-kmd"],
     "confidence": 0.85

@@ -8,7 +8,7 @@ Usage:
     python -m palinode.migration.mem0_export
 
 Output:
-    ~/.palinode/migration/mem0_export.json
+    ./migration/mem0_export.json
 """
 from __future__ import annotations
 
@@ -92,7 +92,7 @@ def _scroll_collection(collection: str) -> list[dict]:
                 "created_at": payload.get("createdAt", ""),
                 "hash": payload.get("hash", ""),
                 "session_type": payload.get("session_type", ""),
-                "user_id": payload.get("userId", "clawd"),
+                "user_id": payload.get("userId", "default"),
             })
 
         offset = result.get("next_page_offset")

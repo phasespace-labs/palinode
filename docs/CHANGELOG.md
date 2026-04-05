@@ -1,5 +1,26 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **CLI wrapper spec** (`specs/palinode-cli-spec.md`) — full `palinode` CLI wrapping REST API via Click
+  - Commands: search, save, status, diff, consolidate, trigger, doctor
+  - TTY-aware output (human text vs piped JSON)
+  - Remote access via `PALINODE_API` env var or SSH
+- **5060 GPU usage plane spec** (`specs/5060-usage-plane.md`) — VRAM budget for embeddings + transcription + general LLM
+- **Architecture decision: CLI vs MCP** — CLI for agents/scripts/cron (8x fewer tokens), MCP for IDEs only
+- Updated README architecture diagram to show CLI path
+- Updated ROADMAP with Phase 1.25 (CLI + interface rationalization)
+- Updated FEATURE-STATUS with CLI entry
+- `palinode read` command — read memory files with optional `--meta` frontmatter parsing
+- `palinode session-end` command — capture session outcomes to daily notes + project status
+
+### Changed
+- Removed Gemini API key from systemd service files (palinode-api, engram-api, engram-watcher) — all inference uses local Ollama/vLLM
+
+### Infrastructure
+- Configured Palinode MCP on calarts-mbp for Claude Desktop, Claude CLI, Antigravity IDE, Cursor
+
 ## [0.1.0] — 2026-03-22
 
 ### 🎉 MVP Launch

@@ -787,6 +787,84 @@ const palinodePlugin = {
           api.logger.info(
             `openclaw-palinode: appended session to daily/${today}.md (${formattedMessages.length} messages)`,
           );
+
+          // Tier 1: Session-end status append
+          // For long sessions: extract unique TOPICS discussed, not just one line.
+          // For short sessions: capture intent → result.
+          try {
+            const userMessages = formattedMessages
+              .filter((m: string) => m.startsWith("user:"))
+              .map((m: string) => m.replace(/^user:\s*/, "").replace(/\n.*/s, "").trim())
+              .filter((l: string) => l.length > 15);
+
+            const assistantMessages = formattedMessages
+              .filter((m: string) => m.startsWith("A:"))
+              .map((m: string) => m.replace(/^A:\s*/, "").replace(/\n.*/s, "").trim())
+              .filter((l: string) => l.length > 20);
+
+            let summary = "";
+            const isLongSession = formattedMessages.length > 20;
+
+            if (isLongSession) {
+              // Long session: sample user messages across the session to capture topics
+              // Take first, middle, and last user messages for breadth
+              const sample: string[] = [];
+              if (userMessages.length > 0) sample.push(userMessages[0]);
+              if (userMessages.length > 4) sample.push(userMessages[Math.floor(userMessages.length / 2)]);
+              if (userMessages.length > 2) sample.push(userMessages[userMessages.length - 1]);
+              // Deduplicate and truncate
+              const unique = [...new Set(sample)].map((s: string) => s.slice(0, 60));
+              summary = `[${formattedMessages.length} msgs] ${unique.join("; ")}`;
+            } else {
+              // Short session: intent → result
+              const intent = userMessages[0] || "";
+              const result = assistantMessages[assistantMessages.length - 1] || "";
+              if (intent && result) {
+                summary = `${intent.slice(0, 100)} → ${result.slice(0, 100)}`;
+              } else {
+                summary = (result || intent).slice(0, 200);
+              }
+            }
+
+            if (summary.length > 15) {
+
+              // Use entity detection API to find which project was discussed
+              try {
+                const detectRes = await fetch(`${cfg.apiUrl}/entities`, {
+                  signal: AbortSignal.timeout(3000),
+                });
+                if (detectRes.ok) {
+                  const entities: any[] = await detectRes.json();
+                  // Find project entities that have status files
+                  const projectEntities = entities
+                    .filter((e: any) => e.entity_ref?.startsWith("project/"))
+                    .map((e: any) => e.entity_ref.replace("project/", ""));
+
+                  const statusDir = path.join(cfg.palinodeDir, "projects");
+                  if (fs.existsSync(statusDir)) {
+                    for (const proj of projectEntities) {
+                      const sfPath = path.join(statusDir, `${proj}-status.md`);
+                      if (fs.existsSync(sfPath)) {
+                        // Check if this session mentioned this project
+                        const projLower = proj.toLowerCase().replace(/-/g, " ");
+                        const mentioned = conversationText.toLowerCase().includes(projLower);
+                        if (mentioned) {
+                          fs.appendFileSync(sfPath, `\n- [${today}] ${summary}\n`);
+                          api.logger.info(`openclaw-palinode: status append → ${proj}-status.md`);
+                        }
+                      }
+                    }
+                  }
+                }
+              } catch {
+                // API not reachable — skip status append silently
+              }
+            }
+          } catch (statusErr) {
+            api.logger.warn(
+              `openclaw-palinode: status append failed: ${String(statusErr)}`,
+            );
+          }
         } catch (err) {
           api.logger.warn(`openclaw-palinode: capture failed: ${String(err)}`);
         }

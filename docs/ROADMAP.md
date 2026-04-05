@@ -119,6 +119,16 @@ prompt mentions supersession but doesn't implement it yet.
 - [x] Bug fixes (#4, #5, #13, #14)
 - [x] `__version__`, proper `pyproject.toml`, `py.typed`
 
+### Phase 1.25: CLI + Interface Rationalization
+- [ ] `palinode` CLI wrapper (click-based, wraps REST API) — see `specs/palinode-cli-spec.md`
+- [ ] Commands: search, save, status, diff, consolidate, trigger, doctor
+- [ ] TTY-aware output (human text vs piped JSON)
+- [ ] Update OpenClaw skill to use CLI via exec instead of phantom MCP tool names
+- [ ] `pyproject.toml` entry point: `palinode = "palinode.cli:main"`
+- [ ] Remote access: `PALINODE_API` env var for remote/SSH usage
+
+**Rationale:** CLI reduces token cost 8x vs MCP schema loading. LLMs pre-trained on CLI patterns. MCP stays for IDEs; CLI for agents, scripts, cron. See research in spec.
+
 ### Phase 1.5: Agent Self-Editing (1 week after Phase 1)
 - [ ] `update_mode` for palinode_save (replace/append/create)
 - [ ] `protected: true` frontmatter flag

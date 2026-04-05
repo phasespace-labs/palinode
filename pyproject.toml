@@ -25,7 +25,9 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "pydantic",
-    "mcp"
+    "mcp",
+    "rich",
+    "click"
 ]
 
 [project.urls]
@@ -34,8 +36,14 @@ dependencies = [
 [project.scripts]
 palinode-watcher = "palinode.indexer.watcher:main"
 palinode-api = "palinode.api.server:main"
-palinode-cli = "palinode.cli:main"
+palinode = "palinode.cli:main"
 palinode-mcp = "palinode.mcp:main"
 
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio"
+]
+
 [tool.setuptools]
-packages = ["palinode", "palinode.core", "palinode.indexer", "palinode.api", "palinode.ingest", "palinode.consolidation", "palinode.migration"]
+packages = ["palinode", "palinode.core", "palinode.indexer", "palinode.api", "palinode.ingest", "palinode.consolidation", "palinode.migration", "palinode.cli"]

@@ -108,7 +108,7 @@ Palinode maintains a background index of "triggers" (specific situational contex
 > Mobile checkout redesign. v2 on React Native...
 
 ## Relevant Context
-[decisions] my-app will use 5 acts instead of 3. the team's creative direction...
+[decisions] MM-KMD will use 5 acts instead of 3. Peter's creative direction...
 [insights] For LoRA training, 90 curated samples outperform 1,623 raw...
 </palinode-memory>
 ```text
@@ -230,11 +230,11 @@ Each project compaction is capped at ~6,000 chars of daily notes (1,500 per note
 ```text
 ## Session 2026-03-29T04:26:16Z
 user: completed M5 Phase 4 tests.
-assistant: Updating my-app with testing progress.
+assistant: Updating MM-KMD with testing progress.
 
 ## Session 2026-03-29T16:12:25Z  
 user: run the consolidation
-assistant: Processed 18 notes, my-app summary updated via 5 KEEP, 2 UPDATE, 1 ARCHIVE ops...
+assistant: Processed 18 notes, MM-KMD summary updated via 5 KEEP, 2 UPDATE, 1 ARCHIVE ops...
 ```text
 
 **After consolidation (projects/mm-kmd-status.md):**
@@ -298,7 +298,7 @@ Every memory change is a git commit. This enables:
 | --- | --- | --- |
 | `palinode_diff` | What changed recently? | "Show me changes this week" |
 | `palinode_blame` | When was this fact recorded? | "When did Alice mention async?" |
-| `palinode_timeline` | How has this file evolved? | "Show my-app's history" |
+| `palinode_timeline` | How has this file evolved? | "Show MM-KMD's history" |
 | `palinode_rollback` | Undo a bad change | "Revert last consolidation" |
 | `palinode_push` | Sync to GitHub | "Backup my memory" |
 
@@ -416,7 +416,7 @@ Backfilled memories enter `palinode-data` with `source: "mem0-backfill"` in thei
 Other memory systems are opaque databases. You can query them but you can't ask:
 
 - "When did I first learn that Alice prefers async?" → `palinode_blame`
-- "What changed about the my-app project this week?" → `palinode_diff`
+- "What changed about the MM-KMD project this week?" → `palinode_diff`
 - "Show me every update to my infrastructure notes" → `palinode_timeline`
 - "The last consolidation was bad, undo it" → `palinode_rollback`
 

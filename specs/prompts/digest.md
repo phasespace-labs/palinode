@@ -51,7 +51,7 @@
 📊 Palinode Weekly — Week of March 17, 2026
 
 🏗️ Projects this week:
-- my-app: [2-3 sentence status]
+- MM-KMD: [2-3 sentence status]
 - Color Class: [2-3 sentence status]
 
 🔑 Decisions made:
@@ -73,4 +73,4 @@
 - This is a REVIEW, not a report. Synthesize, don't summarize.
 - "Patterns noticed" is the most valuable section — this is what the human can't see from daily work.
 - Only include projects and people that had actual activity this week.
-- If a project went quiet, note that: "my-app: no activity this week (last update March 15)."
+- If a project went quiet, note that: "MM-KMD: no activity this week (last update March 15)."

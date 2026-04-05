@@ -18,12 +18,12 @@ Load all files with `core: true` in frontmatter. No search, no ranking — just 
 ```yaml
 # Palinode Core Memory
 user:
-  name: Alice
+  name: Paul
   location: Santa Clarita, CA
   roles: [film/video faculty, software developer]
 
 active_projects:
-  - name: my-app
+  - name: MM-KMD
     status: M5 Phase 1 complete
     current_work: Voice LoRA deployment on vLLM
   - name: Color Class

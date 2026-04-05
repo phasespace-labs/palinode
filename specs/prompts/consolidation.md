@@ -49,7 +49,7 @@ You receive:
 2. **Preserve dates.** When something happened matters for future context.
 3. **Merge, don't repeat.** If 3 daily notes say the same thing, produce one bullet, not three.
 4. **Flag tensions.** If notes contain contradictory information, note the contradiction rather than silently picking one.
-5. **Link decisions to people.** "Alice decided X" is more useful than "X was decided."
+5. **Link decisions to people.** "Peter decided X" is more useful than "X was decided."
 
 ---
 

@@ -29,7 +29,8 @@ def _git_commit(message: str) -> None:
     if not config.git.auto_commit:
         return
     try:
-        subprocess.run(["git", "add", "."], cwd=config.memory_dir, check=True, capture_output=True)
+        # Only add markdown files — respect .gitignore, avoid .db-journal etc.
+        subprocess.run(["git", "add", "*.md", "**/*.md"], cwd=config.memory_dir, capture_output=True)
         subprocess.run(["git", "commit", "-m", message], cwd=config.memory_dir, check=True, capture_output=True)
         logger.info(f"Git commit: {message}")
     except subprocess.CalledProcessError as e:
@@ -94,10 +95,10 @@ def _collect_daily_notes(lookback_days: int) -> list[dict]:
         # Fallback: detect projects by keyword if no entity refs found
         if not any(m.startswith("project/") for m in mentions):
             keyword_map = {
-                
+                "project/mm-kmd": ["MM-KMD", "MM_KMD", "Kill My Darlings", "murder mystery", "OLMo", "LoRA", "vLLM", "LangGraph", "character agent", "Director", "mastermind"],
                 "project/palinode": ["Palinode", "palinode", "memory system", "SQLite-vec", "BGE-M3", "palinode_search"],
                 "project/color-class": ["FPFV", "color grading", "DaVinci Resolve", "Color Class", "RAW grading", "Yumi"],
-                "project/infrastructure": ["your-server", "5090", "5060", "Ollama", "Tailscale", "homelab", "Mac Studio"],
+                "project/infrastructure": ["server", "5090", "5060", "Ollama", "homelab"],
             }
             content_lower = content.lower()
             for project_ref, keywords in keyword_map.items():
@@ -215,8 +216,10 @@ Return the operations JSON array."""
                 from json_repair import repair_json
                 repaired = repair_json(json_match.group(), return_objects=True)
                 if isinstance(repaired, list):
-                    logger.info(f"Repaired malformed LLM JSON ({len(repaired)} ops)")
-                    return repaired
+                    # Filter out any non-dict entries (LLM sometimes nests lists)
+                    valid_ops = [op for op in repaired if isinstance(op, dict) and "op" in op]
+                    logger.info(f"Repaired malformed LLM JSON ({len(valid_ops)} valid ops from {len(repaired)} entries)")
+                    return valid_ops
             except Exception as repair_err:
                 logger.error(f"json_repair also failed: {repair_err}")
             logger.error(f"Could not parse LLM JSON for compaction")

@@ -154,6 +154,90 @@ class SaveRequest(BaseModel):
     entities: list[str] | None = None
     metadata: Any | None = None
     core: bool | None = None
+    source: str | None = None
+
+
+@app.get("/list")
+def list_api(category: str | None = None, core_only: bool = False) -> list[dict[str, Any]]:
+    import glob
+    from palinode.core import parser
+    
+    results = []
+    base_dir = getattr(config, 'memory_dir', config.palinode_dir)
+    search_pattern = os.path.join(base_dir, "**/*.md")
+    
+    skip_dirs = {"daily", "archive", "inbox", "logs"}
+    
+    for filepath in glob.glob(search_pattern, recursive=True):
+        rel_path = os.path.relpath(filepath, base_dir)
+        parts = rel_path.split(os.sep)
+        
+        if parts[0] in skip_dirs:
+            continue
+            
+        if category and parts[0] != category:
+            continue
+            
+        try:
+            with open(filepath, "r") as f:
+                content = f.read()
+            metadata, _ = parser.parse_markdown(content)
+            
+            is_core = bool(metadata.get("core", False))
+            if core_only and not is_core:
+                continue
+                
+            results.append({
+                "file": rel_path,
+                "name": metadata.get("name") or parts[-1].replace('.md', ''),
+                "category": metadata.get("category", parts[0]),
+                "core": is_core,
+                "summary": metadata.get("summary", ""),
+                "last_updated": metadata.get("last_updated", ""),
+                "entities": metadata.get("entities", []),
+                "size_bytes": os.path.getsize(filepath)
+            })
+        except Exception:
+            pass
+            
+    return results
+
+
+@app.get("/read")
+def read_api(file_path: str, meta: bool = False) -> dict[str, Any]:
+    from palinode.core import parser
+    
+    base_dir = getattr(config, 'memory_dir', config.palinode_dir)
+    
+    if not file_path.endswith(".md"):
+        test_path = os.path.join(base_dir, file_path)
+        if not os.path.exists(test_path):
+             file_path += ".md"
+             
+    resolved = os.path.realpath(os.path.join(base_dir, file_path))
+    if not resolved.startswith(os.path.realpath(base_dir)):
+        raise HTTPException(status_code=403, detail="Path traversal rejected")
+        
+    if not os.path.exists(resolved):
+         raise HTTPException(status_code=404, detail="File not found")
+         
+    try:
+        with open(resolved, "r") as f:
+            content = f.read()
+            
+        result = {
+            "file": file_path,
+            "content": content,
+            "size_bytes": os.path.getsize(resolved)
+        }
+        
+        if meta:
+            metadata, _ = parser.parse_markdown(content)
+            result["frontmatter"] = metadata
+            
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/search")
@@ -307,6 +391,8 @@ def save_api(req: SaveRequest) -> dict[str, str]:
         frontmatter_dict.update(req.metadata)
     if req.core is not None:
         frontmatter_dict["core"] = req.core
+        
+    frontmatter_dict["source"] = req.source or os.environ.get("PALINODE_SOURCE", "api")
         
     doc = f"---\n{yaml.dump(frontmatter_dict)}---\n\n{req.content}\n"
     

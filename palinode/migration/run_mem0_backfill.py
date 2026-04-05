@@ -48,7 +48,7 @@ def main():
     logger.info(f"Total files: {sum(stats.values())}")
     logger.info("")
     logger.info("Next steps:")
-    logger.info("  1. Review the generated files in ~/.palinode/")
+    logger.info("  1. Review the generated files in $PALINODE_DIR/")
     logger.info("  2. Run 'curl -X POST http://localhost:6340/reindex' to index them")
     logger.info("  3. Test search: 'curl -X POST http://localhost:6340/search -d {\"query\":\"test\"}'")
     logger.info("  4. If satisfied, disable Mem0 autoRecall in OpenClaw config")

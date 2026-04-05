@@ -135,7 +135,7 @@ class EmbeddingsConfig:
 class AutoSummaryConfig:
     """Inference automation definitions for semantic summarization."""
     enabled: bool = True
-    model: str = "llama3.2:3b"
+    model: str = "qwen2.5:14b-instruct"
     max_chars: int = 120
     min_content_chars: int = 200
     ollama_url: str | None = None

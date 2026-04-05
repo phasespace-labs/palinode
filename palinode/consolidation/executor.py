@@ -41,6 +41,10 @@ def apply_operations(file_path: str, operations: list[dict]) -> dict:
     stats = {"kept": 0, "updated": 0, "merged": 0, "superseded": 0, "archived": 0}
     
     for op in operations:
+        if not isinstance(op, dict):
+            logger.warning(f"Malformed operation (expected dict, got {type(op).__name__}): {op}")
+            continue
+        
         op_type = op.get("op", "KEEP").upper()
         
         if op_type == "KEEP":

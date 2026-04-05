@@ -1,52 +1,28 @@
-# Palinode 🧠
+# Palinode
 
-**Persistent long-term memory for AI agents — with provenance.**
+**Git blame your AI agent's brain.**
 
-*A palinode is a poem that retracts what was said before and says it better.
-That's what memory compaction does.*
+Persistent memory for LLM agents — markdown files, hybrid search, deterministic compaction. The [LLM Knowledge Base](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) pattern, with provenance.
 
-Git-native. Markdown-first. No database required.
+*A palinode is a poem that retracts what was said before and says it better. That's what memory compaction does.*
 
 ---
 
-## The Problem
+## How It Works
 
-AI agents wake up with amnesia every session. They don't remember who you are, what you're working on, or what was decided yesterday. You waste turns re-explaining context that should already be there. Current solutions either don't scale (flat files), produce uncurated noise (vector-only stores), or lock you into opaque databases you can't inspect.
+1. **Ingest** — Drop sources into `research/`, run `palinode ingest <url>`, or let agents save via MCP/CLI
+2. **Index** — File watcher auto-embeds with BGE-M3, indexes with BM25, deduplicates by content hash
+3. **Search** — Hybrid BM25 + vector search, merged with Reciprocal Rank Fusion
+4. **Compile** — Weekly consolidation: LLM proposes ops (KEEP/UPDATE/MERGE/SUPERSEDE/ARCHIVE), deterministic executor applies them
+5. **Audit** — `git blame` any fact, `git diff` any change, `rollback` any mistake
 
-## The Solution
-
-Palinode gives your agent **14 MCP tools and a memory directory** — the agent decides what to remember, what to search, and when to consolidate. No rigid pipeline. No framework lock-in. Just tools, files, and git.
-
-An MCP server works with Claude Code, Cursor, Codex, Antigravity, OpenClaw, or any MCP client. A session skill auto-captures milestones during coding. A deterministic executor handles compaction — the LLM proposes operations, the executor applies them. The LLM never touches your files directly.
-
-Storage is typed markdown with YAML frontmatter. Search is hybrid BM25 + vector. History is git. Works with any LLM backend. If every service crashes, `cat` still works.
-
-### Built for model step-changes
-
-Most AI systems accumulate "compensating complexity" — workarounds for the last model's weaknesses that become constraints when a better model arrives. Palinode is designed to survive model upgrades:
-
-- **Tools are the interface, not a pipeline.** Your agent calls `palinode_search` when it needs context, not because a pipeline forces 300 tokens of search results into every turn. Smarter models make better retrieval decisions on their own.
-- **The executor is deterministic.** The LLM proposes KEEP/UPDATE/MERGE/SUPERSEDE/ARCHIVE. The executor validates and applies. Swap the LLM, keep the executor. ([ADR-001](docs/ADR-001-tools-over-pipeline.md))
-- **Files and git don't depend on any model.** Markdown, YAML, `git blame` — none of this changes when Mythos or GPT-5 drops.
-- **Auto-injection is optional scaffolding.** The OpenClaw plugin injects context automatically today (useful for current models). As models get smarter and use tools proactively, the injection pipeline becomes unnecessary — the tools remain.
-
-### What it costs
-
-| Turn | What happens | Tokens |
-|---|---|---|
-| Turn 1 | Core memory injected (people, projects, decisions) | ~4,200 |
-| Every turn after | Relevant search snippets for your message | **~300** |
-| Trivial messages ("ok", "yes", "👍") | Nothing — skipped automatically | **0** |
-
-~300 tokens per turn. Less than a sentence of output. The alternative — re-explaining your project every session — costs the same tokens with none of the benefit.
+If every service crashes, `cat` still works. No external database. No cloud dependency. Browse your memory in [Obsidian](https://obsidian.md) — it's just markdown.
 
 ---
 
 ## What Makes Palinode Different
 
 Most agent memory systems are opaque databases you can't inspect, flat files that don't scale, or graph stores that require infrastructure. Palinode is **memory with provenance** — the only system where you can `git blame` every fact your agent knows.
-
-### No other production system has these:
 
 - **Git blame/diff/rollback as agent tools** — not just git-compatible files, but `palinode_diff`, `palinode_blame`, and `palinode_rollback` as first-class MCP tools your agent can call. [DiffMem](https://github.com/search?q=diffmem) and Git-Context-Controller are PoCs; Palinode ships 14 MCP tools including 5 git operations.
 
@@ -94,7 +70,7 @@ Most agent memory systems are opaque databases you can't inspect, flat files tha
 
 ### Integration ✅
 - **OpenClaw plugin** — lifecycle hooks for inject, extract, and capture
-- **MCP server** — 13 tools for Claude Code and any MCP client
+- **MCP server** — 14 tools for Claude Code and any MCP client
 - **FastAPI server** — HTTP API for programmatic access
 - **CLI** — command-line search, stats, reindex
 
@@ -109,12 +85,16 @@ graph TD
         S[Slack] --> OC
         W[Webchat] --> OC
         CC[Claude Code] --> MCP[MCP Server]
+        CLI[palinode CLI] --> API[REST API :6340]
+        SCR[Scripts / Cron] --> CLI
     end
 
     subgraph Processing
         OC -->|session end| EX[Extract to daily notes]
         OC -->|"-es" flag| QC[Quick capture + route]
+        OC -->|exec: palinode| CLI
         MCP -->|palinode_save| SV[Write markdown file]
+        API --> SV
     end
 
     subgraph Storage
@@ -142,10 +122,11 @@ graph TD
 | Semantic index | SQLite-vec (embedded) | No server, single file, zero config |
 | Keyword index | SQLite FTS5 (embedded) | BM25 for exact terms, stdlib — no dependencies |
 | Embeddings | BGE-M3 via Ollama (local) | Private, no API dependency, 1024d |
-| API | FastAPI on port 6340 | Lightweight HTTP interface |
-| MCP | Python MCP SDK (stdio) | Claude Code + any MCP client |
+| API | FastAPI on port 6340 | Lightweight HTTP interface, single source of truth |
+| CLI | Click (wraps REST API) | Agents, scripts, cron — 8x fewer tokens than MCP |
+| MCP | Python MCP SDK (stdio) | IDEs only (Claude Desktop, Antigravity, Cursor) |
 | Plugin | OpenClaw Plugin SDK | Lifecycle hooks for session inject/extract |
-| Behavior spec | `PROGRAM.md` | Change how the memory manager thinks by editing one file |
+| Behavior spec / Schema | `PROGRAM.md` | The wiki schema — change how the memory manager extracts, classifies, and consolidates by editing one file |
 
 ---
 
@@ -236,7 +217,46 @@ PALINODE_DIR=~/.palinode python -m palinode.indexer.watcher
 curl http://localhost:6340/status
 ```
 
-### 4. Use from Claude Code (MCP)
+### 4a. Use from the command line (CLI)
+
+The `palinode` CLI wraps the REST API — works anywhere you have a shell.
+
+```bash
+# Search memory
+palinode search "LoRA training curation"
+palinode search "Peter" --type PersonMemory --top-k 5
+
+# Save a memory
+palinode save "Qwen 14B replaces 7B on 5060 GPU" --type Decision --entity infra/5060
+
+# Check system health
+palinode status
+
+# Full health check
+palinode doctor
+
+# See recent changes
+palinode diff
+
+# Preview consolidation
+palinode consolidate --dry-run
+```
+
+Output is TTY-aware: human-readable text in a terminal, JSON when piped. Override with `--format json|text`.
+
+**Remote usage** (from another machine on your network):
+```bash
+# Option A: SSH
+ssh user@your-server 'palinode search "query"'
+
+# Option B: Point at remote API
+export PALINODE_API=http://your-server:6340
+palinode search "query"
+```
+
+### 4b. Use from Claude Code / IDEs (MCP)
+
+MCP is best for IDEs where tool discovery and typed schemas matter (Claude Desktop, Claude Code, Antigravity, Cursor).
 
 Add to `~/.claude/claude_desktop_config.json`:
 
@@ -255,7 +275,29 @@ Add to `~/.claude/claude_desktop_config.json`:
 
 See [docs/claude-code-setup.md](docs/claude-code-setup.md) for details.
 
-### 5. Use from OpenClaw
+> **CLI vs MCP — when to use which:** CLI for agents, scripts, cron jobs, and SSH access (lower overhead, 8x fewer tokens than MCP schema loading). MCP for IDEs where you want tool discovery in the chat UI. Both hit the same REST API. See `specs/palinode-cli-spec.md` for the full rationale.
+
+### 5. Install the session skill (recommended)
+
+The `palinode-session` skill auto-captures milestones, decisions, and progress during Claude Code sessions — no manual saving needed.
+
+```bash
+# Personal (all projects)
+cp -r skill/palinode-session ~/.claude/skills/
+
+# Or project-level (just one repo)
+mkdir -p .claude/skills
+cp -r skill/palinode-session .claude/skills/
+```
+
+Also copy the CLAUDE.md template for explicit memory instructions:
+```bash
+cp examples/CLAUDE.md .claude/CLAUDE.md
+```
+
+The skill auto-fires when you start tasks, hit milestones, make decisions, or end sessions. It calls `palinode_save` and `palinode_session_end` so your memory stays fresh even during long coding runs.
+
+### 6. Use from OpenClaw
 
 Install the plugin to your OpenClaw extensions directory:
 
@@ -281,8 +323,8 @@ palinode diff --days 7
 
 ### When was this fact recorded?
 ```bash
-palinode blame projects/my-app.md --search "Stripe"
-# → 2026-03-10 a1b2c3d — Chose Stripe over Square for payment integration
+palinode blame projects/mm-kmd.md --search "5 acts"
+# → 2026-03-10 a1b2c3d — Peter wants 5 acts instead of 3
 ```
 
 ### Show a file's evolution
@@ -316,9 +358,12 @@ palinode_search("alice project decisions")
 
 # See entity cross-references
 palinode_entities("person/alice")
+
+# Or open PALINODE_DIR as an Obsidian vault for visual browsing
+# See docs/OBSIDIAN-SETUP.md
 ```
 
-Memory files are plain markdown — edit with any text editor, VS Code, Obsidian, or `vim`. Changes are auto-indexed by the file watcher within seconds.
+Memory files are plain markdown — open your `PALINODE_DIR` as an [Obsidian](https://obsidian.md) vault for visual browsing, or edit with VS Code, `vim`, or any text editor. Changes are auto-indexed by the file watcher within seconds.
 
 ---
 
@@ -342,14 +387,14 @@ typed markdown files. Review the output before reindexing.
 ---
 id: project-mm-kmd
 category: project
-name: my-app
+name: MM-KMD
 core: true
 status: active
 entities: [person/paul, person/peter]
 last_updated: 2026-03-29T00:00:00Z
 summary: "Multi-agent murder mystery engine on LangGraph + OLMo 3.1."
 ---
-# My App — Mobile Checkout Redesign
+# MM-KMD — Multi-Agent Murder Mystery Engine
 
 Your content here. Markdown, as detailed or brief as you want.
 Palinode indexes it, searches it, and injects it when relevant.
@@ -413,6 +458,7 @@ Available in OpenClaw conversations and Claude Code (via MCP):
 | `palinode_rollback` | Safe commit-driven reversion of memory files |
 | `palinode_push` | Sync memory to a remote git repository |
 | `palinode_trigger` | Add or list prospective narrative triggers |
+| `palinode_list` | Browse memory files by category, filter by core status |
 
 ---
 
@@ -442,89 +488,39 @@ Available in OpenClaw conversations and Claude Code (via MCP):
 
 ---
 
-## How Palinode Compares
-
-### vs MEMORY.md (OpenClaw/Hermes built-in)
-
-| | MEMORY.md | Palinode |
-|---|---|---|
-| **Storage** | One flat file, grows until truncated | Typed files (people, projects, decisions, insights) |
-| **Injection** | Dump entire file into prompt (~5K tokens, truncated at 18K chars) | 4-phase: core summaries on turn 1 (~4K tokens), search snippets per turn (~300 tokens) |
-| **Search** | None — `grep` or read the whole thing | Hybrid BM25 + vector, ranked by relevance |
-| **Scaling** | Gets worse over time (bigger file = more truncation) | Gets *better* over time (nightly consolidation compacts, not appends) |
-| **History** | None — edits overwrite | Git blame every line, rollback any change |
-| **Multi-agent** | One file per agent, no sharing | Shared memory dir, entity cross-references |
-| **When it breaks** | File missing = total amnesia | Services down = `cat` and `grep` still work |
-
-MEMORY.md costs ~5,000 tokens per session to inject a file that gets staler every week. Palinode costs ~300 tokens per turn and stays fresh via nightly consolidation.
-
-### vs Mem0
-
-| | Mem0 | Palinode |
-|---|---|---|
-| **Storage** | Qdrant vectors + graph DB (opaque) | Markdown files (human-readable, editable) |
-| **Search** | Vector similarity only | Hybrid BM25 + vector (RRF fusion) |
-| **Inspection** | Need API/dashboard to see what's stored | `cat`, `grep`, VS Code, Obsidian — any text editor |
-| **History** | Audit logs in DB | `git blame`, `git diff`, `git rollback` as agent tools |
-| **Compaction** | Behavior summaries (lossy) | Operation-based KEEP/UPDATE/MERGE/SUPERSEDE/ARCHIVE (non-lossy) |
-| **Offline** | Qdrant must be running | Files exist on disk regardless |
-| **MCP tools** | 4-6 (save, search, list, delete) | 14 (+ git ops, triggers, session capture) |
-| **Portability** | Tied to Qdrant instance | `cp -r` to any machine, or push to GitHub |
-
-Mem0 is a black box. Palinode is a directory. If you can `ls`, you can understand your agent's memory.
-
----
-
 ## Design Philosophy
 
 Palinode makes specific bets about how agent memory should work:
 
-1. **Tools, not pipelines.** Give the model capabilities (search, save, diff, rollback). Let it decide when to use them. Don't force retrieval into every turn — let smarter models make smarter retrieval decisions.
+1. **Files are truth.** Not databases, not vector stores, not APIs. Markdown files that humans can read, edit, and version with git.
 
-2. **Files are truth.** Not databases, not vector stores, not APIs. Markdown files that humans can read, edit, and version with git. This survives any model change.
+2. **Typed, not flat.** People, projects, decisions, insights — each has structure. This enables reliable retrieval and consolidation.
 
-3. **Outcomes, not procedures.** Tell the consolidation LLM *what* to achieve ("keep what's true, archive what's stale"), not *how* to do it step by step. The less your system prescribes, the more it gains from a smarter model.
+3. **Consolidation, not accumulation.** 100 sessions should produce 20 well-maintained files, not 100 unread dumps. Memory gets smaller and more useful over time.
 
-4. **Consolidation, not accumulation.** 100 sessions should produce 20 well-maintained files, not 100 unread dumps. Memory gets smaller and more useful over time.
+4. **Invisible when working.** The human talks to their agent. Palinode works behind the scenes. The only visible outputs are better conversations.
 
 5. **Graceful degradation.** Vector index down → read files directly. Embedding service down → grep. Machine off → it's a git repo, clone it anywhere.
 
-6. **Zero compensating complexity.** Every workaround for a model's weakness is technical debt that breaks on the next model. Separate business rules (keep forever) from model scaffolding (delete on upgrade). ([ADR-001](docs/ADR-001-tools-over-pipeline.md))
+6. **Zero taxonomy burden.** The system classifies. The human reviews. If the human has to maintain a taxonomy, the system dies.
 
 ---
 
 ## Roadmap
 
-### Shipped (v0.5)
-| What | Details |
-|---|---|
-| Core system | Typed markdown, SQLite-vec, FTS5, FastAPI, file watcher |
-| 14 MCP tools | search, save, ingest, status, history, entities, consolidate, diff, blame, timeline, rollback, push, trigger, session_end |
-| Hybrid search | BM25 + vector + Reciprocal Rank Fusion |
-| Git provenance | blame, diff, rollback, push as agent-callable tools |
-| Operation-based compaction | KEEP/UPDATE/MERGE/SUPERSEDE/ARCHIVE with deterministic executor |
-| Session skill | Auto-captures milestones across Claude Code, Cursor, Codex, Antigravity |
-| Nightly consolidation | Cron-driven via local LLM (OLMo, any 7B+) |
-| OpenClaw plugin | 4-phase injection + session capture |
+| Phase | Status | What |
+|---|---|---|
+| 0 — MVP | ✅ Done | Core Python, watcher, API, SQLite-vec |
+| 0.5 — Capture | ✅ Done | Plugin, dual embeddings, -es capture, inbox pipeline |
+| 1 — Config + Quality | ✅ Done | Config YAML, docstrings, type hints, bug fixes |
+| 1.5 — Hybrid Search | ✅ Done | BM25 + vector RRF, content-hash dedup |
+| 2 — Consolidation | ✅ Done | Entity linking, temporal memory |
+| 3 — Migration | ✅ Done | Mem0 backfill, automated migration pipelines |
+| 4 — Git Tools | ✅ Done | Memory diffing, blame, CLI timeline, remote push |
+| 5 — Compaction | ✅ Done | Operation-based compaction, layered core files |
+| 5.5 — Recall+ | ✅ Done | Associative entity search, prospective triggers, temporal decay |
 
-### Next (v1.0) — Tools-first architecture
-| What | Why |
-|---|---|
-| Optional injection pipeline | Make auto-injection configurable. Default to tools-first for Mythos-class models |
-| `palinode_list` + `palinode_read` | Browse and read memory files from any MCP client |
-| Prompt storage (`prompts/` category) | Reusable prompt templates as searchable memories |
-| Gemini multimodal embeddings | Index images, PDFs alongside text memories |
-| Hermes Agent contribution | Submit palinode skill to NousResearch |
-| Homebrew tap | `brew install palinode` |
-
-### Future (v2.0) — Model-agnostic memory infrastructure
-| What | Why |
-|---|---|
-| Tools-only mode | Remove pipeline entirely. Model decides all retrieval |
-| Outcome-based compaction prompts | Replace procedural prompts with goal specs |
-| Clean package architecture | `store/`, `recall/`, `compaction/` modules |
-| Mintlify docs site | Searchable documentation |
-| Community memory templates | Shared starter memories for common domains |
+See [docs/ROADMAP.md](docs/ROADMAP.md) for the full research-informed roadmap.
 
 ---
 
@@ -533,6 +529,8 @@ Palinode makes specific bets about how agent memory should work:
 Palinode is informed by research and ideas from several projects in the agent memory space. We believe in attributing what we learned and borrowed.
 
 ### Architecture Inspiration
+
+- **[LLM Knowledge Bases](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)** (Andrej Karpathy, April 2026) — The "compile, don't retrieve" pattern: LLM incrementally builds a structured markdown wiki from raw sources. Palinode implements this with git provenance, deterministic compaction, and 14 MCP tools.
 
 - **[OpenClaw](https://github.com/openclaw/openclaw)** — The plugin SDK, lifecycle hooks, and `MEMORY.md` pattern that Palinode extends and replaces. Palinode started as a better memory system for OpenClaw agents.
 
@@ -562,6 +560,7 @@ Palinode is informed by research and ideas from several projects in the agent me
 ### Research References
 
 - *Memory in the Age of AI Agents: A Survey* — [TeleAI-UAGI/Awesome-Agent-Memory](https://github.com/TeleAI-UAGI/Awesome-Agent-Memory)
+- *DiriGent: Multi-Agent Tension Steering* — AIIDE 2025 (informed the parent project MM-KMD)
 - Nate B. Jones — [OpenBrain Substack](https://natesnewsletter.substack.com/) on context engineering and the "two-door" principle
 
 ### What's Ours
@@ -592,4 +591,4 @@ MIT
 
 ---
 
-*Built by [Paul Kyle](https://phasespace.co) ([@Paul-Kyle](https://github.com/Paul-Kyle)) with Claude Opus, Sonnet, Gemini, Codex, and OLMo — AI agents who use Palinode to remember building Palinode.* 🧠
+*Built by [Paul Kyle](https://github.com/Paul-Kyle) with help from AI agents who use Palinode to remember building Palinode.* 🧠

@@ -1,11 +1,16 @@
 """
 Palinode Consolidation Cron Entry Point
 
-Run via system cron or OpenClaw cron job:
-    python -m palinode.consolidation.cron
+Two-tier memory freshness:
+  Tier 1: Session append (plugin, every session, free — captures intent + result)
+  Tier 2: Deep clean twice/week (this script, full ops)
 
-Or add to crontab:
-    0 3 * * 0 cd /path/to/palinode && venv/bin/python -m palinode.consolidation.cron
+Crontab examples:
+    # Nightly (recommended if you have a local LLM — free)
+    0 3 * * * cd /path/to/palinode && PALINODE_DIR=~/.palinode venv/bin/python -m palinode.consolidation.cron --days 1
+
+    # Twice-weekly (if using cloud LLM — saves API cost)
+    0 3 * * 2,5 cd /path/to/palinode && PALINODE_DIR=~/.palinode venv/bin/python -m palinode.consolidation.cron --days 4
 """
 from __future__ import annotations
 
@@ -24,8 +29,18 @@ def main() -> None:
         logger.info("Consolidation is disabled in config. Exiting.")
         sys.exit(0)
 
-    logger.info("Starting weekly consolidation...")
-    result = run_consolidation()
+    # Parse --days N for custom lookback (default: config value)
+    lookback = None
+    if "--days" in sys.argv:
+        try:
+            idx = sys.argv.index("--days")
+            lookback = int(sys.argv[idx + 1])
+        except (IndexError, ValueError):
+            pass
+
+    logger.info(f"Starting consolidation (lookback: {lookback or 'config default'} days)...")
+    result = run_consolidation(lookback_days=lookback)
+
     logger.info(f"Consolidation complete: {result}")
 
 

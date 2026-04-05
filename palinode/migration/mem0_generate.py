@@ -8,10 +8,10 @@ Usage:
     python -m palinode.migration.mem0_generate
 
 Input:
-    ~/.palinode/migration/mem0_classified.json
+    ./migration/mem0_classified.json
 
 Output:
-    Markdown files in ~/.palinode/{category}/
+    Markdown files in ./{category}/
 """
 from __future__ import annotations
 

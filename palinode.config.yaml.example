@@ -159,7 +159,7 @@ embeddings:
 auto_summary:
   enabled: true
   # Model used for generating summaries (should be fast and small)
-  model: "llama3.2:3b"
+  model: "qwen2.5:14b-instruct"
   # Maximum summary length in characters
   max_chars: 120
   # Minimum content length to trigger summary generation
@@ -187,16 +187,14 @@ search:
     - "archived"
 
 # -----------------------------------------------------------------------------
-# Consolidation
+# Consolidation (Phase 2 — not yet implemented)
 # -----------------------------------------------------------------------------
 consolidation:
   enabled: true
-  # Recommended: nightly if you have a local LLM (free), twice-weekly for cloud APIs
-  # Nightly: 0 3 * * *    (with --days 1)
-  # Twice-weekly: 0 3 * * 2,5  (with --days 4)
-  schedule: "0 3 * * *"  # Nightly 3am UTC
+  # Cron expression for weekly consolidation
+  schedule: "0 3 * * 0"  # Sunday 3am UTC
   # How many days of daily notes to process
-  lookback_days: 1
+  lookback_days: 7
   # Maximum daily files to process per run
   max_files: 30
   # LLM API for consolidation

@@ -1,6 +1,6 @@
 # Installing Palinode with Claude Code
 
-Palinode gives Claude Code persistent memory via MCP — 13 tools for searching, saving, and managing memories across sessions.
+Palinode gives Claude Code persistent memory via MCP — 14 tools for searching, saving, and managing memories across sessions. The `palinode-session` skill auto-captures milestones and decisions during coding, so your memory stays fresh without manual effort.
 
 ## Prerequisites
 
@@ -160,6 +160,32 @@ Search palinode for "recent project decisions"
 | `palinode_rollback` | Revert a file to a previous state |
 | `palinode_push` | Push memory changes to remote git |
 | `palinode_trigger` | Register a prospective recall intention |
+| `palinode_session_end` | Capture session summary, decisions, blockers at end |
+
+---
+
+## Install the Session Skill (Recommended)
+
+The `palinode-session` skill auto-fires during coding — saves milestones, decisions, and progress without you asking. Solves the "Ctrl+C loses everything" problem.
+
+```bash
+# Personal (all Claude Code projects)
+cp -r /path/to/palinode/skill/palinode-session ~/.claude/skills/
+
+# Or project-level
+mkdir -p .claude/skills
+cp -r /path/to/palinode/skill/palinode-session .claude/skills/
+
+# Also add the CLAUDE.md template
+cp /path/to/palinode/examples/CLAUDE.md .claude/CLAUDE.md
+```
+
+The skill auto-fires when:
+- Starting a new task → searches for prior context
+- Tests pass or feature completes → saves the milestone
+- Making a decision → saves with rationale
+- ~30 min since last save → saves progress
+- Session ending → captures structured summary
 
 ---
 
@@ -177,7 +203,7 @@ Search palinode for context on this project before we begin
 
 **Register triggers for recurring topics:**
 ```
-Register an palinode trigger: when we discuss LoRA training, surface insights/curation-over-volume.md
+Register a palinode trigger: when we discuss LoRA training, surface insights/curation-over-volume.md
 ```
 
 **After a long session:**

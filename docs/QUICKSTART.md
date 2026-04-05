@@ -70,14 +70,14 @@ cat > people/peter.md << 'EOF'
 ---
 id: person-peter
 category: person
-name: Alice
+name: Peter
 core: true
 entities: [project/mm-kmd]
 last_updated: 2026-03-22T20:00:00Z
 ---
-# Alice
+# Peter
 
-Product lead at Acme Corp. Drives project decisions.
+Writer and IP creator for MM-KMD. Controls canon.
 EOF
 ```
 
@@ -89,7 +89,7 @@ The watcher auto-indexes it within ~10 seconds.
 curl -X POST http://localhost:6340/save \
   -H "Content-Type: application/json" \
   -d '{
-    "content": "Decided on single-page checkout over multi-step",
+    "content": "Peter wants 5 acts instead of 3",
     "type": "Decision",
     "slug": "kmd-five-acts",
     "entities": ["person/peter", "project/mm-kmd"]

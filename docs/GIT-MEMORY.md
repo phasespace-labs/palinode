@@ -37,7 +37,7 @@ Note: Git shows 2026-03-29 (migration date). True origin is 2026-02-11 (from mem
 For natively-captured memories, both dates match:
 ```bash
 palinode blame decisions/kmd-five-acts.md --search "5 acts"
-# abc1234 (2026-04-06) Chose Stripe over Square for payments
+# abc1234 (2026-04-06) Peter wants 5 acts instead of 3
 # (origin: 2026-04-06, source: palinode — dates match)
 ```
 
