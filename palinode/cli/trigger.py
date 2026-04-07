@@ -10,13 +10,13 @@ def trigger():
 
 @trigger.command(name="add")
 @click.argument("description")
-@click.option("--file", "file_path", required=True, help="Memory file to trigger")
-@click.option("--threshold", type=float, default=0.4, help="Similarity threshold (0.0 to 1.0)")
+@click.option("--file", "memory_file", required=True, help="Memory file to trigger")
+@click.option("--threshold", type=float, default=0.75, help="Similarity threshold (0.0 to 1.0)")
 @click.option("--format", "fmt", type=click.Choice(["json", "text"]), help="Output format")
-def trigger_add(description, file_path, threshold, fmt):
+def trigger_add(description, memory_file, threshold, fmt):
     """Register a new auto-surface trigger."""
     try:
-        result = api_client.trigger_add(description, file_path, threshold)
+        result = api_client.trigger_add(description, memory_file, threshold)
         
         output_fmt = OutputFormat(fmt) if fmt else get_default_format()
         if output_fmt == OutputFormat.JSON:

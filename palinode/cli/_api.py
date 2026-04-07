@@ -10,11 +10,11 @@ class PalinodeAPI:
         )
         self.client = httpx.Client(base_url=self.base_url, timeout=30.0)
 
-    def search(self, query: str, top_k: int = 3, type_filter: str = None):
-        payload = {"query": query, "top_k": top_k}
-        if type_filter:
-            payload["type"] = type_filter
-        
+    def search(self, query: str, limit: int = 3, category: str = None):
+        payload: dict = {"query": query, "limit": limit}
+        if category:
+            payload["category"] = category
+
         response = self.client.post("/search", json=payload)
         response.raise_for_status()
         return response.json()
@@ -37,13 +37,11 @@ class PalinodeAPI:
         response.raise_for_status()
         return response.json()
 
-    def get_diff(self, file_path: str = None, commits: int = None):
-        params = {}
-        if file_path:
-            params["file"] = file_path
-        if commits:
-            params["commits"] = commits
-            
+    def get_diff(self, days: int = 7, paths: str = None):
+        params: dict = {"days": days}
+        if paths:
+            params["paths"] = paths
+
         response = self.client.get("/diff", params=params)
         response.raise_for_status()
         return response.json()
@@ -53,23 +51,23 @@ class PalinodeAPI:
         response.raise_for_status()
         return response.json()
 
-    def trigger_add(self, description: str, file_path: str, threshold: float = 0.4):
-        payload = {
+    def trigger_add(self, description: str, memory_file: str, threshold: float = 0.75):
+        payload: dict = {
             "description": description,
-            "file": file_path,
-            "threshold": threshold
+            "memory_file": memory_file,
+            "threshold": threshold,
         }
-        response = self.client.post("/trigger/add", json=payload)
+        response = self.client.post("/triggers", json=payload)
         response.raise_for_status()
         return response.json()
 
     def trigger_list(self):
-        response = self.client.get("/trigger/list")
+        response = self.client.get("/triggers")
         response.raise_for_status()
         return response.json()
 
     def trigger_remove(self, trigger_id: str):
-        response = self.client.delete(f"/trigger/remove/{trigger_id}")
+        response = self.client.delete(f"/triggers/{trigger_id}")
         response.raise_for_status()
         return response.json()
 
@@ -121,22 +119,30 @@ class PalinodeAPI:
         return response.json()
 
     def blame(self, file_path: str, search: str = None):
-        # We need git_tools for these if they are not exposed by API yet
-        # But for now, let's assume they are or we handle them
-        from palinode.core import git_tools
-        return git_tools.blame(file_path, search)
+        params: dict = {}
+        if search:
+            params["search"] = search
+        response = self.client.get(f"/blame/{file_path}", params=params, timeout=10.0)
+        response.raise_for_status()
+        return response.json()
 
     def timeline(self, file_path: str, limit: int = 20):
-        from palinode.core import git_tools
-        return git_tools.timeline(file_path, limit)
+        response = self.client.get(f"/timeline/{file_path}", params={"limit": limit}, timeout=10.0)
+        response.raise_for_status()
+        return response.json()
 
-    def rollback(self, file_path: str, commit: str, dry_run: bool = True):
-        from palinode.core import git_tools
-        return git_tools.rollback(file_path, commit, dry_run=dry_run)
+    def rollback(self, file_path: str, commit: str = None, dry_run: bool = True):
+        params: dict = {"file_path": file_path, "dry_run": dry_run}
+        if commit:
+            params["commit"] = commit
+        response = self.client.post("/rollback", params=params, timeout=30.0)
+        response.raise_for_status()
+        return response.json()
 
     def push(self):
-        from palinode.core import git_tools
-        return git_tools.push()
+        response = self.client.post("/push", timeout=60.0)
+        response.raise_for_status()
+        return response.json()
 
     def health_check(self):
         try:

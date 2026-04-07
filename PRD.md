@@ -54,7 +54,7 @@ All of these store things. None of them *remember*.
 
 **Secondary:** The human (Paul) who browses, edits, and reviews memory files directly; receives daily digests and weekly reviews.
 
-**Tertiary:** Other agents (governor, gradient, emission) that read from shared memory.
+**Tertiary:** Other AI agents that read from shared memory (multi-agent setups).
 
 ---
 
@@ -694,7 +694,7 @@ Prompts are not disposable. They're the most durable artifact in the system — 
 | **1: Core Memory** | Two-phase injection + core memory files + retire MEMORY.md | Week 2 |
 | **2: Consolidation** | Weekly cron + entity linking + insights extraction | Weeks 3-4 |
 | **3: Migration** | Backfill from Mem0 (2,632) + QC MCP (14K) selectively | Week 4+ |
-| **4: Multi-Agent + MCP** | Orchestrator/gradient/emission read access + MCP server for external tools | Future |
+| **4: Multi-Agent + MCP** | Multi-agent read access + MCP server for external tools | Future |
 
 ---
 
@@ -715,6 +715,6 @@ Prompts are not disposable. They're the most durable artifact in the system — 
 
 **After 3 months:**
 
-- [ ] Multiple agents share Palinode (read access for governor/gradient)
+- [ ] Multiple agents share Palinode (read access for all agent profiles)
 - [ ] Palinode has survived at least one infrastructure failure without data loss
 - [ ] Paul trusts the system enough to stop manually curating MEMORY.md

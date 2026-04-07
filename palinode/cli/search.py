@@ -5,14 +5,14 @@ from rich.panel import Panel
 
 @click.command()
 @click.argument("query")
-@click.option("--top-k", default=3, help="Number of results (default: 3)")
-@click.option("--type", "type_filter", help="Filter by memory type")
+@click.option("--limit", default=3, help="Number of results (default: 3)")
+@click.option("--category", help="Filter by memory type/category")
 @click.option("--format", "fmt", type=click.Choice(["json", "text"]), help="Output format")
 @click.option("--score/--no-score", default=False, help="Show relevance scores")
-def search(query, top_k, type_filter, fmt, score):
+def search(query, limit, category, fmt, score):
     """Search memory by meaning or keyword."""
     try:
-        results = api_client.search(query, top_k=top_k, type_filter=type_filter)
+        results = api_client.search(query, limit=limit, category=category)
         
         output_fmt = OutputFormat(fmt) if fmt else get_default_format()
         

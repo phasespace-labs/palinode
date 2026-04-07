@@ -20,6 +20,21 @@ from palinode.core.config import config
 logger = logging.getLogger("palinode.git_tools")
 
 
+def _resolve_memory_path(file_path: str) -> str:
+    """Resolve a relative file_path against memory_dir and reject traversal.
+
+    Returns the validated relative path. Raises ValueError if the resolved
+    path escapes memory_dir.
+    """
+    if "\x00" in file_path:
+        raise ValueError("Null bytes are not allowed in file paths")
+    base = os.path.realpath(config.memory_dir)
+    resolved = os.path.realpath(os.path.join(base, file_path))
+    if not resolved.startswith(base + os.sep) and resolved != base:
+        raise ValueError(f"Path traversal rejected: {file_path}")
+    return file_path
+
+
 def _utc_now() -> datetime:
     """Return a timezone-aware UTC timestamp."""
     return datetime.now(UTC)
@@ -116,6 +131,7 @@ def blame(file_path: str, search: str | None = None) -> str:
     Returns:
         Formatted blame output with both git dates and origin provenance.
     """
+    file_path = _resolve_memory_path(file_path)
     full_path = os.path.join(config.memory_dir, file_path)
     if not os.path.exists(full_path):
         return f"File not found: {file_path}"
@@ -189,6 +205,7 @@ def timeline(file_path: str, limit: int = 20) -> str:
     Returns:
         Formatted timeline with dates, messages, and change summaries.
     """
+    file_path = _resolve_memory_path(file_path)
     if not os.path.exists(os.path.join(config.memory_dir, file_path)):
         return f"File not found: {file_path}"
 
@@ -231,6 +248,7 @@ def rollback(file_path: str, commit: str | None = None, dry_run: bool = False) -
     Returns:
         Description of what was (or would be) rolled back.
     """
+    file_path = _resolve_memory_path(file_path)
     if not os.path.exists(os.path.join(config.memory_dir, file_path)):
         return f"File not found: {file_path}"
 

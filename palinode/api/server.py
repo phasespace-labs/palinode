@@ -1010,18 +1010,19 @@ def migrate_openclaw_api(req: MigrateOpenClawRequest) -> dict:
     if "\x00" in path:
         raise HTTPException(status_code=400, detail="Null bytes are not allowed in path")
 
-    # Resolve relative paths against memory_dir; reject absolute paths that
-    # point outside it (absolute paths that are already safe are accepted).
-    if not os.path.isabs(path):
-        base = _memory_base_dir()
+    # Resolve against memory_dir; reject paths that escape it.
+    base = _memory_base_dir()
+    if os.path.isabs(path):
+        resolved_path = os.path.realpath(path)
+    else:
         resolved_path = os.path.realpath(os.path.join(base, path))
-        try:
-            within = os.path.commonpath([base, resolved_path]) == base
-        except ValueError:
-            within = False
-        if not within:
-            raise HTTPException(status_code=403, detail="Path traversal rejected")
-        path = resolved_path
+    try:
+        within = os.path.commonpath([base, resolved_path]) == base
+    except ValueError:
+        within = False
+    if not within:
+        raise HTTPException(status_code=403, detail="Path traversal rejected")
+    path = resolved_path
 
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail=f"File not found: {path}")

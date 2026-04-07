@@ -3,13 +3,13 @@ from palinode.cli._api import api_client
 from palinode.cli._format import console, print_result, get_default_format, OutputFormat
 
 @click.command()
-@click.argument("file", required=False)
-@click.option("--commits", type=int, help="Number of recent commits to show")
+@click.option("--days", type=int, default=7, help="Look back N days (default: 7)")
+@click.option("--paths", type=str, default=None, help="Comma-separated path filters (e.g. projects/,decisions/)")
 @click.option("--format", "fmt", type=click.Choice(["json", "text"]), help="Output format")
-def diff(file, commits, fmt):
+def diff(days, paths, fmt):
     """Show recent changes to memory files."""
     try:
-        data = api_client.get_diff(file_path=file, commits=commits)
+        data = api_client.get_diff(days=days, paths=paths)
         
         output_fmt = OutputFormat(fmt) if fmt else get_default_format()
         
