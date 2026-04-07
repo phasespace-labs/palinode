@@ -27,7 +27,7 @@ This looks correct. It is not. It is **save and pray** — the implicit assumpti
 
 The failure mode is always the same: **the agent doesn't know what it doesn't know.** It proceeds with confidence on incomplete context. There is no error. There is no warning. The dashboard is green. The memories are gone.
 
-This is not a theoretical risk. Research from 2026 shows agents completing tasks while losing access to 87% of stored knowledge under complexity. Task completion rates stay high while memory recall drops to 13%. The agent finishes the work. The work is wrong.
+This is not a theoretical risk. Early benchmarks on agent memory retrieval suggest that recall degrades significantly under task complexity — agents complete work while missing large portions of their stored knowledge. Task completion metrics stay green even as retrieval quality degrades. The agent finishes the work. The work is wrong.
 
 ## Architecture: Two Systems, One Contract
 

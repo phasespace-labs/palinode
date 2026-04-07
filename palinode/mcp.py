@@ -479,7 +479,7 @@ async def list_tools() -> list[types.Tool]:
                     "task": {
                         "type": "string",
                         "description": "For 'list': filter by task type",
-                        "enum": ["compaction", "extraction", "update", "classification"],
+                        "enum": ["compaction", "extraction", "update", "classification", "nightly-consolidation"],
                     },
                 },
                 "required": ["action"],

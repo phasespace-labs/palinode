@@ -20,7 +20,7 @@ def prompt():
 
 
 @prompt.command(name="list")
-@click.option("--task", type=click.Choice(["compaction", "extraction", "update", "classification"]),
+@click.option("--task", type=click.Choice(["compaction", "extraction", "update", "classification", "nightly-consolidation"]),
               help="Filter by task type")
 @click.option("--format", "fmt", type=click.Choice(["text", "json"]), default=None)
 def prompt_list(task: str | None, fmt: str | None) -> None:

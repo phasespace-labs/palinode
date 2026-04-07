@@ -7,7 +7,7 @@ from palinode.cli._format import console, print_result, get_default_format, Outp
 @click.option("--dry-run", is_flag=True, help="Preview changes without applying")
 @click.option("--format", "fmt", type=click.Choice(["json", "text"]), help="Output format")
 def consolidate(nightly, dry_run, fmt):
-    """Run or preview weekly compaction."""
+    """Run or preview memory compaction (weekly full or --nightly lightweight)."""
     try:
         data = api_client.consolidate(dry_run=dry_run, nightly=nightly)
         

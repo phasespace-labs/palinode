@@ -76,7 +76,7 @@ pip install -e .
 # Create your memory directory
 mkdir -p ~/.palinode/{people,projects,decisions,insights,daily}
 cd ~/.palinode && git init
-cp ~/palinode/palinode.config.yaml.example palinode.config.yaml
+cp /path/to/palinode/palinode.config.yaml.example palinode.config.yaml  # adjust path
 
 # Start services
 PALINODE_DIR=~/.palinode palinode-api        # REST API on :6340
@@ -213,11 +213,11 @@ Optional: a chat model for consolidation (any 7B+ works), OpenClaw for agent plu
 | `GET/POST` | `/triggers` | Prospective recall triggers |
 | `POST` | `/consolidate` | Run or preview compaction |
 | `GET` | `/list` | Browse files by type |
-| `GET` | `/read/{path}` | Read a memory file |
-| `GET` | `/history/{path}` | Git log for a file |
+| `GET` | `/read?file_path=...` | Read a memory file |
+| `GET` | `/history/{file_path}` | Git log for a file |
 | `GET` | `/diff` | Recent changes |
-| `GET` | `/blame` | Git blame |
-| `GET` | `/timeline` | File evolution |
+| `GET` | `/blame/{file_path}` | Git blame |
+| `GET` | `/timeline/{file_path}` | File evolution |
 | `POST` | `/rollback` | Revert a file |
 | `POST` | `/push` | Push to git remote |
 | `POST` | `/reindex` | Rebuild indices |

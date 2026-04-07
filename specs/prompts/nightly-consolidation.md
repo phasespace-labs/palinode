@@ -19,11 +19,11 @@ For each project mentioned in the daily notes, propose UPDATE or SUPERSEDE opera
 ## Rules
 - Only UPDATE (append new info) or SUPERSEDE (replace outdated line with current info)
 - Do NOT ARCHIVE, MERGE, or KEEP — those are weekly operations
-- Each operation targets a specific fact_id in the status file
+- Each operation targets a specific `id` (fact ID) in the status file
 - If a status line is now outdated by today's work, SUPERSEDE it
 - If today adds new information, UPDATE with a new status line
 - Be concise: one line per status entry, format: `- [YYYY-MM-DD] summary`
 
 ## Output
 Return a JSON array of operations:
-[{"op": "UPDATE", "fact_id": "...", "content": "..."}, ...]
+[{"op": "UPDATE", "id": "...", "new_text": "..."}, ...]

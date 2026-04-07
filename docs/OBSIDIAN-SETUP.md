@@ -12,4 +12,4 @@ Because Palinode stores all memories as standard markdown files, you can use [Ob
 
 - **Visual Graph:** See how your agent connects people, projects, and ideas (frontmatter `entities` arrays act as tags/links if you configure Obsidian's Dataview)
 - **Manual Curation:** If the agent gets a detail wrong, just type to fix it. The file watcher will pick up your changes within 2 seconds.
-- **GrueBrain Rationalization:** If you use GrueBrain, you can symlink specific subdirectories (like `projects/` or `daily/`) into your main GrueBrain vault.
+- **Second Brain Integration:** You can symlink specific subdirectories (like `projects/` or `daily/`) into an existing Obsidian vault.
