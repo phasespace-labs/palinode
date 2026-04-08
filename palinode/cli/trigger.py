@@ -52,7 +52,7 @@ def trigger_list(fmt):
                 table.add_row(
                     t['id'], 
                     t['description'], 
-                    t['file'], 
+                    t.get('memory_file', t.get('file', '')),
                     f"{t['threshold']:.2f}"
                 )
             

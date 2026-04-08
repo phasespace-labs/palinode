@@ -289,8 +289,8 @@ def push() -> str:
     # Check if there are unpushed commits
     status = _run_git("status", "--porcelain")
     if status.stdout.strip():
-        # Auto-commit any uncommitted changes first
-        _run_git("add", "-A")
+        # Auto-commit any uncommitted changes first (only markdown, not journals)
+        _run_git("add", "*.md", "**/*.md")
         _run_git("commit", "-m", f"palinode: auto-commit before push ({_utc_now().strftime('%Y-%m-%d %H:%M')})")
     
     result = _run_git("push", "origin", "main")

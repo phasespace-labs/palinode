@@ -30,7 +30,7 @@ def save(content, memory_type, entities, file_path, title, source, fmt):
         if output_fmt == OutputFormat.JSON:
             print_result(result, fmt=output_fmt)
         else:
-            filename = result.get("file", "unknown")
+            filename = result.get("file_path", result.get("file", "unknown"))
             id_str = result.get("id", "unknown")
             console.print(f"[green]Saved:[/green] {filename} (id: {id_str})")
             

@@ -20,6 +20,8 @@ import glob
 from datetime import UTC, datetime
 from typing import Any
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
@@ -51,7 +53,13 @@ fh = logging.FileHandler(os.path.join(config.palinode_dir, config.logging.operat
 fh.setFormatter(JsonlFormatter())
 logger.addHandler(fh)
 
-app = FastAPI(title="Palinode API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize database on startup."""
+    store.init_db()
+    yield
+
+app = FastAPI(title="Palinode API", lifespan=lifespan)
 
 # ── Auto-summary helpers ──────────────────────────────────────────────────────
 
@@ -144,11 +152,6 @@ def _inject_summary(file_path: str, summary: str) -> None:
         f.write(new_text)
 
 # ─────────────────────────────────────────────────────────────────────────────
-
-@app.on_event("startup")
-def on_startup() -> None:
-    """Initializes local filesystem database routines during FastAPI boot."""
-    store.init_db()
 
 
 class SearchRequest(BaseModel):
