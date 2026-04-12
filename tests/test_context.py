@@ -11,13 +11,13 @@ def test_search_hybrid_context_boost():
         with patch("palinode.core.store.search_fts") as mock_fts:
             with patch("palinode.core.store.get_db"):
                 with patch("palinode.core.store.get_entity_files") as mock_entities:
-                    # Two results: palinode file and other-project file, initially ranked equally
+                    # Two results: palinode file and acme-project file, initially ranked equally
                     mock_vec.return_value = [
                         {"file_path": "/mem/projects/palinode-adr.md", "content": "ADR-004", "score": 0.85},
-                        {"file_path": "/mem/projects/kmd-adr.md", "content": "ADR-052", "score": 0.86},
+                        {"file_path": "/mem/projects/acme-adr.md", "content": "ADR-052", "score": 0.86},
                     ]
                     mock_fts.return_value = [
-                        {"file_path": "/mem/projects/kmd-adr.md", "content": "ADR-052", "score": 0.7},
+                        {"file_path": "/mem/projects/acme-adr.md", "content": "ADR-052", "score": 0.7},
                         {"file_path": "/mem/projects/palinode-adr.md", "content": "ADR-004", "score": 0.6},
                     ]
                     # Entity lookup: project/palinode maps to the palinode file
@@ -25,7 +25,7 @@ def test_search_hybrid_context_boost():
                         {"file_path": "/mem/projects/palinode-adr.md", "category": "projects", "last_seen": "2026-04-12"}
                     ]
 
-                    # Without context: other-project should rank first (higher combined score)
+                    # Without context: acme-project should rank first (higher combined score)
                     results_no_ctx = store.search_hybrid(
                         "ADR-004", query_embedding=[0.0]*1024, top_k=2, threshold=0.0,
                         context_entities=None,
@@ -103,6 +103,94 @@ def test_search_hybrid_boost_factor():
                             context_entities=["project/palinode"],
                         )
                         mock_entities.assert_not_called()
+    finally:
+        config.context.boost = original
+
+
+def test_search_vector_context_boost():
+    """Non-hybrid search should also apply context boost (#92)."""
+    with patch("palinode.core.store.get_db") as mock_db:
+        with patch("palinode.core.store.get_entity_files") as mock_entities:
+            # Simulate two vector results: acme ranks higher by raw cosine
+            mock_cursor = MagicMock()
+            mock_cursor.fetchall.return_value = [
+                {"id": 1, "file_path": "/mem/projects/acme-adr.md", "section_id": "root",
+                 "content": "ADR-052", "category": "projects", "metadata": "{}",
+                 "created_at": "2026-04-12", "distance": 0.3},
+                {"id": 2, "file_path": "/mem/projects/palinode-adr.md", "section_id": "root",
+                 "content": "ADR-004", "category": "projects", "metadata": "{}",
+                 "created_at": "2026-04-12", "distance": 0.35},
+            ]
+            mock_db.return_value.cursor.return_value = mock_cursor
+            mock_db.return_value.close = MagicMock()
+
+            mock_entities.return_value = [
+                {"file_path": "/mem/projects/palinode-adr.md", "category": "projects", "last_seen": "2026-04-12"}
+            ]
+
+            # Without context: acme first (lower distance = higher score)
+            results_no_ctx = store.search(
+                query_embedding=[0.0]*1024, top_k=2, threshold=0.0,
+                context_entities=None,
+            )
+            assert len(results_no_ctx) == 2
+            assert "acme" in results_no_ctx[0]["file_path"]
+
+            # With context: palinode should be boosted to first
+            results_ctx = store.search(
+                query_embedding=[0.0]*1024, top_k=2, threshold=0.0,
+                context_entities=["project/palinode"],
+            )
+            assert len(results_ctx) == 2
+            assert "palinode" in results_ctx[0]["file_path"]
+
+
+def test_search_vector_context_disabled_no_boost():
+    """Non-hybrid search should not boost when context.enabled is False (#92)."""
+    original = config.context.enabled
+    try:
+        config.context.enabled = False
+        with patch("palinode.core.store.get_db") as mock_db:
+            with patch("palinode.core.store.get_entity_files") as mock_entities:
+                mock_cursor = MagicMock()
+                mock_cursor.fetchall.return_value = [
+                    {"id": 1, "file_path": "a.md", "section_id": "root",
+                     "content": "text", "category": "projects", "metadata": "{}",
+                     "created_at": "2026-04-12", "distance": 0.3},
+                ]
+                mock_db.return_value.cursor.return_value = mock_cursor
+                mock_db.return_value.close = MagicMock()
+
+                store.search(
+                    query_embedding=[0.0]*1024, top_k=2, threshold=0.0,
+                    context_entities=["project/palinode"],
+                )
+                mock_entities.assert_not_called()
+    finally:
+        config.context.enabled = original
+
+
+def test_search_vector_boost_factor_one_noop():
+    """Non-hybrid search: boost=1.0 should be a no-op (#92)."""
+    original = config.context.boost
+    try:
+        config.context.boost = 1.0
+        with patch("palinode.core.store.get_db") as mock_db:
+            with patch("palinode.core.store.get_entity_files") as mock_entities:
+                mock_cursor = MagicMock()
+                mock_cursor.fetchall.return_value = [
+                    {"id": 1, "file_path": "a.md", "section_id": "root",
+                     "content": "text", "category": "projects", "metadata": "{}",
+                     "created_at": "2026-04-12", "distance": 0.3},
+                ]
+                mock_db.return_value.cursor.return_value = mock_cursor
+                mock_db.return_value.close = MagicMock()
+
+                store.search(
+                    query_embedding=[0.0]*1024, top_k=2, threshold=0.0,
+                    context_entities=["project/palinode"],
+                )
+                mock_entities.assert_not_called()
     finally:
         config.context.boost = original
 

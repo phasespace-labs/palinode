@@ -161,7 +161,7 @@ Run `palinode_status` and check `total_files` and `fts_chunks`. If both are 0, t
 ## Learn more
 
 - [Main repository](https://github.com/Paul-Kyle/palinode)
-- [CHANGELOG](https://github.com/Paul-Kyle/palinode/blob/main/docs/CHANGELOG.md) for what's in v0.6.2
+- [CHANGELOG](https://github.com/Paul-Kyle/palinode/blob/main/docs/CHANGELOG.md) for what's in v0.7.0
 - [Compaction demo](https://github.com/Paul-Kyle/palinode/tree/main/examples/compaction-demo) — walkthrough of a memory file across three consolidation passes with blame + diff output
 - [ADR-001: Tools Over Pipeline](https://github.com/Paul-Kyle/palinode/blob/main/ADR-001-tools-over-pipeline.md) — why the executor is deterministic
 

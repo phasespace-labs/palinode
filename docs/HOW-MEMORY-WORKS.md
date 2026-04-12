@@ -297,7 +297,7 @@ Every memory change is a git commit. This enables:
 | --- | --- | --- |
 | `palinode_diff` | What changed recently? | "Show me changes this week" |
 | `palinode_blame` | When was this fact recorded? | "When did Alice mention async?" |
-| `palinode_timeline` | How has this file evolved? | "Show My App's history" |
+| `palinode_history` | How has this file evolved? | "Show My App's history" |
 | `palinode_rollback` | Undo a bad change | "Revert last consolidation" |
 | `palinode_push` | Sync to GitHub | "Backup my memory" |
 
@@ -416,7 +416,7 @@ Other memory systems are opaque databases. You can query them but you can't ask:
 
 - "When did I first learn that Alice prefers async?" → `palinode_blame`
 - "What changed about the My App project this week?" → `palinode_diff`
-- "Show me every update to my infrastructure notes" → `palinode_timeline`
+- "Show me every update to my infrastructure notes" → `palinode_history`
 - "The last consolidation was bad, undo it" → `palinode_rollback`
 
 These aren't add-on features. They're consequences of the architectural decision to use files + git as the source of truth. The audit trail is free.

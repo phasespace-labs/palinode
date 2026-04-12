@@ -284,7 +284,7 @@ Search palinode for "recent project decisions"
 | `palinode_consolidate` | Run or preview the weekly compaction job |
 | `palinode_diff` | See what changed in memory recently (git diff) |
 | `palinode_blame` | Who/when each line was written (git blame) |
-| `palinode_timeline` | Chronological changes to a memory file |
+| `palinode_history` | Git history with diff stats and rename tracking |
 | `palinode_rollback` | Revert a file to a previous state |
 | `palinode_push` | Push memory changes to remote git |
 | `palinode_trigger` | Register a prospective recall trigger |
