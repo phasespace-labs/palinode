@@ -1,0 +1,18 @@
+{
+  "id": "openclaw-palinode",
+  "name": "Palinode Memory System",
+  "version": "0.1.0",
+  "description": "Persistent memory — files as truth, vectors as search.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "palinodeApiUrl": { "type": "string" },
+      "palinodeDir": { "type": "string" },
+      "autoCapture": { "type": "boolean" },
+      "autoRecall": { "type": "boolean" },
+      "promptsDir": { "type": "string" }
+    },
+    "required": []
+  }
+}

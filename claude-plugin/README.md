@@ -98,7 +98,7 @@ The plugin configures Claude Code to launch `palinode-mcp` as a stdio MCP server
 
 ## What you get
 
-Once installed and connected, the plugin exposes 18 MCP tools to Claude Code:
+Once installed and connected, the plugin exposes 17 MCP tools to Claude Code:
 
 ### Search and retrieval
 - `palinode_search` — hybrid semantic + keyword search across all memory files
@@ -108,14 +108,13 @@ Once installed and connected, the plugin exposes 18 MCP tools to Claude Code:
 - `palinode_entities` — entity graph traversal (people, projects, decisions)
 
 ### Save and capture
-- `palinode_save` — write a new memory item. Supports type, entities, core flag, slug, source. As of v0.6.0, saves run write-time contradiction checking in the background (ADR-004).
+- `palinode_save` — write a new memory item. Supports type, entities, core flag, slug, source. As of v0.6.2, saves run write-time contradiction checking in the background (ADR-004).
 - `palinode_session_end` — capture session outcomes (summary, decisions, blockers) to daily notes and project status files
 - `palinode_ingest` — fetch a URL and store it as a research reference
 
 ### Provenance and audit
-- `palinode_history` — git log of a specific memory file
+- `palinode_history` — git history of a memory file with diff stats and rename tracking
 - `palinode_blame` — trace every line in a memory file back to the session that wrote it
-- `palinode_timeline` — file evolution over time
 - `palinode_diff` — what changed across the whole memory in the last N days
 - `palinode_rollback` — safely revert a memory file to a prior version
 
@@ -162,7 +161,7 @@ Run `palinode_status` and check `total_files` and `fts_chunks`. If both are 0, t
 ## Learn more
 
 - [Main repository](https://github.com/Paul-Kyle/palinode)
-- [CHANGELOG](https://github.com/Paul-Kyle/palinode/blob/main/docs/CHANGELOG.md) for what's in v0.6.0
+- [CHANGELOG](https://github.com/Paul-Kyle/palinode/blob/main/docs/CHANGELOG.md) for what's in v0.6.2
 - [Compaction demo](https://github.com/Paul-Kyle/palinode/tree/main/examples/compaction-demo) — walkthrough of a memory file across three consolidation passes with blame + diff output
 - [ADR-001: Tools Over Pipeline](https://github.com/Paul-Kyle/palinode/blob/main/ADR-001-tools-over-pipeline.md) — why the executor is deterministic
 

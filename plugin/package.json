@@ -1,0 +1,12 @@
+{
+  "name": "openclaw-palinode",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Palinode memory system for OpenClaw",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.47"
+  },
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  }
+}

@@ -49,7 +49,7 @@ graph TD
 
 ## 1. Session Recall (Every Agent Turn)
 
-**Hook:** `before_agent_start` in the OpenClaw plugin
+**Hook:** `before_agent_start` in the agent plugin
 
 Every time you send a message, Palinode injects relevant context **before the agent sees your message**. This happens in four phases:
 
@@ -120,7 +120,7 @@ Before injection, all content passes through `specs/scrub-patterns.yaml` — reg
 
 ## 2. Session Capture (End of Every Turn)
 
-**Hook:** `agent_end` in the OpenClaw plugin
+**Hook:** `agent_end` in the agent plugin
 
 After each agent response, the plugin captures the conversation to a daily note:
 

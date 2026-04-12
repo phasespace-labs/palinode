@@ -17,7 +17,7 @@ Files (markdown + YAML frontmatter)
   ↓ watched
 Index (SQLite-vec vectors + FTS5 keywords, single .db file)
   ↓ queried by
-Interfaces (MCP server, REST API, CLI, OpenClaw plugin)
+Interfaces (MCP server, REST API, CLI, plugin hooks)
   ↓ compacted by
 LLM (proposes ops → deterministic executor applies them → git commits)
 ```
@@ -28,14 +28,14 @@ That's the whole architecture. One directory of `.md` files, one SQLite database
 
 ## One Backend, Every Interface
 
-Palinode doesn't care how you talk to it. The same 18 tools work everywhere:
+Palinode doesn't care how you talk to it. The same 17 tools work everywhere:
 
 | Interface | Transport | Best For |
 |-----------|-----------|----------|
 | **MCP Server** | Streamable HTTP or stdio | Claude Code, Claude Desktop, Cursor, Zed |
 | **REST API** | HTTP on :6340 | Scripts, webhooks, custom integrations |
 | **CLI** | Wraps REST API | Cron jobs, SSH, shell scripts (8x fewer tokens than MCP) |
-| **Plugin** | OpenClaw lifecycle hooks | Agent frameworks with inject/extract patterns |
+| **Plugin** | Agent lifecycle hooks | Agent frameworks with inject/extract patterns |
 
 Set up once on a server. Connect from any machine, any IDE, any agent framework. The MCP server is a pure HTTP client — it holds no state, no database connection, no embedder. Point it at the API and go.
 
@@ -47,7 +47,7 @@ Set up once on a server. Connect from any machine, any IDE, any agent framework.
 }
 ```
 
-That's the entire client config for Claude Code, Claude Desktop, Cursor, or Zed. See [docs/INSTALL-CLAUDE-CODE.md](docs/INSTALL-CLAUDE-CODE.md) for the full setup guide.
+That's the entire client config for Claude Code, Claude Desktop, Cursor, or Zed. See [docs/MCP-SETUP.md](docs/MCP-SETUP.md) for multi-IDE setup, or [docs/INSTALL-CLAUDE-CODE.md](docs/INSTALL-CLAUDE-CODE.md) for Claude Code specifically.
 
 ---
 
@@ -93,7 +93,7 @@ curl http://localhost:6340/status
 
 ## Tools
 
-18 tools available through every interface:
+17 tools available through every interface:
 
 | Tool | What It Does |
 |------|-------------|
@@ -103,12 +103,11 @@ curl http://localhost:6340/status
 | `read` | Read the full content of a memory file |
 | `ingest` | Fetch a URL and save as research |
 | `status` | Health check — file counts, index stats, service status |
-| `history` | Git history for a specific file |
+| `history` | Git history with diff stats, rename tracking, and limit |
 | `entities` | Entity graph — cross-references between memories |
 | `consolidate` | Preview or run LLM-powered compaction |
 | `diff` | What changed in the last N days |
 | `blame` | Trace a fact back to the commit that recorded it |
-| `timeline` | Evolution of a file over time |
 | `rollback` | Revert a file to a previous commit (safe, creates new commit) |
 | `push` | Sync memory to a remote git repo |
 | `trigger` | Prospective recall — auto-inject when a topic comes up |
@@ -197,7 +196,7 @@ All models are swappable. Any Ollama embedding model, any OpenAI-compatible chat
 - **Ollama** with `bge-m3` (`ollama pull bge-m3`)
 - **Git**
 
-Optional: a chat model for consolidation (any 7B+ works), OpenClaw for agent plugin hooks.
+Optional: a chat model for consolidation (any 7B+ works).
 
 ---
 
@@ -217,7 +216,6 @@ Optional: a chat model for consolidation (any 7B+ works), OpenClaw for agent plu
 | `GET` | `/history/{file_path}` | Git log for a file |
 | `GET` | `/diff` | Recent changes |
 | `GET` | `/blame/{file_path}` | Git blame |
-| `GET` | `/timeline/{file_path}` | File evolution |
 | `POST` | `/rollback` | Revert a file |
 | `POST` | `/push` | Push to git remote |
 | `POST` | `/reindex` | Rebuild indices |

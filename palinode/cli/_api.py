@@ -94,8 +94,8 @@ class PalinodeAPI:
         response.raise_for_status()
         return response.json()
 
-    def get_history(self, file_path: str):
-        response = self.client.get(f"/history/{file_path}", timeout=10.0)
+    def get_history(self, file_path: str, limit: int = 20):
+        response = self.client.get(f"/history/{file_path}", params={"limit": limit}, timeout=10.0)
         response.raise_for_status()
         return response.json()
 
@@ -112,11 +112,6 @@ class PalinodeAPI:
         if search:
             params["search"] = search
         response = self.client.get(f"/blame/{file_path}", params=params, timeout=10.0)
-        response.raise_for_status()
-        return response.json()
-
-    def timeline(self, file_path: str, limit: int = 20):
-        response = self.client.get(f"/timeline/{file_path}", params={"limit": limit}, timeout=10.0)
         response.raise_for_status()
         return response.json()
 

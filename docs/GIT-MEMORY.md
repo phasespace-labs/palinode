@@ -7,7 +7,7 @@ Palinode treats memory as code. Every fact, decision, and project detail your ag
 Because the memory directory is just a Git repository, Palinode provides built-in tools to inspect it without requiring you to use the Git CLI manually. These tools are available via:
 - **CLI Commands:** for human administrators.
 - **MCP Tools:** for LLMs via Claude Code.
-- **OpenClaw Plugin:** read-only tools for the chat agent.
+- **Plugin hooks:** read-only tools for the chat agent.
 
 ### 1. Diff
 

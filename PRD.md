@@ -40,7 +40,7 @@ All of these store things. None of them *remember*.
 3. **Consolidation, not accumulation.** 100 sessions should produce 20 well-maintained files, not 100 unread dumps. The system gets smaller and more useful over time.
 4. **Invisible when working.** The human talks to their agent. The agent uses Palinode behind the scenes. The only visible outputs are daily digests, weekly reviews, and better conversations.
 5. **Graceful degradation.** Vector index down → read files. Embedding service down → grep. Machine off → it's a git repo, clone it anywhere.
-6. **Infrastructure-agnostic.** Palinode is a service. OpenClaw is the first client. If the orchestration layer changes, Palinode is portable.
+6. **Infrastructure-agnostic.** Palinode is a service. Any agent framework can be a client. If the orchestration layer changes, Palinode is portable.
 7. **CAG first, RAG at scale.** For small memory (<50 core files), just load the files. No vector search needed. As memory grows, vector search handles scale. The system naturally transitions from "load it all" to "search for relevant chunks."
 8. **Zero taxonomy burden.** The human captures. The system classifies, creates entities, maintains the catalog. If the human has to maintain a taxonomy, the system dies.
 9. **Nothing hardcoded.** Prompts live in markdown files. Policies live in PROGRAM.md. Thresholds live in config.yaml. The plugin code is plumbing — all behavior is defined in editable, version-controlled text.
@@ -454,9 +454,9 @@ Sunday Cron ────→ Weekly review → Telegram
 
 ---
 
-## 8. Integration with OpenClaw
+## 8. Agent Plugin Integration
 
-**Implementation:** OpenClaw Plugin (`openclaw-palinode`)
+**Implementation:** Agent plugin (`plugin/`)
 
 **Plugin hooks used:**
 
@@ -483,47 +483,41 @@ Sunday Cron ────→ Weekly review → Telegram
 
 | Command | Description |
 |---|---|
-| `openclaw palinode search <query>` | Search from terminal |
-| `openclaw palinode stats` | Memory statistics |
-| `openclaw palinode consolidate` | Run consolidation manually |
-| `openclaw palinode reindex` | Rebuild SQLite-vec from files |
+| `palinode search <query>` | Search from terminal |
+| `palinode stats` | Memory statistics |
+| `palinode consolidate` | Run consolidation manually |
+| `palinode reindex` | Rebuild SQLite-vec from files |
 
-**Config:**
+**Config (`palinode.config.yaml`):**
 
 ```yaml
-extensions:
-  openclaw-palinode:
-    # Paths
-    palinodeDir: "~/.palinode"               # Memory store root
-    programFile: "PROGRAM.md"                  # Memory manager behavior spec (relative to palinodeDir)
-    promptsDir: "specs/prompts"                # System prompts directory (relative to palinodeDir)
+# Paths
+memory_dir: "~/.palinode"                    # Memory store root
 
-    # Embedding
-    ollamaUrl: "http://localhost:11434"       # Ollama endpoint for embeddings
-    embeddingModel: "bge-m3"                   # Model name — change without code changes
+# Embedding
+ollama_url: "http://localhost:11434"         # Ollama endpoint for embeddings
+embedding_model: "bge-m3"                     # Model name — change without code changes
 
-    # Behavior
-    autoCapture: true                          # Extract memories after each agent turn
-    autoRecall: true                           # Inject context before each agent turn
-    receiptMode: "digest"                      # silent | log | notify | digest
+# Behavior
+auto_capture: true                            # Extract memories after each agent turn
+auto_recall: true                             # Inject context before each agent turn
 
-    # Budgets
-    coreMemoryBudget: 2048                     # Max tokens for Phase 1 (core/CAG) injection
-    topicMemoryBudget: 2048                    # Max tokens for Phase 2 (topic-specific) injection
+# Budgets
+recall:
+  core:
+    max_chars_per_file: 3000                  # Max chars for Phase 1 (core/CAG) injection
+  search:
+    top_k: 10                                 # Max results per search
+    threshold: 0.6                            # Minimum similarity score for results
 
-    # Search
-    searchThreshold: 0.6                       # Minimum similarity score for results
-    searchTopK: 10                             # Max results per search
-    confidenceThreshold: 0.6                   # Below this → inbox for human review
+# Schedules (cron expressions)
+consolidation:
+  schedule: "0 3 * * 0"                       # Sunday 3am UTC
 
-    # Schedules (cron expressions)
-    consolidationSchedule: "0 3 * * 0"         # Sunday 3am UTC
-    dailyDigestSchedule: "0 14 * * *"          # 7am Pacific (14:00 UTC)
-    weeklyReviewSchedule: "0 1 * * 0"          # Sunday 1am UTC
-
-    # Git
-    autoCommit: true                           # Commit after extraction/consolidation
-    gitRemote: ""                              # Remote for push (empty = no push)
+# Git
+git:
+  auto_commit: true                           # Commit after extraction/consolidation
+  remote: ""                                  # Remote for push (empty = no push)
 ```
 
 All behavior-level configuration (extraction aggressiveness, what to capture, what to ignore, consolidation rules) lives in `PROGRAM.md` and `specs/prompts/*.md`, NOT in this config. Config is for plumbing. PROGRAM.md is for policy.

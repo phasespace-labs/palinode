@@ -8,14 +8,15 @@ from palinode.cli.consolidate import consolidate
 from palinode.cli.trigger import trigger
 from palinode.cli.doctor import doctor
 from palinode.cli.manage import reindex, rebuild_fts, split_layers, bootstrap_ids
-from palinode.cli.git import blame, timeline, rollback, push
-from palinode.cli.query import history, entities
+from palinode.cli.git import blame, history, rollback, push
+from palinode.cli.query import entities
 from palinode.cli.session_end import session_end
 from palinode.cli.read import read
 from palinode.cli.list import list_cmd
 from palinode.cli.lint import lint
 from palinode.cli.ingest import ingest
 from palinode.cli.prompt import prompt
+
 
 @click.group()
 def main():
@@ -37,14 +38,14 @@ main.add_command(rebuild_fts)
 main.add_command(split_layers)
 main.add_command(bootstrap_ids)
 
+
 # Git
 main.add_command(blame)
-main.add_command(timeline)
+main.add_command(history)
 main.add_command(rollback)
 main.add_command(push)
 
 # Query
-main.add_command(history)
 main.add_command(entities)
 main.add_command(read)
 main.add_command(list_cmd, name="list")

@@ -1,6 +1,6 @@
 import click
 from palinode.cli._api import api_client
-from palinode.cli._format import console, print_result
+from palinode.cli._format import console, print_result, get_default_format
 
 @click.command()
 @click.argument("file_path")
@@ -15,14 +15,14 @@ def blame(file_path, search):
 
 @click.command()
 @click.argument("file_path")
-@click.option("--limit", type=int, default=20, help="Number of evolution records to show")
-def timeline(file_path, limit):
-    """Show file evolution."""
+@click.option("--limit", type=int, default=20, help="Max commits to show")
+def history(file_path, limit):
+    """Show file change history with diff stats."""
     try:
-        data = api_client.timeline(file_path, limit)
-        console.print(data)
+        data = api_client.get_history(file_path, limit)
+        print_result(data, fmt=get_default_format())
     except Exception as e:
-        console.print(f"[red]Error showing timeline: {str(e)}[/red]")
+        console.print(f"[red]Error showing history: {str(e)}[/red]")
 
 @click.command()
 @click.argument("file_path")

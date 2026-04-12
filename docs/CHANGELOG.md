@@ -2,6 +2,31 @@
 
 All notable changes to Palinode. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.2] — 2026-04-12
+
+### Added
+
+**Multi-platform MCP setup guide**
+- `docs/MCP-SETUP.md` — setup instructions for Claude Code, Cursor, VS Code (Continue + Cline), Zed, and Windsurf
+- Replaces the old Claude Code-only setup doc
+
+**Agent plugin restored**
+- `plugin/` re-added after scrubbing internal references
+- Hook migrated from `before_agent_start` to `before_prompt_build`
+- Fixed `cfg.apiUrl` → `cfg.palinodeApiUrl` runtime bug
+
+### Changed
+
+- `palinode_timeline` merged into `palinode_history` — one tool with `--follow`, diff stats, structured JSON return, and `limit` parameter (closes #1)
+- Tool count: 18 → 17 (timeline/history consolidated)
+- Claude Code plugin manifest updated to v0.6.2
+
+### Removed
+
+- `docs/claude-code-setup.md` — replaced by `docs/MCP-SETUP.md`
+
+---
+
 ## [0.6.1] — 2026-04-12
 
 ### Added

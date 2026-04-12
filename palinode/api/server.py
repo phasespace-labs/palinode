@@ -741,35 +741,18 @@ def lint_api() -> dict[str, Any]:
 
 
 @app.get("/history/{file_path:path}")
-def history_api(file_path: str, limit: int = 10) -> dict[str, Any]:
-    """Get the change history for a memory file via git log.
+def history_api(file_path: str, limit: int = 20) -> dict[str, Any]:
+    """Get the change history for a memory file.
 
-    Shows when and how a memory was created, updated, or superseded.
+    Uses --follow to track renames and includes diff stats per commit.
     """
-    import subprocess
-    base_dir, full_path = _resolve_memory_path(file_path)
-        
-    if not os.path.exists(full_path):
-        raise HTTPException(status_code=404, detail="File not found")
-
-    result = subprocess.run(
-        ["git", "log", f"-{limit}", "--format=%H|%aI|%s", "--", file_path],
-        capture_output=True, text=True,
-        cwd=base_dir,
-    )
-    
-    commits = []
-    for line in result.stdout.strip().split("\n"):
-        if not line:
-            continue
-        parts = line.split("|", 2)
-        if len(parts) == 3:
-            commits.append({
-                "hash": parts[0][:8],
-                "date": parts[1],
-                "message": parts[2],
-            })
-    
+    commits = git_tools.history(file_path, limit)
+    if not commits:
+        # Distinguish "file not found" from "no history"
+        import os as _os
+        full_path = _os.path.join(config.memory_dir, file_path)
+        if not _os.path.exists(full_path):
+            raise HTTPException(status_code=404, detail="File not found")
     return {"file": file_path, "history": commits}
 
 
@@ -825,12 +808,6 @@ def diff_api(days: int = 7, paths: str | None = None) -> dict[str, Any]:
 def blame_api(file_path: str, search: str | None = None) -> dict[str, Any]:
     """Show when each line of a memory file was last changed."""
     return {"blame": git_tools.blame(file_path, search)}
-
-
-@app.get("/timeline/{file_path:path}")
-def timeline_api(file_path: str, limit: int = 20) -> dict[str, Any]:
-    """Show the evolution of a memory file over time."""
-    return {"timeline": git_tools.timeline(file_path, limit)}
 
 
 @app.post("/rollback")

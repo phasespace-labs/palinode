@@ -1,6 +1,6 @@
 # Installing Palinode with Claude Code
 
-Palinode gives Claude Code persistent memory via MCP — 18 tools for searching, saving, and managing memories across sessions. The `palinode-session` skill auto-captures milestones and decisions during coding, so your memory stays fresh without manual effort.
+Palinode gives Claude Code persistent memory via MCP — 17 tools for searching, saving, and managing memories across sessions. The `palinode-session` skill auto-captures milestones and decisions during coding, so your memory stays fresh without manual effort.
 
 ## Prerequisites
 
@@ -201,7 +201,7 @@ The MCP endpoint is `http://your-server:6341/mcp`. Configure your IDE:
 ### Network Access
 
 The MCP server needs to be reachable from your IDE. Options:
-- **Tailscale** (recommended): Install on both machines, use the Tailscale IP (e.g., `http://100.x.x.x:6341/mcp`)
+- **VPN / overlay network**: Use a VPN or overlay network IP if the server is on a different network
 - **LAN**: Use the server's local IP if on the same network
 - **SSH tunnel**: `ssh -L 6341:localhost:6341 youruser@your-server` then use `http://localhost:6341/mcp`
 

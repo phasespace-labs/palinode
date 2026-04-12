@@ -192,33 +192,34 @@ def blame(file_path: str, search: str | None = None) -> str:
     return header + blame_output
 
 
-def timeline(file_path: str, limit: int = 20) -> str:
-    """Show the evolution of a memory file over time.
+def history(file_path: str, limit: int = 20) -> list[dict[str, str]]:
+    """Show the change history of a memory file.
 
-    Returns a chronological list of changes: when, what changed,
-    and the commit message (which often contains the session context).
+    Returns a list of commits that touched this file, with diff stats.
+    Uses ``--follow`` to track renames.
 
     Args:
         file_path: Relative path within the data repo.
-        limit: Maximum number of commits to show.
+        limit: Maximum number of commits to return.
 
     Returns:
-        Formatted timeline with dates, messages, and change summaries.
+        List of dicts with keys: hash, date, message, stats.
+        Empty list if no history found.
     """
     file_path = _resolve_memory_path(file_path)
     if not os.path.exists(os.path.join(config.memory_dir, file_path)):
-        return f"File not found: {file_path}"
+        return []
 
-    # Get commits that touched this file
+    # Get commits that touched this file (--follow tracks renames)
     result = _run_git(
         "log", f"-{limit}", "--format=%h|%aI|%s",
         "--follow", "--", file_path
     )
-    
-    if not result.stdout.strip():
-        return f"No git history for {file_path}"
 
-    lines = []
+    if not result.stdout.strip():
+        return []
+
+    commits = []
     for entry in result.stdout.strip().split("\n"):
         parts = entry.split("|", 2)
         if len(parts) == 3:
@@ -226,12 +227,19 @@ def timeline(file_path: str, limit: int = 20) -> str:
             # Get the diff stat for this specific commit
             stat = _run_git("diff", "--stat", f"{hash_short}^..{hash_short}", "--", file_path)
             stat_line = stat.stdout.strip().split("\n")[-1] if stat.stdout.strip() else ""
-            lines.append(f"- **{date[:10]}** `{hash_short}` — {message}")
-            if stat_line and "changed" in stat_line:
-                lines.append(f"  {stat_line.strip()}")
+            stats = stat_line.strip() if stat_line and "changed" in stat_line else ""
+            commits.append({
+                "hash": hash_short,
+                "date": date,
+                "message": message,
+                "stats": stats,
+            })
 
-    header = f"## Timeline: {file_path}\n\n"
-    return header + "\n".join(lines)
+    return commits
+
+
+# Keep as alias for any remaining callers
+timeline = history
 
 
 def rollback(file_path: str, commit: str | None = None, dry_run: bool = False) -> str:

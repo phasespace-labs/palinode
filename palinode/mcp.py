@@ -6,7 +6,7 @@ Runs over stdio — spawned on demand by the client.
 
 All tool implementations are thin HTTP wrappers around the Palinode API server.
 The MCP server itself holds no database connections, embedder state, or git handles.
-Set PALINODE_API_HOST to point at a remote API server (e.g. over Tailscale).
+Set PALINODE_API_HOST to point at a remote API server (e.g. over a VPN).
 
 Tools:
   palinode_search  — semantic search over memory files
@@ -285,14 +285,22 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="palinode_history",
-            description="View the creation/modification history of a memory file.",
+            description=(
+                "Show the change history of a memory file. Tracks renames (--follow) "
+                "and includes diff stats per commit."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "file_path": {
                         "type": "string",
                         "description": "File path relative to the memory directory (e.g. people/alice.md)"
-                    }
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of commits to show (default 20)",
+                        "default": 20,
+                    },
                 },
                 "required": ["file_path"],
             },
@@ -362,28 +370,6 @@ async def list_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
-            name="palinode_timeline",
-            description=(
-                "Show the evolution of a memory file over time. Lists every change "
-                "with dates and descriptions."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "file": {
-                        "type": "string",
-                        "description": "Memory file path (e.g., 'projects/my-app.md')",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum number of changes to show (default 20)",
-                        "default": 20,
-                    },
-                },
-                "required": ["file"],
-            },
-        ),
-        types.Tool(
             name="palinode_rollback",
             description=(
                 "Revert a memory file to a previous version. Safe: creates a new commit "
@@ -398,7 +384,7 @@ async def list_tools() -> list[types.Tool]:
                     },
                     "commit": {
                         "type": "string",
-                        "description": "Target commit hash (from palinode_timeline). Default: previous version.",
+                        "description": "Target commit hash (from palinode_history). Default: previous version.",
                     },
                     "dry_run": {
                         "type": "boolean",
@@ -621,13 +607,19 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
         # ── history ───────────────────────────────────────────────────────
         elif name == "palinode_history":
             file_path = arguments["file_path"]
-            resp = await _get(f"/history/{file_path}")
+            limit = int(arguments.get("limit", 20))
+            resp = await _get(f"/history/{file_path}", params={"limit": str(limit)})
             if resp.status_code != 200:
                 return _text(f"Error: {resp.text}")
             data = resp.json()
             if not data.get("history"):
                 return _text("No history found.")
-            lines = [f"{c['hash']} | {c['date']} | {c['message']}" for c in data["history"]]
+            lines = []
+            for c in data["history"]:
+                line = f"{c['hash']} | {c['date'][:10]} | {c['message']}"
+                if c.get("stats"):
+                    line += f"\n  {c['stats']}"
+                lines.append(line)
             return _text("\n".join(lines))
 
         # ── entities ──────────────────────────────────────────────────────
@@ -692,15 +684,6 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
             if resp.status_code != 200:
                 return _text(f"Error: {resp.text}")
             return _text(resp.json().get("blame", "No blame data."))
-
-        # ── timeline ──────────────────────────────────────────────────────
-        elif name == "palinode_timeline":
-            file_path = arguments["file"]
-            limit = int(arguments.get("limit", 20))
-            resp = await _get(f"/timeline/{file_path}", params={"limit": str(limit)})
-            if resp.status_code != 200:
-                return _text(f"Error: {resp.text}")
-            return _text(resp.json().get("timeline", "No timeline data."))
 
         # ── rollback ──────────────────────────────────────────────────────
         elif name == "palinode_rollback":

@@ -46,7 +46,7 @@ Applied to Palinode:
 ## Consequences
 
 ### Positioning
-Lead with: "18 tools + a memory directory your agent uses however it wants."
+Lead with: "17 tools + a memory directory your agent uses however it wants."
 Not: "4-phase injection pipeline."
 
 The pipeline is an implementation detail. The tools are the interface.
