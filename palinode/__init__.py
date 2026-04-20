@@ -11,4 +11,4 @@ Components:
     mcp.py      — MCP server for Claude Code integration
     cli.py      — Command-line interface
 """
-__version__ = "0.2.0"
+__version__ = "0.7.0"

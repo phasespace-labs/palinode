@@ -1,4 +1,6 @@
 import click
+from palinode import __version__
+from palinode.core.brand import BANNER
 from palinode.core.config import config
 from palinode.cli.search import search
 from palinode.cli.save import save
@@ -16,12 +18,34 @@ from palinode.cli.list import list_cmd
 from palinode.cli.lint import lint
 from palinode.cli.ingest import ingest
 from palinode.cli.prompt import prompt
+from palinode.cli.migrate import migrate
+from palinode.cli.init import init
+
+def _print_version(ctx: click.Context, param: click.Parameter, value: bool) -> None:
+    if not value or ctx.resilient_parsing:
+        return
+    click.echo(f"{BANNER}\n\npalinode {__version__}")
+    ctx.exit()
 
 
 @click.group()
+@click.option(
+    "--version",
+    is_flag=True,
+    callback=_print_version,
+    expose_value=False,
+    is_eager=True,
+    help="Show the version banner and exit.",
+)
 def main():
     """Palinode — persistent agent memory."""
     pass
+
+
+@main.command()
+def banner() -> None:
+    """Print the Palinode ASCII brand mark."""
+    click.echo(BANNER)
 
 # Registration
 main.add_command(search)
@@ -38,7 +62,6 @@ main.add_command(rebuild_fts)
 main.add_command(split_layers)
 main.add_command(bootstrap_ids)
 
-
 # Git
 main.add_command(blame)
 main.add_command(history)
@@ -51,12 +74,16 @@ main.add_command(read)
 main.add_command(list_cmd, name="list")
 main.add_command(lint)
 main.add_command(ingest)
+main.add_command(migrate)
 
 # Prompts
 main.add_command(prompt)
 
 # Session
 main.add_command(session_end)
+
+# Project scaffolding
+main.add_command(init)
 
 @main.command()
 @click.option("--watcher/--no-watcher", default=True, help="Run memory watcher")

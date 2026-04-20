@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/palinode-session-end.sh",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

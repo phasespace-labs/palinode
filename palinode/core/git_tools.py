@@ -121,7 +121,7 @@ def blame(file_path: str, search: str | None = None) -> str:
     shows the true origin date.
 
     Output format:
-        [git: 2026-03-29, origin: 2026-02-11, source: mem0-backfill] content...
+        [git: 2026-03-29, origin: 2026-02-11, source: openclaw-migration] content...
         [git: 2026-04-06, origin: 2026-04-06, source: consolidation] content...
 
     Args:
@@ -236,10 +236,6 @@ def history(file_path: str, limit: int = 20) -> list[dict[str, str]]:
             })
 
     return commits
-
-
-# Keep as alias for any remaining callers
-timeline = history
 
 
 def rollback(file_path: str, commit: str | None = None, dry_run: bool = False) -> str:

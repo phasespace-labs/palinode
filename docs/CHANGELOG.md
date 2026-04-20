@@ -2,69 +2,19 @@
 
 All notable changes to Palinode. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.7.0] — 2026-04-12
+## Unreleased
 
 ### Added
 
-**Search quality**
-- **Score-gap dedup** (#91) — additional chunks from the same file are kept only if within `dedup_score_gap` (default 0.2) of the file's best score. Reduces noise from multi-section files dominating results.
-- **G1 context boost fix** (#92) — `store.search()` now accepts `context_entities` for ADR-008 ambient context boost. Previously the boost only fired through `search_hybrid`.
-- **Raw cosine exposure** (#94) — search results include a `raw_score` field with the original cosine similarity before RRF normalization.
-- **Daily penalty** (#93) — `daily/` files receive `score * daily_penalty` (default 0.3) to prevent daily notes from dominating search results. New `include_daily` parameter opts out of the penalty. Exposed as an MCP tool parameter.
-- **Canonical question frontmatter** (#83) — `canonical_question` frontmatter field (string or list) is prepended as `"Q: ..."` to the first chunk before embedding, anchoring each memory to the question it answers.
-- **Confidence field + content_hash in frontmatter** (#113, #114) — new `confidence` field for memory files, full SHA-256 content hash stored in frontmatter for integrity verification.
+**Search quality (M0.5)**
+- **Score-gap dedup** (#91, `52966ae`) — additional chunks from the same file are kept only if within `dedup_score_gap` (default 0.2) of the file's best score. Reduces noise from multi-section files dominating results.
+- **G1 context boost fix** (#92, `f156a3d`) — `store.search()` now accepts `context_entities` for ambient context boost. Previously the boost only fired through `search_hybrid`.
+- **Raw cosine exposure** (#94, `ee8931a`) — search results include a `raw_score` field with the original cosine similarity before RRF normalization.
+- **Daily penalty** (#93, `d18240c`) — `daily/` files receive `score * daily_penalty` (default 0.3) to prevent daily notes from dominating search results. New `include_daily` parameter opts out of the penalty. Exposed as an MCP tool parameter.
+- **Canonical question frontmatter** (#83, `dbe5703`) — `canonical_question` frontmatter field (string or list) is prepended as `"Q: ..."` to the first chunk before embedding, anchoring each memory to the question it answers.
 
-**Security**
-- CORS, rate limiting, request size limits, stack trace sanitization for the API server
-- MCP audit log — structured JSONL tool call logging (#116)
-
-**CI/CD**
-- GitHub Actions pipeline — unit tests + security scan (#121)
-
-**Testing**
-- Integration test suite — 14 API roundtrip tests (#120)
+**Tests**
 - 175 tests passing (up from 149)
-
-**Documentation**
-- Multi-platform MCP setup guide (`docs/MCP-SETUP.md`) — Claude Code, Cursor, VS Code, Zed, Windsurf
-- PyPI-ready pyproject.toml with metadata and classifiers
-
-### Changed
-
-- `palinode_timeline` merged into `palinode_history` — one tool with `--follow`, diff stats, structured JSON return, and `limit` parameter
-- Tool count: 18 → 17 (timeline/history consolidated)
-- README repositioned as memory substrate, not just persistent memory
-
-### Removed
-
-- Migration endpoints and CLI commands (`palinode.migration` module removed)
-- `docs/claude-code-setup.md` — replaced by `docs/MCP-SETUP.md`
-
----
-
-## [0.6.0] — 2026-04-11
-
-### Added
-
-**Write-time contradiction check (ADR-004)**
-- When saving a memory, the system checks for contradictions against existing files in the same entity scope
-- Contradiction candidates surfaced before the save completes, with configurable thresholds
-
-**Ambient context search (ADR-008)**
-- Search results boosted by project context inferred from the caller's working directory
-- Resolution chain: `PALINODE_PROJECT` env var → config project map → CWD auto-detect
-
-**RETRACT operation**
-- New executor operation: `RETRACT` — marks a memory fact as wrong with a visible tombstone
-- Strikethrough formatting with `[RETRACTED date — reason]` annotation
-- Fact ID preserved so readers know what was retracted and why
-
-**Claude Code plugin scaffold**
-- `claude-plugin/` directory with plugin manifest for Claude Code marketplace submission
-
-**Claude Code skills**
-- `palinode-claude-code` — MCP setup and usage for Claude Code sessions
-- `palinode-session` — automatic session lifecycle memory capture
 
 ---
 
@@ -88,8 +38,8 @@ First tagged release. Persistent memory for AI agents with git-versioned markdow
 - Prompt versioning system — extraction/compaction prompts stored as memory files with `active: true` frontmatter
 
 **Interfaces (all four expose the same capabilities)**
-- **MCP server** — Streamable HTTP transport (also supports stdio). Stateless HTTP client, point it at any Palinode API server
-- **REST API** — FastAPI on port 6340, 20+ endpoints covering search, save, diff, triggers, history, blame, rollback, consolidation, session-end, lint
+- **MCP server** — Streamable HTTP transport (also supports stdio) with 18 tools. Stateless HTTP client, point it at any Palinode API server
+- **REST API** — FastAPI on port 6340, 20+ endpoints covering search, save, diff, triggers, history, blame, rollback, consolidation, session-end, lint, migrate
 - **CLI** — 26 commands wrapping the REST API via Click. TTY-aware (human output interactive, JSON when piped). Remote access via `PALINODE_API` env var
 - **Plugin** — OpenClaw lifecycle hooks for agent frameworks with inject/extract patterns
 
@@ -104,6 +54,9 @@ First tagged release. Persistent memory for AI agents with git-versioned markdow
 - Session-end hook for Claude Code — auto-captures sessions on exit, idempotent, non-blocking
 - Entity extraction from daily notes with keyword fallback for untagged content
 
+**Migration**
+- `palinode migrate` — import existing markdown memory systems (OpenClaw format) with `--review` mode for dry-run inspection
+
 **Security and hardening**
 - Path validation on all file operations (rejects `..`, symlinks outside memory directory)
 - Secret scrubbing on save path via configurable regex patterns
@@ -115,7 +68,7 @@ First tagged release. Persistent memory for AI agents with git-versioned markdow
 - Compaction walkthrough (`examples/compaction-demo/`) — a memory file across 3 passes with blame + diff output
 
 **Tests**
-- 92 tests covering parser, store, executor, API, CLI, and hybrid search
+- 92 tests covering parser, store, executor, API, CLI, migration, and hybrid search
 
 ### Changed
 - All inference is local by default. Cloud API keys (Gemini, OpenAI) are opt-in via environment variables
@@ -126,6 +79,7 @@ First tagged release. Persistent memory for AI agents with git-versioned markdow
 ### Fixed
 - Watcher no longer crashes the API server if the memory directory is temporarily unavailable
 - CLI display keys match API response keys across all commands
+- Migration tool correctly handles frontmatter with embedded colons
 
 ### Removed
 - Deprecated SSE MCP transport (replaced by Streamable HTTP per canonical MCP SDK pattern)

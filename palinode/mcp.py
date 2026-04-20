@@ -6,7 +6,7 @@ Runs over stdio — spawned on demand by the client.
 
 All tool implementations are thin HTTP wrappers around the Palinode API server.
 The MCP server itself holds no database connections, embedder state, or git handles.
-Set PALINODE_API_HOST to point at a remote API server (e.g. over a VPN).
+Set PALINODE_API_HOST to point at a remote API server (e.g. over Tailscale).
 
 Tools:
   palinode_search  — semantic search over memory files
@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -40,15 +41,17 @@ from mcp.server import Server
 import os
 
 from palinode.core.config import config
+from palinode.core.audit import AuditLogger
 
 logger = logging.getLogger("palinode.mcp")
 logging.basicConfig(level=logging.WARNING)  # quiet — don't pollute stdio
 
 server = Server("palinode")
+_audit = AuditLogger(config.memory_dir, config.audit)
 
 
 def _resolve_context() -> list[str] | None:
-    """Resolve ambient project context from environment (ADR-008).
+    """Resolve ambient project context from environment.
 
     Resolution order:
     1. PALINODE_PROJECT env var (explicit entity ref, e.g. "project/palinode")
@@ -164,6 +167,10 @@ async def list_tools() -> list[types.Tool]:
                     },
                 },
             },
+            annotations=types.ToolAnnotations(
+                title="List Memory Files",
+                readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False,
+            ),
         ),
         types.Tool(
             name="palinode_read",
@@ -181,6 +188,10 @@ async def list_tools() -> list[types.Tool]:
                 },
                 "required": ["file_path"],
             },
+            annotations=types.ToolAnnotations(
+                title="Read Memory File",
+                readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False,
+            ),
         ),
         types.Tool(
             name="palinode_search",
@@ -214,9 +225,18 @@ async def list_tools() -> list[types.Tool]:
                         "type": "string",
                         "description": "Filter results before an ISO date",
                     },
+                    "include_daily": {
+                        "type": "boolean",
+                        "description": "Include daily session notes at full rank (default: false, daily/ files are penalized)",
+                        "default": False,
+                    },
                 },
                 "required": ["query"],
             },
+            annotations=types.ToolAnnotations(
+                title="Search Memory",
+                readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False,
+            ),
         ),
         types.Tool(
             name="palinode_save",
@@ -256,6 +276,10 @@ async def list_tools() -> list[types.Tool]:
                 },
                 "required": ["content", "type"],
             },
+            annotations=types.ToolAnnotations(
+                title="Save Memory",
+                readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False,
+            ),
         ),
         types.Tool(
             name="palinode_ingest",
@@ -274,6 +298,10 @@ async def list_tools() -> list[types.Tool]:
                 },
                 "required": ["url"],
             },
+            annotations=types.ToolAnnotations(
+                title="Ingest URL",
+                readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True,
+            ),
         ),
         types.Tool(
             name="palinode_status",
@@ -282,6 +310,10 @@ async def list_tools() -> list[types.Tool]:
                 "type": "object",
                 "properties": {},
             },
+            annotations=types.ToolAnnotations(
+                title="Health Status",
+                readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False,
+            ),
         ),
         types.Tool(
             name="palinode_history",
@@ -304,6 +336,10 @@ async def list_tools() -> list[types.Tool]:
                 },
                 "required": ["file_path"],
             },
+            annotations=types.ToolAnnotations(
+                title="File History",
+                readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False,
+            ),
         ),
         types.Tool(
             name="palinode_entities",
@@ -317,6 +353,10 @@ async def list_tools() -> list[types.Tool]:
                     }
                 },
             },
+            annotations=types.ToolAnnotations(
+                title="Entity Graph",
+                readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False,
+            ),
         ),
         types.Tool(
             name="palinode_consolidate",
@@ -325,6 +365,10 @@ async def list_tools() -> list[types.Tool]:
                 "type": "object",
                 "properties": {},
             },
+            annotations=types.ToolAnnotations(
+                title="Run Consolidation",
+                readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False,
+            ),
         ),
         types.Tool(
             name="palinode_diff",
@@ -347,6 +391,10 @@ async def list_tools() -> list[types.Tool]:
                     },
                 },
             },
+            annotations=types.ToolAnnotations(
+                title="Recent Changes",
+                readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False,
+            ),
         ),
         types.Tool(
             name="palinode_blame",
@@ -368,6 +416,10 @@ async def list_tools() -> list[types.Tool]:
                 },
                 "required": ["file"],
             },
+            annotations=types.ToolAnnotations(
+                title="Blame / Provenance",
+                readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False,
+            ),
         ),
         types.Tool(
             name="palinode_rollback",
@@ -394,11 +446,19 @@ async def list_tools() -> list[types.Tool]:
                 },
                 "required": ["file"],
             },
+            annotations=types.ToolAnnotations(
+                title="Rollback File",
+                readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False,
+            ),
         ),
         types.Tool(
             name="palinode_push",
             description="Sync memory changes to GitHub for backup and cross-machine access.",
             inputSchema={"type": "object", "properties": {}},
+            annotations=types.ToolAnnotations(
+                title="Push to Remote",
+                readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True,
+            ),
         ),
         types.Tool(
             name="palinode_trigger",
@@ -430,6 +490,10 @@ async def list_tools() -> list[types.Tool]:
                 },
                 "required": ["action"],
             },
+            annotations=types.ToolAnnotations(
+                title="Manage Triggers",
+                readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False,
+            ),
         ),
         types.Tool(
             name="palinode_session_end",
@@ -466,6 +530,10 @@ async def list_tools() -> list[types.Tool]:
                 },
                 "required": ["summary"],
             },
+            annotations=types.ToolAnnotations(
+                title="End Session",
+                readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False,
+            ),
         ),
         types.Tool(
             name="palinode_lint",
@@ -477,6 +545,10 @@ async def list_tools() -> list[types.Tool]:
                 "type": "object",
                 "properties": {},
             },
+            annotations=types.ToolAnnotations(
+                title="Lint Memory",
+                readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False,
+            ),
         ),
         types.Tool(
             name="palinode_prompt",
@@ -507,6 +579,10 @@ async def list_tools() -> list[types.Tool]:
                 },
                 "required": ["action"],
             },
+            annotations=types.ToolAnnotations(
+                title="Manage Prompts",
+                readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False,
+            ),
         ),
     ]
 
@@ -515,6 +591,24 @@ async def list_tools() -> list[types.Tool]:
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextContent]:
+    start_time = time.monotonic()
+    result = await _dispatch_tool(name, arguments)
+    duration_ms = (time.monotonic() - start_time) * 1000
+
+    # Detect error responses (the dispatch handler returns error text rather than raising)
+    first_text = result[0].text if result else ""
+    is_error = first_text.startswith(("Error", "API Error", "Search failed", "Save failed",
+                                      "Ingest failed", "Push failed", "Consolidation failed",
+                                      "Session-end failed", "Lint failed"))
+    _audit.log_call(
+        name, arguments, duration_ms,
+        status="error" if is_error else "success",
+        error=first_text if is_error else None,
+    )
+    return result
+
+
+async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.TextContent]:
     try:
         # ── list ──────────────────────────────────────────────────────────
         if name == "palinode_list":
@@ -554,9 +648,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
                 body["date_after"] = arguments["date_after"]
             if arguments.get("date_before"):
                 body["date_before"] = arguments["date_before"]
+            if arguments.get("include_daily"):
+                body["include_daily"] = True
             # Use MCP threshold, not API default
             body["threshold"] = config.search.mcp_threshold
-            # ADR-008: ambient context boost
+            # ambient context boost
             context = _resolve_context()
             if context:
                 body["context"] = context

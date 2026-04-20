@@ -38,7 +38,7 @@ curl http://localhost:11434/api/tags
 Install from source (PyPI publish coming soon):
 
 ```bash
-git clone https://github.com/Paul-Kyle/palinode.git
+git clone https://github.com/phasespace-labs/palinode.git
 cd palinode
 pip install -e .
 ```
@@ -85,7 +85,7 @@ systemctl --user enable --now palinode-api palinode-watcher
 Once Palinode is installed and the services are running, install this Claude Code plugin:
 
 ```
-/plugin install palinode@Paul-Kyle
+/plugin install palinode@phasespace-labs
 ```
 
 Or, during development, point Claude Code at this directory directly:
@@ -108,7 +108,7 @@ Once installed and connected, the plugin exposes 17 MCP tools to Claude Code:
 - `palinode_entities` — entity graph traversal (people, projects, decisions)
 
 ### Save and capture
-- `palinode_save` — write a new memory item. Supports type, entities, core flag, slug, source. As of v0.6.2, saves run write-time contradiction checking in the background (ADR-004).
+- `palinode_save` — write a new memory item. Supports type, entities, core flag, slug, source. As of v0.6.0, saves run write-time contradiction checking in the background.
 - `palinode_session_end` — capture session outcomes (summary, decisions, blockers) to daily notes and project status files
 - `palinode_ingest` — fetch a URL and store it as a research reference
 
@@ -160,11 +160,10 @@ Run `palinode_status` and check `total_files` and `fts_chunks`. If both are 0, t
 
 ## Learn more
 
-- [Main repository](https://github.com/Paul-Kyle/palinode)
-- [CHANGELOG](https://github.com/Paul-Kyle/palinode/blob/main/docs/CHANGELOG.md) for what's in v0.7.0
-- [Compaction demo](https://github.com/Paul-Kyle/palinode/tree/main/examples/compaction-demo) — walkthrough of a memory file across three consolidation passes with blame + diff output
-- [ADR-001: Tools Over Pipeline](https://github.com/Paul-Kyle/palinode/blob/main/ADR-001-tools-over-pipeline.md) — why the executor is deterministic
+- [Main repository](https://github.com/phasespace-labs/palinode)
+- [CHANGELOG](https://github.com/phasespace-labs/palinode/blob/main/docs/CHANGELOG.md) for what's in v0.6.1
+- [Compaction demo](https://github.com/phasespace-labs/palinode/tree/main/examples/compaction-demo) — walkthrough of a memory file across three consolidation passes with blame + diff output
 
 ## License
 
-MIT. See [LICENSE](https://github.com/Paul-Kyle/palinode/blob/main/LICENSE) in the main repository.
+MIT. See [LICENSE](https://github.com/phasespace-labs/palinode/blob/main/LICENSE) in the main repository.

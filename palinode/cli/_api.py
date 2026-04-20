@@ -107,6 +107,15 @@ class PalinodeAPI:
         response.raise_for_status()
         return response.json()
 
+    def migrate_openclaw(self, path: str, dry_run: bool = False):
+        response = self.client.post(
+            "/migrate/openclaw",
+            json={"path": path, "dry_run": dry_run},
+            timeout=120.0,
+        )
+        response.raise_for_status()
+        return response.json()
+
     def blame(self, file_path: str, search: str = None):
         params: dict = {}
         if search:

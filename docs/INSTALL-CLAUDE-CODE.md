@@ -1,6 +1,6 @@
 # Installing Palinode with Claude Code
 
-Palinode gives Claude Code persistent memory via MCP — 17 tools for searching, saving, and managing memories across sessions. The `palinode-session` skill auto-captures milestones and decisions during coding, so your memory stays fresh without manual effort.
+Palinode gives Claude Code persistent memory via MCP — 18 tools for searching, saving, and managing memories across sessions. The `palinode-session` skill auto-captures milestones and decisions during coding, so your memory stays fresh without manual effort.
 
 ## Prerequisites
 
@@ -30,7 +30,7 @@ Best if you run Claude Code on the same machine as Palinode.
 ### 1. Install Palinode
 
 ```bash
-git clone https://github.com/Paul-Kyle/palinode.git ~/palinode
+git clone https://github.com/phasespace-labs/palinode.git ~/palinode
 cd ~/palinode
 python3 -m venv venv && source venv/bin/activate
 pip install -e .
@@ -201,7 +201,7 @@ The MCP endpoint is `http://your-server:6341/mcp`. Configure your IDE:
 ### Network Access
 
 The MCP server needs to be reachable from your IDE. Options:
-- **VPN / overlay network**: Use a VPN or overlay network IP if the server is on a different network
+- **Tailscale** (recommended): Install on both machines, use the Tailscale IP (e.g., `http://100.x.x.x:6341/mcp`)
 - **LAN**: Use the server's local IP if on the same network
 - **SSH tunnel**: `ssh -L 6341:localhost:6341 youruser@your-server` then use `http://localhost:6341/mcp`
 
@@ -279,12 +279,11 @@ Search palinode for "recent project decisions"
 | `palinode_read` | Read the full content of a specific memory file |
 | `palinode_ingest` | Fetch a URL and save as research reference |
 | `palinode_status` | File counts, index health, entity graph size |
-| `palinode_history` | Git history for a specific memory file |
+| `palinode_history` | Git history for a file with diff stats and rename tracking |
 | `palinode_entities` | List known entities and their relationships |
 | `palinode_consolidate` | Run or preview the weekly compaction job |
 | `palinode_diff` | See what changed in memory recently (git diff) |
 | `palinode_blame` | Who/when each line was written (git blame) |
-| `palinode_history` | Git history with diff stats and rename tracking |
 | `palinode_rollback` | Revert a file to a previous state |
 | `palinode_push` | Push memory changes to remote git |
 | `palinode_trigger` | Register a prospective recall trigger |

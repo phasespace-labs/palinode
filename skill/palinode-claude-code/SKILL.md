@@ -7,7 +7,7 @@ metadata:
   mcp-server: palinode
   category: memory
   tags: [memory, persistence, claude-code, mcp, knowledge-management]
-  documentation: https://github.com/Paul-Kyle/palinode/blob/main/docs/INSTALL-CLAUDE-CODE.md
+  documentation: https://github.com/phasespace-labs/palinode/blob/main/docs/INSTALL-CLAUDE-CODE.md
 ---
 
 # Palinode — Claude Code Integration

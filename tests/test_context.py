@@ -11,13 +11,13 @@ def test_search_hybrid_context_boost():
         with patch("palinode.core.store.search_fts") as mock_fts:
             with patch("palinode.core.store.get_db"):
                 with patch("palinode.core.store.get_entity_files") as mock_entities:
-                    # Two results: palinode file and acme-project file, initially ranked equally
+                    # Two results: palinode file and other-project file, initially ranked equally
                     mock_vec.return_value = [
                         {"file_path": "/mem/projects/palinode-adr.md", "content": "ADR-004", "score": 0.85},
-                        {"file_path": "/mem/projects/acme-adr.md", "content": "ADR-052", "score": 0.86},
+                        {"file_path": "/mem/projects/other-adr.md", "content": "ADR-052", "score": 0.86},
                     ]
                     mock_fts.return_value = [
-                        {"file_path": "/mem/projects/acme-adr.md", "content": "ADR-052", "score": 0.7},
+                        {"file_path": "/mem/projects/other-adr.md", "content": "ADR-052", "score": 0.7},
                         {"file_path": "/mem/projects/palinode-adr.md", "content": "ADR-004", "score": 0.6},
                     ]
                     # Entity lookup: project/palinode maps to the palinode file
@@ -25,7 +25,7 @@ def test_search_hybrid_context_boost():
                         {"file_path": "/mem/projects/palinode-adr.md", "category": "projects", "last_seen": "2026-04-12"}
                     ]
 
-                    # Without context: acme-project should rank first (higher combined score)
+                    # Without context: other-project should rank first (higher combined score)
                     results_no_ctx = store.search_hybrid(
                         "ADR-004", query_embedding=[0.0]*1024, top_k=2, threshold=0.0,
                         context_entities=None,
@@ -111,10 +111,10 @@ def test_search_vector_context_boost():
     """Non-hybrid search should also apply context boost (#92)."""
     with patch("palinode.core.store.get_db") as mock_db:
         with patch("palinode.core.store.get_entity_files") as mock_entities:
-            # Simulate two vector results: acme ranks higher by raw cosine
+            # Simulate two vector results: kmd ranks higher by raw cosine
             mock_cursor = MagicMock()
             mock_cursor.fetchall.return_value = [
-                {"id": 1, "file_path": "/mem/projects/acme-adr.md", "section_id": "root",
+                {"id": 1, "file_path": "/mem/projects/kmd-adr.md", "section_id": "root",
                  "content": "ADR-052", "category": "projects", "metadata": "{}",
                  "created_at": "2026-04-12", "distance": 0.3},
                 {"id": 2, "file_path": "/mem/projects/palinode-adr.md", "section_id": "root",
@@ -128,13 +128,13 @@ def test_search_vector_context_boost():
                 {"file_path": "/mem/projects/palinode-adr.md", "category": "projects", "last_seen": "2026-04-12"}
             ]
 
-            # Without context: acme first (lower distance = higher score)
+            # Without context: kmd first (lower distance = higher score)
             results_no_ctx = store.search(
                 query_embedding=[0.0]*1024, top_k=2, threshold=0.0,
                 context_entities=None,
             )
             assert len(results_no_ctx) == 2
-            assert "acme" in results_no_ctx[0]["file_path"]
+            assert "kmd" in results_no_ctx[0]["file_path"]
 
             # With context: palinode should be boosted to first
             results_ctx = store.search(
@@ -223,7 +223,7 @@ def test_mcp_resolve_context_short_name():
 def test_mcp_resolve_context_from_cwd():
     """CWD basename should resolve to project entity via auto-detect."""
     from palinode.mcp import _resolve_context
-    with patch.dict("os.environ", {"CWD": "/home/user/projects/palinode"}, clear=False):
+    with patch.dict("os.environ", {"CWD": "/Users/admin/Code/palinode"}, clear=False):
         with patch.dict("os.environ", {}, clear=False):
             # Remove PALINODE_PROJECT if set
             import os
@@ -249,7 +249,7 @@ def test_mcp_resolve_context_disabled():
 def test_cli_resolve_context():
     """CLI context resolver should work from CWD."""
     from palinode.cli.search import _cli_resolve_context
-    with patch("os.getcwd", return_value="/home/user/projects/palinode"):
+    with patch("os.getcwd", return_value="/Users/admin/Code/palinode"):
         with patch.dict("os.environ", {}, clear=False):
             import os
             env = os.environ.copy()

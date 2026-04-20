@@ -41,7 +41,7 @@ Between pass 1 and pass 2 (9 operations):
 - 4 × `ARCHIVE` — moved superseded entries to `archive/2026/my-app-status.md`
 - 2 × `UPDATE` — final wording pass on merged lines
 
-All 22 operations were **proposed by an LLM** but **applied by deterministic Python** (`palinode/consolidation/executor.py`). The LLM never touches the file directly — it only emits JSON like `{"op": "SUPERSEDE", "id": "f-0317-1", "superseded_by": "f-0324-2", "reason": "stripe integration actually shipped on the 24th"}` and the executor validates and applies it. That's the [ADR-001](../../ADR-001-tools-over-pipeline.md) invariant in action.
+All 22 operations were **proposed by an LLM** but **applied by deterministic Python** (`palinode/consolidation/executor.py`). The LLM never touches the file directly — it only emits JSON like `{"op": "SUPERSEDE", "id": "f-0317-1", "superseded_by": "f-0324-2", "reason": "stripe integration actually shipped on the 24th"}` and the executor validates and applies it.
 
 ## Why this matters
 

@@ -49,7 +49,7 @@ graph TD
 
 ## 1. Session Recall (Every Agent Turn)
 
-**Hook:** `before_agent_start` in the agent plugin
+**Hook:** `before_agent_start` in the OpenClaw plugin
 
 Every time you send a message, Palinode injects relevant context **before the agent sees your message**. This happens in four phases:
 
@@ -120,7 +120,7 @@ Before injection, all content passes through `specs/scrub-patterns.yaml` — reg
 
 ## 2. Session Capture (End of Every Turn)
 
-**Hook:** `agent_end` in the agent plugin
+**Hook:** `agent_end` in the OpenClaw plugin
 
 After each agent response, the plugin captures the conversation to a daily note:
 
@@ -289,9 +289,7 @@ Each chunk is hashed before embedding. If the hash matches the existing entry, t
 
 ## 6. Git Versioning (Every Change)
 
-**Repo:** `Paul-Kyle/palinode-data` (PRIVATE)
-
-Every memory change is a git commit. This enables:
+Memories live in a git repository — typically a private repo you own, local or pushed to a remote of your choice. Every memory change is a git commit. This enables:
 
 | Tool | What It Does | Example |
 | --- | --- | --- |
@@ -380,8 +378,8 @@ Apr 13  — Manual edit: Alice corrected a fact via palinode_save (commit def567
 
 ```text
 ## Blame: projects/my-app-milestones.md
-Origin: 2026-02-11 | Source: mem0-backfill
-Note: Git shows 2026-03-29 (migration date). True origin is 2026-02-11 (from mem0-backfill).
+Origin: 2026-02-11 | Source: openclaw-migration
+Note: Git shows 2026-03-29 (migration date). True origin is 2026-02-11 (from openclaw-migration).
 
 ^dcdbf5f (2026-03-29) - [2026-02-11] M5 Phase 1 complete: all 9 modules deployed
 ^dcdbf5f (2026-03-29) - [2026-02-15] M2 closed: auth + notification systems
@@ -389,7 +387,7 @@ abc1234  (2026-04-06) - M6 Phase 1 spec ready: routing fixed
 def5678  (2026-04-13) - M6 Phase 2: real-time sync live
 ```text
 
-For backfilled memories, git blame shows when the file was migrated. The frontmatter `created_at` field preserves the true origin date from the source system (Mem0, QC MCP, etc.). Palinode surfaces both so you always know:
+For imported memories, git blame shows when the file was migrated. The frontmatter `created_at` field preserves the true origin date from the source system. Palinode surfaces both so you always know:
 
 - **When the fact was first captured** (frontmatter `created_at`)
 - **When this file was last modified** (git blame date)
@@ -399,16 +397,9 @@ For memories captured natively by Palinode (not backfilled), both dates match.
 
 **`git log --follow`** shows the complete history of a file — every consolidation, every manual edit, every backfill.
 
-### Backfill Provenance
+### Import Provenance
 
-Palinode has already absorbed memories from two external systems:
-
-| Source | Memories | Classified By | Status |
-| --- | --- | --- | --- |
-| **Mem0** (Qdrant) | 4,637 → 3,645 (after dedup + skip) | Qwen 72B | ✅ Done |
-| **QC MCP** (PostgreSQL) | 14,000+ contexts | TBD | Planned |
-
-Backfilled memories enter `palinode-data` with `source: "mem0-backfill"` in their frontmatter. As consolidation updates them, each change gets its own commit — gradually building provenance that Mem0 never had.
+Imported memories enter `palinode-data` with a source marker in frontmatter, such as `source: "openclaw-migration"`. As consolidation updates them, each change gets its own commit — building a readable provenance trail on top of the imported material.
 
 ### Why This Matters
 

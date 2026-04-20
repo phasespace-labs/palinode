@@ -149,6 +149,8 @@ class SearchConfig:
     exclude_status: list[str] = field(default_factory=lambda: ["archived"])
     hybrid_weight: float = 0.5
     hybrid_enabled: bool = True
+    dedup_score_gap: float = 0.2
+    daily_penalty: float = 0.3  # Multiplier for daily/ files (0.3 = 30% of original score)
 
 @dataclass
 class NightlyConfig:
@@ -159,7 +161,7 @@ class NightlyConfig:
 
 @dataclass
 class WriteTimeConfig:
-    """Tier 2a (ADR-004): write-time contradiction check on palinode_save.
+    """Tier 2a: write-time contradiction check on palinode_save.
 
     When enabled, every save schedules a background contradiction check
     against similar existing memories. The check runs asynchronously
@@ -235,6 +237,12 @@ class GitConfig:
     commit_prefix: str = "palinode"
 
 @dataclass
+class AuditConfig:
+    """MCP tool call audit logging for compliance and debugging."""
+    enabled: bool = True
+    log_path: str = ".audit/mcp-calls.jsonl"
+
+@dataclass
 class LoggingConfig:
     """Log formatting and target directories constraints formats."""
     level: str = "INFO"
@@ -282,6 +290,38 @@ class ContextConfig:
     embed_augment: bool = True      # Prepend project context to query before embedding
 
 @dataclass
+class ScopeConfig:
+    """Layer 1: scope chain for multi-harness, multi-agent, team memory.
+
+    Scopes form an entity-ref hierarchy: org → member → project → harness → agent → session.
+    Memories inherit DOWN the chain by default. A session's scope is resolved from
+    env vars and config.
+
+    Layer 1 scope (this slice): resolution only — produces a ScopeChain from
+    config + env. Later slices wire the chain into store search, the
+    /context/prime endpoint, and frontmatter `scope` field parsing.
+
+    Env vars:
+      PALINODE_ORG      → scope.org
+      PALINODE_MEMBER   → scope.member
+      PALINODE_HARNESS  → scope.harness  (MCP client auto-detection is Layer 2+)
+      PALINODE_AGENT    → scope.agent    (multi-agent orchestration only)
+
+    prime_mode:
+      "classic" — inject all core files regardless of scope (legacy, default
+                  during Layer 1 rollout for backwards compatibility).
+      "scoped"  — filter core files by the session's scope chain. Flip the
+                  default to "scoped" in a follow-up once Slices 2-3 land.
+    """
+    enabled: bool = False
+    org: str | None = None
+    member: str | None = None
+    harness: str | None = None
+    agent: str | None = None
+    prime_mode: str = "classic"
+
+
+@dataclass
 class CompactionConfig:
     """Operations controls algorithms parameters logic models layouts mapping endpoints."""
     # Which operations are allowed
@@ -306,10 +346,12 @@ class Config:
     consolidation: ConsolidationConfig = field(default_factory=ConsolidationConfig)
     compaction: CompactionConfig = field(default_factory=CompactionConfig)
     context: ContextConfig = field(default_factory=ContextConfig)
+    scope: ScopeConfig = field(default_factory=ScopeConfig)
     decay: DecayConfig = field(default_factory=DecayConfig)
     services: ServicesConfig = field(default_factory=ServicesConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     git: GitConfig = field(default_factory=GitConfig)
+    audit: AuditConfig = field(default_factory=AuditConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     
     @property
@@ -385,6 +427,14 @@ def load_config() -> Config:
             cfg.services.api.port = int(os.environ["PALINODE_API_PORT"])
         except ValueError:
             pass
+    if "PALINODE_ORG" in os.environ:
+        cfg.scope.org = os.environ["PALINODE_ORG"]
+    if "PALINODE_MEMBER" in os.environ:
+        cfg.scope.member = os.environ["PALINODE_MEMBER"]
+    if "PALINODE_HARNESS" in os.environ:
+        cfg.scope.harness = os.environ["PALINODE_HARNESS"]
+    if "PALINODE_AGENT" in os.environ:
+        cfg.scope.agent = os.environ["PALINODE_AGENT"]
 
     # Print summary string
     try:

@@ -24,9 +24,12 @@ def run_lint_pass() -> dict[str, Any]:
     stale_files = []
     missing_fields = []
     contradictions = []  # Heuristic placeholder
-    
+    missing_entities: list[str] = []
+    missing_descriptions: list[str] = []
+    core_count = 0
+
     now = datetime.now(timezone.utc)
-    
+
     entity_references: dict[str, int] = {}
     all_files = []
     
@@ -82,7 +85,19 @@ def run_lint_pass() -> dict[str, Any]:
             if not has_entities and not is_referenced:
                 orphaned_files.append(path)
                 
-        # 3. Stale 
+        # 3. Missing entities (non-daily files with empty entities list)
+        if not path.startswith("daily/") and not meta.get("entities"):
+            missing_entities.append(path)
+
+        # 4. Missing description
+        if not path.startswith("daily/") and not meta.get("description"):
+            missing_descriptions.append(path)
+
+        # 5. Core count
+        if meta.get("core"):
+            core_count += 1
+
+        # 6. Stale
         if meta.get("status") == "active":
             last_updated = meta.get("last_updated") or meta.get("created_at")
             if last_updated:
@@ -127,5 +142,8 @@ def run_lint_pass() -> dict[str, Any]:
         "orphaned_files": orphaned_files,
         "stale_files": stale_files,
         "missing_fields": missing_fields,
-        "contradictions": unique_contradictions
+        "contradictions": unique_contradictions,
+        "missing_entities": missing_entities,
+        "missing_descriptions": missing_descriptions,
+        "core_count": core_count,
     }

@@ -10,7 +10,7 @@ insights/
 daily/
 archive/
 inbox/
-migration/
+/migration/
 research/
 
 # ============================================================
@@ -48,3 +48,4 @@ venv/
 server.log
 nohup.out
 .engram.db
+.claude/worktrees/

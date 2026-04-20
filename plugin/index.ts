@@ -387,21 +387,6 @@ const palinodePlugin = {
         },
     }, { name: "palinode_blame" });
 
-    api.registerTool({
-        name: "palinode_history",
-        label: "Palinode History",
-        description: "Show git history of a memory file with diff stats and rename tracking.",
-        parameters: Type.Object({
-            file: Type.String({ description: "Memory file path" }),
-            limit: Type.Optional(Type.Number({ description: "Max entries (default 20)" })),
-        }),
-        async execute(_id: string, params: any) {
-            const res = await palinodeFetch(cfg.palinodeApiUrl, `/history/${params.file}?limit=${params.limit || 20}`);
-            const lines = (res.history || []).map((h: any) => `${h.hash} | ${h.date} | ${h.message}${h.stats ? ' | ' + h.stats : ''}`);
-            return { content: [{ type: "text", text: lines.join("\n") || "No history found." }] };
-        },
-    }, { name: "palinode_history" });
-
     // ========================================================================
     // Quick-save flag: -es at end of message → save to Palinode
     // Works from any channel (Telegram, webchat, Discord, etc.)

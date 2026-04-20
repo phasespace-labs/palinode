@@ -1,4 +1,15 @@
-name: Tests
+# CI pipeline for Palinode
+# Runs on every push to main and on pull requests.
+#
+# Jobs:
+#   1. unit-tests    — fast feedback on core logic (no external services)
+#   2. integration   — placeholder for tests requiring Ollama/external deps
+#   3. security-scan — bandit (code) + pip-audit (dependencies)
+
+name: CI
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 on:
   push:
@@ -7,22 +18,93 @@ on:
     branches: [ main ]
 
 jobs:
-  test:
+  # ---------------------------------------------------------------------------
+  # Unit tests — should never need network access or Ollama.
+  # All embeddings / LLM calls are mocked in the test suite.
+  # ---------------------------------------------------------------------------
+  unit-tests:
     runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.11"
-        cache: 'pip'
-        
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -e .[dev]
-        
-    - name: Run Pytest
-      run: |
-        pytest tests/ -v
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run unit tests
+        run: pytest tests/ -v --tb=short
+
+  # ---------------------------------------------------------------------------
+  # Integration tests — placeholder.
+  #
+  # When tests/integration/ is created, update the pytest path below.
+  # Integration tests will likely need an Ollama service container for
+  # BGE-M3 embeddings. That setup is deferred until the test suite exists.
+  # ---------------------------------------------------------------------------
+  integration-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run integration tests
+        run: pytest tests/integration/ -v --tb=short
+
+  # ---------------------------------------------------------------------------
+  # Security scans — informational for now (continue-on-error: true).
+  #
+  # bandit:    static analysis for common Python security issues
+  # pip-audit: checks installed packages against known vulnerability databases
+  #
+  # These run in a single job to save runner time. Once the findings are
+  # triaged, remove continue-on-error to enforce them on PRs.
+  # ---------------------------------------------------------------------------
+  security-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install bandit pip-audit
+
+      - name: Run bandit (static security analysis)
+        # -r: recursive, -ll: only medium+ severity findings
+        run: bandit -r palinode/ -ll
+        continue-on-error: true
+
+      - name: Run pip-audit (dependency vulnerability check)
+        run: pip-audit
+        continue-on-error: true

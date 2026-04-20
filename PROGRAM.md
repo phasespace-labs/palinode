@@ -63,7 +63,7 @@ Extract only things that will be useful **across sessions** — facts that a fut
 
 - *Example:* "Alice uses VS Code + Gemini 3.1 Pro (High) as default for executing milestone build specs." → Preference (tool + workflow).
 - *Example:* "Don't comment on time of day or suggest quitting." → Preference (communication). Already known — likely NOOP.
-- *NOT example:* Paul used vim once in a session → don't infer "prefers vim." Single instances aren't preferences.
+- *NOT example:* the user opened vim once in a session → don't infer "prefers vim." Single instances aren't preferences.
 
 **Technical context** — extract when it represents a *decision*, not just mentioned in passing.
 
@@ -120,7 +120,7 @@ id: person-{slug}
 category: person
 name: Full Name
 aliases: [nickname, shortened]
-role: their relationship to Paul
+role: their relationship to the user
 core: false  # set true for inner circle
 entities: [project/related-project]
 last_contact: 2026-03-22
@@ -129,7 +129,7 @@ last_updated: 2026-03-22T16:00:00Z
 # Full Name
 
 ## Context
-Who they are, how Paul knows them, what their role is.
+Who they are, how the user knows them, what their role is.
 
 ## Preferences & Communication
 How they like to work, communication style, things to remember.
@@ -275,7 +275,7 @@ last_updated: 2026-03-22T16:00:00Z
 - Bullet list of the important takeaways.
 
 ## Relevance
-Why this matters for Paul's work.
+Why this matters for the user's work.
 ```
 
 ---

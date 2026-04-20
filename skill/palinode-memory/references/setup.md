@@ -4,7 +4,7 @@
 
 ```bash
 # 1. Clone and install
-git clone https://github.com/Paul-Kyle/palinode.git ~/palinode
+git clone https://github.com/phasespace-labs/palinode.git ~/palinode
 cd ~/palinode && pip install -e .
 
 # 2. Memory directory
@@ -15,9 +15,12 @@ cp palinode.config.yaml.example ~/.palinode/palinode.config.yaml
 PALINODE_DIR=~/.palinode python -m palinode.api.server &
 PALINODE_DIR=~/.palinode python -m palinode.indexer.watcher &
 
-# 4. (Optional) Configure Claude Code MCP
-# See docs/claude-code-setup.md in the repo.
+# 4. Install plugin
+cp -r ~/palinode/plugin ~/.openclaw/extensions/openclaw-palinode
+openclaw gateway restart
 ```
+
+Full guide: `docs/INSTALL-OPENCLAW.md` in the repo.
 
 ## Key Config Options (palinode.config.yaml)
 

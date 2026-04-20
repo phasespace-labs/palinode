@@ -45,6 +45,7 @@ dependencies = [
 "Repository" = "https://github.com/phasespace-labs/palinode"
 "Issues" = "https://github.com/phasespace-labs/palinode/issues"
 "Changelog" = "https://github.com/phasespace-labs/palinode/blob/main/docs/CHANGELOG.md"
+"Privacy" = "https://github.com/phasespace-labs/palinode/blob/main/PRIVACY.md"
 
 [project.scripts]
 palinode-watcher = "palinode.indexer.watcher:main"
@@ -57,8 +58,17 @@ palinode-mcp-sse = "palinode.mcp:main_sse"  # deprecated alias for main_http
 [project.optional-dependencies]
 dev = [
     "pytest",
-    "pytest-asyncio",
+    "pytest-asyncio"
 ]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Exclude live tests from default runs (they need a running server)
+addopts = "--ignore=tests/live"
+markers = [
+    "slow: marks tests that need Ollama or take >5s",
+]
+asyncio_mode = "strict"
+
 [tool.setuptools]
-packages = ["palinode", "palinode.core", "palinode.indexer", "palinode.api", "palinode.ingest", "palinode.consolidation", "palinode.cli"]
+packages = ["palinode", "palinode.core", "palinode.indexer", "palinode.api", "palinode.ingest", "palinode.consolidation", "palinode.migration", "palinode.cli"]

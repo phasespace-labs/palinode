@@ -22,7 +22,9 @@ from typing import Any
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from palinode.core import store, embedder, git_tools
@@ -65,7 +67,7 @@ async def lifespan(app: FastAPI):
     """Initialize database and background workers on startup."""
     store.init_db()
 
-    # Tier 2a (ADR-004): write-time contradiction check worker
+    # Tier 2a: write-time contradiction check worker
     if config.consolidation.write_time.enabled:
         try:
             from palinode.consolidation import write_time
@@ -88,7 +90,61 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Palinode API", lifespan=lifespan)
 
-# ── Auto-summary helpers ──────────────────────────────────────────────────────
+# ── Security middleware ──────────────────────────────────────────────────────
+
+# CORS: restrict to configured origins (default: localhost only)
+_cors_origins = os.environ.get("PALINODE_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in _cors_origins],
+    allow_credentials=True,
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
+# Request body size limit (default 5MB)
+_MAX_REQUEST_BYTES = int(os.environ.get("PALINODE_MAX_REQUEST_BYTES", 5 * 1024 * 1024))
+
+@app.middleware("http")
+async def limit_request_size(request: Request, call_next):
+    """Reject oversized request bodies to prevent memory exhaustion."""
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > _MAX_REQUEST_BYTES:
+        return JSONResponse(status_code=413, content={"detail": "Request body too large"})
+    return await call_next(request)
+
+# Rate limiting (in-memory, per-IP, resets each window)
+_RATE_LIMIT_WINDOW = 60  # seconds
+_RATE_LIMIT_SEARCH = int(os.environ.get("PALINODE_RATE_LIMIT_SEARCH", 100))
+_RATE_LIMIT_WRITE = int(os.environ.get("PALINODE_RATE_LIMIT_WRITE", 30))
+_rate_counters: dict[str, dict[str, Any]] = {}
+
+def _check_rate_limit(client_ip: str, category: str, limit: int) -> bool:
+    """Return True if request is within rate limit, False if exceeded."""
+    now = time.time()
+    key = f"{client_ip}:{category}"
+    entry = _rate_counters.get(key)
+    if not entry or now - entry["window_start"] > _RATE_LIMIT_WINDOW:
+        _rate_counters[key] = {"window_start": now, "count": 1}
+        return True
+    entry["count"] += 1
+    return entry["count"] <= limit
+
+# Startup warning for unsafe binding
+_api_host = os.environ.get("PALINODE_API_HOST", config.services.api.host)
+if _api_host == "0.0.0.0":
+    logger.warning(
+        "API binding to 0.0.0.0 — accessible from any network. "
+        "No authentication is configured. Set PALINODE_API_HOST=127.0.0.1 for local-only access."
+    )
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _safe_500(e: Exception, context: str = "Internal error") -> HTTPException:
+    """Log full exception, return sanitized 500 to client."""
+    logger.exception(f"{context}: {e}")
+    return HTTPException(status_code=500, detail=context)
 
 
 def _utc_now() -> datetime:
@@ -117,6 +173,84 @@ def _resolve_memory_path(file_path: str) -> tuple[str, str]:
     if not within_root:
         raise HTTPException(status_code=403, detail="Path traversal rejected")
     return base_dir, resolved
+
+# ── Entity normalization ─────────────────────────────────────────────────────
+
+# Maps memory category dirs to singular entity-ref prefixes.
+_CATEGORY_TO_ENTITY_PREFIX: dict[str, str] = {
+    "people": "person",
+    "decisions": "decision",
+    "projects": "project",
+    "insights": "insight",
+    "research": "research",
+    "inbox": "action",
+}
+
+
+def _normalize_entities(entities: list[str], category: str) -> list[str]:
+    """Ensure every entity ref has a category/ prefix.
+
+    Bare strings (no '/') get a prefix inferred from the memory's own
+    category.  Falls back to 'project/' when the category is unknown
+    (matches MCP context-resolution convention).
+    """
+    prefix = _CATEGORY_TO_ENTITY_PREFIX.get(category, "project")
+    normalized = []
+    for e in entities:
+        if "/" in e:
+            normalized.append(e)
+        else:
+            logger.info("Entity normalized: %r → %r", e, f"{prefix}/{e}")
+            normalized.append(f"{prefix}/{e}")
+    return normalized
+
+
+def _generate_description(content: str) -> str:
+    """Generate a one-line description for a memory file.
+
+    Tries a cheap Ollama call first; falls back to first-line extraction
+    if the LLM is unreachable.  Never raises — returns empty string on
+    total failure.
+    """
+    MAX_CHARS = 150
+
+    # Attempt LLM description
+    prompt = (
+        "Write one sentence (max 150 chars) describing what this memory is about. "
+        "Be specific and factual. Output ONLY the sentence, no preamble.\n\n"
+        + content[:1500]
+    )
+    url = config.auto_summary.ollama_url or config.embeddings.primary.url
+    try:
+        resp = httpx.post(
+            f"{url}/api/generate",
+            json={"model": config.auto_summary.model, "prompt": prompt, "stream": False},
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        raw = resp.json().get("response", "").strip().strip('"\'').strip()
+        if raw:
+            return raw[:MAX_CHARS]
+    except Exception as e:
+        logger.info(f"Ollama description call failed, using fallback: {e}")
+
+    # Fallback: first meaningful line of content
+    return _extract_first_line(content, MAX_CHARS)
+
+
+def _extract_first_line(content: str, max_chars: int = 150) -> str:
+    """Extract the first non-empty, non-header line from markdown content."""
+    for line in content.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        # Strip markdown headers
+        line = re.sub(r'^#+\s*', '', line)
+        line = line.strip()
+        if line:
+            return line[:max_chars]
+    return ""
+
 
 def _generate_summary(content: str) -> str:
     """Invokes Ollama to produce a single-sentence logical summary of file memory.
@@ -189,7 +323,8 @@ class SearchRequest(BaseModel):
     hybrid: bool | None = None
     date_after: str | None = None
     date_before: str | None = None
-    context: list[str] | None = None  # Entity refs for ambient context boost (ADR-008)
+    context: list[str] | None = None  # Entity refs for ambient context boost
+    include_daily: bool | None = False  # Skip daily/ penalty when True (#93)
 
 class SearchAssociativeRequest(BaseModel):
     query: str
@@ -215,6 +350,7 @@ class SaveRequest(BaseModel):
     metadata: Any | None = None
     core: bool | None = None
     source: str | None = None
+    confidence: float | None = None
 
 
 @app.get("/list")
@@ -303,18 +439,22 @@ def read_api(file_path: str, meta: bool = False) -> dict[str, Any]:
             
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _safe_500(e, "File read failed")
 
 
 @app.post("/search")
-def search_api(req: SearchRequest) -> list[dict[str, Any]]:
+def search_api(req: SearchRequest, request: Request = None) -> list[dict[str, Any]]:
     """Semantic vector search against cached `.palinode.db` chunks.
 
     Returns:
         list[dict[str, Any]]: List payload sequence matching the criteria boundaries.
     """
+    if request:
+        client_ip = request.client.host if request.client else "unknown"
+        if not _check_rate_limit(client_ip, "search", _RATE_LIMIT_SEARCH):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
     try:
-        # ADR-008: Augment query with project context before embedding
+        # Augment query with project context before embedding
         embed_query = req.query
         if req.context and config.context.enabled and config.context.embed_augment:
             # Extract project name from entity ref (e.g., "project/palinode" → "palinode")
@@ -339,6 +479,7 @@ def search_api(req: SearchRequest) -> list[dict[str, Any]]:
                 date_after=req.date_after,
                 date_before=req.date_before,
                 context_entities=req.context,
+                include_daily=bool(req.include_daily),
             )
         else:
             results = store.search(
@@ -348,10 +489,12 @@ def search_api(req: SearchRequest) -> list[dict[str, Any]]:
                 threshold=req.threshold or config.search.api_threshold,
                 date_after=req.date_after,
                 date_before=req.date_before,
+                context_entities=req.context,
+                include_daily=bool(req.include_daily),
             )
         return results
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _safe_500(e, "Search failed")
 
 
 @app.post("/search-associative")
@@ -369,7 +512,7 @@ def search_associative_api(req: SearchAssociativeRequest) -> list[dict[str, Any]
         )
         return results
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _safe_500(e, "Associative search failed")
 
 
 @app.post("/triggers")
@@ -392,7 +535,7 @@ def create_trigger_api(req: TriggerRequest) -> dict[str, Any]:
         )
         return {"id": trigger_id, "status": "created"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _safe_500(e, "Trigger creation failed")
 
 
 @app.get("/triggers")
@@ -421,19 +564,25 @@ def check_triggers_api(req: CheckTriggersRequest) -> list[dict[str, Any]]:
         )
         return results
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _safe_500(e, "Trigger check failed")
 
 
 @app.post("/save")
-def save_api(req: SaveRequest, sync: bool = False) -> dict[str, Any]:
+def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> dict[str, Any]:
     """Persists a new memory instance chunk locally and initiates git backup sequences.
 
     Query params:
-        sync: If True, runs the write-time contradiction check (tier 2a, ADR-004)
+        sync: If True, runs the write-time contradiction check (tier 2a)
               inline and returns its result. If False (default), the check is
               enqueued for background processing and the response returns as
               soon as the file is written and git-committed.
     """
+    if request:
+        client_ip = request.client.host if request.client else "unknown"
+        if not _check_rate_limit(client_ip, "write", _RATE_LIMIT_WRITE):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    if len(req.content) > _MAX_REQUEST_BYTES:
+        raise HTTPException(status_code=413, detail="Content too large")
     slug = req.slug
     if slug:
         # Prevent any potential JSON escape or traversal exploits if user defines slug
@@ -462,13 +611,18 @@ def save_api(req: SaveRequest, sync: bool = False) -> dict[str, Any]:
     file_path = os.path.join(config.palinode_dir, category, f"{slug}.md")
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
     
-    content_hash = hashlib.sha256(req.content.encode()).hexdigest()[:16]
-    
+    content_hash = hashlib.sha256(req.content.encode()).hexdigest()
+
+    # Normalize entity refs: bare strings get a category prefix.
+    # e.g. "palinode" → "project/palinode", "alice" → "person/alice"
+    raw_entities = req.entities or []
+    normalized_entities = _normalize_entities(raw_entities, category)
+
     frontmatter_dict = {
         "id": f"{category}-{slug}",
         "category": category,
         "type": req.type,
-        "entities": req.entities or [],
+        "entities": normalized_entities,
         "content_hash": content_hash,
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ")
     }
@@ -476,10 +630,21 @@ def save_api(req: SaveRequest, sync: bool = False) -> dict[str, Any]:
         frontmatter_dict.update(req.metadata)
     if req.core is not None:
         frontmatter_dict["core"] = req.core
-        
+    if req.confidence is not None:
+        frontmatter_dict["confidence"] = req.confidence
+
     frontmatter_dict["source"] = req.source or os.environ.get("PALINODE_SOURCE", "api")
-        
-    doc = f"---\n{yaml.dump(frontmatter_dict)}---\n\n{req.content}\n"
+
+    # Auto-generate description if not already provided via metadata
+    if not frontmatter_dict.get("description"):
+        try:
+            desc = _generate_description(req.content)
+            if desc:
+                frontmatter_dict["description"] = desc
+        except Exception as e:
+            logger.warning(f"Description generation failed (non-fatal): {e}")
+
+    doc = f"---\n{yaml.safe_dump(frontmatter_dict, default_flow_style=False, allow_unicode=True)}---\n\n{req.content}\n"
     
     with open(file_path, "w") as f:
         f.write(doc)
@@ -513,7 +678,7 @@ def save_api(req: SaveRequest, sync: bool = False) -> dict[str, Any]:
 
     result: dict[str, Any] = {"file_path": file_path, "id": frontmatter_dict["id"]}
 
-    # Tier 2a (ADR-004): schedule write-time contradiction check.
+    # Tier 2a: schedule write-time contradiction check.
     # Always safe to call — returns None immediately if disabled in config.
     # Errors inside the scheduler are logged and swallowed; never propagate.
     if config.consolidation.write_time.enabled:
@@ -613,7 +778,7 @@ def status_api() -> dict[str, Any]:
         
     stats["ollama_reachable"] = ollama_reachable
 
-    # Tier 2a (ADR-004) observability
+    # Tier 2a observability
     stats["write_time_enabled"] = config.consolidation.write_time.enabled
     if config.consolidation.write_time.enabled:
         try:
@@ -635,6 +800,97 @@ def status_api() -> dict[str, Any]:
     return stats
 
 
+@app.get("/health")
+def health_api() -> dict[str, Any]:
+    """Lightweight liveness check — no side effects, <100ms."""
+    result: dict[str, Any] = {"status": "ok"}
+
+    # DB accessible + basic stats
+    try:
+        db = store.get_db()
+        chunks = db.execute("SELECT count(*) FROM chunks").fetchone()[0]
+        last_row = db.execute(
+            "SELECT last_updated FROM chunks ORDER BY last_updated DESC LIMIT 1"
+        ).fetchone()
+        result["chunks"] = chunks
+        result["last_indexed"] = last_row["last_updated"] if last_row else None
+        entities = db.execute("SELECT count(DISTINCT entity_ref) FROM entities").fetchone()[0]
+        result["entities"] = entities
+        db.close()
+    except Exception as e:
+        result["status"] = "degraded"
+        result["db_error"] = str(e)
+
+    # Ollama reachable
+    try:
+        httpx.get(config.embeddings.primary.url, timeout=2.0)
+        result["ollama"] = True
+    except Exception:
+        result["ollama"] = False
+
+    return result
+
+
+@app.get("/health/watcher")
+def watcher_health_api() -> dict[str, Any]:
+    """Canary check: write a temp file, verify it gets indexed, clean up.
+
+    Returns watcher_alive=True if the file was indexed within the timeout.
+    Also checks systemd journal for recent watcher errors.
+    """
+    import uuid as _uuid
+    canary_id = f"_canary-{_uuid.uuid4().hex[:8]}"
+    canary_dir = os.path.join(config.palinode_dir, "insights")
+    os.makedirs(canary_dir, exist_ok=True)
+    canary_path = os.path.join(canary_dir, f"{canary_id}.md")
+    canary_content = f"---\nid: {canary_id}\ncategory: insights\ntype: Insight\n---\nCanary check {canary_id}\n"
+
+    result: dict[str, Any] = {"watcher_alive": False, "canary_id": canary_id}
+
+    try:
+        # Write canary file
+        with open(canary_path, "w") as f:
+            f.write(canary_content)
+
+        # Wait for watcher to pick it up (check every 0.5s, up to 8s)
+        import time as _time
+        for _ in range(16):
+            _time.sleep(0.5)
+            db = store.get_db()
+            row = db.execute(
+                "SELECT id FROM chunks WHERE file_path = ?", (canary_path,)
+            ).fetchone()
+            db.close()
+            if row:
+                result["watcher_alive"] = True
+                break
+
+        # Check journal for recent watcher errors (last hour)
+        try:
+            import subprocess
+            journal = subprocess.run(
+                ["journalctl", "--user", "-u", "palinode-watcher",
+                 "--since", "1 hour ago", "--no-pager", "-p", "err"],
+                capture_output=True, text=True, timeout=5
+            )
+            errors = [l for l in journal.stdout.strip().split("\n") if l.strip() and "-- No entries --" not in l]
+            result["recent_errors"] = len(errors)
+            if errors:
+                result["last_error"] = errors[-1][:200]
+        except Exception:
+            result["recent_errors"] = -1  # couldn't check
+
+    finally:
+        # Clean up canary file and any indexed chunks
+        try:
+            os.remove(canary_path)
+            store.delete_file_chunks(canary_path)
+        except Exception:
+            pass
+
+    return result
+
+
 @app.post("/ingest")
 def ingest_api() -> dict[str, str]:
     """Invoke document drop-box scanning routine."""
@@ -643,8 +899,7 @@ def ingest_api() -> dict[str, str]:
         process_inbox()
         return {"status": "success"}
     except Exception as e:
-        logger.error(f"Ingestion failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _safe_500(e, "Ingestion failed")
 
 
 @app.post("/ingest-url")
@@ -667,7 +922,7 @@ def ingest_url_api(req: dict[str, str]) -> dict[str, str]:
             return {"status": "success", "file_path": result}
         return {"status": "no_content"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _safe_500(e, "URL ingestion failed")
 
 
 @app.post("/rebuild-fts")
@@ -684,25 +939,54 @@ def rebuild_fts_api() -> dict[str, Any]:
 
 
 @app.post("/reindex")
-def reindex_api() -> dict[str, Any]:
-    """Resets memory boundaries enforcing a holistic index cycle across DB instances."""
-    logger.info("Starting full reindex...")
+def reindex_api(since: str | None = None) -> dict[str, Any]:
+    """Reindex memory files.  Idempotent — unchanged files are skipped.
+
+    Query params:
+        since: ISO timestamp (e.g. '2026-04-09T00:00:00Z').  If provided,
+               only files whose mtime is newer than this are processed.
+               Without it, all files are visited (but content-hash dedup
+               still skips unchanged content).
+    """
     from palinode.indexer.watcher import PalinodeHandler
     handler = PalinodeHandler()
+
+    since_ts: float | None = None
+    if since:
+        try:
+            from datetime import datetime, timezone
+            dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
+            since_ts = dt.timestamp()
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid ISO timestamp: {since}")
+
+    logger.info("Starting %s reindex...", "incremental" if since_ts else "full")
     count = 0
+    skipped_mtime = 0
     errors = 0
     for filepath in glob.glob(os.path.join(config.palinode_dir, "**/*.md"), recursive=True):
-        if handler.is_valid_file(filepath):
-            try:
-                handler._process_file(filepath)
-                count += 1
-            except Exception as e:
-                errors += 1
-                logger.warning(f"Reindex failed for {filepath}: {e}")
+        if not handler.is_valid_file(filepath):
+            continue
+        if since_ts and os.path.getmtime(filepath) < since_ts:
+            skipped_mtime += 1
+            continue
+        try:
+            handler._process_file(filepath)
+            count += 1
+        except Exception as e:
+            errors += 1
+            logger.warning(f"Reindex failed for {filepath}: {e}")
+
     # Rebuild FTS5 after bulk reindex to ensure consistency
     fts_count = store.rebuild_fts()
-    logger.info(f"Reindex complete: {count} files processed, {errors} errors, FTS5: {fts_count}")
-    return {"status": "success", "files_reindexed": count, "errors": errors, "fts_chunks": fts_count}
+    logger.info(f"Reindex complete: {count} processed, {skipped_mtime} skipped (mtime), {errors} errors, FTS5: {fts_count}")
+    return {
+        "status": "success",
+        "files_reindexed": count,
+        "skipped_not_modified": skipped_mtime,
+        "errors": errors,
+        "fts_chunks": fts_count,
+    }
 
 
 @app.get("/entities/{entity_ref:path}")
@@ -777,8 +1061,7 @@ def consolidate_api(req: ConsolidateRequest = None) -> dict[str, Any]:
             result = run_consolidation()
         return result
     except Exception as e:
-        logger.error(f"Consolidation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _safe_500(e, "Consolidation failed")
 
 
 @app.post("/split-layers")
@@ -874,7 +1157,25 @@ def session_end_api(req: SessionEndRequest) -> dict[str, Any]:
                 f.write(f"\n- [{today}] {one_liner}\n")
             status_file = f"projects/{req.project}-status.md"
 
-    # Git commit
+    # Also save as an individual indexed memory file (M0: dual-write).
+    # This gives each session-end its own frontmatter, entities, description,
+    # and embedding — searchable and retractable independently.
+    individual_file = None
+    try:
+        short_hash = hashlib.sha256(req.summary.encode()).hexdigest()[:8]
+        save_req = SaveRequest(
+            content=session_entry,
+            type="ProjectSnapshot" if req.project else "Insight",
+            slug=f"session-end-{today}-{req.project}-{short_hash}" if req.project else f"session-end-{today}-{short_hash}",
+            entities=[f"project/{req.project}"] if req.project else [],
+            source=source,
+        )
+        save_result = save_api(save_req)
+        individual_file = save_result.get("file_path")
+    except Exception as e:
+        logger.error(f"Individual session-end file save failed (non-fatal): {e}")
+
+    # Git commit (covers daily + status + individual file if save_api didn't commit)
     if config.git.auto_commit:
         try:
             files_to_add = [daily_path]
@@ -892,6 +1193,7 @@ def session_end_api(req: SessionEndRequest) -> dict[str, Any]:
     return {
         "daily_file": f"daily/{today}.md",
         "status_file": status_file,
+        "individual_file": individual_file,
         "entry": session_entry,
     }
 
@@ -1052,6 +1354,58 @@ def activate_prompt_api(name: str) -> dict[str, Any]:
             logger.warning(f"Git commit for prompt activation failed: {e}")
 
     return {"activated": name, "task": task}
+
+
+class MigrateOpenClawRequest(BaseModel):
+    path: str
+    dry_run: bool = False
+
+
+@app.post("/migrate/openclaw")
+def migrate_openclaw_api(req: MigrateOpenClawRequest) -> dict:
+    """Import a MEMORY.md from OpenClaw into Palinode.
+
+    Parses each ## section into a separate memory file with heuristic
+    type detection (person / decision / project / insight).
+
+    Args:
+        req: Request body with ``path`` (absolute or relative to memory_dir)
+             and optional ``dry_run`` flag.
+
+    Returns:
+        dict with sections_found, files_created, files_skipped, log_file, dry_run.
+    """
+    from palinode.migration.openclaw import run_migration
+
+    path = req.path
+    if "\x00" in path:
+        raise HTTPException(status_code=400, detail="Null bytes are not allowed in path")
+
+    # Resolve against memory_dir; reject paths that escape it.
+    base = _memory_base_dir()
+    if os.path.isabs(path):
+        resolved_path = os.path.realpath(path)
+    else:
+        resolved_path = os.path.realpath(os.path.join(base, path))
+    try:
+        within = os.path.commonpath([base, resolved_path]) == base
+    except ValueError:
+        within = False
+    if not within:
+        raise HTTPException(status_code=403, detail="Path traversal rejected")
+    path = resolved_path
+
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+
+    try:
+        result = run_migration(source_path=path, dry_run=req.dry_run)
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error(f"OpenClaw migration failed: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 def main() -> None:

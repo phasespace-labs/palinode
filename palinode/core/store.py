@@ -352,7 +352,7 @@ def search(query_embedding: list[float], category: str | None = None,
         top_k (int): Maximum number of results to return.
         threshold (float): Minimum cosine similarity score (0.0-1.0).
         context_entities (list[str] | None): Entity refs (e.g. ["project/palinode"])
-            for ADR-008 ambient context boost. Matching results get score * config.context.boost.
+            for ambient context boost. Matching results get score * config.context.boost.
         include_daily (bool): If True, skip the daily/ penalty (search daily notes at full rank).
 
     Returns:
@@ -424,7 +424,7 @@ def search(query_embedding: list[float], category: str | None = None,
 
     db.close()
 
-    # ADR-008: Ambient context boost (same logic as search_hybrid)
+    # Ambient context boost (same logic as search_hybrid)
     if context_entities and config.context.enabled and config.context.boost != 1.0:
         context_files: set[str] = set()
         for entity in context_entities:
@@ -689,7 +689,7 @@ def search_hybrid(
         for key in sorted_keys:
             result_map[key]["score"] = rrf_scores[key] / max_score
 
-    # Ambient context boost (ADR-008): boost results matching caller's project context
+    # Ambient context boost: boost results matching caller's project context
     if context_entities and config.context.enabled and config.context.boost != 1.0:
         context_files: set[str] = set()
         for entity in context_entities:

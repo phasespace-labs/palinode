@@ -41,16 +41,80 @@ def test_lint_pass(tmp_path, monkeypatch):
     contra_dup.write_text("---\nid: people-contra-dup\ncategory: people\ntype: Person\nstatus: active\n---\nBody", encoding="utf-8")
 
     result = run_lint_pass()
-    
+
     # Validate missing fields
     assert any(mf["file"].endswith("missing1.md") and "id" in mf["missing"] for mf in result["missing_fields"])
-    
-    # Validate stale 
+
+    # Validate stale
     assert any(sf["file"].endswith("stale1.md") for sf in result["stale_files"])
-    
+
     # Validate orphan
     assert any(of.endswith("orphan1.md") for of in result["orphaned_files"])
     assert not any(of.endswith("stale1.md") for of in result["orphaned_files"])  # referenced!
-    
+
     # Validate contradictions
     assert any(ct["entity"] == "people/contra" for ct in result["contradictions"])
+
+    # M0: Validate new keys exist
+    assert "missing_entities" in result
+    assert "missing_descriptions" in result
+    assert "core_count" in result
+
+
+def test_lint_missing_entities(tmp_path, monkeypatch):
+    """Files without entities should be flagged."""
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    people_dir = tmp_path / "people"
+    people_dir.mkdir()
+
+    # File with no entities
+    (people_dir / "lonely.md").write_text(
+        "---\nid: people-lonely\ncategory: people\ntype: Person\n---\nBody"
+    )
+    # File with entities
+    (people_dir / "linked.md").write_text(
+        "---\nid: people-linked\ncategory: people\ntype: Person\nentities:\n  - project/foo\n---\nBody"
+    )
+
+    result = run_lint_pass()
+    assert any("lonely.md" in f for f in result["missing_entities"])
+    assert not any("linked.md" in f for f in result["missing_entities"])
+
+
+def test_lint_missing_descriptions(tmp_path, monkeypatch):
+    """Files without description should be flagged."""
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    insights_dir = tmp_path / "insights"
+    insights_dir.mkdir()
+
+    # No description
+    (insights_dir / "nodesc.md").write_text(
+        "---\nid: insights-nodesc\ncategory: insights\ntype: Insight\n---\nBody"
+    )
+    # Has description
+    (insights_dir / "hasdesc.md").write_text(
+        "---\nid: insights-hasdesc\ncategory: insights\ntype: Insight\ndescription: A useful insight\n---\nBody"
+    )
+
+    result = run_lint_pass()
+    assert any("nodesc.md" in f for f in result["missing_descriptions"])
+    assert not any("hasdesc.md" in f for f in result["missing_descriptions"])
+
+
+def test_lint_core_count(tmp_path, monkeypatch):
+    """Core count should tally files with core: true."""
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    projects_dir = tmp_path / "projects"
+    projects_dir.mkdir()
+
+    # Core file
+    (projects_dir / "important.md").write_text(
+        "---\nid: projects-important\ncategory: projects\ntype: ProjectSnapshot\ncore: true\n---\nBody"
+    )
+    # Non-core file
+    (projects_dir / "normal.md").write_text(
+        "---\nid: projects-normal\ncategory: projects\ntype: ProjectSnapshot\n---\nBody"
+    )
+
+    result = run_lint_pass()
+    assert result["core_count"] == 1

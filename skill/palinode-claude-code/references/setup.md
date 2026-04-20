@@ -17,7 +17,7 @@ Best if you run Claude Code on the same machine as Palinode.
 ### 1. Install Palinode
 
 ```bash
-git clone https://github.com/Paul-Kyle/palinode.git ~/palinode
+git clone https://github.com/phasespace-labs/palinode.git ~/palinode
 cd ~/palinode
 python3 -m venv venv && source venv/bin/activate
 pip install -e .
@@ -151,12 +151,11 @@ Search palinode for "recent project decisions"
 | `palinode_save` | Store a typed memory (person, decision, insight, project) |
 | `palinode_ingest` | Fetch a URL and save as research reference |
 | `palinode_status` | File counts, index health, entity graph size |
-| `palinode_history` | Recent daily notes / capture history |
+| `palinode_history` | File change history with diff stats and rename tracking |
 | `palinode_entities` | List known entities and their relationships |
 | `palinode_consolidate` | Run or preview the weekly compaction job |
 | `palinode_diff` | See what changed in a memory file (git diff) |
 | `palinode_blame` | Who/when each section was written |
-| `palinode_history` | Git history with diff stats and rename tracking |
 | `palinode_rollback` | Revert a file to a previous state |
 | `palinode_push` | Push memory changes to remote git |
 | `palinode_trigger` | Register a prospective recall intention |

@@ -1,8 +1,16 @@
-# Palinode
+<!-- mcp-name: io.github.phasespace-labs/palinode -->
 
-**Persistent memory for AI agents. Markdown in, markdown out, git everything.**
+```
+┌─ palinode ─┐
+│ ░░░░░░░░░░ │
+│ ▓▓▓▓▓▓▓▓▓▓ │
+│ ██████████ │
+└────────────┘
+```
 
-Your agent's memory is a folder of markdown files. Palinode indexes them with hybrid search, compacts them with an LLM, and exposes them through any interface you want — MCP, REST API, CLI, or plugin hooks. If every service crashes, `cat` still works.
+**The memory substrate for AI agents and developer tools. Git-versioned, file-native, MCP-first.**
+
+Your agent's memory is a folder of markdown files. Palinode indexes them with hybrid search, compacts them with an LLM, and serves them through MCP — so the same memory works in Claude Code, Cursor, Windsurf, Zed, VS Code (Continue/Cline), and any other MCP-compatible editor. Enterprises can govern AI memory the same way they govern code. If every service crashes, `cat` still works.
 
 *A palinode is a poem that retracts what was said before and says it better. That's what memory compaction does.*
 
@@ -17,7 +25,7 @@ Files (markdown + YAML frontmatter)
   ↓ watched
 Index (SQLite-vec vectors + FTS5 keywords, single .db file)
   ↓ queried by
-Interfaces (MCP server, REST API, CLI, plugin hooks)
+Interfaces (MCP server, REST API, CLI, OpenClaw plugin)
   ↓ compacted by
 LLM (proposes ops → deterministic executor applies them → git commits)
 ```
@@ -32,10 +40,10 @@ Palinode doesn't care how you talk to it. The same 17 tools work everywhere:
 
 | Interface | Transport | Best For |
 |-----------|-----------|----------|
-| **MCP Server** | Streamable HTTP or stdio | Claude Code, Claude Desktop, Cursor, Zed |
+| **MCP Server** | Streamable HTTP or stdio | Claude Code, Claude Desktop, Cursor, Windsurf, Zed, VS Code (Continue/Cline) |
 | **REST API** | HTTP on :6340 | Scripts, webhooks, custom integrations |
 | **CLI** | Wraps REST API | Cron jobs, SSH, shell scripts (8x fewer tokens than MCP) |
-| **Plugin** | Agent lifecycle hooks | Agent frameworks with inject/extract patterns |
+| **Plugin** | OpenClaw lifecycle hooks | Agent frameworks with inject/extract patterns |
 
 Set up once on a server. Connect from any machine, any IDE, any agent framework. The MCP server is a pure HTTP client — it holds no state, no database connection, no embedder. Point it at the API and go.
 
@@ -47,7 +55,7 @@ Set up once on a server. Connect from any machine, any IDE, any agent framework.
 }
 ```
 
-That's the entire client config for Claude Code, Claude Desktop, Cursor, or Zed. See [docs/MCP-SETUP.md](docs/MCP-SETUP.md) for multi-IDE setup, or [docs/INSTALL-CLAUDE-CODE.md](docs/INSTALL-CLAUDE-CODE.md) for Claude Code specifically.
+That's the entire client config. Works with Claude Code, Claude Desktop, Cursor, Windsurf, Zed, and VS Code (Continue/Cline). See [docs/MCP-SETUP.md](docs/MCP-SETUP.md) for editor-specific paths.
 
 ---
 
@@ -62,6 +70,34 @@ That's the entire client config for Claude Code, Claude Desktop, Cursor, or Zed.
 **Compact** — Weekly consolidation where an LLM proposes structured operations (KEEP / UPDATE / MERGE / SUPERSEDE / ARCHIVE) and a deterministic executor applies them. The LLM never touches your files directly. Every compaction is a git commit you can review, blame, or revert.
 
 **Audit** — `git blame` any fact. `git diff` any change. `rollback` any mistake. These aren't just git-compatible files — `palinode_diff`, `palinode_blame`, and `palinode_rollback` are first-class tools your agent can call.
+
+---
+
+## Getting started in 60 seconds (Claude Code)
+
+Already have Palinode installed and `palinode-api` running? Drop it into any
+project in one command:
+
+```bash
+cd your-project
+palinode init
+```
+
+That scaffolds:
+
+- `.claude/CLAUDE.md` — memory instructions for the agent (appended if one
+  already exists)
+- `.claude/settings.json` — a `SessionEnd` hook that auto-captures on `/clear`,
+  logout, and normal exit
+- `.claude/hooks/palinode-session-end.sh` — the hook script itself
+- `.mcp.json` — points Claude Code at the `palinode` MCP server
+
+Open the project in Claude Code and your agent will search prior context on
+startup, save decisions as you work, and snapshot the session on `/clear`. No
+server restarts, no settings menus, no copy-paste.
+
+Re-run with `--dry-run` to preview, `--force` to overwrite, or `--no-mcp`
+/ `--no-hook` to scope what gets installed.
 
 ---
 
@@ -89,6 +125,43 @@ curl http://localhost:6340/status
 
 > Your memory directory is **private**. It contains personal data. Never make it public. The code repo contains zero memory files.
 
+> For a pre-populated demo, copy `examples/sample-memory/` to `~/.palinode/`.
+
+---
+
+## Usage Examples
+
+### Save a decision, recall it later
+
+```bash
+# During a session — save a decision
+palinode save --type Decision "Chose SQLite over Postgres for the cache layer. \
+  Reason: no ops burden, single-file deployment, good enough for our scale."
+
+# Next week — search for it
+palinode search "database decision for cache"
+```
+
+### End-of-session capture
+
+```bash
+# Agent calls at end of coding session
+palinode session-end \
+  --summary "Migrated auth from JWT to session tokens" \
+  --decisions "Session tokens stored server-side, 24h expiry" \
+  --blockers "Need to update mobile client auth flow"
+```
+
+### Audit trail — who decided what and when
+
+```bash
+# Trace a fact back to when it was recorded
+palinode blame decisions/auth-migration.md
+
+# See what changed across all memory in the last week
+palinode diff --days 7
+```
+
 ---
 
 ## Tools
@@ -103,11 +176,11 @@ curl http://localhost:6340/status
 | `read` | Read the full content of a memory file |
 | `ingest` | Fetch a URL and save as research |
 | `status` | Health check — file counts, index stats, service status |
-| `history` | Git history with diff stats, rename tracking, and limit |
 | `entities` | Entity graph — cross-references between memories |
 | `consolidate` | Preview or run LLM-powered compaction |
 | `diff` | What changed in the last N days |
 | `blame` | Trace a fact back to the commit that recorded it |
+| `history` | Git history for a file with diff stats and rename tracking |
 | `rollback` | Revert a file to a previous commit (safe, creates new commit) |
 | `push` | Sync memory to a remote git repo |
 | `trigger` | Prospective recall — auto-inject when a topic comes up |
@@ -146,12 +219,14 @@ status: active
 entities: [person/paul]
 last_updated: 2026-04-05T00:00:00Z
 summary: "Persistent memory for AI agents."
+canonical_question: "What is Palinode and what does it do?"
 ---
 # Palinode
 
 Your content here. As detailed or brief as you want.
 Files marked `core: true` are always in context.
 Everything else is retrieved on demand via hybrid search.
+The `canonical_question` field anchors the file to the question it answers, improving search relevance.
 ```
 
 Open your memory directory as an [Obsidian](https://obsidian.md) vault for visual browsing. See [docs/OBSIDIAN-SETUP.md](docs/OBSIDIAN-SETUP.md).
@@ -196,7 +271,7 @@ All models are swappable. Any Ollama embedding model, any OpenAI-compatible chat
 - **Ollama** with `bge-m3` (`ollama pull bge-m3`)
 - **Git**
 
-Optional: a chat model for consolidation (any 7B+ works).
+Optional: a chat model for consolidation (any 7B+ works), OpenClaw for agent plugin hooks.
 
 ---
 
@@ -242,6 +317,8 @@ Optional: a chat model for consolidation (any 7B+ works).
 
 ## What's Unique
 
+- **Your data, your files** — No accounts, no cloud dependency, no vendor lock-in. Your memory is markdown files in a directory you control. Export is `cp`. Backup is `git push`. Whatever happens to any tool in this ecosystem, your data is plain text on your filesystem.
+- **Cross-IDE memory** — Your memory lives in one place. Connect from Claude Code, Cursor, Windsurf, Zed, or any MCP-compatible editor. Switch IDEs without losing context.
 - **Git operations as agent tools** — `diff`, `blame`, `rollback`, `push` exposed via MCP. No other system makes git ops callable by the agent.
 - **Operation-based compaction** — KEEP/UPDATE/MERGE/SUPERSEDE/ARCHIVE DSL. LLM proposes, deterministic executor disposes. Every compaction is a reviewable git commit.
 - **Per-fact addressability** — `<!-- fact:slug -->` IDs inline in markdown, invisible in rendering, preserved by git, targetable by compaction.
@@ -263,7 +340,7 @@ If you know of prior art we missed, please [open an issue](https://github.com/ph
 
 ## License
 
-MIT
+MIT — [Privacy Policy](PRIVACY.md)
 
 ---
 

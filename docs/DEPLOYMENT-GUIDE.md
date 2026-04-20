@@ -32,7 +32,7 @@ Install Palinode on **one** machine (the server). Client machines need zero loca
 
 ```bash
 # Install
-git clone https://github.com/Paul-Kyle/palinode
+git clone https://github.com/phasespace-labs/palinode
 cd palinode
 python3 -m venv venv && source venv/bin/activate
 pip install -e .

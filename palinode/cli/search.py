@@ -7,7 +7,7 @@ from rich.panel import Panel
 
 
 def _cli_resolve_context() -> list[str] | None:
-    """Resolve ambient project context from CWD for CLI (ADR-008)."""
+    """Resolve ambient project context from CWD for CLI."""
     if not config.context.enabled:
         return None
     explicit = os.environ.get("PALINODE_PROJECT")

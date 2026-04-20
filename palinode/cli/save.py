@@ -4,7 +4,8 @@ from palinode.cli._format import console, print_result, get_default_format, Outp
 
 @click.command()
 @click.argument("content", required=False)
-@click.option("--type", "memory_type", required=True, help="Memory type (e.g. PersonMemory, Decision, Insight)")
+@click.option("--type", "memory_type", required=False, help="Memory type (e.g. PersonMemory, Decision, Insight, ProjectSnapshot)")
+@click.option("--ps", "is_ps", is_flag=True, help="Shorthand for --type ProjectSnapshot (Palinode Save a mid-session snapshot)")
 @click.option("--entity", "entities", multiple=True, help="Entity tag (e.g. person/X, project/X)")
 @click.option("--file", "file_path", type=click.Path(exists=True), help="Read content from file instead of argument")
 @click.option("--title", help="Optional title override")
@@ -17,14 +18,31 @@ from palinode.cli._format import console, print_result, get_default_format, Outp
          "consolidation.write_time.enabled in config.",
 )
 @click.option("--format", "fmt", type=click.Choice(["json", "text"]), help="Output format")
-def save(content, memory_type, entities, file_path, title, source, sync, fmt):
-    """Store a new memory."""
+def save(content, memory_type, is_ps, entities, file_path, title, source, sync, fmt):
+    """Store a new memory.
+
+    Use --ps as shorthand for --type ProjectSnapshot when dropping a quick
+    mid-session note ("Palinode Save"). For structured session wrap-ups with
+    decisions and blockers, use `palinode session-end` instead.
+    """
     if file_path:
         with open(file_path, "r") as f:
             content = f.read()
 
     if not content:
         console.print("[red]Error: Must provide content or a file.[/red]")
+        click.Abort()
+        return
+
+    # Resolve memory type: --ps is shorthand for ProjectSnapshot
+    if is_ps and memory_type and memory_type != "ProjectSnapshot":
+        console.print(f"[red]Error: --ps conflicts with --type {memory_type}. Pick one.[/red]")
+        click.Abort()
+        return
+    if is_ps:
+        memory_type = "ProjectSnapshot"
+    if not memory_type:
+        console.print("[red]Error: Must provide --type or --ps.[/red]")
         click.Abort()
         return
 

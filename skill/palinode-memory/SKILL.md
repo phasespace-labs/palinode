@@ -7,7 +7,7 @@ metadata:
   mcp-server: palinode
   category: memory
   tags: [memory, persistence, knowledge-management, agents]
-  documentation: https://github.com/Paul-Kyle/palinode
+  documentation: https://github.com/phasespace-labs/palinode
 ---
 
 # Palinode Memory
@@ -86,7 +86,7 @@ Triggers fire when the user's message semantically matches `description`. Good f
 Use these when the user asks about memory history:
 - `palinode_diff` — what changed in the last N commits for a file
 - `palinode_blame` — who/when each section was written
-- `palinode_history` — git history with diff stats and rename tracking
+- `palinode_history` — file change history with diff stats and rename tracking
 - `palinode_rollback` — revert a file to a previous state
 
 ## Consolidation

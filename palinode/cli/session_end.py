@@ -1,4 +1,5 @@
 import click
+import hashlib
 import json
 import os
 from datetime import datetime, timezone
@@ -67,6 +68,25 @@ def session_end(summary, decision, blocker, project, source, fmt):
                 f.write(f"\n- [{today}] {one_liner}\n")
             status_msg = f" + status → {project}-status.md"
 
+    # Also save as an individual indexed memory file (M0: dual-write)
+    individual_file = None
+    try:
+        import httpx
+        short_hash = hashlib.sha256(summary.encode()).hexdigest()[:8]
+        api_url = f"http://localhost:{config.services.api.port}/save"
+        save_payload = {
+            "content": session_entry,
+            "type": "ProjectSnapshot" if project else "Insight",
+            "slug": f"session-end-{today}-{project}-{short_hash}" if project else f"session-end-{today}-{short_hash}",
+            "entities": [f"project/{project}"] if project else [],
+            "source": source_val,
+        }
+        resp = httpx.post(api_url, json=save_payload, timeout=10.0)
+        if resp.status_code == 200:
+            individual_file = resp.json().get("file_path")
+    except Exception:
+        pass  # Non-fatal — daily append is the primary path
+
     # Git commit
     try:
         import subprocess
@@ -86,6 +106,7 @@ def session_end(summary, decision, blocker, project, source, fmt):
 
     result = {
         "daily_file": f"daily/{today}.md",
+        "individual_file": individual_file,
         "project_status": f"projects/{project}-status.md" if status_msg else None,
         "summary": summary,
         "decisions": decisions,
