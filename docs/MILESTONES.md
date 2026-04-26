@@ -30,9 +30,9 @@ Improve what gets stored and how it evolves. Epistemic markers (fact vs inferenc
 
 Bring existing knowledge in. Generic markdown import, Obsidian integration (research stage — palinode is markdown-first by design, the substrate is already compatible), GitLab-aware entity linking, team scopes / agent-to-agent channels, OpenClaw profile migration.
 
-### M5 — Cloud + Colophon
+### M5 — Cloud + Signed Provenance
 
-Team sharing, hosted deployment, provenance bridge. Cloud infrastructure with enforced RBAC, monorepo structure for a `palinode_cloud/` package, Ed25519 signed provenance receipts, Colophon Protocol integration. Currently paused pending IP-hygiene clearance; bridge plan captured separately.
+Team sharing, hosted deployment, provenance bridge. Cloud infrastructure with enforced RBAC, monorepo structure for a `palinode_cloud/` package, and Ed25519 signed provenance receipts. This milestone is currently paused pending IP-hygiene clearance; the bridge plan is tracked separately.
 
 ### M6 — v1.0 Packaging
 
@@ -54,7 +54,7 @@ M1 (foundation) → M2 (intelligence) → M3 (quality) → M4 (ecosystem) → M5
 - **M2 next.** The largest leverage point once foundation is solid is "make sessions actually smart" — handoff tokens, scope chains, parity contract enforcement.
 - **M3 third.** Memory quality builds on the agent-intelligence APIs (you need the surfaces before you refine what flows through them).
 - **M4 fourth.** Ecosystem integrations (Obsidian, GitLab, generic markdown import) work best on a stable, intelligent core. *Note: M4's research-stage items can begin in parallel with M1 — different code areas, different audiences, no conflict.*
-- **M5/M6 productization.** Cloud and packaging assume the underlying product is solid. Order between them is parallel-safe; M5 has external dependencies (Colophon clearance) that affect timing.
+- **M5/M6 productization.** Cloud and packaging assume the underlying product is solid. Order between them is parallel-safe; M5 has external dependencies around signed-provenance clearance that affect timing.
 - **M7 last.** Research items inform future direction but don't block shipping.
 
 ## How to contribute
