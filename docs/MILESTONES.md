@@ -30,9 +30,9 @@ Improve what gets stored and how it evolves. Epistemic markers (fact vs inferenc
 
 Bring existing knowledge in. Generic markdown import, Obsidian integration (research stage — palinode is markdown-first by design, the substrate is already compatible), GitLab-aware entity linking, team scopes / agent-to-agent channels, OpenClaw profile migration.
 
-### M5 — Cloud + Signed Provenance
+### M5 — Cloud + Team Sharing
 
-Team sharing, hosted deployment, provenance bridge. Cloud infrastructure with enforced RBAC, monorepo structure for a `palinode_cloud/` package, and Ed25519 signed provenance receipts. This milestone is currently paused pending IP-hygiene clearance; the bridge plan is tracked separately.
+Hosted deployment, shared memory for teams, and the operational foundation for managed use cases. This milestone covers the path from single-user local workflows to collaborative and hosted environments.
 
 ### M6 — v1.0 Packaging
 
@@ -40,7 +40,7 @@ Homebrew, Nix, Mintlify docs site, package architecture restructure. Unblocked w
 
 ### M7 — Research + Speculative
 
-Things worth thinking about that aren't yet committed: query-time delta compilation, prompt A/B testing, Cowork integration, multimodal embeddings (image/PDF), model step-change preparation, Palinode self-tracking, GrueBrain memory pathway rationalization.
+Things worth thinking about that aren't yet committed: query-time delta compilation, prompt A/B testing, Cowork integration, multimodal embeddings (image/PDF), model step-change preparation, Palinode self-tracking, and rationalizing legacy memory workflows.
 
 ## Order rationale
 
@@ -54,7 +54,7 @@ M1 (foundation) → M2 (intelligence) → M3 (quality) → M4 (ecosystem) → M5
 - **M2 next.** The largest leverage point once foundation is solid is "make sessions actually smart" — handoff tokens, scope chains, parity contract enforcement.
 - **M3 third.** Memory quality builds on the agent-intelligence APIs (you need the surfaces before you refine what flows through them).
 - **M4 fourth.** Ecosystem integrations (Obsidian, GitLab, generic markdown import) work best on a stable, intelligent core. *Note: M4's research-stage items can begin in parallel with M1 — different code areas, different audiences, no conflict.*
-- **M5/M6 productization.** Cloud and packaging assume the underlying product is solid. Order between them is parallel-safe; M5 has external dependencies around signed-provenance clearance that affect timing.
+- **M5/M6 productization.** Cloud and packaging assume the underlying product is solid. Order between them is parallel-safe; hosted and team-sharing work also carries additional product and deployment dependencies that affect timing.
 - **M7 last.** Research items inform future direction but don't block shipping.
 
 ## How to contribute

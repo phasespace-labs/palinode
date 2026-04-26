@@ -36,7 +36,7 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ## [0.7.2] — 2026-04-26
 
-Bug-fix release with small UX additions. Brings the public repo up to date with two production-impacting fixes (MCP array coercion, SessionEnd hook reasoning) plus search filters and structured session metadata. v0.8.0 remains reserved for Signed Provenance.
+Bug-fix release with small UX additions. Brings the public repo up to date with two production-impacting fixes (MCP array coercion, SessionEnd hook reasoning) plus search filters and structured session metadata. v0.8.0 remains reserved for a later major feature release.
 
 ### Added
 
@@ -60,7 +60,7 @@ Bug-fix release with small UX additions. Brings the public repo up to date with 
 
 ### Tests
 
-- 325 tests passing on dev main (290 on the public-shipped subset; the 35 difference is reverted Phase-B actor-class and capabilities tests not part of this release).
+- 325 tests passing at release time.
 
 ---
 
