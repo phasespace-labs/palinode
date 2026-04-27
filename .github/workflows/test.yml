@@ -43,6 +43,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
+      - name: Assert palinode resolves to the checked-out tree
+        # Regression guard for editable installs:
+        # palinode.__file__ must resolve under GITHUB_WORKSPACE, not some
+        # other site-packages path.  A failure here means the editable
+        # install is broken and tests are running against the wrong source.
+        run: |
+          RESOLVED=$(python -c "import palinode; print(palinode.__file__)")
+          echo "palinode.__file__ = $RESOLVED"
+          if [[ "$RESOLVED" != "$GITHUB_WORKSPACE"/* ]]; then
+            echo "ERROR: palinode resolves outside the workspace ($GITHUB_WORKSPACE)"
+            echo "       Got: $RESOLVED"
+            exit 1
+          fi
+
       - name: Run unit tests
         run: pytest tests/ -v --tb=short
 
@@ -112,7 +126,7 @@ jobs:
   # ---------------------------------------------------------------------------
   # Shipping-leak scan — catch new SYNC-PUBLIC blacklist patterns at PR time.
   #
-  # Failing here means the PR introduced a private reference (Tailscale IP,
+  # Failing here means the PR introduced a private reference (private host,
   # internal repo name, agent identifier, etc.) into a file that ships
   # publicly. Fix at PR time rather than letting it propagate to staging.
   #

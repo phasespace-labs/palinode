@@ -12,13 +12,17 @@ Config resolution order:
 """
 from __future__ import annotations
 
+import logging
 import os
+import sys
 import glob
 from pathlib import Path
 from dataclasses import field
 from pydantic.dataclasses import dataclass
 from pydantic import TypeAdapter, ValidationError
 import yaml
+
+_logger = logging.getLogger("palinode.config")
 
 def _expand_path(path_str: str) -> str:
     """Expand ~ and normalizes path."""
@@ -237,6 +241,27 @@ class GitConfig:
     commit_prefix: str = "palinode"
 
 @dataclass
+class DoctorConfig:
+    """Configuration for palinode doctor diagnostics.
+
+    search_roots: directories to search for phantom .palinode.db files when
+                  running the phantom_db_files check.  Each entry is an
+                  absolute path string; ~ expansion is applied.
+
+                  When empty (the default), the built-in plausible roots are
+                  used (home, ~/palinode, ~/palinode-data, /var/lib/palinode,
+                  and a few historical clawd paths).
+
+                  When non-empty, ONLY the listed paths are searched — the
+                  built-in list is bypassed entirely.  This lets operators pin
+                  the exact set of roots on production hosts, and lets tests
+                  isolate themselves to tmp_path directories without the check
+                  discovering real databases elsewhere on the machine.
+    """
+    search_roots: list[str] = field(default_factory=list)
+
+
+@dataclass
 class AuditConfig:
     """MCP tool call audit logging for compliance and debugging."""
     enabled: bool = True
@@ -336,7 +361,10 @@ class CompactionConfig:
 class Config:
     """Global configuration model mapping all schema structures format maps formats outputs."""
     memory_dir: str = "~/palinode"
-    db_path: str = ".palinode.db"
+    # Sentinel `None` means "default to memory_dir/.palinode.db, tracking
+    # PALINODE_DIR overrides at load time". See __post_init__ + load_config.
+    # An explicit string (e.g. from palinode.config.yaml) is taken at face value.
+    db_path: str | None = None
     recall: RecallConfig = field(default_factory=RecallConfig)
     capture: CaptureConfig = field(default_factory=CaptureConfig)
     ingestion: IngestionConfig = field(default_factory=IngestionConfig)
@@ -352,6 +380,7 @@ class Config:
     security: SecurityConfig = field(default_factory=SecurityConfig)
     git: GitConfig = field(default_factory=GitConfig)
     audit: AuditConfig = field(default_factory=AuditConfig)
+    doctor: DoctorConfig = field(default_factory=DoctorConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     
     @property
@@ -361,9 +390,54 @@ class Config:
     def __post_init__(self):
         # Support ~ expansion in specific paths
         self.memory_dir = _expand_path(self.memory_dir)
-        # Handle db_path absolute or relative
-        if not os.path.isabs(self.db_path):
+        # Handle db_path absolute or relative.
+        # `None` is the sentinel meaning "default to memory_dir/.palinode.db";
+        # leave it for load_config() to resolve AFTER env-var overrides apply.
+        # If the user passed an explicit string, normalize it now: relative
+        # paths land under memory_dir, absolute paths stay as-is.
+        if self.db_path is not None and not os.path.isabs(self.db_path):
             self.db_path = os.path.join(self.memory_dir, self.db_path)
+
+    def validate_paths(self) -> list[str]:
+        """Return human-readable warning strings for path misconfigurations.
+
+        Checks:
+          (a) memory_dir exists on disk
+          (b) db_path parent directory exists on disk
+          (c) db_path is under memory_dir (warns if not — not an error by itself)
+
+        An empty return list means all checks passed.  Callers should log each
+        entry at WARNING level; a missing db_path parent is the only condition
+        serious enough to refuse startup (the caller decides policy).
+        """
+        warnings: list[str] = []
+
+        memory_dir = Path(self.memory_dir).resolve()
+        db_path = Path(self.db_path).resolve()
+        db_parent = db_path.parent
+
+        if not memory_dir.exists():
+            warnings.append(
+                f"memory_dir does not exist: {memory_dir}"
+            )
+
+        if not db_parent.exists():
+            warnings.append(
+                f"db_path parent directory does not exist: {db_parent} "
+                f"(db_path={db_path})"
+            )
+
+        try:
+            db_path.relative_to(memory_dir)
+        except ValueError:
+            warnings.append(
+                f"db_path is outside memory_dir — they may have diverged. "
+                f"memory_dir={memory_dir}  db_path={db_path}. "
+                f"If you moved the data directory and updated PALINODE_DIR, "
+                f"also update db_path in palinode.config.yaml."
+            )
+
+        return warnings
 
 
 def _deep_merge(target: dict, source: dict) -> dict:
@@ -412,8 +486,18 @@ def load_config() -> Config:
     # 4. Environment variable overrides
     if "PALINODE_DIR" in os.environ:
         cfg.memory_dir = _expand_path(os.environ["PALINODE_DIR"])
-        if not os.path.isabs(cfg.db_path):
+        # If the user did not set db_path explicitly (sentinel `None`), it
+        # remains None here and gets resolved against the post-env memory_dir
+        # in step 5. If they did set it (YAML), preserve their intent: only
+        # rebase when it's a bare relative path (originally a basename).
+        if cfg.db_path is not None and not os.path.isabs(cfg.db_path):
             cfg.db_path = os.path.join(cfg.memory_dir, os.path.basename(cfg.db_path))
+
+    # 5. Resolve sentinel db_path. Always tracks the final memory_dir, so
+    #    `PALINODE_DIR=/tmp/foo` (with no YAML db_path) lands the DB at
+    #    /tmp/foo/.palinode.db rather than the install-dir default. Fixes #248.
+    if cfg.db_path is None:
+        cfg.db_path = os.path.join(cfg.memory_dir, ".palinode.db")
     if "OLLAMA_URL" in os.environ:
         cfg.embeddings.primary.url = os.environ["OLLAMA_URL"]
     if "EMBEDDING_MODEL" in os.environ:
@@ -436,14 +520,36 @@ def load_config() -> Config:
     if "PALINODE_AGENT" in os.environ:
         cfg.scope.agent = os.environ["PALINODE_AGENT"]
 
+    # Warn if PALINODE_DIR is set but db_path was not updated to match
+    if "PALINODE_DIR" in os.environ:
+        memory_dir = os.path.abspath(os.path.expanduser(os.environ["PALINODE_DIR"]))
+        db_path = os.path.abspath(cfg.db_path)
+        try:
+            Path(db_path).relative_to(memory_dir)
+        except ValueError:
+            _logger.warning(
+                "PALINODE_DIR is set but db_path does not fall under it — "
+                "they may have diverged after a directory rename. "
+                "memory_dir=%s  db_path=%s. "
+                "Update db_path in palinode.config.yaml to suppress this warning.",
+                memory_dir,
+                db_path,
+            )
+
     # Print summary string
     try:
         num_files = len(glob.glob(os.path.join(cfg.memory_dir, "**/*.md"), recursive=True))
     except (OSError, ValueError):
         num_files = 0
 
-    print(f"Palinode config: {loaded_path or 'defaults'} "
-          f"({num_files} files, {cfg.embeddings.primary.model} @ {cfg.embeddings.primary.url})")
+    # Diagnostic banner — write to stderr so machine-readable stdout
+    # (e.g. `palinode doctor --json | jq`) stays clean. Per Unix convention,
+    # informational/diagnostic output belongs on stderr.
+    print(
+        f"Palinode config: {loaded_path or 'defaults'} "
+        f"({num_files} files, {cfg.embeddings.primary.model} @ {cfg.embeddings.primary.url})",
+        file=sys.stderr,
+    )
     
     return cfg
 

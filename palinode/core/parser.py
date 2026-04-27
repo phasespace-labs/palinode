@@ -16,6 +16,14 @@ logger = logging.getLogger("palinode.parser")
 VALID_VISIBILITIES: tuple[str, ...] = ("inherited", "private", "restricted")
 DEFAULT_VISIBILITY: str = "inherited"
 
+# Regex for Obsidian-style wikilinks: [[Target]] or [[Target|Display]]
+_WIKILINK_RE = re.compile(r'\[\[([^\]|]+)(?:\|[^\]]*)?\]\]')
+
+# Canonical schema kinds (from PROGRAM.md).  Used to detect typed wikilinks.
+_CANONICAL_KINDS: frozenset[str] = frozenset(
+    ("person", "project", "decision", "insight", "research", "daily")
+)
+
 
 def slugify(text: str) -> str:
     """Converts a standard text string to a URL-safe lowercase slug.
@@ -29,6 +37,118 @@ def slugify(text: str) -> str:
     text = text.lower()
     text = re.sub(r'[^a-z0-9]+', '-', text)
     return text.strip('-')
+
+
+def canonicalize_wikilink(label: str, known_entities: list[str] | None = None) -> str:
+    """Convert a raw wikilink label to its canonical ``kind/slug`` form.
+
+    Canonicalization rules (per PROGRAM.md Wiki Maintenance § Canonicalization):
+    - Lowercase, spaces → hyphens, strip leading/trailing hyphens.
+    - If the label already contains a ``/`` (e.g. ``[[person/alice-smith]]``),
+      treat it as an already-typed reference and just normalise the slug.
+    - If the label matches one of the canonical kinds as a prefix separated by
+      a space or hyphen (e.g. ``[[person alice smith]]``), parse that.
+    - Otherwise try to match against ``known_entities`` (the frontmatter list):
+      a slug-match means the two references point at the same entity, so return
+      the known entity's canonical string.
+    - If nothing matches, fall back to ``entity/<slug>`` where ``entity`` is a
+      type-less sentinel that indicates the kind could not be inferred.
+
+    Args:
+        label: Raw wikilink content, e.g. ``"Alice Smith"`` or ``"person/alice-smith"``.
+        known_entities: Optional list of already-canonical entity strings from the
+            same file's frontmatter; used to detect label ↔ slug equivalences.
+
+    Returns:
+        Canonical entity string, e.g. ``"person/alice-smith"``.
+    """
+    label = label.strip()
+
+    # Already contains a slash → typed ref; just normalise
+    if "/" in label:
+        kind, _, rest = label.partition("/")
+        kind = kind.lower().strip()
+        slug = re.sub(r'[^a-z0-9]+', '-', rest.lower()).strip('-')
+        return f"{kind}/{slug}"
+
+    # Check if label slug matches any known entity's slug portion
+    label_slug = re.sub(r'[^a-z0-9]+', '-', label.lower()).strip('-')
+    if known_entities:
+        for entity in known_entities:
+            if "/" in entity:
+                _, _, ent_slug = entity.partition("/")
+                if ent_slug == label_slug:
+                    return entity  # exact slug match → same entity
+
+    # Fall back: no type can be inferred
+    return f"entity/{label_slug}"
+
+
+def parse_entities(
+    metadata: dict[str, Any],
+    body: str,
+) -> dict[str, Any]:
+    """Extract and merge entity references from frontmatter and body wikilinks.
+
+    Reads two surfaces:
+    - ``entities:`` frontmatter field (list of canonical ``kind/slug`` strings).
+    - ``[[wikilink]]`` patterns anywhere in *body* (outside the auto-footer too).
+
+    Returns a dict with three keys:
+
+    ``entities_frontmatter``
+        The raw list from ``metadata['entities']``, or ``[]``.  Preserved
+        unchanged for back-compat and for the ``wiki_drift`` lint check.
+
+    ``entities_body``
+        Canonicalised list of entities found via ``[[wikilinks]]`` in *body*
+        (including under the auto-footer).  Each label is resolved against
+        ``entities_frontmatter`` first so that ``[[Alice Smith]]`` and
+        ``person/alice-smith`` are recognised as the same entity.
+
+    ``entities_resolved``
+        Merged, deduplicated union of the two surfaces.  This is the field
+        downstream consumers should use.  Ordering: frontmatter entries first,
+        then body-only additions, both in stable insertion order.
+
+    Args:
+        metadata: Parsed frontmatter dict (as returned by ``parse_markdown``).
+        body: Markdown body text (frontmatter stripped).
+
+    Returns:
+        Dict with keys ``entities_frontmatter``, ``entities_body``,
+        ``entities_resolved``.
+    """
+    # ── Surface 1: frontmatter ────────────────────────────────────────────────
+    raw_fm = metadata.get("entities", [])
+    if isinstance(raw_fm, list):
+        entities_fm: list[str] = [str(e).strip() for e in raw_fm if e]
+    else:
+        entities_fm = []
+
+    # ── Surface 2: body wikilinks ─────────────────────────────────────────────
+    raw_labels = _WIKILINK_RE.findall(body)
+    entities_body: list[str] = []
+    seen_body: set[str] = set()
+    for label in raw_labels:
+        canonical = canonicalize_wikilink(label.strip(), known_entities=entities_fm)
+        if canonical not in seen_body:
+            seen_body.add(canonical)
+            entities_body.append(canonical)
+
+    # ── Merge ─────────────────────────────────────────────────────────────────
+    # Build slug-set from frontmatter for dedup against body entries.
+    fm_set = set(entities_fm)
+    resolved: list[str] = list(entities_fm)  # frontmatter entries first
+    for ent in entities_body:
+        if ent not in fm_set:
+            resolved.append(ent)
+
+    return {
+        "entities_frontmatter": entities_fm,
+        "entities_body": entities_body,
+        "entities_resolved": resolved,
+    }
 
 
 def _build_canonical_question_prefix(metadata: dict[str, Any]) -> str:

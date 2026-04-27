@@ -337,6 +337,43 @@ class PalinodeAPI:
         response.raise_for_status()
         return response.json()
 
+    def dedup_suggest(
+        self,
+        content: str,
+        min_similarity: float | None = None,
+        top_k: int | None = None,
+    ):
+        """Find existing files semantically near draft content (#210).
+
+        Defaults applied server-side.  Returns the same shape as
+        ``POST /dedup-suggest``: a list of ``{file_path, similarity, snippet,
+        strong_dup}`` dicts ranked by descending similarity.
+        """
+        payload: dict = {"content": content}
+        if min_similarity is not None:
+            payload["min_similarity"] = min_similarity
+        if top_k is not None:
+            payload["top_k"] = top_k
+        response = self.client.post("/dedup-suggest", json=payload, timeout=60.0)
+        response.raise_for_status()
+        return response.json()
+
+    def orphan_repair(
+        self,
+        broken_link: str,
+        min_similarity: float | None = None,
+        top_k: int | None = None,
+    ):
+        """Find files semantically near a broken `[[wikilink]]` target (#210)."""
+        payload: dict = {"broken_link": broken_link}
+        if min_similarity is not None:
+            payload["min_similarity"] = min_similarity
+        if top_k is not None:
+            payload["top_k"] = top_k
+        response = self.client.post("/orphan-repair", json=payload, timeout=60.0)
+        response.raise_for_status()
+        return response.json()
+
     def health_check(self):
         try:
             response = self.client.get("/health")

@@ -731,6 +731,103 @@ async def list_tools() -> list[types.Tool]:
             ),
         ),
         types.Tool(
+            name="palinode_dedup_suggest",
+            description=(
+                "Given draft memory content the LLM is about to save, return the top-K existing "
+                "memory files whose embeddings are semantically near it. Use BEFORE writing a new "
+                "memory to decide 'create new' vs 'update existing'. Each result includes a "
+                "`strong_dup` flag — when true (similarity ≥ 0.90), the existing file is a "
+                "near-paraphrase and the LLM should usually update rather than create. "
+                "Preprocessing strips wikilink syntax and the auto-generated `## See also` footer "
+                "so notes linking the same entities don't false-positive as duplicates."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "The draft memory body about to be saved (markdown, with or without frontmatter).",
+                    },
+                    "min_similarity": {
+                        "type": "number",
+                        "description": "Minimum cosine similarity to surface (0.0–1.0). Default 0.80.",
+                        "default": 0.80,
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "Maximum number of candidate files to return. Default 5.",
+                        "default": 5,
+                    },
+                },
+                "required": ["content"],
+            },
+            annotations=types.ToolAnnotations(
+                title="Dedup Suggest",
+                readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False,
+            ),
+        ),
+        types.Tool(
+            name="palinode_orphan_repair",
+            description=(
+                "Given a `[[wikilink]]` whose target file does not exist, return existing memory "
+                "files semantically near the link target text. Use during wiki-maintenance passes "
+                "to either propose a redirect (rename the link to point at an existing file) or "
+                "to create the missing target file with informed context about its semantic "
+                "neighbours. Accepts either `[[name]]` or bare `name`."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "broken_link": {
+                        "type": "string",
+                        "description": "The wikilink text (e.g. '[[alice-meeting]]') or bare target slug.",
+                    },
+                    "min_similarity": {
+                        "type": "number",
+                        "description": "Minimum cosine similarity to surface (0.0–1.0). Default 0.65 — looser than dedup_suggest because the LLM picks from a wider slate.",
+                        "default": 0.65,
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "Maximum number of candidate files to return. Default 10.",
+                        "default": 10,
+                    },
+                },
+                "required": ["broken_link"],
+            },
+            annotations=types.ToolAnnotations(
+                title="Orphan Repair",
+                readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False,
+            ),
+        ),
+        types.Tool(
+            name="palinode_doctor",
+            description=(
+                "Fast palinode health check (<500ms). "
+                "Skips network probes and canary writes. "
+                "Checks path integrity, config consistency, and env-var drift. "
+                "Use this first; call palinode_doctor_deep when results are unclear."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+            annotations=types.ToolAnnotations(
+                title="Doctor (fast)",
+                readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False,
+            ),
+        ),
+        types.Tool(
+            name="palinode_doctor_deep",
+            description=(
+                "Full palinode health check including network probes and canary write tests. "
+                "Takes 10-15s. Use when palinode_doctor reports unclear results or you need "
+                "to verify the API, watcher, and service connectivity."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+            annotations=types.ToolAnnotations(
+                title="Doctor (deep)",
+                readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False,
+            ),
+        ),
+        types.Tool(
             name="palinode_prompt",
             description=(
                 "List, read, or activate versioned LLM prompts stored as memory files in the prompts/ directory. "
@@ -778,7 +875,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
     first_text = result[0].text if result else ""
     is_error = first_text.startswith(("Error", "API Error", "Search failed", "Save failed",
                                       "Ingest failed", "Push failed", "Consolidation failed",
-                                      "Session-end failed", "Lint failed"))
+                                      "Session-end failed", "Lint failed",
+                                      "Doctor failed", "Doctor (deep) failed"))
     _audit.log_call(
         name, arguments, duration_ms,
         status="error" if is_error else "success",
@@ -1040,7 +1138,6 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
         elif name == "palinode_trigger":
             action = arguments.get("action", "create")
             if action == "list":
-                import json
                 resp = await _get("/triggers")
                 if resp.status_code != 200:
                     return _text(f"Error: {resp.text}")
@@ -1094,6 +1191,66 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
             data = resp.json()
             status_msg = f" + status → {data['status_file']}" if data.get("status_file") else ""
             return _text(f"Session captured → {data['daily_file']}{status_msg}\n\n{data.get('entry', '')}")
+
+        # ── dedup_suggest ─────────────────────────────────────────────────
+        elif name == "palinode_dedup_suggest":
+            body: dict[str, Any] = {"content": arguments.get("content", "")}
+            if arguments.get("min_similarity") is not None:
+                body["min_similarity"] = float(arguments["min_similarity"])
+            if arguments.get("top_k") is not None:
+                body["top_k"] = int(arguments["top_k"])
+            resp = await _post("/dedup-suggest", json=body, timeout=60.0)
+            if resp.status_code != 200:
+                return _text(f"Error: {resp.text}")
+            data = resp.json()
+            if not data:
+                return _text("No semantically similar files found.")
+            lines = []
+            for r in data:
+                fp = r.get("file_path", "")
+                rel = fp.rsplit("/palinode/", 1)[-1] if "/palinode/" in fp else fp
+                tag = " ⚠ STRONG-DUP (likely should update, not create)" if r.get("strong_dup") else ""
+                pct = int(r.get("similarity", 0) * 100)
+                snippet = (r.get("snippet") or "").strip().replace("\n", " ")[:160]
+                lines.append(f"[{rel}] ({pct}% similar){tag}\n  {snippet}")
+            return _text("\n\n".join(lines))
+
+        # ── orphan_repair ─────────────────────────────────────────────────
+        elif name == "palinode_orphan_repair":
+            body: dict[str, Any] = {"broken_link": arguments.get("broken_link", "")}
+            if arguments.get("min_similarity") is not None:
+                body["min_similarity"] = float(arguments["min_similarity"])
+            if arguments.get("top_k") is not None:
+                body["top_k"] = int(arguments["top_k"])
+            resp = await _post("/orphan-repair", json=body, timeout=60.0)
+            if resp.status_code != 200:
+                return _text(f"Error: {resp.text}")
+            data = resp.json()
+            if not data:
+                return _text("No semantically related files found.")
+            lines = []
+            for r in data:
+                fp = r.get("file_path", "")
+                rel = fp.rsplit("/palinode/", 1)[-1] if "/palinode/" in fp else fp
+                pct = int(r.get("similarity", 0) * 100)
+                snippet = (r.get("snippet") or "").strip().replace("\n", " ")[:160]
+                lines.append(f"[{rel}] ({pct}% similar)\n  {snippet}")
+            return _text("\n\n".join(lines))
+
+        # ── doctor ────────────────────────────────────────────────────────
+        elif name == "palinode_doctor":
+            resp = await _get("/doctor", params={"fast": "true"}, timeout=10.0)
+            if resp.status_code != 200:
+                return _text(f"Doctor failed: {resp.text}")
+            data = resp.json()
+            return _text(json.dumps(data, indent=2))
+
+        elif name == "palinode_doctor_deep":
+            resp = await _get("/doctor", params={"canary": "true"}, timeout=60.0)
+            if resp.status_code != 200:
+                return _text(f"Doctor (deep) failed: {resp.text}")
+            data = resp.json()
+            return _text(json.dumps(data, indent=2))
 
         # ── lint ──────────────────────────────────────────────────────────
         elif name == "palinode_lint":

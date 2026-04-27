@@ -9,9 +9,7 @@ from __future__ import annotations
 
 import time
 import os
-import hashlib
 import logging
-from typing import Any
 
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileModifiedEvent, FileCreatedEvent, FileDeletedEvent, DirModifiedEvent, DirCreatedEvent, DirDeletedEvent
@@ -19,9 +17,9 @@ from watchdog.events import FileSystemEventHandler, FileModifiedEvent, FileCreat
 import threading
 import urllib.request
 
-from palinode.core import store, embedder, parser
+from palinode.core import store, parser, embedder  # noqa: F401  (embedder re-exported for test patches)
 from palinode.core.config import config
-from palinode.core.hashing import stable_md5_hexdigest
+from palinode.indexer.index_file import index_file
 import json
 from datetime import UTC, datetime
 
@@ -127,77 +125,30 @@ class PalinodeHandler(FileSystemEventHandler):
         except Exception as e:
             logger.error(f"Failed to read {filepath}: {e}")
             return
-            
+
         logger.info(f"Indexing: {filepath}")
-        metadata, sections = parser.parse_markdown(content)
-        category = metadata.get('category', os.path.basename(os.path.dirname(filepath)))
-        
-        chunks = []
-        skipped = 0
-        valid_chunk_ids = []
-        for sec in sections:
-            chunk_id = stable_md5_hexdigest(f"{filepath}#{sec['section_id']}")
-            valid_chunk_ids.append(chunk_id)
-            content_hash = hashlib.sha256(sec["content"].encode()).hexdigest()
 
-            # Check if content has changed before calling embedder
-            db = store.get_db()
-            existing = db.execute(
-                "SELECT content_hash FROM chunks WHERE id = ?", (chunk_id,)
-            ).fetchone()
-            db.close()
+        # Delegate to the shared indexer helper. Note that the helper now
+        # also re-embeds rows whose ``content_hash`` matches but whose FTS
+        # / vec0 entries are missing — defense-in-depth against silent
+        # index loss (#251).
+        outcome = index_file(filepath, content=content)
+        logger.info(
+            "Indexed %d new, %d re-embedded (missing index), %d unchanged, %d deleted (%s)",
+            outcome["chunks_written"],
+            outcome["chunks_reembedded"],
+            outcome["chunks_unchanged"],
+            outcome["chunks_deleted"],
+            filepath,
+        )
+        if outcome.get("error"):
+            logger.warning(
+                "Index pass for %s reported: %s", filepath, outcome["error"]
+            )
 
-            if existing and existing["content_hash"] == content_hash:
-                skipped += 1
-                continue  # Content unchanged — skip embedding call entirely
-
-            emb = embedder.embed(sec["content"])
-            if not emb:
-                continue
-                
-            chunks.append({
-                "id": chunk_id,
-                "file_path": filepath,
-                "section_id": sec["section_id"],
-                "category": category,
-                "content": sec["content"],
-                "metadata": metadata,
-                # #191: producers (save_api, consolidation, ingest, openclaw,
-                # mem0_generate) write the key as ``created_at`` — historical
-                # ``"created"`` read here always returned ``""``.
-                "created_at": metadata.get("created_at", ""),
-                "last_updated": metadata.get("last_updated", ""),
-                "embedding": emb
-            })
-            
-        db = store.get_db()
-        cursor = db.cursor()
-        cursor.execute("SELECT id FROM chunks WHERE file_path = ?", (filepath,))
-        existing_ids = [row["id"] for row in cursor.fetchall()]
-        
-        to_delete = [cid for cid in existing_ids if cid not in valid_chunk_ids]
-        if to_delete:
-            placeholders = ",".join("?" * len(to_delete))
-            for cid in to_delete:
-                try:
-                    cursor.execute("DELETE FROM chunks_fts WHERE rowid = (SELECT rowid FROM chunks WHERE id = ?)", (cid,))
-                except Exception:
-                    pass
-            cursor.execute(f"DELETE FROM chunks WHERE id IN ({placeholders})", to_delete)
-            try:
-                cursor.execute(f"DELETE FROM chunks_vec WHERE id IN ({placeholders})", to_delete)
-            except Exception:
-                pass  # vec0 row may already be gone — safe to ignore
-            db.commit()
-        db.close()
-            
-        if chunks:
-            store.upsert_chunks(chunks, skip_unchanged=False)
-            logger.info(f"Indexed {len(chunks)} chunks, skipped {skipped} unchanged, deleted {len(to_delete)} obsolete ({filepath})")
-        elif skipped > 0:
-            logger.info(f"All {skipped} chunks unchanged, deleted {len(to_delete)} obsolete ({filepath})")
-            
-        store.upsert_entities(filepath, metadata)
+        # Re-parse for metadata so we can decide whether to schedule summary
+        # generation. (Cheap — no embedder call.)
+        metadata, _ = parser.parse_markdown(content)
 
         # Trigger retroactive summary generation if file is core but lacks a summary
         if metadata.get("core") is True and not metadata.get("summary"):

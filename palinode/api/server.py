@@ -18,9 +18,12 @@ import hashlib
 import subprocess
 import glob
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from contextlib import asynccontextmanager
+
+import asyncio
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -71,7 +74,38 @@ _parent_logger.addHandler(fh)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize database and background workers on startup."""
-    store.init_db()
+    _startup_logger = logging.getLogger("palinode.config")
+
+    # Validate resolved paths and surface misconfigurations before first DB touch
+    _startup_logger.info(
+        "palinode.config: memory_dir=%s db_path=%s",
+        config.memory_dir,
+        config.db_path,
+    )
+    path_warnings = config.validate_paths()
+    for warning in path_warnings:
+        _startup_logger.warning(warning)
+
+    # Refuse to start if the db_path parent doesn't exist — sqlite3.connect()
+    # would silently auto-create the DB in a non-existent directory (raising an
+    # OperationalError on first write), producing silent 500s identical to #201.
+    _db_parent = Path(config.db_path).parent
+    if not _db_parent.exists():
+        raise RuntimeError(
+            f"Cannot start: db_path parent directory does not exist: {_db_parent}. "
+            f"Create the directory or update db_path in palinode.config.yaml."
+        )
+
+    try:
+        store.init_db()
+    except RuntimeError as exc:
+        # #188: misconfiguration guard in store._ensure_db() — DB missing but
+        # memory_dir has .md files. Log CRITICAL so the operator sees it in
+        # journalctl before the process exits.
+        logging.getLogger("palinode.api").critical(
+            "Database misconfiguration detected — refusing to start: %s", exc
+        )
+        raise
 
     # Tier 2a (ADR-004): write-time contradiction check worker
     if config.consolidation.write_time.enabled:
@@ -95,6 +129,18 @@ async def lifespan(app: FastAPI):
             logger.error(f"write-time worker failed to stop cleanly: {e}")
 
 app = FastAPI(title="Palinode API", lifespan=lifespan)
+
+# ── Reindex concurrency guard (#200) ─────────────────────────────────────────
+# asyncio.Lock is safe because FastAPI runs on a single event loop.  The
+# reindex work itself is synchronous (file I/O + Ollama HTTP) but the lock
+# acquisition is async so concurrent HTTP callers fail fast rather than queue.
+_reindex_lock = asyncio.Lock()
+_reindex_state: dict[str, Any] = {
+    "running": False,
+    "started_at": None,
+    "files_processed": 0,
+    "total_files": 0,
+}
 
 # ── Security middleware ──────────────────────────────────────────────────────
 
@@ -191,6 +237,78 @@ _CATEGORY_TO_ENTITY_PREFIX: dict[str, str] = {
     "research": "research",
     "inbox": "action",
 }
+
+
+_WIKI_FOOTER_MARKER = "<!-- palinode-auto-footer -->"
+
+
+def _apply_wiki_footer(content: str, entities: list[str]) -> str:
+    """Append or update a ``## See also`` auto-footer for un-linked entities.
+
+    When ``entities`` are provided but some of them are not already referenced
+    as ``[[wikilinks]]`` in *content*, this function appends a detectable
+    auto-generated footer so that Obsidian graph view picks up the links.
+
+    Canonicalization: entity refs use the slash form ``category/slug``; the
+    wikilink target is only the *slug* part (everything after the last ``/``).
+    This matches the existing ``_normalize_entities`` convention — entity refs
+    are stored as ``project/palinode``, the corresponding wikilink is
+    ``[[palinode]]``.
+
+    Rules:
+    - If *content* is empty / None, or *entities* is empty, return unchanged.
+    - Extract existing ``[[target]]`` wikilinks from body; skip entities whose
+      slug already appears as an inline link.
+    - If a ``## See also`` block with ``_WIKI_FOOTER_MARKER`` exists, **replace**
+      it (idempotent re-save).
+    - If a ``## See also`` block exists **without** the marker it is user-authored
+      — leave it alone and append a new auto-footer block after it.
+    - If all entities are already linked inline, remove any stale auto-footer.
+    """
+    if not content or not entities:
+        return content
+
+    # Pattern that matches an existing auto-footer block up to end-of-string or
+    # the next level-2 heading.  Compiled once; used twice below.
+    auto_footer_re = re.compile(
+        r"## See also\s*\n" + re.escape(_WIKI_FOOTER_MARKER) + r".*?(?=\n## |\Z)",
+        re.DOTALL,
+    )
+
+    # Scan for existing inline wikilinks OUTSIDE the auto-footer block so that
+    # links inside the footer itself are not mistaken for user-authored inline
+    # links.  This is the key to idempotency: on re-save the footer's own
+    # [[slug]] entries do not satisfy the "already linked inline" check.
+    body_for_scan = auto_footer_re.sub("", content)
+    existing_links: set[str] = set(re.findall(r"\[\[([^\]]+)\]\]", body_for_scan))
+
+    # Derive the wikilink slug for each entity (part after the last '/').
+    missing: list[str] = []
+    for entity in entities:
+        slug = entity.split("/")[-1]
+        if slug not in existing_links:
+            missing.append(slug)
+
+    # Build the new auto-footer block.  Always ends with a newline so that the
+    # substitution path and the append path produce identical output (idempotent).
+    if missing:
+        footer_lines = ["## See also", _WIKI_FOOTER_MARKER]
+        footer_lines.extend(f"- [[{slug}]]" for slug in missing)
+        new_footer = "\n".join(footer_lines) + "\n"
+    else:
+        new_footer = ""
+
+    if auto_footer_re.search(content):
+        if new_footer:
+            content = auto_footer_re.sub(new_footer, content)
+        else:
+            # All links are now inline — strip the stale auto-footer.
+            content = auto_footer_re.sub("", content).rstrip("\n") + "\n"
+    elif new_footer:
+        # No existing auto-footer; append after a blank-line separator.
+        content = content.rstrip("\n") + "\n\n" + new_footer
+
+    return content
 
 
 def _normalize_entities(entities: list[str], category: str) -> list[str]:
@@ -379,6 +497,36 @@ class CheckTriggersRequest(BaseModel):
     query: str
     cooldown_bypass: bool | None = False
 
+class DedupSuggestRequest(BaseModel):
+    """Find existing files semantically near the supplied draft content (#210).
+
+    Used by the LLM at write-time to decide "create new vs update existing".
+    Both ``min_similarity`` and ``top_k`` are kwarg-tunable per the design
+    doc — defaults match the BGE-M3 thresholds research-validated in
+    `artifacts/obsidian-integration/design.md`.
+    """
+    content: str
+    min_similarity: float | None = 0.80
+    top_k: int | None = 5
+    # Threshold above which a candidate is flagged ``strong_dup=true`` —
+    # "near-paraphrase territory" per the design doc; LLM should usually
+    # update rather than create when this fires.
+    strong_dup_threshold: float | None = 0.90
+
+
+class OrphanRepairRequest(BaseModel):
+    """Find files semantically near a broken `[[wikilink]]` target (#210).
+
+    The LLM uses the candidate slate to propose a redirect or seed a new
+    target file with informed context.  ``min_similarity`` defaults are
+    looser than ``dedup_suggest`` because we want a wider candidate slate
+    here — the LLM picks one or none.
+    """
+    broken_link: str
+    min_similarity: float | None = 0.65
+    top_k: int | None = 10
+
+
 class SaveRequest(BaseModel):
     content: str
     type: str
@@ -445,7 +593,13 @@ def list_api(category: str | None = None, core_only: bool = False) -> list[dict[
             })
         except Exception:
             pass
-            
+
+    # Sort newest first so listing surfaces recent activity.
+    # `last_updated` may be a string (typical) or a datetime (yaml auto-converts
+    # ISO timestamps without quotes); stringify in the key so mixed types don't
+    # raise. Empty string sorts last in descending order — correct for files
+    # with missing or malformed frontmatter.
+    results.sort(key=lambda r: str(r.get("last_updated") or ""), reverse=True)
     return results
 
 
@@ -667,6 +821,214 @@ def check_triggers_api(req: CheckTriggersRequest) -> list[dict[str, Any]]:
         raise _safe_500(e, "Trigger check failed")
 
 
+# ── Embedding tools (#210) — Obsidian wiki maintenance helpers ──────────────
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    """Cosine similarity between two equal-length vectors.
+
+    BGE-M3 outputs are L2-normalized so this reduces to a dot product, but we
+    keep the explicit norm denominator for correctness against any embedder
+    that doesn't normalize (e.g. Gemini at certain dimensions).
+    """
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = 0.0
+    na = 0.0
+    nb = 0.0
+    for x, y in zip(a, b):
+        dot += x * y
+        na += x * x
+        nb += y * y
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    import math
+    return dot / (math.sqrt(na) * math.sqrt(nb))
+
+
+def _read_memory_body(file_path: str) -> str | None:
+    """Read a memory file's full body for re-embedding.  Returns None on miss."""
+    try:
+        candidates = [file_path]
+        if not file_path.endswith(".md"):
+            candidates.append(f"{file_path}.md")
+        for candidate in candidates:
+            try:
+                _, resolved = _resolve_memory_path(candidate)
+            except HTTPException:
+                continue
+            if os.path.exists(resolved):
+                with open(resolved, "r") as f:
+                    return f.read()
+    except Exception:
+        return None
+    return None
+
+
+def _embedding_candidates(
+    query_embedding: list[float],
+    top_k: int,
+    over_fetch: int = 4,
+) -> list[dict[str, Any]]:
+    """Run the existing vector index for an over-fetched candidate slate.
+
+    The corpus index was built without the wikilink-stripping preprocessing;
+    we use it only to narrow down which files to re-embed.  Final ranking
+    (caller's responsibility) re-embeds each candidate's preprocessed body so
+    the cosine score is apples-to-apples with the preprocessed query.
+    """
+    if not query_embedding:
+        return []
+    return store.search(
+        query_embedding=query_embedding,
+        top_k=top_k * over_fetch,
+        threshold=0.0,  # caller filters; we want the wider slate
+    )
+
+
+def _rerank_with_preprocessing(
+    query_preprocessed: str,
+    candidates: list[dict[str, Any]],
+    min_similarity: float,
+    top_k: int,
+) -> list[dict[str, Any]]:
+    """Re-embed each candidate's preprocessed body, score against the
+    preprocessed query, and return the top_k above ``min_similarity``.
+
+    This is the strip-at-query-AND-strip-at-rerank pipeline.  The corpus
+    index stays raw (so existing ``palinode_search`` behaviour is unchanged);
+    the dedup/orphan tools pay a small re-embed cost per candidate to get
+    formatting-noise-free similarity.
+    """
+    from palinode.core.embedding_preprocess import preprocess_for_similarity
+
+    query_emb = embedder.embed(query_preprocessed)
+    if not query_emb:
+        return []
+
+    # Group by file_path so we re-embed each file once, not per chunk.  The
+    # candidate list from store.search() may contain multiple chunks of the
+    # same file; the wiki tools care about file-level dedup.
+    seen: dict[str, dict[str, Any]] = {}
+    for cand in candidates:
+        fp = cand.get("file_path", "")
+        if not fp or fp in seen:
+            continue
+        body = _read_memory_body(fp)
+        if body is None:
+            # Fall back to the chunk content if the file is gone — better
+            # than dropping the candidate silently.
+            body = cand.get("content", "")
+        preprocessed = preprocess_for_similarity(body)
+        if not preprocessed:
+            continue
+        cand_emb = embedder.embed(preprocessed)
+        if not cand_emb:
+            continue
+        sim = _cosine(query_emb, cand_emb)
+        if sim < min_similarity:
+            continue
+        snippet = preprocessed[:200].strip()
+        seen[fp] = {
+            "file_path": fp,
+            "similarity": round(sim, 4),
+            "snippet": snippet,
+        }
+
+    ranked = sorted(seen.values(), key=lambda r: r["similarity"], reverse=True)
+    return ranked[:top_k]
+
+
+@app.post("/dedup-suggest")
+def dedup_suggest_api(req: DedupSuggestRequest) -> list[dict[str, Any]]:
+    """Return existing files semantically near the supplied draft content.
+
+    Preprocessing pipeline (P1 per design doc): strip frontmatter, strip the
+    auto-generated `## See also` footer, strip `[[wikilink]]` decoration —
+    applied BOTH to the incoming draft AND to each candidate's body before
+    re-embedding.  Without this, every note linking the same entities looks
+    like a duplicate of every other one.
+
+    Each result carries a ``strong_dup: bool`` flag — true when similarity
+    crosses the strong-dup threshold (default 0.90).  The LLM uses this to
+    pick "create new" vs "update existing".
+    """
+    try:
+        from palinode.core.embedding_preprocess import preprocess_for_similarity
+
+        min_similarity = req.min_similarity if req.min_similarity is not None else 0.80
+        top_k = req.top_k or 5
+        strong_threshold = (
+            req.strong_dup_threshold if req.strong_dup_threshold is not None else 0.90
+        )
+
+        preprocessed_query = preprocess_for_similarity(req.content)
+        if not preprocessed_query:
+            return []
+
+        # Initial candidate slate — over-fetched, filter-free.  The caller's
+        # min_similarity gates only the post-rerank cosine score, not the
+        # initial vector recall.
+        query_emb = embedder.embed(preprocessed_query)
+        if not query_emb:
+            return []
+        candidates = _embedding_candidates(query_emb, top_k=top_k, over_fetch=4)
+
+        ranked = _rerank_with_preprocessing(
+            query_preprocessed=preprocessed_query,
+            candidates=candidates,
+            min_similarity=min_similarity,
+            top_k=top_k,
+        )
+        for r in ranked:
+            r["strong_dup"] = r["similarity"] >= strong_threshold
+        return ranked
+    except Exception as e:
+        raise _safe_500(e, "Dedup suggest failed")
+
+
+@app.post("/orphan-repair")
+def orphan_repair_api(req: OrphanRepairRequest) -> list[dict[str, Any]]:
+    """Return existing files semantically near a broken `[[wikilink]]` target.
+
+    The LLM proposes a redirect (rename the link to point at one of the
+    returned files) or creates the missing target with informed context
+    (knowing what existing pages are nearby in semantic space).
+
+    The input ``broken_link`` may be the raw link text (``[[alice-meeting]]``)
+    or just the target word — both are accepted; the wikilink stripper
+    normalizes either form.
+    """
+    try:
+        from palinode.core.embedding_preprocess import preprocess_for_similarity
+
+        min_similarity = req.min_similarity if req.min_similarity is not None else 0.65
+        top_k = req.top_k or 10
+
+        # Accept either `[[name]]` or bare `name`.  Preprocessing handles both.
+        preprocessed_query = preprocess_for_similarity(req.broken_link)
+        # Replace hyphens with spaces so a slug like ``alice-meeting`` reads
+        # as natural language to the embedder.  This is intent-preserving:
+        # we want semantic neighbours of the target *concept*.
+        preprocessed_query = preprocessed_query.replace("-", " ").replace("_", " ").strip()
+        if not preprocessed_query:
+            return []
+
+        query_emb = embedder.embed(preprocessed_query)
+        if not query_emb:
+            return []
+        candidates = _embedding_candidates(query_emb, top_k=top_k, over_fetch=4)
+
+        return _rerank_with_preprocessing(
+            query_preprocessed=preprocessed_query,
+            candidates=candidates,
+            min_similarity=min_similarity,
+            top_k=top_k,
+        )
+    except Exception as e:
+        raise _safe_500(e, "Orphan repair failed")
+
+
 @app.post("/save")
 def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> dict[str, Any]:
     """Persists a new memory instance chunk locally and initiates git backup sequences.
@@ -757,8 +1119,12 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
         except Exception as e:
             logger.warning(f"Description generation failed (non-fatal): {e}")
 
-    doc = f"---\n{yaml.safe_dump(frontmatter_dict, default_flow_style=False, allow_unicode=True)}---\n\n{req.content}\n"
-    
+    # Layer 2 wiki contract (#210): auto-append See also footer for any entities
+    # not already referenced as [[wikilinks]] in the body.
+    body_content = _apply_wiki_footer(req.content, normalized_entities)
+
+    doc = f"---\n{yaml.safe_dump(frontmatter_dict, default_flow_style=False, allow_unicode=True)}---\n\n{body_content}\n"
+
     with open(file_path, "w") as f:
         f.write(doc)
 
@@ -789,7 +1155,37 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
 
     logger.info(f"Saved memory to {file_path}")
 
-    result: dict[str, Any] = {"file_path": file_path, "id": frontmatter_dict["id"]}
+    # #251: embed inline so that POST /save only returns once vector + FTS
+    # entries actually exist. Previously the watcher embedded out-of-band,
+    # leaving a race window where /search immediately after /save returned
+    # zero results. The watcher remains the indexer for filesystem-direct
+    # writes; this path covers API-driven saves.
+    indexed = False
+    index_error: str | None = None
+    try:
+        from palinode.indexer.index_file import index_file
+        outcome = index_file(file_path)
+        indexed = bool(outcome.get("embedded"))
+        index_error = outcome.get("error")
+    except Exception as e:
+        # File is on disk; the watcher will pick it up later.
+        logger.warning(f"Inline index failed for {file_path} (non-fatal): {e}")
+        index_error = str(e)
+
+    if not indexed:
+        logger.warning(
+            f"Saved {file_path} but inline embed did not complete "
+            f"(reason: {index_error or 'unknown'}); watcher will retry."
+        )
+
+    result: dict[str, Any] = {
+        "file_path": file_path,
+        "id": frontmatter_dict["id"],
+        "indexed": indexed,
+        "embedded": indexed,
+    }
+    if index_error and not indexed:
+        result["index_error"] = index_error
 
     # Tier 2a (ADR-004): schedule write-time contradiction check.
     # Always safe to call — returns None immediately if disabled in config.
@@ -882,13 +1278,13 @@ def status_api() -> dict[str, Any]:
     
     stats["hybrid_search"] = config.search.hybrid_enabled
     stats["associative_capability"] = stats["total_entities"] > 0
-    
+
     try:
         httpx.get(config.embeddings.primary.url, timeout=2.0)
         ollama_reachable = True
     except Exception:
         ollama_reachable = False
-        
+
     stats["ollama_reachable"] = ollama_reachable
 
     # Tier 2a (ADR-004) observability
@@ -910,26 +1306,44 @@ def status_api() -> dict[str, Any]:
         except Exception as e:
             logger.warning(f"write-time status lookup failed: {e}")
 
+    # Reindex progress (#200)
+    stats["reindex"] = {
+        "running": _reindex_state["running"],
+        "started_at": _reindex_state["started_at"],
+        "files_processed": _reindex_state["files_processed"],
+        "total_files": _reindex_state["total_files"],
+    }
+
     return stats
 
 
 @app.get("/health")
 def health_api() -> dict[str, Any]:
-    """Lightweight liveness check — no side effects, <100ms."""
+    """Lightweight liveness check — no side effects, <100ms.
+
+    Returns live counts queried at request time via store.get_stats() — the
+    same code path used by /status.  If chunks or entities are zero, the
+    database is genuinely empty (not stale or cached).  Reports
+    status="degraded" with a db_error key if the database cannot be reached.
+    """
     result: dict[str, Any] = {"status": "ok"}
 
-    # DB accessible + basic stats
+    # DB accessible + basic stats — delegate to store.get_stats() for chunk
+    # count so the code path is identical to /status and cannot diverge (#187).
     try:
+        stats = store.get_stats()
+        result["chunks"] = stats["total_chunks"]
         db = store.get_db()
-        chunks = db.execute("SELECT count(*) FROM chunks").fetchone()[0]
-        last_row = db.execute(
-            "SELECT last_updated FROM chunks ORDER BY last_updated DESC LIMIT 1"
-        ).fetchone()
-        result["chunks"] = chunks
-        result["last_indexed"] = last_row["last_updated"] if last_row else None
-        entities = db.execute("SELECT count(DISTINCT entity_ref) FROM entities").fetchone()[0]
-        result["entities"] = entities
-        db.close()
+        try:
+            last_row = db.execute(
+                "SELECT last_updated FROM chunks ORDER BY last_updated DESC LIMIT 1"
+            ).fetchone()
+            result["last_indexed"] = last_row["last_updated"] if last_row else None
+            result["entities"] = db.execute(
+                "SELECT count(DISTINCT entity_ref) FROM entities"
+            ).fetchone()[0]
+        finally:
+            db.close()
     except Exception as e:
         result["status"] = "degraded"
         result["db_error"] = str(e)
@@ -1004,6 +1418,53 @@ def watcher_health_api() -> dict[str, Any]:
     return result
 
 
+@app.get("/doctor")
+def doctor_api(canary: bool = False, fast: bool = False) -> dict[str, Any]:
+    """Run diagnostic checks; return structured report.
+
+    Query params
+    ------------
+    fast:   When true, run only checks tagged "fast" (skips network probes
+            and filesystem walks).  Target: <500ms.
+    canary: When true, include canary-write checks (Phase 5 will populate
+            these; for now the flag is accepted and passed through without
+            error — no canary checks exist yet so the result set is the same
+            as without the flag).
+    """
+    from palinode.diagnostics.runner import run_all
+    from palinode.diagnostics.types import DoctorContext
+    from palinode.diagnostics.formatters import format_json
+    import json as _json
+
+    ctx = DoctorContext(config=config)
+
+    # Determine the tag filter.
+    # fast=true  → only "fast"-tagged checks
+    # canary=true → Phase 5 will add canary checks; accepted now, no-op
+    # Neither flag → full run (all tags)
+    tag_filter: str | None = "fast" if fast else None
+
+    results = run_all(ctx, tag=tag_filter)
+
+    passed = sum(1 for r in results if r.passed)
+    failed = len(results) - passed
+
+    result_dicts = _json.loads(format_json(results))
+
+    return {
+        "results": result_dicts,
+        "summary": {
+            "total": len(results),
+            "passed": passed,
+            "failed": failed,
+        },
+        "params": {
+            "fast": fast,
+            "canary": canary,
+        },
+    }
+
+
 @app.post("/ingest")
 def ingest_api() -> dict[str, str]:
     """Invoke document drop-box scanning routine."""
@@ -1052,7 +1513,7 @@ def rebuild_fts_api() -> dict[str, Any]:
 
 
 @app.post("/reindex")
-def reindex_api(since: str | None = None) -> dict[str, Any]:
+async def reindex_api(since: str | None = None) -> dict[str, Any]:
     """Reindex memory files.  Idempotent — unchanged files are skipped.
 
     Query params:
@@ -1060,39 +1521,64 @@ def reindex_api(since: str | None = None) -> dict[str, Any]:
                only files whose mtime is newer than this are processed.
                Without it, all files are visited (but content-hash dedup
                still skips unchanged content).
+
+    Returns 409 if a reindex is already in progress — check /status for
+    progress.  (#200)
     """
+    if _reindex_lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="reindex already running — check /status for progress",
+        )
+
     from palinode.indexer.watcher import PalinodeHandler
     handler = PalinodeHandler()
 
     since_ts: float | None = None
     if since:
         try:
-            from datetime import datetime, timezone
             dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
             since_ts = dt.timestamp()
         except ValueError:
             raise HTTPException(status_code=400, detail=f"Invalid ISO timestamp: {since}")
 
-    logger.info("Starting %s reindex...", "incremental" if since_ts else "full")
-    count = 0
-    skipped_mtime = 0
-    errors = 0
-    for filepath in glob.glob(os.path.join(config.palinode_dir, "**/*.md"), recursive=True):
-        if not handler.is_valid_file(filepath):
-            continue
-        if since_ts and os.path.getmtime(filepath) < since_ts:
-            skipped_mtime += 1
-            continue
-        try:
-            handler._process_file(filepath)
-            count += 1
-        except Exception as e:
-            errors += 1
-            logger.warning(f"Reindex failed for {filepath}: {e}")
+    files = [
+        fp
+        for fp in glob.glob(os.path.join(config.palinode_dir, "**/*.md"), recursive=True)
+        if handler.is_valid_file(fp)
+    ]
 
-    # Rebuild FTS5 after bulk reindex to ensure consistency
-    fts_count = store.rebuild_fts()
-    logger.info(f"Reindex complete: {count} processed, {skipped_mtime} skipped (mtime), {errors} errors, FTS5: {fts_count}")
+    async with _reindex_lock:
+        _reindex_state["running"] = True
+        _reindex_state["started_at"] = _utc_now().isoformat().replace("+00:00", "Z")
+        _reindex_state["files_processed"] = 0
+        _reindex_state["total_files"] = len(files)
+
+        logger.info("Starting %s reindex (%d files)...", "incremental" if since_ts else "full", len(files))
+        count = 0
+        skipped_mtime = 0
+        errors = 0
+        try:
+            for filepath in files:
+                if since_ts and os.path.getmtime(filepath) < since_ts:
+                    skipped_mtime += 1
+                    continue
+                try:
+                    handler._process_file(filepath)
+                    count += 1
+                except Exception as e:
+                    errors += 1
+                    logger.warning(f"Reindex failed for {filepath}: {e}")
+                _reindex_state["files_processed"] = count + errors
+
+            # Rebuild FTS5 after bulk reindex to ensure consistency
+            fts_count = store.rebuild_fts()
+            logger.info(
+                f"Reindex complete: {count} processed, {skipped_mtime} skipped (mtime), {errors} errors, FTS5: {fts_count}"
+            )
+        finally:
+            _reindex_state["running"] = False
+
     return {
         "status": "success",
         "files_reindexed": count,

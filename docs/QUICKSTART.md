@@ -33,19 +33,20 @@ ollama pull bge-m3
 ### Option A: Systemd services (recommended)
 
 ```bash
-# Copy service files
-mkdir -p ~/.config/systemd/user/
-cp systemd/palinode-api.service ~/.config/systemd/user/
-cp systemd/palinode-watcher.service ~/.config/systemd/user/
+# Required environment variables
+export PALINODE_HOME=/path/to/palinode             # code root + venv/
+export PALINODE_DATA_DIR=/path/to/palinode-data    # memory markdown files
+export OLLAMA_URL=http://localhost:11434
+export EMBEDDING_MODEL=bge-m3
 
-# Start and enable
-systemctl --user daemon-reload
-systemctl --user enable --now palinode-api palinode-watcher
+# Install + enable the three user units (palinode-api, palinode-mcp, palinode-watcher)
+bash deploy/systemd/install.sh --enable
 
 # Check status
-systemctl --user status palinode-api
-systemctl --user status palinode-watcher
+systemctl --user status palinode-api palinode-mcp palinode-watcher
 ```
+
+See [`deploy/systemd/README.md`](../deploy/systemd/README.md) for full variable reference, troubleshooting, and uninstall.
 
 ### Option B: Manual
 
@@ -116,6 +117,16 @@ curl http://localhost:6340/status
 python3 -m palinode.cli stats
 ```
 
+### Verify with `palinode doctor`
+
+After install, run a quick health check:
+
+```bash
+palinode doctor
+```
+
+It runs 18 read-only checks across path integrity, service health, config drift, index sanity, disk/backup, and a forward-looking CLAUDE.md scan. Every check has a remediation string; pass `--verbose` to also see remediation for passing checks. Use `--fix` (with per-action confirmation) to apply the small whitelist of safe automated fixes — doctor never moves user data. Full guide: [`docs/DOCTOR.md`](DOCTOR.md).
+
 ### Rebuild index from scratch
 
 ```bash
@@ -176,3 +187,34 @@ Content here.
 | `PALINODE_DIR` | `/path/to/palinode` | Root directory for memory files |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama endpoint for embeddings |
 | `EMBEDDING_MODEL` | `bge-m3` | Ollama model name |
+
+## Verify your setup with palinode doctor
+
+After install and service start, run:
+
+```bash
+palinode doctor
+```
+
+This checks 18+ conditions — DB path validity, watcher connectivity, config consistency, index health — and prints a pass/warn/fail report. If something is misconfigured, run `palinode doctor --fix` to apply safe automated repairs. See [docs/DOCTOR.md](DOCTOR.md) for the full check catalog.
+
+## Obsidian integration
+
+Palinode stores everything as plain markdown with YAML frontmatter, so your Palinode directory is already a valid Obsidian vault. Run `palinode init --obsidian /path/to/vault` for an opinionated scaffold (graph defaults, daily-notes wiring, a starter `_index.md` MOC), then open the directory in Obsidian. You get the graph view, backlinks, and Bases on top of Palinode's hybrid search and consolidation — same files, two surfaces.
+
+See [OBSIDIAN.md](OBSIDIAN.md) for the comprehensive guide: quickstart, the wiki-maintenance contract, the embedding tools the LLM calls (`palinode_dedup_suggest`, `palinode_orphan_repair`), and migration paths.
+## Connecting your IDE via MCP
+
+Once the API is running, connect it to your AI coding assistant:
+
+| Client | Recipe |
+|--------|--------|
+| Claude Code | [INSTALL-CLAUDE-CODE.md](INSTALL-CLAUDE-CODE.md) |
+| Claude Desktop | [MCP-SETUP.md](MCP-SETUP.md#claude-desktop) |
+| Cursor | [MCP-INSTALL-RECIPES.md](MCP-INSTALL-RECIPES.md#1-cursor) |
+| Windsurf | [MCP-INSTALL-RECIPES.md](MCP-INSTALL-RECIPES.md#2-windsurf) |
+| Continue (VS Code) | [MCP-INSTALL-RECIPES.md](MCP-INSTALL-RECIPES.md#3-continue-vs-code) |
+| Cline (VS Code) | [MCP-INSTALL-RECIPES.md](MCP-INSTALL-RECIPES.md#4-cline-vs-code) |
+| Zed | [MCP-INSTALL-RECIPES.md](MCP-INSTALL-RECIPES.md#5-zed) |
+
+After connecting, verify with `palinode mcp-config --diagnose`.

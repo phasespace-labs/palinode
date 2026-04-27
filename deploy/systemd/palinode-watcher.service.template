@@ -1,0 +1,23 @@
+[Unit]
+Description=Palinode File Watcher & Indexer Daemon
+Documentation=https://github.com/phasespace-labs/palinode
+After=network.target palinode-api.service
+Wants=palinode-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=${PALINODE_HOME}
+Environment="PALINODE_DIR=${PALINODE_DATA_DIR}"
+Environment="OLLAMA_URL=${OLLAMA_URL}"
+Environment="EMBEDDING_MODEL=${EMBEDDING_MODEL}"
+ExecStart=${PALINODE_HOME}/venv/bin/python -m palinode.indexer.watcher
+Restart=always
+RestartSec=5
+
+# Structured JSON logs → journalctl; no custom log file needed
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=palinode-watcher
+
+[Install]
+WantedBy=default.target

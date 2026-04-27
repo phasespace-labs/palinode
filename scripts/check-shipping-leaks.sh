@@ -13,15 +13,9 @@
 #
 # Exit code: 0 = clean, 1 = leaks found.
 #
-# IMPORTANT: this script enforces the rule "NO NEW LEAKS at PR time," not
-# "all of dev main is leak-free." Dev main carries a baseline of legitimate
-# private references (e.g. Phase-B holdout files, internal issue trackers,
-# old-org URLs in long-lived docs) that get scrubbed at staging-build time
-# via the standard scrub commits — see .claude/plans/phase-a-codex-handoff.md.
-#
-# CI runs with `--diff origin/main` to fail only on NEW introductions.
-# The full-audit mode (no args) will return baseline noise; useful for
-# dev hygiene work but not for gating PRs.
+# IMPORTANT: this script is meant to catch new leaks introduced by a change.
+# CI typically runs it against a diff so existing baseline noise does not block
+# unrelated work. Full-audit mode is still useful when preparing a public sync.
 
 set -euo pipefail
 
@@ -61,11 +55,18 @@ PATTERNS=(
     'CODEX-REVIEW-PROMPT'
     'GOVERNOR-MEM0-DISABLE'
 
-    # Patent-adjacent vocabulary that's hard-private until counsel clears
+    # Reserved internal vocabulary
     '[Cc]olophon'
     'mm-kmd'
     'antigravity'
     'color-class'
+    'GrueBrain'
+    '[Ss]igned [Pp]rovenance'
+    'palinode_cloud'
+    'Ed25519'
+    'RBAC'
+    'IP-hygiene'
+    'provenance bridge'
 
     # Old-org URLs that should now point at phasespace-labs
     'github\.com/Paul-Kyle/palinode([/-]|\.git|$)'
@@ -96,16 +97,7 @@ DEV_ONLY_PREFIXES=(
     'CLAUDE.md'
     'deploy_5060.sh'
     'notes/'
-    # Phase-B holdouts — the capabilities + actor-class scaffold lived on
-    # dev main from 2026-04-19 to 2026-04-26 and was reverted in 12934e1
-    # per the colophon-cleanup decision. The paths below no longer exist
-    # on dev main; they're listed only because re-introducing them at
-    # resume time should remain caught by the [Cc]olophon pattern in the
-    # blacklist above (i.e. these excludes are intentionally NOT here, so
-    # any future palinode/capabilities/record.py shipping a colophon_*
-    # field name fails the lint at PR time, the way it should).
-    # ADR-*.md: default-private per migration plan (2026-04-19 revision).
-    # Every staging build deletes them; this lint should not flag them either.
+    # Default-private architecture and planning docs
     'ADR-001-tools-over-pipeline.md'
     'ADR-002-watcher-fault-isolation.md'
     'ADR-003-memory-harness-boundary.md'
@@ -115,24 +107,22 @@ DEV_ONLY_PREFIXES=(
     'ADR-007-access-metadata-and-decay.md'
     'ADR-008-ambient-context-search.md'
     'ADR-009-scoped-memory-context-prime.md'
-    # Dev-only Antigravity-sync script (deleted on the staging branch).
+    # Dev-only sync script
     'scripts/sync-ag-artifacts.sh'
-    # Dev-only PR template — uses internal vocabulary (palinode-dev,
-    # Colophon-adjacent, Phase A/B). Public repo gets its own template.
-    # Mirrored in .claude/plans/phase-a-codex-handoff.md's rsync exclude.
+    # Dev-only PR template
     '.github/PULL_REQUEST_TEMPLATE.md'
 )
 
-# Paths the scrub source itself uses (legitimate occurrences of the
-# patterns above). Skip them so the scanner doesn't false-positive on
-# its own pattern list.
+# Files that intentionally contain the blocked patterns as scanner inputs.
+# Skip them so the scanner does not flag its own source data.
 SCANNER_SOURCES=(
     'scripts/scrub-check.sh'
     'scripts/check-shipping-leaks.sh'
+    # Tests may enumerate forbidden patterns as part of the guard itself.
+    'tests/test_deploy_systemd.py'
 )
 
-# Allow specs/prompts/ even though specs/ is excluded above (the prompts
-# subdirectory is the one part of specs that DOES ship publicly).
+# Allow specs/prompts/ even though specs/ is excluded above.
 SHIPPING_ALLOWLIST=(
     'specs/prompts/'
 )

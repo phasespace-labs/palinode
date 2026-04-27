@@ -4,33 +4,41 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ## Unreleased
 
-## [0.7.3] — 2026-04-26
-
-### Added
-
-**Session-end semantic dedup (#126)**
-- `palinode_session_end` now checks recently indexed saves (default: last 60 minutes) for semantic overlap with the new content via cosine similarity on the existing BGE-M3 embeddings. When the best match scores at or above 0.85, the indexed individual file is skipped and the response carries `deduplicated_against: <slug>`. Daily-note and project-status appends are unchanged — only the duplicate indexed file is suppressed. Defaults `SESSION_END_DEDUP_WINDOW_MINUTES` and `SESSION_END_DEDUP_THRESHOLD` live in `palinode/core/defaults.py`. Embedder failures degrade gracefully: both files written, warning logged.
-
-**Search quality (M0.5)**
-- **Score-gap dedup** (#91, `52966ae`) — additional chunks from the same file are kept only if within `dedup_score_gap` (default 0.2) of the file's best score. Reduces noise from multi-section files dominating results.
-- **G1 context boost fix** (#92, `f156a3d`) — `store.search()` now accepts `context_entities` for ADR-008 ambient context boost. Previously the boost only fired through `search_hybrid`.
-- **Raw cosine exposure** (#94, `ee8931a`) — search results include a `raw_score` field with the original cosine similarity before RRF normalization.
-- **Daily penalty** (#93, `d18240c`) — `daily/` files receive `score * daily_penalty` (default 0.3) to prevent daily notes from dominating search results. New `include_daily` parameter opts out of the penalty. Exposed as an MCP tool parameter.
-- **Canonical question frontmatter** (#83, `dbe5703`) — `canonical_question` frontmatter field (string or list) is prepended as `"Q: ..."` to the first chunk before embedding, anchoring each memory to the question it answers.
-
-**Tests**
-- 175 tests passing (up from 149)
-- **L1-L3 end-to-end test for `palinode session-end` (#139)** — `tests/integration/test_session_end_e2e_l1_l3.py` covers Tool fired / Data on disk / Retrievable layers of the four-layer validation model from `docs/VALIDATION-STRATEGY.md`. Drives the real CLI through `CliRunner` with the dual-write API call redirected into the in-process `TestClient`, manually triggers the watcher's per-file index path, and asserts a fresh client surfaces the record via `POST /search`. L4 (LLM-in-the-loop behavioural test) is deferred to `docs/L4-BEHAVIORAL-TESTING-DESIGN.md`.
+## [0.8.0] — 2026-04-27
 
 ### Changed
 
-- **ADR-010 cross-surface monopoly is now total (#170)** — all CLI surfaces (`session-end`, `ingest`, `prompt`, `lint`, `list`) now route through `palinode/cli/_api.py`. The `GRANDFATHERED` list in `scripts/check-httpx-monopoly.sh` is now empty, and plugin parity tests were added on the TypeScript side. v0.7.3 ships with a single canonical API surface, eliminating silent feature drift between CLI and API.
+- README.md and docs/QUICKSTART.md updated to promote Obsidian integration and `palinode doctor` as headline features for the v0.8.x rollout.
+- `/save` is now the canonical mid-session checkpoint slash command; `/ps` remains as a back-compat alias and `palinode init` scaffolds both.
+
+### Added
+
+- `palinode doctor` across CLI, API, and MCP, including a constrained `--fix` mode for safe setup repairs.
+- `docs/DOCTOR.md`, a full diagnostic guide covering the check catalog, `--fix`, and common failure cases.
+- `palinode init --obsidian`, `palinode obsidian-sync`, and a broader Obsidian workflow with scaffolding, wiki footer support, and migration guidance.
+- `palinode_dedup_suggest` and `palinode_orphan_repair` across CLI, API, and MCP.
+- Expanded MCP config diagnostics for Claude Code, Claude Desktop, Cline, Zed, and project-local `.mcp.json`.
+- Version-controlled systemd unit templates and an installer under `deploy/systemd/`.
+- Search improvements including score-gap dedup, daily-note penalty tuning, canonical-question anchoring, and raw cosine exposure.
+- Session-end semantic dedup for recently indexed saves.
+- Additional docs around MCP setup and Obsidian workflows.
 
 ### Fixed
 
-- **Timestamp inconsistency in `chunks.created_at`** (#191) — two related bugs together made the column unreliable as a recency signal. `save_api` wrote `time.strftime("%Y-%m-%dT%H:%M:%SZ")` (local time formatted with a `Z` UTC suffix); switched to `_utc_now().isoformat()`. The watcher read `metadata.get("created", "")` while every producer writes the key as `created_at`; fixed the read. Existing rows still parse — values are just shifted by the local-vs-UTC offset until rewritten — so no migration is shipped. `palinode/core/store.py`'s file-mtime fallback (added in #183) remains as a defense for downstream consumers.
-- **Timestamp inconsistency in batch surfaces** (#193) — same Z-on-local-time hazard as #191/#192, this time on `last_updated` writes in four batch paths: `palinode/ingest/pipeline.py` (research files), `palinode/consolidation/layer_split.py` (identity / status / history), `palinode/migration/mem0_generate.py`, and `palinode/migration/openclaw.py`. All switched to `datetime.now(UTC).isoformat()` (or the existing `_utc_now().isoformat()` where the helper was already in scope). One incidental fifth surface — `palinode/consolidation/runner.py`'s `## Consolidation Log (...)` heading — was switched to a human-readable `... UTC` suffix to satisfy the project-wide `strftime("...Z")` audit (the audit now returns zero non-comment matches). `last_updated` isn't currently load-bearing for recency filters, so no migration is shipped.
-- **`.gitignore` no longer hides legitimate code paths** — the broad private-data rules (`people/`, `projects/`, `decisions/`, `insights/`, `migration/`, etc.) caught `palinode/migration/` and `examples/{people,projects,decisions,insights,sample-memory}/`, requiring `git add -f` for any new file under those paths. Added `!palinode/**` and `!examples/**` exemptions so the broad defense-in-depth pattern still catches accidental nested data anywhere else. As a consequence, four sample-memory files that the `examples/sample-memory/README.md` already advertised but were silently dropped on commit are now tracked: `decisions/api-design.md`, `people/alice.md`, `insights/testing.md`, `projects/my-app.md`. The sample tree now matches its README inventory (3 people, 1 project, 2 decisions, 1 insight).
+- `/list` now sorts newest first instead of filesystem glob order.
+- `POST /save` now embeds inline before returning, and the watcher verifies vector-index presence before skipping unchanged content.
+- Default `db_path` now follows `PALINODE_DIR` overrides more reliably.
+- `palinode doctor --json` now emits only JSON on stdout.
+- `/health` now reports live chunk and entity counts.
+- Fresh-empty-database creation is refused when `memory_dir` already contains memories.
+- Startup validation is stricter around `db_path`, `memory_dir`, and reindex concurrency.
+- Several timestamp surfaces now use consistent UTC handling.
+- `.gitignore` no longer hides legitimate code paths under `palinode/` and `examples/`.
+- Worktree test resolution is more reliable for editable installs.
+
+### Removed
+
+- Root-level placeholder systemd unit files superseded by the version-controlled templates and installer under `deploy/systemd/`.
 
 ---
 
@@ -56,7 +64,7 @@ Bug-fix release with small UX additions. Brings the public repo up to date with 
 
 ### Documentation
 
-- **SSH keepalive options for remote-stdio MCP (`docs/MCP-SETUP.md`, `docs/INSTALL-CLAUDE-CODE.md`)** — `ServerAliveInterval=30`, `ServerAliveCountMax=3`, `TCPKeepAlive=yes` added to the example configs. Fixes the "MCP dies after laptop sleep / WiFi change" failure mode that hits anyone running palinode-api on a remote homelab box and SSH-spawning the MCP from a laptop. NAT and Tailscale's DERP relay drop idle TCP after a few minutes; without keepalives the IDE's MCP log fills with `Connection reset by peer`.
+- **SSH keepalive options for remote-stdio MCP (`docs/MCP-SETUP.md`, `docs/INSTALL-CLAUDE-CODE.md`)** — `ServerAliveInterval=30`, `ServerAliveCountMax=3`, and `TCPKeepAlive=yes` added to the example configs. This helps long-lived SSH-backed MCP sessions survive idle network drops and reconnect more cleanly after laptop sleep or WiFi changes.
 
 ### Tests
 
@@ -109,7 +117,7 @@ First tagged release. Persistent memory for AI agents with git-versioned markdow
 - Exclude-paths list prevents search results from surfacing files in `.secrets`, `credentials`, etc.
 
 **Documentation**
-- [ADR-001: Tools Over Pipeline](../ADR-001-tools-over-pipeline.md) — why the executor is deterministic
+- Architecture decision records covering the deterministic executor design
 - Remote MCP setup guides for Claude Code, Claude Desktop, Cursor, Zed
 - Example memory files (`examples/people/`, `examples/projects/`, `examples/decisions/`, `examples/insights/`)
 - Compaction walkthrough (`examples/compaction-demo/`) — a memory file across 3 passes with blame + diff output
