@@ -48,6 +48,22 @@ PATTERNS=(
     'AGENT-ROADMAP'
     'CODEX-REVIEW-PROMPT'
     'GOVERNOR-MEM0-DISABLE'
+
+    # Reserved internal vocabulary
+    '[Cc]olophon'
+    'mm-kmd'
+    'antigravity'
+    'color-class'
+    'GrueBrain'
+    '[Ss]igned [Pp]rovenance'
+    'palinode_cloud'
+    'Ed25519'
+    'RBAC'
+    'IP-hygiene'
+    'provenance bridge'
+
+    # Old-org URLs that should now point at phasespace-labs
+    'github\.com/Paul-Kyle/palinode([/-]|\.git|$)'
 )
 
 # Files/dirs to skip (binary, git internals, this script itself)

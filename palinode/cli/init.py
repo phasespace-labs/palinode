@@ -6,6 +6,13 @@ Creates:
   - .claude/hooks/palinode-session-end.sh  (hook script)
   - .mcp.json  (MCP server block for palinode, if --mcp given)
 
+With --obsidian, additionally writes:
+  - .obsidian/app.json       (file recovery, daily/ default location, wikilinks)
+  - .obsidian/graph.json     (pre-tuned graph: collapsed dirs, color groups)
+  - .obsidian/workspace.json (sidebar opens on daily/)
+  - _index.md                (starter MOC at vault root)
+  - _README.md               (orientation for first-time openers)
+
 All writes are opt-out via flags. Existing files are preserved — we append
 or skip, never overwrite without --force.
 """
@@ -43,11 +50,11 @@ This project uses Palinode for persistent memory via MCP (server name: `palinode
   `palinode_session_end` from the agent first produces a far better record.
 - The user may type `/ps` (Palinode Save) or `/wrap` (session wrap-up) as
   shortcuts. These are **deterministic** — each maps to exactly one tool:
-  - `/ps` → always `palinode_save` with `type="ProjectSnapshot"`. Use for
-    mid-session checkpoints.
+  - `/save` → always `palinode_save` with `type="ProjectSnapshot"`. Use for
+    mid-session checkpoints. (`/ps` is a back-compat alias for `/save`.)
   - `/wrap` → always `palinode_session_end` with summary/decisions/blockers.
     Use before `/clear`.
-  Never dispatch one to the other's tool. See `.claude/commands/ps.md` and
+  Never dispatch one to the other's tool. See `.claude/commands/save.md` and
   `.claude/commands/wrap.md` for the exact prompts.
 
 ### What NOT to save
@@ -138,10 +145,39 @@ exit 0
 """
 
 
-PS_COMMAND_BODY = """\
+SAVE_COMMAND_BODY = """\
 ---
 description: Palinode Save — drop a mid-session ProjectSnapshot to persistent memory.
 ---
+
+Call `palinode_save` with:
+- `type` — **always** `"ProjectSnapshot"` (this command is exclusively for
+  progress snapshots; use `/wrap` for end-of-session wrap-ups)
+- `content` — a one-to-three sentence summary of what's been done since the
+  last save and what's next. Written in past/present tense, specific enough
+  that a future session could pick up where this one left off.
+- `project` — the project slug from `.claude/CLAUDE.md` (or the directory
+  name if no slug is set)
+
+After saving, print one line: the file path and slug from the tool result.
+Do not editorialise. Do not call any other tool.
+
+**This command is deterministic.** Always `palinode_save`, always
+`ProjectSnapshot`. If the user is wrapping up for the day, they should use
+`/wrap` instead — that calls `palinode_session_end` with a structured
+summary, decisions, and blockers.
+"""
+
+
+PS_COMMAND_BODY = """\
+---
+description: "DEPRECATED — use /save instead. /ps remains for back-compat."
+---
+
+> **DEPRECATED:** `/ps` is the legacy name for this command. Use `/save`
+> instead — it is identical and is now the canonical mid-session checkpoint.
+> `/ps` continues to work exactly as before; no action required on existing
+> installs.
 
 Call `palinode_save` with:
 - `type` — **always** `"ProjectSnapshot"` (this command is exclusively for
@@ -183,7 +219,8 @@ Do not call any other tool. Do not save as a ProjectSnapshot first — this
 command is exclusively for structured session wrap-ups.
 
 **This command is deterministic.** Always `palinode_session_end`. For a
-quick mid-session checkpoint, use `/ps` instead.
+quick mid-session checkpoint, use `/save` instead (`/ps` also works as a
+back-compat alias).
 """
 
 
@@ -205,6 +242,12 @@ SETTINGS_HOOK_BLOCK = {
 
 
 MCP_JSON_BLOCK = {
+    "_warning": (
+        "This is a project-local MCP config. "
+        "Your client may also read a global config at ~/.claude.json or "
+        "~/Library/Application Support/Claude/ (macOS). "
+        "Run 'palinode mcp-config --diagnose' to see all of them."
+    ),
     "mcpServers": {
         "palinode": {
             "command": "palinode-mcp",
@@ -283,6 +326,255 @@ def _write_slash_command(path: Path, body: str, force: bool) -> str:
     return "created"
 
 
+# ---------------------------------------------------------------------------
+# Obsidian scaffold templates
+# ---------------------------------------------------------------------------
+
+# app.json
+# Fields kept to the minimum that Obsidian needs on first open.
+# - alwaysUpdateLinks / trashOption: safe file-recovery defaults
+# - newFileFolderPath: new notes land in daily/ by default
+# - useMarkdownLinks: false → Obsidian uses [[wikilinks]] (the default, but
+#   explicit so the intent survives a settings reset)
+# - newFileLocation: "folder" → honour newFileFolderPath
+OBSIDIAN_APP_JSON: dict = {
+    "alwaysUpdateLinks": True,
+    "trashOption": "local",
+    "newFileLocation": "folder",
+    "newFileFolderPath": "daily",
+    "useMarkdownLinks": False,
+}
+
+# graph.json
+# Obsidian graph config is a flat JSON object.  Fields confirmed from the
+# Obsidian desktop app's exported graph.json format (v1.x):
+#   - colorGroups: list of {query, color:{r,g,b,a}}
+#   - collapsedNodeGroups: list of query strings whose nodes are collapsed
+#   - showTags, showAttachments, showOrphans: booleans
+#   - scale, linksScalingFactor: physics tuning
+# Node query syntax is Obsidian's native graph query language (same as
+# search), e.g. "path:archive/" matches files under archive/.
+OBSIDIAN_GRAPH_JSON: dict = {
+    "colorGroups": [
+        {"query": "path:people/",    "color": {"r": 74,  "g": 222, "b": 128, "a": 1}},
+        {"query": "path:projects/",  "color": {"r": 96,  "g": 165, "b": 250, "a": 1}},
+        {"query": "path:decisions/", "color": {"r": 251, "g": 146, "b": 60,  "a": 1}},
+        {"query": "path:insights/",  "color": {"r": 192, "g": 132, "b": 252, "a": 1}},
+    ],
+    "collapsedNodeGroups": [
+        "path:archive/",
+        "path:logs/",
+        "path:.palinode/",
+    ],
+    "showTags": False,
+    "showAttachments": False,
+    "showOrphans": True,
+    "scale": 1.0,
+    "linksScalingFactor": 1.0,
+}
+
+# workspace.json
+# Obsidian owns this file after launch — the user should never need to
+# hand-edit it.  We set a minimal structure so Obsidian opens without
+# complaining about a malformed workspace.
+# NOTE: --force-obsidian deliberately skips this file (it's Obsidian-owned
+# post-launch).  The skip is implemented in _write_obsidian_scaffold().
+OBSIDIAN_WORKSPACE_JSON: dict = {
+    "main": {
+        "id": "main",
+        "type": "split",
+        "children": [
+            {
+                "id": "leaf",
+                "type": "leaf",
+                "state": {
+                    "type": "file-explorer",
+                    "state": {"sortOrder": "alphabetical"},
+                },
+            }
+        ],
+        "direction": "vertical",
+    },
+    "left": {
+        "id": "left",
+        "type": "split",
+        "children": [
+            {
+                "id": "left-leaf",
+                "type": "leaf",
+                "state": {
+                    "type": "file-explorer",
+                    "state": {"sortOrder": "alphabetical"},
+                },
+            }
+        ],
+        "direction": "vertical",
+        "width": 280,
+    },
+    "right": {"id": "right", "type": "split", "children": [], "direction": "vertical"},
+    "active": "leaf",
+    "lastOpenFiles": ["daily"],
+}
+
+# _index.md  — starter MOC at vault root
+OBSIDIAN_INDEX_MD = """\
+# Index
+
+This vault is managed by [Palinode](https://github.com/phasespace-labs/palinode) —
+a persistent memory system for AI agents. Markdown files here are the source of
+truth; Obsidian is a read/write UI on top of them.
+
+## Categories
+
+- [[people/_index|People]] — contacts and collaborators
+- [[projects/_index|Projects]] — active and archived projects
+- [[decisions/_index|Decisions]] — architectural and design decisions
+- [[insights/_index|Insights]] — reusable findings and lessons
+- [[research/_index|Research]] — background notes and references
+- [[daily/_index|Daily]] — session notes and daily logs
+- [[archive/_index|Archive]] — superseded content
+
+## Getting started
+
+Run `palinode --help` from your terminal for all available commands.
+
+Check that the MCP server is reachable:
+
+```
+palinode mcp-config --diagnose
+```
+
+Save a new memory from the terminal:
+
+```
+palinode save "Your insight here"
+```
+
+Or use `palinode_save` from any connected AI agent (Claude Code, Cursor, etc).
+"""
+
+# _README.md  — vault orientation for cold openers
+OBSIDIAN_README_MD = """\
+# Palinode Vault
+
+This directory is a **Palinode memory vault** opened in Obsidian.
+
+Palinode is a persistent long-term memory system for AI agents. It stores
+memories as git-versioned markdown files with hybrid (semantic + keyword)
+search. Obsidian is the human-facing UI — browse, edit, and link memories
+visually while your AI agents read and write through the CLI or MCP server.
+
+## First steps
+
+1. Make sure `palinode-api` is running (`palinode start`, or via systemd).
+2. Open `_index.md` for a map of all memory categories.
+3. Run `palinode mcp-config --diagnose` to confirm MCP connectivity.
+4. Run `palinode --help` for all available commands.
+
+## Directory structure
+
+| Directory     | Contents                                      |
+|---------------|-----------------------------------------------|
+| `daily/`      | Session notes and daily logs (auto-created)   |
+| `people/`     | Contacts, collaborators, entities             |
+| `projects/`   | Active and archived project notes             |
+| `decisions/`  | Architectural and design decision records     |
+| `insights/`   | Reusable findings and lessons                 |
+| `research/`   | Background notes and references               |
+| `archive/`    | Superseded or historical content              |
+| `.palinode/`  | Internal index state — do not edit            |
+
+## Notes
+
+- Wikilinks (`[[like this]]`) are first-class — Palinode reads and writes them.
+- Do not edit files under `.palinode/` — that directory is managed by the daemon.
+- The graph view collapses `archive/`, `logs/`, and `.palinode/` by default.
+- Re-run `palinode init --obsidian <vault-path>` to restore scaffolded files
+  if they are accidentally deleted (user-edited files are preserved).
+"""
+
+
+def _write_json_file(path: Path, data: dict, force: bool) -> str:
+    """Write a JSON file; skip if exists and not forced."""
+    _ensure_parent(path)
+    if path.exists() and not force:
+        return "skipped (exists)"
+    path.write_text(json.dumps(data, indent=2) + "\n")
+    return "created"
+
+
+def _write_text_file(path: Path, content: str, force: bool) -> str:
+    """Write a text/markdown file; skip if exists and not forced."""
+    _ensure_parent(path)
+    if path.exists() and not force:
+        return "skipped (exists)"
+    path.write_text(content)
+    return "created"
+
+
+def _write_obsidian_scaffold(
+    target: Path,
+    force: bool,
+    force_obsidian: bool,
+) -> list[tuple[str, str]]:
+    """Write all Obsidian scaffold files into *target*.
+
+    Returns a list of (label, status) pairs suitable for the output table.
+
+    Idempotency rules:
+      - ``force=False, force_obsidian=False`` — skip any file that already exists
+      - ``force_obsidian=True`` — overwrite all scaffold files EXCEPT
+        ``.obsidian/workspace.json`` (Obsidian owns that post-launch)
+      - ``force=True`` — same behaviour as ``force_obsidian=True`` for Obsidian
+        files (the global --force applies everywhere)
+    """
+    obsidian_force = force or force_obsidian
+    # workspace.json is excluded from force-overwrite — Obsidian owns it
+    workspace_force = force  # only overwrite on global --force, not --force-obsidian
+
+    obsidian_dir = target / ".obsidian"
+    results: list[tuple[str, str]] = []
+
+    # Create the standard memory category directories so the Obsidian graph
+    # has seed nodes to render and Obsidian's file tree isn't empty.
+    # A .gitkeep is placed in each so git tracks empty dirs.
+    _VAULT_DIRS = (
+        "people", "projects", "decisions", "insights",
+        "research", "daily", "archive", "logs",
+    )
+    for dir_name in _VAULT_DIRS:
+        d = target / dir_name
+        d.mkdir(exist_ok=True)
+        gitkeep = d / ".gitkeep"
+        if not gitkeep.exists():
+            gitkeep.write_text("")
+            results.append((dir_name + "/", "created"))
+        else:
+            results.append((dir_name + "/", "skipped"))
+
+    results.append((
+        ".obsidian/app.json",
+        _write_json_file(obsidian_dir / "app.json", OBSIDIAN_APP_JSON, obsidian_force),
+    ))
+    results.append((
+        ".obsidian/graph.json",
+        _write_json_file(obsidian_dir / "graph.json", OBSIDIAN_GRAPH_JSON, obsidian_force),
+    ))
+    results.append((
+        ".obsidian/workspace.json",
+        _write_json_file(obsidian_dir / "workspace.json", OBSIDIAN_WORKSPACE_JSON, workspace_force),
+    ))
+    results.append((
+        "_index.md",
+        _write_text_file(target / "_index.md", OBSIDIAN_INDEX_MD, obsidian_force),
+    ))
+    results.append((
+        "_README.md",
+        _write_text_file(target / "_README.md", OBSIDIAN_README_MD, obsidian_force),
+    ))
+    return results
+
+
 def _merge_mcp_json(path: Path, force: bool) -> str:
     _ensure_parent(path)
     if not path.exists():
@@ -332,7 +624,25 @@ def _merge_mcp_json(path: Path, force: bool) -> str:
 @click.option(
     "--slash/--no-slash",
     default=True,
-    help="Install /ps and /wrap slash commands for save-before-clear reflex",
+    help="Install /save, /ps (back-compat alias), and /wrap slash commands for save-before-clear reflex",
+)
+@click.option(
+    "--obsidian/--no-obsidian",
+    default=False,
+    help=(
+        "Scaffold an opinionated Obsidian vault config alongside the standard "
+        "palinode files (.obsidian/, _index.md, _README.md). Default: off."
+    ),
+)
+@click.option(
+    "--force-obsidian",
+    is_flag=True,
+    default=False,
+    help=(
+        "Overwrite scaffolded Obsidian files even if they exist (excluding "
+        ".obsidian/workspace.json which Obsidian owns post-launch). "
+        "Implies --obsidian."
+    ),
 )
 @click.option(
     "--force",
@@ -344,7 +654,18 @@ def _merge_mcp_json(path: Path, force: bool) -> str:
     is_flag=True,
     help="Print what would change without writing anything",
 )
-def init(target_dir, project_slug, mcp, claudemd, hook, slash, force, dry_run):
+def init(
+    target_dir,
+    project_slug,
+    mcp,
+    claudemd,
+    hook,
+    slash,
+    obsidian,
+    force_obsidian,
+    force,
+    dry_run,
+):
     """Scaffold Palinode into a project for zero-friction adoption.
 
     Creates (or appends to):
@@ -353,7 +674,15 @@ def init(target_dir, project_slug, mcp, claudemd, hook, slash, force, dry_run):
       .claude/hooks/palinode-session-end.sh — hook script (fires on /clear, exit)
       .mcp.json                             — palinode MCP server block
 
+    With --obsidian, additionally writes:
+      .obsidian/app.json       — wikilinks, daily/ as default file location
+      .obsidian/graph.json     — pre-tuned graph (collapsed dirs, color groups)
+      .obsidian/workspace.json — sidebar opens on daily/ by default
+      _index.md                — starter MOC linking all category dirs
+      _README.md               — vault orientation for first-time openers
+
     Re-run with --force to overwrite. --dry-run shows the plan without writing.
+    --force-obsidian overwrites the Obsidian scaffold only (preserving workspace.json).
     """
     target = Path(target_dir).resolve()
     if not target.exists():
@@ -361,10 +690,15 @@ def init(target_dir, project_slug, mcp, claudemd, hook, slash, force, dry_run):
 
     slug = project_slug or _slugify(target.name)
 
+    # --force-obsidian implies --obsidian
+    if force_obsidian:
+        obsidian = True
+
     claude_md = target / ".claude" / "CLAUDE.md"
     settings = target / ".claude" / "settings.json"
     hook_script = target / ".claude" / "hooks" / "palinode-session-end.sh"
     mcp_json = target / ".mcp.json"
+    save_cmd = target / ".claude" / "commands" / "save.md"
     ps_cmd = target / ".claude" / "commands" / "ps.md"
     wrap_cmd = target / ".claude" / "commands" / "wrap.md"
 
@@ -380,10 +714,17 @@ def init(target_dir, project_slug, mcp, claudemd, hook, slash, force, dry_run):
             click.echo(f"  {hook_script.relative_to(target)}  (SessionEnd hook script)")
             click.echo(f"  {settings.relative_to(target)}  (hook registration)")
         if slash:
-            click.echo(f"  {ps_cmd.relative_to(target)}  (/ps slash command)")
+            click.echo(f"  {save_cmd.relative_to(target)}  (/save slash command — canonical)")
+            click.echo(f"  {ps_cmd.relative_to(target)}  (/ps slash command — back-compat alias)")
             click.echo(f"  {wrap_cmd.relative_to(target)}  (/wrap slash command)")
         if mcp:
             click.echo(f"  {mcp_json.relative_to(target)}  (MCP server block)")
+        if obsidian:
+            click.echo(f"  .obsidian/app.json  (Obsidian app config)")
+            click.echo(f"  .obsidian/graph.json  (graph view settings)")
+            click.echo(f"  .obsidian/workspace.json  (workspace layout)")
+            click.echo(f"  _index.md  (MOC at vault root)")
+            click.echo(f"  _README.md  (vault orientation)")
         return
 
     results = []
@@ -393,10 +734,13 @@ def init(target_dir, project_slug, mcp, claudemd, hook, slash, force, dry_run):
         results.append(("hook script", _write_hook_script(hook_script, force)))
         results.append(("settings.json", _merge_settings(settings, force)))
     if slash:
-        results.append(("/ps command", _write_slash_command(ps_cmd, PS_COMMAND_BODY, force)))
+        results.append(("/save command", _write_slash_command(save_cmd, SAVE_COMMAND_BODY, force)))
+        results.append(("/ps command (alias)", _write_slash_command(ps_cmd, PS_COMMAND_BODY, force)))
         results.append(("/wrap command", _write_slash_command(wrap_cmd, WRAP_COMMAND_BODY, force)))
     if mcp:
         results.append((".mcp.json", _merge_mcp_json(mcp_json, force)))
+    if obsidian:
+        results.extend(_write_obsidian_scaffold(target, force, force_obsidian))
 
     for label, status in results:
         mark = "✓" if status in ("created", "appended", "merged") else "·"
@@ -405,5 +749,9 @@ def init(target_dir, project_slug, mcp, claudemd, hook, slash, force, dry_run):
     click.echo("")
     click.echo("Next steps:")
     click.echo("  1. Make sure palinode-api is running (palinode start, or systemd)")
-    click.echo("  2. Open the project in Claude Code — the MCP server will connect on start")
-    click.echo("  3. Try it:  \"search palinode for recent decisions on this project\"")
+    if obsidian:
+        click.echo("  2. Open the vault in Obsidian: open -a Obsidian " + str(target))
+        click.echo("  3. Try it:  \"search palinode for recent decisions on this project\"")
+    else:
+        click.echo("  2. Open the project in Claude Code — the MCP server will connect on start")
+        click.echo("  3. Try it:  \"search palinode for recent decisions on this project\"")

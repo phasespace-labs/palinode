@@ -1,7 +1,10 @@
+import logging
 import click
 from palinode import __version__
 from palinode.core.brand import BANNER
 from palinode.core.config import config
+
+_cli_logger = logging.getLogger("palinode.config")
 from palinode.cli.search import search
 from palinode.cli.save import save
 from palinode.cli.status import status
@@ -20,6 +23,9 @@ from palinode.cli.ingest import ingest
 from palinode.cli.prompt import prompt
 from palinode.cli.migrate import migrate
 from palinode.cli.init import init
+from palinode.cli.mcp_config import mcp_config
+from palinode.cli.embedding_tools import dedup_suggest, orphan_repair
+from palinode.cli.obsidian_sync import obsidian_sync
 
 def _print_version(ctx: click.Context, param: click.Parameter, value: bool) -> None:
     if not value or ctx.resilient_parsing:
@@ -39,7 +45,13 @@ def _print_version(ctx: click.Context, param: click.Parameter, value: bool) -> N
 )
 def main():
     """Palinode — persistent agent memory."""
-    pass
+    _cli_logger.info(
+        "palinode.config: memory_dir=%s db_path=%s",
+        config.memory_dir,
+        config.db_path,
+    )
+    for warning in config.validate_paths():
+        _cli_logger.warning(warning)
 
 
 @main.command()
@@ -85,6 +97,16 @@ main.add_command(session_end)
 
 # Project scaffolding
 main.add_command(init)
+
+# Diagnostics
+main.add_command(mcp_config, name="mcp-config")
+
+# Embedding tools (#210 — Obsidian wiki maintenance helpers)
+main.add_command(dedup_suggest)
+main.add_command(orphan_repair)
+
+# Obsidian integration — backfill / migration (#210, Deliverable E)
+main.add_command(obsidian_sync, name="obsidian-sync")
 
 @main.command()
 @click.option("--watcher/--no-watcher", default=True, help="Run memory watcher")

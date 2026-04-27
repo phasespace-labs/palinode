@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "palinode"
-version = "0.7.3"
+version = "0.8.0"
 description = "The memory substrate for AI agents and developer tools. Git-versioned, file-native, MCP-first."
 authors = [
   {name = "Paul Kyle", email = "paul@phasespace.co"}
@@ -65,6 +65,7 @@ dev = [
 testpaths = ["tests"]
 # Exclude live tests from default runs (they need a running server)
 addopts = "--ignore=tests/live"
+pythonpath = ["."]
 markers = [
     "slow: marks tests that need Ollama or take >5s",
 ]

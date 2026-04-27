@@ -1,0 +1,23 @@
+[Unit]
+Description=Palinode MCP Server (SSE transport)
+Documentation=https://github.com/phasespace-labs/palinode
+After=network.target palinode-api.service
+Wants=palinode-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=${PALINODE_HOME}
+Environment="PALINODE_DIR=${PALINODE_DATA_DIR}"
+Environment="PALINODE_API_HOST=127.0.0.1"
+Environment="PALINODE_API_PORT=${API_PORT}"
+ExecStart=${PALINODE_HOME}/venv/bin/palinode-mcp-sse --port ${MCP_PORT}
+Restart=always
+RestartSec=5
+
+# Structured JSON logs → journalctl; no custom log file needed
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=palinode-mcp
+
+[Install]
+WantedBy=default.target

@@ -1,5 +1,5 @@
 import click
-from palinode.cli._api import api_client
+from palinode.cli._api import api_client, HTTPStatusError
 from palinode.cli._format import console, print_result, get_default_format, OutputFormat
 
 @click.command()
@@ -9,6 +9,11 @@ def reindex(fmt):
     try:
         result = api_client.reindex()
         print_result(result, fmt=OutputFormat(fmt) if fmt else get_default_format())
+    except HTTPStatusError as e:
+        if e.response.status_code == 409:
+            console.print("[yellow]Reindex already running. Check 'palinode status' for progress.[/yellow]")
+        else:
+            console.print(f"[red]Error reindexing: {str(e)}[/red]")
     except Exception as e:
         console.print(f"[red]Error reindexing: {str(e)}[/red]")
 

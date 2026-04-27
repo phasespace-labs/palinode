@@ -74,7 +74,7 @@ Core memory persists in the model's context window from turn 1 until OpenClaw co
 - `people/alice.md` — your collaborator
 - `projects/my-app.md` — current project status
 - `projects/palinode.md` — memory system status
-- `projects/infrastructure.md` — homelab machines and services
+- `projects/infrastructure.md` — infrastructure notes and service status
 
 ### Phase 2: Topic-Specific Search (per message)
 
@@ -136,7 +136,7 @@ After each agent response, the plugin captures the conversation to a daily note:
 
 user: what's the status on Palinode?
 
-assistant: Phase 2 complete. Consolidation cron enabled, entity linking live,
+assistant: Search improvements are live. Consolidation cron enabled, entity linking live,
 temporal search working. 2,165 chunks indexed across 219 files...
 ```text
 
@@ -228,7 +228,7 @@ Each project compaction is capped at ~6,000 chars of daily notes (1,500 per note
 
 ```text
 ## Session 2026-03-29T04:26:16Z
-user: completed M5 Phase 4 tests.
+user: completed the latest test pass.
 assistant: Updating My App with testing progress.
 
 ## Session 2026-03-29T16:12:25Z  
@@ -240,14 +240,14 @@ assistant: Processed 18 notes, My App summary updated via 5 KEEP, 2 UPDATE, 1 AR
 
 ```text
 ## Active Milestones
-- <!-- fact:m5-completed --> [2026-03-29] M5 Phase 4 tests completed successfully.
+- <!-- fact:test-pass-complete --> [2026-03-29] Latest test pass completed successfully.
 ```text
 
 **Archived directly to (projects/my-app-history.md):**
 
 ```text
 ## Archived Facts
-- <!-- fact:m5-in-progress --> [2026-03-25] Working on M5 Phase 4.
+- <!-- fact:test-pass-in-progress --> [2026-03-25] Working through the current test pass.
   *(Archived 2026-03-29: Superseded by m5-completed)*
 ```text
 
@@ -289,7 +289,7 @@ Each chunk is hashed before embedding. If the hash matches the existing entry, t
 
 ## 6. Git Versioning (Every Change)
 
-**Repo:** `Paul-Kyle/palinode-data` (PRIVATE)
+**Repo:** a dedicated Git repository for your memory directory
 
 Every memory change is a git commit. This enables:
 
@@ -328,6 +328,16 @@ The entity index is a reverse lookup: given an entity, find all files that menti
 **Entity graph:** shows which entities co-occur. If `person/alice` and `project/checkout` always appear together, the system knows they're related.
 
 **Currently 20 entities tracked** across 219 files.
+
+---
+
+## 7b. The Wiki Maintenance Contract
+
+Each memory has two cross-reference channels: the typed `entities:` list in YAML frontmatter, and `[[wikilinks]]` in the note body. Both are first-class. The frontmatter is authoritative for the index and for entity-graph queries; the body links are what makes a note useful when read directly or rendered in Obsidian.
+
+The LLM is the maintainer of consistency between the two surfaces. PROGRAM.md's "Wiki Maintenance" section is the canonical contract: when creating or updating a memory, decide what entities are referenced, add them in canonical `kind/slug` form to `entities:`, and either write the link inline in the body where it's load-bearing or let `palinode_save` materialise an idempotent `## See also` footer (delimited by `<!-- palinode-auto-footer -->`) for whatever doesn't have an inline anchor.
+
+This contract is what makes Palinode's storage interoperable with Obsidian's graph view, with `palinode_orphan_repair`, with `palinode_dedup_suggest`, and with the entity-graph spreading-activation phase of recall above. Lint includes a `wiki_drift` check that warns when the two surfaces diverge. See [OBSIDIAN.md](OBSIDIAN.md#the-wiki-contract) for the user-facing summary.
 
 ---
 
@@ -383,10 +393,10 @@ Apr 13  — Manual edit: Alice corrected a fact via palinode_save (commit def567
 Origin: 2026-02-11 | Source: mem0-backfill
 Note: Git shows 2026-03-29 (migration date). True origin is 2026-02-11 (from mem0-backfill).
 
-^dcdbf5f (2026-03-29) - [2026-02-11] M5 Phase 1 complete: all 9 modules deployed
-^dcdbf5f (2026-03-29) - [2026-02-15] M2 closed: auth + notification systems
-abc1234  (2026-04-06) - M6 Phase 1 spec ready: routing fixed
-def5678  (2026-04-13) - M6 Phase 2: real-time sync live
+^dcdbf5f (2026-03-29) - [2026-02-11] Deployment milestone completed across all modules
+^dcdbf5f (2026-03-29) - [2026-02-15] Authentication and notifications are complete
+abc1234  (2026-04-06) - Routing spec is ready
+def5678  (2026-04-13) - Real-time sync is live
 ```text
 
 For backfilled memories, git blame shows when the file was migrated. The frontmatter `created_at` field preserves the true origin date from the source system (Mem0, QC MCP, etc.). Palinode surfaces both so you always know:
@@ -408,7 +418,7 @@ Palinode has already absorbed memories from two external systems:
 | **Mem0** (Qdrant) | 4,637 → 3,645 (after dedup + skip) | Qwen 72B | ✅ Done |
 | **QC MCP** (PostgreSQL) | 14,000+ contexts | TBD | Planned |
 
-Backfilled memories enter `palinode-data` with `source: "mem0-backfill"` in their frontmatter. As consolidation updates them, each change gets its own commit — gradually building provenance that Mem0 never had.
+Backfilled memories enter your Palinode memory repository with `source: "mem0-backfill"` in their frontmatter. As consolidation updates them, each change gets its own commit and an audit trail builds over time.
 
 ### Why This Matters
 
@@ -420,3 +430,13 @@ Other memory systems are opaque databases. You can query them but you can't ask:
 - "The last consolidation was bad, undo it" → `palinode_rollback`
 
 These aren't add-on features. They're consequences of the architectural decision to use files + git as the source of truth. The audit trail is free.
+
+## If something's wrong
+
+Palinode's worst failure mode is *silent success* — every component reports healthy while serving wrong, stale, or orphan data (after a directory rename, an env-var drift, a watcher running with stale config, etc.). When search returns less than you expect or "save" feels like it didn't stick, run:
+
+```bash
+palinode doctor
+```
+
+Doctor is a read-only diagnostic command with 18 checks across path integrity, service health, config drift, index sanity, disk/backup, and a forward-looking CLAUDE.md scan. It surfaces the silent drifts that the rest of this document assumes never happen. Full guide: [`docs/DOCTOR.md`](DOCTOR.md).

@@ -1,15 +1,7 @@
 # Using Palinode with Obsidian
 
-Because Palinode stores all memories as standard markdown files, you can use [Obsidian](https://obsidian.md) to visually browse, edit, and link your agent's memories.
+The comprehensive guide moved to [OBSIDIAN.md](OBSIDIAN.md) — quickstart, the wiki contract, the embedding tools, migration paths, and FAQ.
 
-## Setup
+The 30-second version: Palinode stores memories as plain markdown with YAML frontmatter, so any folder of Palinode memories is already a valid Obsidian vault. Run `palinode init --obsidian /path/to/vault` to scaffold an opinionated vault config (graph defaults, hidden `archive/` and `logs/`, daily-notes wired to `daily/`), then `open -a Obsidian /path/to/vault` (macOS) or `obsidian /path/to/vault` (Linux). The file watcher handles edits from either side.
 
-1. Open Obsidian
-2. Click "Open folder as vault"
-3. Select your `PALINODE_DIR` (e.g., `~/.palinode`)
-
-## Why This Rocks
-
-- **Visual Graph:** See how your agent connects people, projects, and ideas (frontmatter `entities` arrays act as tags/links if you configure Obsidian's Dataview)
-- **Manual Curation:** If the agent gets a detail wrong, just type to fix it. The file watcher will pick up your changes within 2 seconds.
-- **Second Brain Integration:** You can symlink specific subdirectories (like `projects/` or `daily/`) into an existing Obsidian vault.
+For the why, the wiki-contract details, and the embedding tools the LLM calls during maintenance, see [OBSIDIAN.md](OBSIDIAN.md).

@@ -2,11 +2,84 @@ from __future__ import annotations
 
 import os
 import glob
+import re
 from datetime import datetime, timezone
 from typing import Any
 
+import frontmatter as _frontmatter
+
 from palinode.core.config import config
 from palinode.core import parser
+
+# Marker written by Deliverable C (palinode_save auto-footer plumbing).
+# Wikilinks that appear under this marker count as satisfying the entity
+# requirement — the auto-footer is a derived view of ``entities:`` and
+# deliberately links every frontmatter entity that has no inline body link.
+_AUTO_FOOTER_MARKER = "<!-- palinode-auto-footer -->"
+
+def check_wiki_drift(
+    metadata: dict[str, Any],
+    body: str,
+) -> list[dict[str, str]]:
+    """Check for drift between frontmatter ``entities:`` and body ``[[wikilinks]]``.
+
+    Returns a (possibly empty) list of warning dicts, each with keys:
+    ``kind`` (``"body_not_in_frontmatter"`` or ``"frontmatter_not_in_body"``) and
+    ``detail`` (a human-readable description).
+
+    Auto-footer-aware: wikilinks that appear after the
+    ``<!-- palinode-auto-footer -->`` marker count as satisfying the frontmatter
+    entity requirement.  Body wikilinks under the auto-footer are NOT flagged as
+    missing from frontmatter — the auto-footer is derived from frontmatter, so
+    those links are guaranteed to correspond to frontmatter entries.
+
+    Args:
+        metadata: Parsed frontmatter dict (from ``parser.parse_markdown``).
+        body: Markdown body text (frontmatter stripped).
+
+    Returns:
+        List of warning dicts (empty list if surfaces are aligned).
+    """
+    entity_info = parser.parse_entities(metadata, body)
+    fm_entities: list[str] = entity_info["entities_frontmatter"]
+    body_entities: list[str] = entity_info["entities_body"]
+
+    fm_set = set(fm_entities)
+    body_set = set(body_entities)
+
+    # Determine which wikilinks live under the auto-footer.
+    auto_footer_entities: set[str] = set()
+    if _AUTO_FOOTER_MARKER in body:
+        _, _, footer_text = body.partition(_AUTO_FOOTER_MARKER)
+        footer_labels = re.findall(r'\[\[([^\]|]+)(?:\|[^\]]*)?\]\]', footer_text)
+        for label in footer_labels:
+            canonical = parser.canonicalize_wikilink(label.strip(), known_entities=fm_entities)
+            auto_footer_entities.add(canonical)
+
+    warnings: list[dict[str, str]] = []
+
+    # 1. Body wikilinks not in frontmatter (skip auto-footer ones — they come from FM)
+    for ent in body_entities:
+        if ent not in fm_set and ent not in auto_footer_entities:
+            warnings.append({
+                "kind": "body_not_in_frontmatter",
+                "detail": (
+                    f"body wikilink not in entities frontmatter: {ent!r}"
+                ),
+            })
+
+    # 2. Frontmatter entities not in body and not covered by auto-footer
+    for ent in fm_entities:
+        if ent not in body_set and ent not in auto_footer_entities:
+            warnings.append({
+                "kind": "frontmatter_not_in_body",
+                "detail": (
+                    f"entity not in body or see-also: {ent!r}"
+                ),
+            })
+
+    return warnings
+
 
 def run_lint_pass() -> dict[str, Any]:
     """Scan PALINODE_DIR for memory health issues.
@@ -26,6 +99,7 @@ def run_lint_pass() -> dict[str, Any]:
     contradictions = []  # Heuristic placeholder
     missing_entities: list[str] = []
     missing_descriptions: list[str] = []
+    wiki_drift: list[dict[str, Any]] = []
     core_count = 0
 
     now = datetime.now(timezone.utc)
@@ -45,14 +119,22 @@ def run_lint_pass() -> dict[str, Any]:
             with open(filepath, "r") as f:
                 content = f.read()
             metadata, _ = parser.parse_markdown(content)
-            
+
+            # Extract body (strip frontmatter) for wiki_drift check.
+            try:
+                _post = _frontmatter.loads(content)
+                body_text: str = _post.content
+            except Exception:
+                body_text = content
+
             entities = metadata.get("entities", [])
             for e in entities:
                 entity_references[e] = entity_references.get(e, 0) + 1
-                
+
             all_files.append({
                 "path": rel_path,
                 "metadata": metadata,
+                "body": body_text,
             })
         except Exception:
             pass
@@ -108,12 +190,18 @@ def run_lint_pass() -> dict[str, Any]:
                         dt = last_updated
                         if dt.tzinfo is None:
                             dt = dt.replace(tzinfo=timezone.utc)
-                    
+
                     days_old = (now - dt).days
                     if days_old > 90:
                         stale_files.append({"file": path, "days_old": days_old})
                 except Exception:
                     pass
+
+        # 7. Wiki drift — frontmatter entities vs. body wikilinks
+        body = f.get("body", "")
+        drift_warnings = check_wiki_drift(meta, body)
+        if drift_warnings:
+            wiki_drift.append({"file": path, "warnings": drift_warnings})
                     
     # 4. Contradictions heuristics
     # Simple check: Any entity that has multiple active files
@@ -145,5 +233,6 @@ def run_lint_pass() -> dict[str, Any]:
         "contradictions": unique_contradictions,
         "missing_entities": missing_entities,
         "missing_descriptions": missing_descriptions,
+        "wiki_drift": wiki_drift,
         "core_count": core_count,
     }

@@ -1,6 +1,6 @@
 # Git-Powered Memory in Palinode
 
-Palinode treats memory as code. Every fact, decision, and project detail your agent learns is saved as a markdown file and versioned in a dedicated Git repository (`palinode-data`). This provides complete provenance: you can trace any fact back to the exact session where it was recorded, and see how your agent's understanding evolved over time.
+Palinode treats memory as code. Every fact, decision, and project detail your agent learns is saved as a markdown file and versioned in a dedicated Git repository. This provides complete provenance: you can trace any fact back to the exact session where it was recorded, and see how your agent's understanding evolved over time.
 
 ## Core Concepts
 
@@ -31,7 +31,7 @@ palinode blame projects/my-app-milestones.md --search "deploy"
 Origin: 2026-02-11 | Source: mem0-backfill
 Note: Git shows 2026-03-29 (migration date). True origin is 2026-02-11 (from mem0-backfill).
 
-^dcdbf5f (2026-03-29) - [2026-02-15] M5 Phase 1 complete: all 9 modules deployed
+^dcdbf5f (2026-03-29) - [2026-02-15] Deployment milestone completed across all modules
 ```
 
 For natively-captured memories, both dates match:

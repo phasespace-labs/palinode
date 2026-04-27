@@ -10,7 +10,7 @@
 
 **The memory substrate for AI agents and developer tools. Git-versioned, file-native, MCP-first.**
 
-Your agent's memory is a folder of markdown files. Palinode indexes them with hybrid search, compacts them with an LLM, and serves them through MCP — so the same memory works in Claude Code, Cursor, Windsurf, Zed, VS Code (Continue/Cline), and any other MCP-compatible editor. Enterprises can govern AI memory the same way they govern code. If every service crashes, `cat` still works.
+Your agent's memory is a folder of markdown files. Palinode indexes them with hybrid search, compacts them with an LLM, and serves them through MCP — so the same memory works in Claude Code, Cursor, Windsurf, Zed, VS Code (Continue/Cline), and any other MCP-compatible editor. Bring your own Obsidian vault, or use Palinode as one: `palinode init --obsidian /path/to/vault` scaffolds a full vault with graph defaults, daily-notes wiring, and an LLM-maintained wiki contract. Enterprises can govern AI memory the same way they govern code. If every service crashes, `cat` still works.
 
 *A palinode is a poem that retracts what was said before and says it better. That's what memory compaction does.*
 
@@ -36,7 +36,7 @@ That's the whole architecture. One directory of `.md` files, one SQLite database
 
 ## One Backend, Every Interface
 
-Palinode doesn't care how you talk to it. The same 17 tools work everywhere:
+Palinode doesn't care how you talk to it. The full toolkit — save, search, doctor, dedup-suggest, orphan-repair, diff, blame, rollback, and more — works through every interface:
 
 | Interface | Transport | Best For |
 |-----------|-----------|----------|
@@ -55,7 +55,7 @@ Set up once on a server. Connect from any machine, any IDE, any agent framework.
 }
 ```
 
-That's the entire client config. Works with Claude Code, Claude Desktop, Cursor, Windsurf, Zed, and VS Code (Continue/Cline). See [docs/MCP-SETUP.md](docs/MCP-SETUP.md) for editor-specific paths.
+That's the entire client config. Works with Claude Code, Claude Desktop, Cursor, Windsurf, Zed, and VS Code (Continue/Cline). See [docs/MCP-SETUP.md](docs/MCP-SETUP.md) for editor-specific install recipes.
 
 ---
 
@@ -166,7 +166,7 @@ palinode diff --days 7
 
 ## Tools
 
-17 tools available through every interface:
+21 tools available through every interface:
 
 | Tool | What It Does |
 |------|-------------|
@@ -187,6 +187,10 @@ palinode diff --days 7
 | `lint` | Health scan — orphans, stale files, missing fields |
 | `session_end` | Capture summary, decisions, and blockers at end of session |
 | `prompt` | List, show, or activate versioned LLM prompts |
+| `dedup_suggest` | Before saving, surface existing files that overlap the draft |
+| `orphan_repair` | Find semantic matches for broken `[[wikilinks]]` |
+| `doctor` | Fast diagnostic pass — 18+ checks across paths, services, config, index |
+| `doctor_deep` | Full diagnostic with canary write test (~10–15s) |
 
 Every tool is accessible as `palinode_<name>` via MCP, `palinode <name>` via CLI, or `POST/GET /<name>` via the REST API.
 
@@ -229,7 +233,37 @@ Everything else is retrieved on demand via hybrid search.
 The `canonical_question` field anchors the file to the question it answers, improving search relevance.
 ```
 
-Open your memory directory as an [Obsidian](https://obsidian.md) vault for visual browsing. See [docs/OBSIDIAN-SETUP.md](docs/OBSIDIAN-SETUP.md).
+---
+
+## Open in Obsidian
+
+Palinode stores every memory as a plain markdown file — which means your memory directory is already a valid Obsidian vault. Point Obsidian at the folder and you get graph view, backlinks, and Bases on top of Palinode's hybrid search and compaction. No sync job, no plugin to install, no two-source-of-truth problem.
+
+```bash
+palinode init --obsidian ~/palinode-vault
+```
+
+This scaffolds the vault directory layout, an `_index.md` Map of Content, a `_README.md` orientation page, and an opinionated `.obsidian/` config (graph view colour-coded by category, daily-notes wired to `daily/`). Then open the directory in Obsidian.
+
+The LLM follows a **wiki-maintenance contract** — it keeps `entities:` frontmatter and `[[wikilinks]]` in the note body in sync so the Obsidian graph stays accurate as new memories are saved. When you save a memory with entity references, Palinode appends an idempotent `## See also` block linking them as wikilinks.
+
+Two embedding-aware tools support wiki hygiene: `palinode_dedup_suggest` checks whether a draft overlaps an existing file before creating a duplicate, and `palinode_orphan_repair` finds semantic matches for broken `[[wikilinks]]`. Both are callable via MCP, CLI, and REST.
+
+See [docs/OBSIDIAN.md](docs/OBSIDIAN.md) for the comprehensive guide: quickstart, wiki contract details, migration paths, and FAQ.
+
+---
+
+## Diagnose with palinode doctor
+
+Silent misconfiguration — a `db_path` pointing at the wrong file, a watcher indexing a stale directory, a phantom DB file — is the most common reason Palinode doesn't behave as expected after an upgrade or server move. `palinode doctor` catches this entire class of bugs.
+
+```bash
+palinode doctor
+```
+
+The command runs 18+ checks across paths, services, config consistency, index health, and disk state, and emits a structured report with a pass/warn/fail status for each. `--fix` mode applies safe automated repairs (creates missing directories, appends the CLAUDE.md Palinode block) — it never moves user data; phantom DB files and DB-path mismatches print suggested `mv` commands but never execute them.
+
+Run `palinode doctor` after every install, upgrade, or server migration. See [docs/DOCTOR.md](docs/DOCTOR.md) for the full check catalog and `--fix` reference.
 
 ---
 
@@ -320,7 +354,7 @@ Optional: a chat model for consolidation (any 7B+ works), OpenClaw for agent plu
 - **Your data, your files** — No accounts, no cloud dependency, no vendor lock-in. Your memory is markdown files in a directory you control. Export is `cp`. Backup is `git push`. Whatever happens to any tool in this ecosystem, your data is plain text on your filesystem.
 - **Cross-IDE memory** — Your memory lives in one place. Connect from Claude Code, Cursor, Windsurf, Zed, or any MCP-compatible editor. Switch IDEs without losing context.
 - **Git operations as agent tools** — `diff`, `blame`, `rollback`, `push` exposed via MCP. No other system makes git ops callable by the agent.
-- **Operation-based compaction** — KEEP/UPDATE/MERGE/SUPERSEDE/ARCHIVE DSL. LLM proposes, deterministic executor disposes. Every compaction is a reviewable git commit.
+- **Operation-based compaction** — KEEP/UPDATE/MERGE/SUPERSEDE/ARCHIVE DSL. The LLM proposes structured operations and the deterministic executor applies them. Every compaction is a reviewable git commit.
 - **Per-fact addressability** — `<!-- fact:slug -->` IDs inline in markdown, invisible in rendering, preserved by git, targetable by compaction.
 - **4-phase injection** — Core (always) + Topic (per-turn search) + Associative (entity graph) + Triggered (prospective recall).
 - **Multi-transport MCP** — stdio for local, Streamable HTTP for remote. One server, any IDE on any machine.

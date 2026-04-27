@@ -1,6 +1,6 @@
 # Installing Palinode with Claude Code
 
-Palinode gives Claude Code persistent memory via MCP — 18 tools for searching, saving, and managing memories across sessions. The `palinode-session` skill auto-captures milestones and decisions during coding, so your memory stays fresh without manual effort.
+Palinode gives Claude Code persistent memory via MCP — 21 tools for searching, saving, diagnosing, and managing memories across sessions. The `palinode-session` skill auto-captures milestones and decisions during coding, so your memory stays fresh without manual effort.
 
 ## Prerequisites
 
@@ -82,7 +82,7 @@ Restart Claude Code. Run `/mcp` to verify `palinode` is connected.
 
 ## Option B: Remote Server via SSH (stdio)
 
-Best if Palinode runs on a homelab server and your IDE only supports stdio MCP (Claude Code, Claude Desktop).
+Best if Palinode runs on a remote server and your IDE only supports stdio MCP (Claude Code, Claude Desktop).
 
 ```json
 {
@@ -110,7 +110,7 @@ Best if Palinode runs on a homelab server and your IDE only supports stdio MCP (
 
 > **Note:** The MCP server is a pure HTTP client — it makes requests to `palinode-api` on localhost. No direct database or filesystem access. This means the API server must be running on the remote host.
 
-> **Why the three keepalive options:** the MCP session is a long-lived stdio stream over SSH. NAT and VPN relays (especially Tailscale's DERP) drop idle TCP connections after a few minutes, which would surface as `Connection reset by peer` in the IDE log and a dead MCP server. `ServerAliveInterval=30` + `ServerAliveCountMax=3` makes SSH probe every 30s and disconnect within 90s of a real failure (laptop sleep, WiFi change), letting the IDE reconnect promptly instead of leaving you with a zombie MCP.
+> **Why the three keepalive options:** the MCP session is a long-lived stdio stream over SSH. NAT and VPN relays can drop idle TCP connections after a few minutes, which would surface as `Connection reset by peer` in the IDE log and a dead MCP server. `ServerAliveInterval=30` + `ServerAliveCountMax=3` makes SSH probe every 30s and disconnect within 90s of a real failure (laptop sleep, WiFi change), letting the IDE reconnect promptly instead of leaving you with a zombie MCP.
 
 ---
 
@@ -206,7 +206,7 @@ The MCP endpoint is `http://your-server:6341/mcp`. Configure your IDE:
 ### Network Access
 
 The MCP server needs to be reachable from your IDE. Options:
-- **Tailscale** (recommended): Install on both machines, use the Tailscale IP (e.g., `http://100.x.x.x:6341/mcp`)
+- **VPN or private network**: expose the MCP endpoint on a reachable private hostname or IP
 - **LAN**: Use the server's local IP if on the same network
 - **SSH tunnel**: `ssh -L 6341:localhost:6341 youruser@your-server` then use `http://localhost:6341/mcp`
 
@@ -272,9 +272,11 @@ Expected output: file counts, chunk counts, hybrid search status, Ollama reachab
 Search palinode for "recent project decisions"
 ```
 
+If something doesn't look right, run `palinode doctor` from your terminal for a structured diagnostic report covering DB path, service connectivity, config consistency, and index health. See [docs/DOCTOR.md](DOCTOR.md) for the full check catalog and `--fix` mode reference.
+
 ---
 
-## Available Tools (17)
+## Available Tools (21)
 
 | Tool | Description |
 |---|---|
@@ -294,6 +296,11 @@ Search palinode for "recent project decisions"
 | `palinode_trigger` | Register a prospective recall trigger |
 | `palinode_lint` | Run health checks on memory files |
 | `palinode_session_end` | Capture session summary, decisions, blockers at end |
+| `palinode_dedup_suggest` | Before saving, surface existing files that overlap the draft |
+| `palinode_orphan_repair` | Find semantic matches for broken `[[wikilinks]]` |
+| `palinode_doctor` | Fast diagnostic — 18+ checks across paths, services, config, index |
+| `palinode_doctor_deep` | Full diagnostic with canary write test (~10–15s) |
+| `palinode_prompt` | List, show, or activate versioned LLM prompts |
 
 ---
 
@@ -383,7 +390,7 @@ There are four distinct things that can fail — tool fired, data on disk, retri
 
 **MCP disconnects after idle / sleep / WiFi change:**
 - Symptom in IDE log: `Connection reset by peer` or `Broken pipe` from the SSH child
-- Cause: SSH idle-killed by NAT/VPN relay (common with Tailscale's DERP), or the network path changed under a sleeping laptop
+- Cause: SSH idle-killed by a NAT/VPN relay, or the network path changed under a sleeping laptop
 - Fix: ensure the three keepalive `-o` flags are in your config (`ServerAliveInterval=30`, `ServerAliveCountMax=3`, `TCPKeepAlive=yes`). With them, SSH detects dead connections within ~90s and the IDE reconnects automatically
 
 **Slow first search:**

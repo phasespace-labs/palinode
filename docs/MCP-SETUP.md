@@ -2,12 +2,16 @@
 
 Connect Palinode's 17 MCP tools to your AI coding assistant. Two transport options:
 
-| Transport | When to use | Client config |
-|-----------|-------------|---------------|
+| Transport | When to use | Key field |
+|-----------|-------------|-----------|
 | **Streamable HTTP** | Remote server, any IDE | `"url": "http://your-server:6341/mcp/"` |
 | **stdio** | Local install, same machine | `"command": "palinode-mcp"` |
 
-HTTP is recommended for remote setups -- no SSH pipes, survives disconnects, works with every client.
+HTTP is recommended for remote setups — no SSH pipes, survives disconnects, works with every client.
+
+**Per-client copy-pasteable install recipes** (Cursor, Windsurf, Continue, Cline, Zed) live in
+[MCP-INSTALL-RECIPES.md](MCP-INSTALL-RECIPES.md). Each recipe includes the exact JSON/YAML
+snippet, restart sequence, verification step, and troubleshooting table for that client.
 
 ---
 
@@ -98,177 +102,10 @@ Restart Claude Desktop after saving.
 
 ---
 
-## Cursor
+## Cursor, Windsurf, Continue, Cline, Zed
 
-Add to `.cursor/mcp.json` in your project root, or `~/.cursor/mcp.json` for global config.
-
-**HTTP (remote):**
-```json
-{
-  "mcpServers": {
-    "palinode": {
-      "url": "http://your-server:6341/mcp/"
-    }
-  }
-}
-```
-
-**stdio (local):**
-```json
-{
-  "mcpServers": {
-    "palinode": {
-      "command": "palinode-mcp",
-      "env": {
-        "PALINODE_DIR": "/path/to/.palinode"
-      }
-    }
-  }
-}
-```
-
-Restart Cursor after editing. Tools appear in Settings > MCP.
-
----
-
-## VS Code (Continue)
-
-Add to `~/.continue/config.json` under the `mcpServers` array.
-
-**HTTP (remote):**
-```json
-{
-  "mcpServers": [
-    {
-      "name": "palinode",
-      "url": "http://your-server:6341/mcp/"
-    }
-  ]
-}
-```
-
-**stdio (local):**
-```json
-{
-  "mcpServers": [
-    {
-      "name": "palinode",
-      "command": "palinode-mcp",
-      "env": {
-        "PALINODE_DIR": "/path/to/.palinode"
-      }
-    }
-  ]
-}
-```
-
-Reload the Continue extension after editing.
-
----
-
-## VS Code (Cline)
-
-Add to `cline_mcp_servers.json`:
-- macOS: `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_servers.json`
-- Linux: `~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_servers.json`
-- Windows: `%APPDATA%\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_servers.json`
-
-Or open it from VS Code: Cline sidebar > Settings (gear icon) > MCP Servers.
-
-**HTTP (remote):**
-```json
-{
-  "mcpServers": {
-    "palinode": {
-      "url": "http://your-server:6341/mcp/"
-    }
-  }
-}
-```
-
-**stdio (local):**
-```json
-{
-  "mcpServers": {
-    "palinode": {
-      "command": "palinode-mcp",
-      "env": {
-        "PALINODE_DIR": "/path/to/.palinode"
-      }
-    }
-  }
-}
-```
-
----
-
-## Zed
-
-Add to `~/.config/zed/settings.json` (or open Settings from the command palette).
-
-**HTTP (remote):**
-```json
-{
-  "context_servers": {
-    "palinode": {
-      "settings": {
-        "url": "http://your-server:6341/mcp/"
-      }
-    }
-  }
-}
-```
-
-**stdio (local):**
-```json
-{
-  "context_servers": {
-    "palinode": {
-      "settings": {
-        "command": {
-          "path": "palinode-mcp",
-          "env": {
-            "PALINODE_DIR": "/path/to/.palinode"
-          }
-        }
-      }
-    }
-  }
-}
-```
-
----
-
-## Windsurf
-
-Add to `~/.codeium/windsurf/mcp_config.json`.
-
-**HTTP (remote):**
-```json
-{
-  "mcpServers": {
-    "palinode": {
-      "serverUrl": "http://your-server:6341/mcp/"
-    }
-  }
-}
-```
-
-**stdio (local):**
-```json
-{
-  "mcpServers": {
-    "palinode": {
-      "command": "palinode-mcp",
-      "env": {
-        "PALINODE_DIR": "/path/to/.palinode"
-      }
-    }
-  }
-}
-```
-
-Restart Windsurf after editing.
+See **[MCP-INSTALL-RECIPES.md](MCP-INSTALL-RECIPES.md)** for complete per-client workflows
+including exact config snippets, restart sequences, and troubleshooting blocks.
 
 ---
 
@@ -314,7 +151,7 @@ The three `ServerAlive*` / `TCPKeepAlive` options keep the SSH session alive acr
 
 ---
 
-## Available tools (17)
+## Available tools
 
 | Tool | What it does |
 |------|-------------|
@@ -335,6 +172,12 @@ The three `ServerAlive*` / `TCPKeepAlive` options keep the SSH session alive acr
 | `palinode_prompt` | Manage versioned LLM prompt files |
 | `palinode_consolidate` | Run memory consolidation |
 | `palinode_session_end` | Capture session outcomes to daily notes |
+| `palinode_dedup_suggest` | Pre-write check: existing files semantically near a draft (Obsidian wiki contract) |
+| `palinode_orphan_repair` | Given a broken `[[wikilink]]`, return semantically near candidate targets |
+
+### Obsidian wiki-maintenance tools
+
+The last two tools (`palinode_dedup_suggest`, `palinode_orphan_repair`) are part of the Obsidian integration's wiki-maintenance contract. They give the LLM cheap pre-write checks: "does a near-duplicate already exist?" and "this `[[wikilink]]` has no target — what's the right file to point at?" Both are MCP-callable from any compatible client and are documented in detail in [OBSIDIAN.md](OBSIDIAN.md#the-embedding-tools), including default similarity thresholds and the embedding-text preprocessing that runs before comparison.
 
 ---
 
@@ -357,3 +200,11 @@ If the status check fails, verify:
 2. For HTTP transport: `palinode-mcp-sse` is running (`curl http://your-server:6341/mcp/`)
 3. For stdio: `palinode-mcp` is on PATH (`which palinode-mcp`)
 4. `PALINODE_DIR` exists and contains at least one `.md` file
+
+If the MCP tools appear but your changes aren't taking effect after a config edit, you may have edited the wrong config file. Each client reads a different path:
+
+```bash
+palinode mcp-config --diagnose
+```
+
+See [MCP-CONFIG-HOMES.md](MCP-CONFIG-HOMES.md) for the full canonical-location reference.

@@ -271,20 +271,27 @@ The `.palinode.db` file does NOT need to be backed up — it's rebuilt from file
 
 ## Systemd Setup (Linux)
 
-Example service files are in the `systemd/` directory of the repo.
+Version-controlled unit-file templates live in [`deploy/systemd/`](../deploy/systemd/). The installer substitutes `${VARIABLE}` placeholders via `envsubst` and is idempotent.
 
 ```bash
-# Copy to user systemd directory
-cp systemd/palinode-api.service ~/.config/systemd/user/
-cp systemd/palinode-watcher.service ~/.config/systemd/user/
+# Required environment variables
+export PALINODE_HOME=/path/to/palinode             # code root + venv/
+export PALINODE_DATA_DIR=/path/to/palinode-data    # memory markdown files
+export OLLAMA_URL=http://localhost:11434
+export EMBEDDING_MODEL=bge-m3
+# Optional: API_PORT (default 6340), MCP_PORT (default 6341)
 
-# Edit paths and environment variables
-# Then:
-systemctl --user daemon-reload
-systemctl --user enable palinode-api palinode-watcher
-systemctl --user start palinode-api palinode-watcher
+# Install + enable the three user units (palinode-api, palinode-mcp, palinode-watcher)
+bash deploy/systemd/install.sh --enable
 
 # Check status
-systemctl --user status palinode-api
-systemctl --user status palinode-watcher
+systemctl --user status palinode-api palinode-mcp palinode-watcher
 ```
+
+For headless servers, enable linger so services start at boot without an active session:
+
+```bash
+loginctl enable-linger "$USER"
+```
+
+Full reference (variables, idempotency, upgrade, uninstall, troubleshooting): [`deploy/systemd/README.md`](../deploy/systemd/README.md).

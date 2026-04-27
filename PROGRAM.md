@@ -42,7 +42,7 @@ Extract only things that will be useful **across sessions** — facts that a fut
 
 **Project state changes** — status shifts, milestones reached, blockers discovered, architecture changes. Not every line of work — the *transitions*.
 
-- *Example:* "M5 Phase 1 complete. All 9 modules deployed to staging." → ProjectSnapshot update.
+- *Example:* "Deployment milestone complete. All modules are now in staging." → ProjectSnapshot update.
 - *Example:* "Sprint 7 demo: live demo didn't happen, pushed to Sprint 8. Design review happened instead." → ProjectSnapshot update.
 - *Example:* "QC MCP was down — forgot to restart after updates. Back online now." → Infrastructure status change.
 
@@ -251,7 +251,7 @@ Action items are not standalone files. They're checkboxes in the relevant person
 ```markdown
 ## Follow-ups
 - [ ] Send Alice the new checkout flow (due: 2026-03-25)
-- [x] Review M5 Phase 1 deployment results ~~(done 2026-03-20)~~
+- [x] Review latest deployment results ~~(done 2026-03-20)~~
 ```
 
 ### ResearchRef → `research/{date}-{slug}.md`
@@ -277,6 +277,94 @@ last_updated: 2026-03-22T16:00:00Z
 ## Relevance
 Why this matters for Paul's work.
 ```
+
+---
+
+## Wiki Maintenance
+
+Every memory has two surfaces that point at the same things: the `entities:` list in the YAML frontmatter, and the `[[wikilinks]]` in the body. Both are first-class. You are the maintainer of consistency between them. The parser reads both; downstream tools (graph view, `palinode_search`, `palinode_orphan_repair`) depend on them agreeing.
+
+This section is the contract. Follow it on every write and every update. The plumbing layer (`palinode_save` auto-footer, `palinode obsidian-sync` backfill, parser drift lint) backstops mistakes — it does not replace the discipline.
+
+### Two surfaces, one truth
+
+- **Frontmatter `entities:`** — typed, machine-readable, the authoritative list for cross-referencing and graph queries.
+- **Body `[[wikilinks]]`** — human-readable, in-context, what makes the file useful when read directly or rendered in Obsidian.
+
+Both must reference the same set of entities. A frontmatter entry without a corresponding body link is invisible to a human reader; a body link without a frontmatter entry is invisible to the index. Drift is a bug.
+
+### Canonicalization
+
+The canonical form of an entity reference is **lowercase, hyphens-not-spaces, `kind/slug` for typed refs**:
+
+- `person/alice-smith` (not `Person/Alice Smith`, not `alice_smith`, not `alice smith`)
+- `project/palinode`
+- `decision/tools-over-pipeline`
+- `insight/curation-beats-volume`
+
+The body `[[wikilink]]` may be the human-readable label (`[[Alice Smith]]`) or the slug (`[[alice-smith]]`) — both resolve to the same target file. Whichever you write, the corresponding `entities:` value is always the canonical `kind/slug` form. A body line `Met with [[Alice Smith]] about Q3 planning` requires `entities: [person/alice-smith]` in the frontmatter.
+
+When the kind is obvious from the file path (e.g., a wikilink to another `people/` file), the `kind/` prefix may be omitted in the body link but is **required** in the frontmatter.
+
+### Write-time rule
+
+When you create a new memory:
+
+1. Decide what entities are referenced — either explicitly stated in the conversation or clearly implied by the content.
+2. Add them to `entities:` in canonical form.
+3. Either write the link inline in the body where the reference is load-bearing (`Met with [[Alice Smith]] about Q3 planning`), OR if no good inline spot exists, append a `## See also` footer with the slug-form links (`[[alice-smith]]`).
+4. Verify the two surfaces agree before saving.
+
+Example. The conversation says: "Alice and I decided to drop legacy browser support for the checkout redesign." You file a Decision:
+
+```yaml
+---
+id: decision-drop-legacy-browser-support
+category: decision
+status: active
+entities: [project/checkout-redesign, person/alice-smith]
+created: 2026-04-26T14:30:00Z
+last_updated: 2026-04-26T14:30:00Z
+---
+# Decision: Drop legacy browser support
+
+## Statement
+[[Alice Smith]] and Paul agreed to drop legacy browser support from the [[checkout-redesign]] roadmap.
+
+## Rationale
+Not relevant for the target user base; the test matrix cost outweighed the coverage value.
+```
+
+Both surfaces agree. The frontmatter says `person/alice-smith` and `project/checkout-redesign`; the body links to `[[Alice Smith]]` and `[[checkout-redesign]]`. The parser will resolve both to the same two entities.
+
+### Update-time rule
+
+Before updating an existing file, scan **both surfaces** and resolve drift:
+
+- **Body wikilink without frontmatter entity** → add the entity in canonical form.
+- **Frontmatter entity without body link** → add a body link. Prefer inline at a load-bearing spot; fall back to the `## See also` footer.
+- **Both exist but disagree on form** (body says `[[Alice Smith]]`, frontmatter says `person/alice` with the wrong slug) → prefer the body's text as the source of truth — it's the surface humans most often hand-edit. Fix the frontmatter to match.
+- **Stale body link to an entity no longer in frontmatter** → before deleting the link, check whether the entity is still referenced. If yes, restore the frontmatter entry. If no, the link itself is the stale one — call `palinode_orphan_repair` to find the right target or remove the link.
+
+Write both surfaces in the same edit. Never leave the file mid-update with one surface fixed and the other not.
+
+### Tools to call
+
+The following MCP/CLI tools exist to make this contract cheap to follow. Reach for them during write and update flows:
+
+- **`palinode_search`** — already in your toolkit. Use it during updates to find related files before you start writing. The cheapest way to avoid creating a near-duplicate.
+- **`palinode_dedup_suggest(content)`** — before creating a new file, pass the draft content. Returns top-K existing files within similarity threshold. If a strong match comes back (≥ 0.90), the right move is almost always `UPDATE` not `ADD`.
+- **`palinode_orphan_repair(broken_link)`** — when you encounter a `[[wikilink]]` whose target file does not exist, call this with the link text. Returns candidate files semantically near the link. Pick one and rewrite the link, or create the target with the candidate's context as scaffolding.
+
+These tools are forward references for some surfaces — they ship in the M4 Obsidian integration MVP. If a tool is not yet exposed, fall back to `palinode_search` with the same query and apply judgment.
+
+### What NOT to do
+
+- **Don't auto-generate dozens of wikilinks for incidental references.** A link is load-bearing when the linked entity has its own continuity (a person you'll meet again, a project that has a status). One-off mentions — a tool you used once, a city Alice flew through — should stay as plain text. Over-linking poisons the graph view and inflates the entity set without adding signal.
+- **Don't create a new entity file for a one-off mention.** Entities have continuity; mentions don't. If a name appears once and never again, leave it as plain text in the body. If it recurs, *then* promote it to an entity — at that point the file gets created and the prior mentions get linked retroactively as part of the next update pass.
+- **Don't hand-edit the `## See also` footer if it's auto-generated.** Layer 2 plumbing (Deliverable C, `palinode_save`) appends a delimited `## See also` section when `entities:` is provided without inline body links. That footer is a derived view of `entities:`; editing it manually creates drift the auto-footer machinery will overwrite. If you want a link in the body, write it inline where it's load-bearing — that's authoritative — and let the footer reflect whatever's left over.
+- **Don't invent kinds.** The canonical kinds are the schema categories: `person`, `project`, `decision`, `insight`, `research`, `daily`. If the content needs a new kind, that's a PROGRAM.md schema change, not a one-off frontmatter improvisation.
+- **Don't skip the scan on update.** "I'm only adding one bullet" is exactly the path that produces drift. Every update reads both surfaces; every update writes both surfaces consistently.
 
 ---
 
@@ -461,4 +549,4 @@ Weekly consolidation runs
           → next week's behavior changes
 ```
 
-*This is a Phase 3+ feature. The foundation is here. When quality metrics are being tracked and the consolidation cron is stable, wire it up.*
+*This is a later-stage feature. The foundation is here. When quality metrics are being tracked and the consolidation cron is stable, wire it up.*

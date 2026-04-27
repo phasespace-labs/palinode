@@ -1,0 +1,22 @@
+[Unit]
+Description=Palinode API Server (FastAPI / uvicorn)
+Documentation=https://github.com/phasespace-labs/palinode
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=${PALINODE_HOME}
+Environment="PALINODE_DIR=${PALINODE_DATA_DIR}"
+Environment="OLLAMA_URL=${OLLAMA_URL}"
+Environment="EMBEDDING_MODEL=${EMBEDDING_MODEL}"
+ExecStart=${PALINODE_HOME}/venv/bin/uvicorn palinode.api.server:app --host 0.0.0.0 --port ${API_PORT}
+Restart=always
+RestartSec=5
+
+# Structured JSON logs → journalctl; no custom log file needed
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=palinode-api
+
+[Install]
+WantedBy=default.target
