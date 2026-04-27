@@ -8,6 +8,33 @@ category: documentation
 This document covers the local development workflow, including running the test
 suite and the specific setup required when working inside a `git worktree`.
 
+## PyPI publishing
+
+Palinode publishes to PyPI via GitHub Actions Trusted Publishing.
+
+The repository workflow is `.github/workflows/publish-pypi.yml`. It:
+
+- builds the sdist and wheel on tag pushes matching `v*`
+- runs `twine check` on the built artifacts
+- publishes to PyPI from a separate job using OIDC, without a stored API token
+
+### One-time PyPI setup
+
+PyPI must be configured to trust this repository and workflow.
+
+For the `palinode` project on PyPI:
+
+1. Open **Manage** -> **Publishing**
+2. Add a **GitHub Actions** trusted publisher
+3. Use:
+   - Owner: `phasespace-labs`
+   - Repository name: `palinode`
+   - Workflow name: `publish-pypi.yml`
+   - Environment name: `pypi`
+
+The environment name is optional in PyPI's model, but this repo uses it on
+purpose so GitHub environment protection rules can gate real releases.
+
 ## Basic setup
 
 ```bash
