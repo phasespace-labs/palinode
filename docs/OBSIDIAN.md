@@ -158,7 +158,7 @@ Given a draft about to be saved, returns the top-K existing files whose embeddin
 
 ### `palinode_orphan_repair`
 
-Given a `[[wikilink]]` whose target file does not exist, returns existing files semantically near the link target text. The LLM proposes a redirect to one of those files, or creates the target with the candidate's content as scaffolding rather than starting cold.
+Given a `[[wikilink]]` whose target file does not exist, returns existing files semantically near the link target text. The agent can redirect to one of those files, or create the target with the candidate's content as scaffolding rather than starting cold.
 
 - **Default threshold:** ≥ 0.65 cosine — more permissive than dedup because a wider candidate slate helps the LLM choose.
 

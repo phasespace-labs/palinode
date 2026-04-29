@@ -1,6 +1,6 @@
 # Compaction Demo — Watching a Memory File Consolidate
 
-This directory walks through a realistic scenario: a team debating REST vs GraphQL for a new checkout API over several weeks, with the decision recorded as it evolves. You see the raw daily-note accretion, then the deterministic executor applying consolidation operations, and finally the clean state.
+This directory walks through a realistic scenario: a team debating REST vs GraphQL for a new checkout API over several weeks, with the decision recorded as it evolves. You see the raw daily-note accretion, then Palinode applying reviewable consolidation updates, and finally the clean state.
 
 The key thing to notice: **every change is a git commit, and every line can be blamed back to the session where the fact was first recorded.** That's the "git your agent's brain" pitch, made concrete.
 
@@ -22,13 +22,13 @@ Alice and Bob are building a mobile checkout flow (`projects/my-app.md`). Over t
 
 Start with `pass-0-initial.md` and notice the mess — every session-end hook append adds another status line, contradictions don't resolve themselves, and old `[ ]` todos stick around long after they're done.
 
-Then open `pass-1-after-update-supersede.md` side-by-side. The executor preserved every original line's provenance but corrected outdated claims (SUPERSEDE) and tightened wording (UPDATE). Note the `<!-- supersede: ... -->` comments — those aren't just documentation, they're structured metadata the executor writes so that the next pass knows what it's looking at.
+Then open `pass-1-after-update-supersede.md` side-by-side. Palinode preserved every original line's provenance but corrected outdated claims (SUPERSEDE) and tightened wording (UPDATE). Note the `<!-- supersede: ... -->` comments — those aren't just documentation, they're structured metadata the system writes so that the next pass knows what it's looking at.
 
 Then `pass-2-after-merge-archive.md` shows what you'd actually want to read if you opened the file fresh. Related facts have been merged into single lines. Archived entries are gone from this file but preserved in `archive/2026/my-app-status.md` — nothing is deleted, just moved out of the way.
 
 Finally `blame-output.txt` is the demo's money shot: **every line has a commit, and every commit has a session.** You can answer "when did we decide X?" and "which session first mentioned Y?" without remembering — git remembers for you.
 
-## What the executor actually did
+## What the system actually did
 
 Between pass 0 and pass 1 (13 operations):
 - 6 × `UPDATE` — tightened wording on stale-but-still-true status lines
@@ -41,7 +41,7 @@ Between pass 1 and pass 2 (9 operations):
 - 4 × `ARCHIVE` — moved superseded entries to `archive/2026/my-app-status.md`
 - 2 × `UPDATE` — final wording pass on merged lines
 
-All 22 operations were **proposed by an LLM** but **applied by deterministic Python** (`palinode/consolidation/executor.py`). The LLM never touches the file directly — it only emits JSON like `{"op": "SUPERSEDE", "id": "f-0317-1", "superseded_by": "f-0324-2", "reason": "stripe integration actually shipped on the 24th"}` and the executor validates and applies it. That's the core tools-over-pipeline invariant in action.
+All 22 operations were **proposed by an LLM** and then **validated and applied by Palinode's consolidation code** (`palinode/consolidation/executor.py`). The LLM never touches the file directly — it only emits JSON like `{"op": "SUPERSEDE", "id": "f-0317-1", "superseded_by": "f-0324-2", "reason": "stripe integration actually shipped on the 24th"}` and Palinode turns that into reviewable file changes.
 
 ## Why this matters
 

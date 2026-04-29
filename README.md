@@ -42,7 +42,7 @@ Index (SQLite-vec vectors + FTS5 keywords, single .db file)
   ↓ queried by
 Interfaces (MCP server, REST API, CLI, OpenClaw plugin)
   ↓ compacted by
-LLM (proposes ops → deterministic executor applies them → git commits)
+LLM (suggests updates → Palinode validates and writes them → git commits)
 ```
 
 That's the whole architecture. One directory of `.md` files, one SQLite database, one API server. No Postgres, no Redis, no cloud dependency.
@@ -82,7 +82,7 @@ That's the entire client config. Works with Claude Code, Claude Desktop, Cursor,
 
 **Search** — Hybrid BM25 + vector search merged with Reciprocal Rank Fusion. Keyword precision when you need exact terms, semantic recall when you don't. Optional associative entity graph and prospective triggers.
 
-**Compact** — Weekly consolidation where an LLM proposes structured operations (KEEP / UPDATE / MERGE / SUPERSEDE / ARCHIVE) and a deterministic executor applies them. The LLM never touches your files directly. Every compaction is a git commit you can review, blame, or revert.
+**Compact** — Weekly consolidation where an LLM suggests structured memory updates and Palinode applies the validated result to your files. Every compaction is a git commit you can review, blame, or revert.
 
 **Audit** — `git blame` any fact. `git diff` any change. `rollback` any mistake. These aren't just git-compatible files — `palinode_diff`, `palinode_blame`, and `palinode_rollback` are first-class tools your agent can call.
 
@@ -369,7 +369,7 @@ Optional: a chat model for consolidation (any 7B+ works), OpenClaw for agent plu
 - **Your data, your files** — No accounts, no cloud dependency, no vendor lock-in. Your memory is markdown files in a directory you control. Export is `cp`. Backup is `git push`. Whatever happens to any tool in this ecosystem, your data is plain text on your filesystem.
 - **Cross-IDE memory** — Your memory lives in one place. Connect from Claude Code, Cursor, Windsurf, Zed, or any MCP-compatible editor. Switch IDEs without losing context.
 - **Git operations as agent tools** — `diff`, `blame`, `rollback`, `push` exposed via MCP. No other system makes git ops callable by the agent.
-- **Operation-based compaction** — KEEP/UPDATE/MERGE/SUPERSEDE/ARCHIVE DSL. The LLM proposes structured operations and the deterministic executor applies them. Every compaction is a reviewable git commit.
+- **Reviewable compaction** — The LLM suggests structured memory updates and Palinode applies validated changes with full git history. Every compaction is a reviewable git commit.
 - **Per-fact addressability** — `<!-- fact:slug -->` IDs inline in markdown, invisible in rendering, preserved by git, targetable by compaction.
 - **4-phase injection** — Core (always) + Topic (per-turn search) + Associative (entity graph) + Triggered (prospective recall).
 - **Multi-transport MCP** — stdio for local, Streamable HTTP for remote. One server, any IDE on any machine.

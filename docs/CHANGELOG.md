@@ -118,7 +118,7 @@ Bug-fix release with small UX additions. Brings the public repo up to date with 
 
 ## [0.5.0] — 2026-04-10
 
-First tagged release. Persistent memory for AI agents with git-versioned markdown as source of truth, hybrid SQLite-vec + FTS5 search, and LLM-driven consolidation applied by a deterministic executor.
+First tagged release. Persistent memory for AI agents with git-versioned markdown as source of truth, hybrid SQLite-vec + FTS5 search, and LLM-driven consolidation with reviewable git-backed updates.
 
 ### Added
 
@@ -129,7 +129,7 @@ First tagged release. Persistent memory for AI agents with git-versioned markdow
 - File watcher daemon with debounced reindex and fault isolation
 
 **Consolidation and compaction**
-- Deterministic executor applying `KEEP` / `UPDATE` / `MERGE` / `SUPERSEDE` / `ARCHIVE` operations proposed by an LLM
+- Reviewable consolidation engine applying structured memory updates proposed by an LLM
 - Weekly full-corpus consolidation with configurable LLM backend
 - Nightly lightweight consolidation pass (`--nightly` flag) bounded to `UPDATE`/`SUPERSEDE` for safer incremental updates
 - Model fallback chains — primary → fallback → fallback on timeout or HTTP error
@@ -161,7 +161,7 @@ First tagged release. Persistent memory for AI agents with git-versioned markdow
 - Exclude-paths list prevents search results from surfacing files in `.secrets`, `credentials`, etc.
 
 **Documentation**
-- Architecture decision records covering the deterministic executor design
+- Design and setup docs covering consolidation, provenance, and deployment
 - Remote MCP setup guides for Claude Code, Claude Desktop, Cursor, Zed
 - Example memory files (`examples/people/`, `examples/projects/`, `examples/decisions/`, `examples/insights/`)
 - Compaction walkthrough (`examples/compaction-demo/`) — a memory file across 3 passes with blame + diff output
