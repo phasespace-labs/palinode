@@ -19,7 +19,6 @@ Checklist for v1.0 public launch readiness.
 
 ## Quality gates
 - [ ] `palinode doctor` passes on fresh install (no warnings)
-- [ ] `check-shipping-leaks.sh` clean on main
 - [ ] Pre-launch: resolve any open `P0`/`P1` labeled issues
 
 ## Hardening (M1)

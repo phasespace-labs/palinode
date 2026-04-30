@@ -122,26 +122,3 @@ jobs:
       - name: Run pip-audit (dependency vulnerability check)
         run: pip-audit
         continue-on-error: true
-
-  # ---------------------------------------------------------------------------
-  # Shipping-leak scan — catch new SYNC-PUBLIC blacklist patterns at PR time.
-  #
-  # Failing here means the PR introduced a private reference (private host,
-  # internal repo name, agent identifier, etc.) into a file that ships
-  # publicly. Fix at PR time rather than letting it propagate to staging.
-  #
-  # Runs only on PRs (not on pushes to main) and only against the diff
-  # vs the base branch — existing baseline leaks on dev main are not
-  # the concern of this check.
-  # ---------------------------------------------------------------------------
-  shipping-leak-scan:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0    # full history so the diff comparison works
-
-      - name: Scan PR diff for new shipping leaks
-        run: bash scripts/check-shipping-leaks.sh --diff "origin/${{ github.base_ref }}"

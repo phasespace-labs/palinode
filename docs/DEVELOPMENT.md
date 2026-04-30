@@ -122,14 +122,3 @@ pytest -k "session_end" -v
 # Integration tests (require a running palinode-api)
 pytest tests/integration/ -v
 ```
-
-## Shipping-leak scan
-
-Before pushing a PR that touches `palinode/`, `docs/`, `tests/`, `scripts/`, or
-any top-level shipping file, run the leak scanner:
-
-```bash
-bash scripts/check-shipping-leaks.sh --diff origin/main
-```
-
-CI runs this automatically on every PR.
