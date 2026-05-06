@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.phasespace-labs/palinode",
   "title": "Palinode",
-  "description": "Git-versioned markdown memory across AI agents — search, save, compact, lint, audit. Local-first, MCP-native, with optional bearer-token auth for network-exposed deployments.",
+  "description": "Git-versioned markdown memory for AI agents: save, search, compact, lint, and audit.",
   "websiteUrl": "https://github.com/phasespace-labs/palinode",
   "repository": {
     "url": "https://github.com/phasespace-labs/palinode",
@@ -68,7 +68,8 @@
       "version": "0.8.9",
       "runtimeHint": "uvx",
       "transport": {
-        "type": "streamable-http"
+        "type": "streamable-http",
+        "url": "http://127.0.0.1:6341/mcp/"
       },
       "packageArguments": [
         {
