@@ -1,0 +1,133 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.phasespace-labs/palinode",
+  "title": "Palinode",
+  "description": "Git-versioned markdown memory across AI agents — search, save, compact, lint, audit. Local-first, MCP-native, with optional bearer-token auth for network-exposed deployments.",
+  "websiteUrl": "https://github.com/phasespace-labs/palinode",
+  "repository": {
+    "url": "https://github.com/phasespace-labs/palinode",
+    "source": "github"
+  },
+  "version": "0.8.9",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "palinode",
+      "version": "0.8.9",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "named",
+          "name": "--from",
+          "value": "palinode",
+          "description": "Select the palinode distribution from PyPI"
+        },
+        {
+          "type": "positional",
+          "value": "palinode-mcp",
+          "valueHint": "stdio entry point",
+          "description": "Console script for the stdio MCP server"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "PALINODE_DIR",
+          "description": "Path to the markdown-memory directory (e.g. ~/.palinode). Created if missing.",
+          "isRequired": true
+        },
+        {
+          "name": "PALINODE_API_HOST",
+          "description": "Host where the back-end palinode-api process is reachable",
+          "default": "127.0.0.1"
+        },
+        {
+          "name": "PALINODE_API_PORT",
+          "description": "Port for palinode-api",
+          "default": "6340"
+        },
+        {
+          "name": "PALINODE_API_TOKEN",
+          "description": "Optional bearer token enforced on every palinode-api request other than /health. Required when PALINODE_API_BIND_INTENT=public. Generate with: python -c 'import secrets; print(secrets.token_urlsafe(32))'.",
+          "isSecret": true
+        },
+        {
+          "name": "PALINODE_API_TOKEN_FILE",
+          "description": "Path to a file containing the bearer token (alternative to PALINODE_API_TOKEN; for docker-secrets style deployments)",
+          "isSecret": true
+        }
+      ]
+    },
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "palinode",
+      "version": "0.8.9",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "streamable-http"
+      },
+      "packageArguments": [
+        {
+          "type": "named",
+          "name": "--from",
+          "value": "palinode",
+          "description": "Select the palinode distribution from PyPI"
+        },
+        {
+          "type": "positional",
+          "value": "palinode-mcp-sse",
+          "valueHint": "streamable-http entry point",
+          "description": "Console script for the long-running streamable-HTTP MCP server"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "PALINODE_DIR",
+          "description": "Path to the markdown-memory directory",
+          "isRequired": true
+        },
+        {
+          "name": "PALINODE_MCP_HTTP_HOST",
+          "description": "Bind host for the MCP HTTP server. Defaults to loopback; set to 0.0.0.0 only with intentional network exposure (paired with PALINODE_API_BIND_INTENT=public on the back-end).",
+          "default": "127.0.0.1"
+        },
+        {
+          "name": "PALINODE_MCP_HTTP_PORT",
+          "description": "Port for the MCP HTTP server",
+          "default": "6341"
+        },
+        {
+          "name": "PALINODE_API_HOST",
+          "description": "Host where the back-end palinode-api is reachable",
+          "default": "127.0.0.1"
+        },
+        {
+          "name": "PALINODE_API_PORT",
+          "description": "Port for palinode-api",
+          "default": "6340"
+        },
+        {
+          "name": "PALINODE_API_TOKEN",
+          "description": "Bearer token enforced by palinode-api. Required when binding non-loopback. Generate with: python -c 'import secrets; print(secrets.token_urlsafe(32))'.",
+          "isSecret": true
+        },
+        {
+          "name": "PALINODE_API_TOKEN_FILE",
+          "description": "Path to a file containing the bearer token (alternative to PALINODE_API_TOKEN)",
+          "isSecret": true
+        }
+      ]
+    }
+  ],
+  "_meta": {
+    "io.modelcontextprotocol.registry/publisher-provided": {
+      "tool": "mcp-publisher",
+      "release": "v0.8.9",
+      "release_notes_url": "https://github.com/phasespace-labs/palinode/releases/tag/v0.8.9"
+    }
+  }
+}

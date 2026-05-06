@@ -288,18 +288,20 @@ def test_sync_path_swallows_check_errors(tmp_palinode_dir, tmp_memory_file, samp
 
 def test_translate_ops_filters_ops_without_target_id():
     """Ops without a target_id can't be applied deterministically → filtered out."""
+    from palinode.consolidation.proposal import OpKind
     ops = [
         {"operation": "UPDATE", "item": {"content": "new"}},  # no target_id
         {"operation": "UPDATE", "item": {"content": "new"}, "target_id": "f1", "new_text": "x"},
     ]
     translated = write_time._translate_ops(ops, "/tmp/fake.md")
     assert len(translated) == 1
-    assert translated[0]["op"] == "UPDATE"
-    assert translated[0]["id"] == "f1"
+    assert translated[0].kind == OpKind.UPDATE
+    assert translated[0].fact_id == "f1"
 
 
 def test_translate_ops_delete_becomes_supersede():
     """DELETE from _check_contradictions maps to SUPERSEDE (we never delete)."""
+    from palinode.consolidation.proposal import OpKind
     ops = [
         {
             "operation": "DELETE",
@@ -310,6 +312,6 @@ def test_translate_ops_delete_becomes_supersede():
     ]
     translated = write_time._translate_ops(ops, "/tmp/fake.md")
     assert len(translated) == 1
-    assert translated[0]["op"] == "SUPERSEDE"
-    assert translated[0]["id"] == "f-old"
-    assert translated[0]["superseded_by"] == "decision-new"
+    assert translated[0].kind == OpKind.SUPERSEDE
+    assert translated[0].fact_id == "f-old"
+    assert translated[0].payload["superseded_by"] == "decision-new"

@@ -4,6 +4,63 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ## Unreleased
 
+## [0.8.9] — 2026-05-05
+
+A reliability and architecture release. Closes the MCP cold-start timeout class and lands
+four rounds of internal architecture deepening (no breaking changes). Two latent bugs
+surfaced and were fixed along the way.
+
+### Fixed
+
+- **MCP cold-start timeouts.** `palinode_save`, `palinode_search`, and `palinode_session_end`
+  now use explicit 90 s httpx timeouts instead of the 30 s / 60 s defaults. BGE-M3 cold-starts
+  on a warm-VRAM GPU take ~54 s on first inference; the old defaults caused `-32001 Request
+  timed out` errors from the MCP client before the response arrived.
+- **`_warmup_embed()` background task** fires on MCP stdio startup, pre-heating the embedding
+  GPU so the first real tool call doesn't hit the cold-start window.
+- **Trigger cooldown `TypeError`.** `check_triggers()` cooldown path subtracted a naive
+  datetime (parsed via `fromisoformat`) from an aware `_utc_now()`. Any second-fire of a real
+  trigger would raise `TypeError`. Hidden because no test exercised the cooldown-without-bypass
+  path against a real DB and the API layer caught it as a 500. Caught during the architecture
+  refactor.
+- **Frontmatter body truncation in consolidation runner.** `_get_decisions_for_project` used
+  `content.split('---')` without `maxsplit`. If a decision file's body contained a horizontal
+  rule, the body would be truncated at the first `---`. Fixed via the new
+  `consolidation/frontmatter` module.
+
+### Added
+
+- **`deploy/systemd/palinode-embed-keepalive.{service,timer}.template`** — user-level systemd
+  timer that pings BGE-M3 every 20 minutes to keep GPU kernels warm between sessions.
+- **`EmbedderProtocol` and `LLMProvider`** typed Protocol classes for embedding and LLM
+  generation, each with `OllamaProvider` + `FakeProvider` adapters. Production callers
+  default-construct the real adapter; tests can inject `FakeProvider` to run without live
+  Ollama. Aligns with the tools-over-pipeline approach: model swaps become adapter swaps.
+- **`palinode/core/memory_paths`** with typed exception hierarchy (`MemoryPathError`,
+  `MemoryPathTraversal`, `MemoryPathNotFound`, `MemoryPathTooLarge`). Replaces
+  `HTTPException`-coupled path validation with typed errors that any surface can consume.
+- **`palinode/consolidation/proposal`** — typed `ProposalOp` dataclass and `OpKind` enum for
+  the consolidation pipeline. The deterministic executor now accepts typed ops instead of
+  `dict[str, Any]` with defensive runtime checks.
+- **`palinode/core/git_persistence`** — single seam for git write operations
+  (`write_and_commit`, `commit_existing`, `push`) with typed error hierarchy. Replaces 9
+  inline `subprocess.run(["git", ...])` call sites that had inconsistent `check=` semantics,
+  cwd resolution, and error handling.
+
+### Internal
+
+- **Architecture deepening pass (rounds 1–4).** `server.py` 3088 → 2398 lines (−22%);
+  `store.py` 1413 → 1158 lines (−18%). 14 new modules in `palinode/core/`, `palinode/api/`,
+  and `palinode/consolidation/`; 12 new direct unit-test files adding 100+ seam tests.
+  No behaviour changes outside the two bug fixes called out under Fixed.
+  - Round 1: `similarity`, `wiki`, `summarize`, `db`, `triggers`, `entity_graph` extracted;
+    `EmbedderProtocol` introduced.
+  - Round 2: `middleware`, `rate_limit`, `frontmatter` extracted; direct seam tests for
+    triggers, entity graph, indexer dedup, middleware, frontmatter.
+  - Round 3: `LLMProvider`, `memory_paths`, `ProposalOp` typed seams.
+  - Round 4: `git_persistence` write seam; callers migrated off the `store.py` re-export
+    facade onto canonical module imports.
+
 ## [0.8.8] — 2026-05-01
 
 A pure-security release in response to the MCP Marketplace security audit.

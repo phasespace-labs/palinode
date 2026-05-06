@@ -139,14 +139,13 @@ def generate_files() -> dict:
         logger.info(f"  {category}/{group_slug}.md ({len(mems)} memories)")
 
     # Git commit
-    import subprocess
     try:
-        subprocess.run(["git", "add", "."], cwd=config.memory_dir, check=False)
-        subprocess.run(
-            ["git", "commit", "-m", f"palinode: Mem0 backfill — {sum(stats.values())} files from {len(active)} memories"],
-            cwd=config.memory_dir, check=False,
+        from palinode.core.git_persistence import commit_existing, GitPersistenceError
+        commit_existing(
+            f"palinode: Mem0 backfill — {sum(stats.values())} files from {len(active)} memories",
+            ["."],
         )
-    except Exception as e:
+    except (GitPersistenceError, OSError) as e:
         logger.error(f"Git commit failed: {e}")
 
     return dict(stats)

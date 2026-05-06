@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 from palinode.core import store
+from palinode.core import entity_graph
 from palinode.core.config import config
 
 def test_empty_index_returns_empty():
@@ -132,12 +133,12 @@ def test_search_hybrid_raw_score_preserved_through_rrf():
 
 
 def test_detect_entities_in_text():
-    with patch("palinode.core.store.get_db") as mock_db:
+    with patch("palinode.core.entity_graph.get_db") as mock_db:
         mock_conn = MagicMock()
         mock_conn.execute.return_value.fetchall.return_value = [("person/alice",), ("project/alpha",)]
         mock_db.return_value = mock_conn
 
-        res = store.detect_entities_in_text("Saw alice today regarding project alpha")
+        res = entity_graph.detect_entities_in_text("Saw alice today regarding project alpha")
         assert "person/alice" in res
         assert "project/alpha" in res
         assert "person/bob" not in res

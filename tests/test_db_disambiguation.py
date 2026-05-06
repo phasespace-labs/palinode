@@ -19,6 +19,7 @@ import os
 import pytest
 
 from palinode.core import store
+from palinode.core import db as _db_mod
 from palinode.core.config import config
 
 
@@ -28,10 +29,14 @@ def _reset_db_checked():
 
     Without this, the first test that triggers ``_ensure_db`` would mark the
     flag True and all subsequent tests would skip the check entirely.
+
+    The canonical home for ``_db_checked`` is ``palinode.core.db`` (extracted
+    from store.py).  Writes must target ``_db_mod`` so the flag is actually
+    reset in the module that ``_ensure_db`` checks.
     """
-    store._db_checked = False
+    _db_mod._db_checked = False
     yield
-    store._db_checked = False
+    _db_mod._db_checked = False
 
 
 @pytest.fixture()
@@ -180,16 +185,16 @@ def test_existing_db_skips_check(fresh_env, monkeypatch):
         f.write("# Existing memory\n")
 
     # Reset checked flag to force re-entry
-    store._db_checked = False
+    _db_mod._db_checked = False
 
     # Should NOT raise even though .md files exist — DB is present
     store._ensure_db()
-    assert store._db_checked is True
+    assert _db_mod._db_checked is True
 
 
 def test_db_checked_flag_prevents_double_check(fresh_env):
     """Once _db_checked is True, subsequent _ensure_db calls are no-ops."""
-    store._db_checked = True  # Simulate already-checked state
+    _db_mod._db_checked = True  # Simulate already-checked state
 
     # Plant .md files — if the guard ran, it would raise
     memory_dir = str(fresh_env)

@@ -13,13 +13,9 @@ from __future__ import annotations
 import os
 import re
 import yaml
-from datetime import UTC, datetime
 from palinode.core.config import config
-
-
-def _utc_now() -> datetime:
-    """Return a timezone-aware UTC timestamp."""
-    return datetime.now(UTC)
+from palinode.core.db import utc_now as _utc_now
+from palinode.consolidation.frontmatter import parse_frontmatter, serialize_frontmatter
 
 
 def split_file(file_path: str) -> dict:
@@ -42,16 +38,8 @@ def split_file(file_path: str) -> dict:
         content = f.read()
     
     # Parse frontmatter
-    metadata = {}
-    body = content
-    if content.startswith("---"):
-        parts = content.split("---", 2)
-        if len(parts) >= 3:
-            try:
-                metadata = yaml.safe_load(parts[1]) or {}
-            except:
-                pass
-            body = parts[2].strip()
+    metadata, body = parse_frontmatter(content)
+    body = body.strip()
     
     # Split body into sections by ## headings
     sections = re.split(r'^(## .+)$', body, flags=re.MULTILINE)
@@ -119,8 +107,7 @@ def split_file(file_path: str) -> dict:
     # ``strftime("...Z")``, which silently drops sub-second precision and
     # diverges from the project standard set by #192.
     id_meta['last_updated'] = _utc_now().isoformat()
-    id_content = f"---\n{yaml.dump(id_meta, default_flow_style=False)}---\n\n"
-    id_content += "\n\n".join(identity_sections)
+    id_content = serialize_frontmatter(id_meta, "\n" + "\n\n".join(identity_sections))
     
     with open(file_path, 'w') as f:
         f.write(id_content)
@@ -142,8 +129,7 @@ def split_file(file_path: str) -> dict:
         if metadata.get('entities'):
             st_meta['entities'] = metadata['entities']
         
-        st_content = f"---\n{yaml.dump(st_meta, default_flow_style=False)}---\n\n"
-        st_content += "\n\n".join(status_sections)
+        st_content = serialize_frontmatter(st_meta, "\n" + "\n\n".join(status_sections))
         
         with open(status_path, 'w') as f:
             f.write(st_content)
@@ -163,7 +149,7 @@ def split_file(file_path: str) -> dict:
         if metadata.get('entities'):
             h_meta['entities'] = metadata['entities']
         
-        h_content = f"---\n{yaml.dump(h_meta, default_flow_style=False)}---\n\n# {name} — History\n\nArchived statuses and superseded facts.\n"
+        h_content = serialize_frontmatter(h_meta, f"\n# {name} — History\n\nArchived statuses and superseded facts.\n")
         
         with open(history_path, 'w') as f:
             f.write(h_content)
@@ -179,7 +165,7 @@ def split_all_core_files() -> dict:
     """
     import glob
     from palinode.core import parser as md_parser
-    from palinode.core import store
+    from palinode.core import triggers
     from palinode.core import embedder
     
     stats = {"files_split": 0, "status_created": 0, "history_created": 0, "triggers_registered": 0}
@@ -216,7 +202,7 @@ def split_all_core_files() -> dict:
                         trigger_id = f"auto-{base}"
                         # Need to pass relative path to memory_file
                         rel_path = results["identity"].replace(config.memory_dir + "/", "")
-                        store.add_trigger(trigger_id, desc, rel_path, emb)
+                        triggers.add_trigger(trigger_id, desc, rel_path, emb)
                         stats["triggers_registered"] += 1
                 except Exception as e:
                     print(f"Failed to auto-register trigger for {f}: {e}")

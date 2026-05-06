@@ -20,16 +20,11 @@ import urllib.request
 from palinode.core import store, parser, embedder  # noqa: F401  (embedder re-exported for test patches)
 from palinode.core.config import config
 from palinode.indexer.index_file import index_file
+from palinode.core.db import utc_now as _utc_now
 import json
-from datetime import UTC, datetime
 
 logger = logging.getLogger("palinode.watcher")
 logger.setLevel(logging.INFO)
-
-
-def _utc_now() -> datetime:
-    """Return a timezone-aware UTC timestamp."""
-    return datetime.now(UTC)
 
 
 class JsonlFormatter(logging.Formatter):

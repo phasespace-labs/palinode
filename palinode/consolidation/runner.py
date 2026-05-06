@@ -13,34 +13,33 @@ import time
 import glob
 import logging
 import shutil
-import subprocess
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
 import yaml
 
+from palinode.consolidation.proposal import ProposalOp, parse_op
 from palinode.core.config import config
 from palinode.core import store, embedder
+from palinode.core.db import utc_now as _utc_now
+from palinode.core.llm import LLMError, LLMTimeout, LLMUnreachable
+from palinode.consolidation.frontmatter import parse_frontmatter, serialize_frontmatter
 
 logger = logging.getLogger("palinode.consolidation")
-
-
-def _utc_now() -> datetime:
-    """Return a timezone-aware UTC timestamp."""
-    return datetime.now(UTC)
 
 def _git_commit(message: str) -> None:
     if not config.git.auto_commit:
         return
     try:
+        from palinode.core.git_persistence import commit_existing, GitCommitError
         # Only add markdown files — respect .gitignore, avoid .db-journal etc.
-        subprocess.run(["git", "add", "*.md", "**/*.md"], cwd=config.memory_dir, capture_output=True)
-        subprocess.run(["git", "commit", "-m", message], cwd=config.memory_dir, check=True, capture_output=True)
+        commit_existing(message, ["*.md", "**/*.md"])
         logger.info(f"Git commit: {message}")
-    except subprocess.CalledProcessError as e:
-        if b"nothing to commit" not in e.stdout:
-            logger.error(f"Git commit failed: {e.stderr.decode()}")
+    except GitCommitError as e:
+        # commit_existing treats "nothing to commit" as a no-op, so any
+        # GitCommitError here is a real failure.
+        logger.error(f"Git commit failed: {e.stderr}")
 
 def _get_decisions_for_project(project_id: str) -> list[dict]:
     """Fetch active decisions related to a specific project."""
@@ -52,19 +51,15 @@ def _get_decisions_for_project(project_id: str) -> list[dict]:
     for filepath in glob.glob(os.path.join(decisions_dir, "*.md")):
         with open(filepath, "r", encoding="utf-8") as f:
             content = f.read()
-            parts = content.split("---")
-            if len(parts) >= 3:
-                try:
-                    meta = yaml.safe_load(parts[1]) or {}
-                    entities = meta.get("entities", [])
-                    if f"project/{project_id}" in entities and meta.get("status") != "superseded":
-                        active_decisions.append({
-                            "id": meta.get("id"),
-                            "name": meta.get("name"),
-                            "content": parts[2].strip()
-                        })
-                except Exception:
-                    continue
+            meta, body = parse_frontmatter(content)
+            if meta:
+                entities = meta.get("entities", [])
+                if f"project/{project_id}" in entities and meta.get("status") != "superseded":
+                    active_decisions.append({
+                        "id": meta.get("id"),
+                        "name": meta.get("name"),
+                        "content": body.strip()
+                    })
     return active_decisions
 
 _CONSOLIDATION_SKIP_DIRS = {"daily", "archive", "inbox", "logs", "prompts", "specs"}
@@ -86,17 +81,10 @@ def _collect_daily_notes(lookback_days: int) -> list[dict]:
             continue
             
         with open(filepath, "r", encoding="utf-8") as f:
-            content = f.read()
-            
-        meta = {}
-        if content.startswith("---"):
-            parts = content.split("---", 2)
-            if len(parts) >= 3:
-                try:
-                    meta = yaml.safe_load(parts[1]) or {}
-                    content = parts[2].strip()
-                except Exception:
-                    pass
+            raw = f.read()
+
+        meta, content = parse_frontmatter(raw)
+        content = content.strip()
         
         mentions = list(set(re.findall(r"(project/[\w-]+|person/[\w-]+)", content)))
         
@@ -149,12 +137,19 @@ def _call_llm_with_fallback(system_prompt: str, user_prompt: str) -> tuple[str, 
     Tries primary model first. On timeout or HTTP error, tries each
     fallback in order. Returns (response_text, model_used).
 
+    Note: this function uses the OpenAI-compatible ``/v1/chat/completions``
+    endpoint (system + user messages), which is structurally different from
+    ``LLMProvider.generate()`` (single prompt, ``/api/generate``). The
+    fallback-chain orchestration is consolidation-specific and stays here.
+    The typed error hierarchy from ``palinode.core.llm`` is used for
+    consistent error handling across the codebase.
+
     Raises:
-        RuntimeError: All models in chain failed.
+        LLMUnreachable: All models in the chain failed.
     """
     chain = _build_model_chain()
 
-    last_error = None
+    last_error: Exception | None = None
     for i, endpoint in enumerate(chain):
         try:
             response = httpx.post(
@@ -178,12 +173,18 @@ def _call_llm_with_fallback(system_prompt: str, user_prompt: str) -> tuple[str, 
 
             return result, endpoint["model"]
 
-        except (httpx.TimeoutException, httpx.HTTPStatusError, Exception) as e:
+        except httpx.TimeoutException as e:
+            last_error = e
+            logger.warning(f"Model {endpoint['model']} @ {endpoint['url']} timed out: {e}")
+        except (httpx.HTTPStatusError, httpx.HTTPError, OSError,
+                json.JSONDecodeError, ValueError, KeyError) as e:
             last_error = e
             logger.warning(f"Model {endpoint['model']} @ {endpoint['url']} failed: {e}")
-            continue
 
-    raise RuntimeError(f"All {len(chain)} models failed. Last error: {last_error}")
+    # Distinguish timeout from unreachable in the final raised error
+    if isinstance(last_error, httpx.TimeoutException):
+        raise LLMTimeout(f"All {len(chain)} models timed out. Last: {last_error}") from last_error
+    raise LLMUnreachable(f"All {len(chain)} models failed. Last error: {last_error}") from last_error
 
 def _consolidate_project(project_id: str, notes: list[dict], is_nightly: bool = False) -> tuple[list[dict], str]:
     """Consolidate a project by generating compaction operations.
@@ -255,7 +256,7 @@ Return the operations JSON array."""
     # Call LLM
     try:
         result_text, model_used = _call_llm_with_fallback(system_prompt, user_prompt)
-    except Exception as e:
+    except LLMError as e:
         logger.error(f"Failed to call LLM for {project_id}: {e}")
         return [], "failed"
     
@@ -326,7 +327,7 @@ Return the operation as JSON."""
                 operations.append(operation)
             except json.JSONDecodeError:
                 operations.append({"operation": "ADD", "item": item, "reason": "LLM parse failed"})
-        except Exception as e:
+        except LLMError as e:
             logger.error(f"Contradiction check failed: {e}")
             operations.append({"operation": "ADD", "item": item, "reason": f"API error: {e}"})
 
@@ -364,8 +365,7 @@ def _write_project_summary(project_id: str, consolidation: dict) -> None:
             "entities": [f"project/{project_id}"],
             "last_updated": now
         }
-        yaml_front = yaml.dump(metadata, default_flow_style=False)
-        content = f"---\n{yaml_front}---\n\n# {project_id}\n\n## Summary\n{bullets_text}\n"
+        content = serialize_frontmatter(metadata, f"\n# {project_id}\n\n## Summary\n{bullets_text}\n")
         with open(project_file, "w", encoding="utf-8") as f:
             f.write(content)
 
@@ -444,7 +444,7 @@ def _archive_daily_notes(notes: list[dict]) -> None:
         except Exception as e:
             logger.error(f"Failed to archive note {note['filepath']}: {e}")
 
-def _update_status_summary(file_path: str, new_activity: list[dict]) -> None:
+def _update_status_summary(file_path: str, new_activity: list[ProposalOp]) -> None:
     """
     Update a -status.md file by merging new activity into existing sections
     rather than rewriting from scratch. Preserves longitudinal history.
@@ -452,7 +452,7 @@ def _update_status_summary(file_path: str, new_activity: list[dict]) -> None:
 
     Args:
         file_path: Absolute path to the status markdown file.
-        new_activity: List of operation dicts with keys: op, fact_id, reason.
+        new_activity: List of ProposalOp instances.
     """
     STATUS_SECTIONS = ["Current Work", "Open Tasks", "Recent Progress", "Next Steps", "Consolidation Log"]  # noqa: F841
 
@@ -470,9 +470,9 @@ def _update_status_summary(file_path: str, new_activity: list[dict]) -> None:
     timestamp = datetime.now().strftime("%Y-%m-%d")
     new_entry = f"\n### {timestamp}\n"
     for item in new_activity:
-        op = item.get("op", item.get("operation", "UPDATE"))
-        fact_id = item.get("fact_id", item.get("id", ""))
-        reason = item.get("reason", "")
+        op = item.kind.value
+        fact_id = item.fact_id or item.payload.get("fact_id", "")
+        reason = item.payload.get("reason", "")
         new_entry += f"- [{op}] {fact_id}: {reason}\n"
 
     if "## Consolidation Log" in existing:
@@ -486,34 +486,54 @@ def _update_status_summary(file_path: str, new_activity: list[dict]) -> None:
     logger.info(f"Updated status summary: {file_path} (+{len(new_activity)} entries)")
 
 
+def _parse_ops_safe(raw_ops: list[dict]) -> list[ProposalOp]:
+    """Convert raw LLM dicts to ProposalOps, skipping malformed entries.
+
+    Matches the previous behaviour: malformed ops logged and skipped,
+    never crash the consolidation run.
+    """
+    typed: list[ProposalOp] = []
+    for raw in raw_ops:
+        try:
+            typed.append(parse_op(raw))
+        except (TypeError, ValueError) as e:
+            logger.warning(f"Skipping malformed operation: {e}")
+    return typed
+
+
 def run_consolidation(lookback_days: int | None = None) -> dict[str, Any]:
     """Orchestrator for the entire memory consolidation process."""
     from palinode.consolidation.executor import apply_operations
-    
+
     lookback = lookback_days or config.consolidation.lookback_days
     notes = _collect_daily_notes(lookback)
     if not notes:
         return {"status": "no notes found", "processed": 0}
-    
+
     grouped = _group_by_project(notes)
-    
+
     total_stats = {"kept": 0, "updated": 0, "merged": 0, "superseded": 0, "archived": 0}
     projects_processed = 0
-    
+
     for project_id, pnotes in grouped.items():
         try:
             model_used_current = "primary"
-            operations, model_used_current = _consolidate_project(project_id, pnotes)
+            raw_operations, model_used_current = _consolidate_project(project_id, pnotes)
+            if not raw_operations:
+                continue
+
+            model_used = model_used_current
+
+            # Parse raw LLM dicts into typed ProposalOps
+            operations = _parse_ops_safe(raw_operations)
             if not operations:
                 continue
-            
-            model_used = model_used_current
-            
+
             # Determine target file
             status_file = os.path.join(config.memory_dir, "projects", f"{project_id}-status.md")
             project_file = os.path.join(config.memory_dir, "projects", f"{project_id}.md")
             target = status_file if os.path.exists(status_file) else project_file
-            
+
             stats = apply_operations(target, operations)
             for k, v in stats.items():
                 total_stats[k] = total_stats.get(k, 0) + v
@@ -523,23 +543,23 @@ def run_consolidation(lookback_days: int | None = None) -> dict[str, Any]:
 
             projects_processed += 1
             logger.info(f"Compacted {project_id}: {stats}")
-            
+
         except Exception as e:
             logger.error(f"Compaction failed for {project_id}: {e}")
-    
+
     # Extract insights and archive (only if at least one project compacted successfully)
     _extract_insights(notes)
     if projects_processed > 0:
         _archive_daily_notes(notes)
     else:
         logger.warning("No projects compacted successfully — skipping daily note archival")
-    
-    
+
+
     _git_commit(f"palinode: compaction {_utc_now().strftime('%Y-%m-%d')} — "
                 f"{total_stats['updated']}u {total_stats['merged']}m "
                 f"{total_stats['superseded']}s {total_stats['archived']}a"
                 f" (model: {model_used})")
-    
+
     return {
         "status": "success",
         "processed_notes": len(notes),
@@ -555,37 +575,42 @@ def run_nightly(lookback_days: int | None = None) -> dict[str, Any]:
     are weekly concerns). Smaller LLM context = better JSON output.
     """
     from palinode.consolidation.executor import apply_operations
-    
+
     lookback = lookback_days or config.consolidation.nightly.lookback_days
     notes = _collect_daily_notes(lookback)
     if not notes:
         return {"status": "no_new_notes", "processed_notes": 0, "projects_compacted": 0}
-    
+
     grouped = _group_by_project(notes)
-    
+
     total_stats = {"kept": 0, "updated": 0, "merged": 0, "superseded": 0, "archived": 0}
     projects_processed = 0
     model_used = "primary"
-    
+
     for project_id, pnotes in grouped.items():
         try:
-            operations, model_used_current = _consolidate_project(project_id, pnotes, is_nightly=True)
-            if not operations:
+            raw_operations, model_used_current = _consolidate_project(project_id, pnotes, is_nightly=True)
+            if not raw_operations:
                 continue
-                
+
             model_used = model_used_current
-            
-            # Enforce allows ops restriction
-            allowed_ops = set(config.consolidation.nightly.allowed_ops)
-            operations = [op for op in operations if op.get("op", op.get("operation", "")).upper() in allowed_ops]
+
+            # Parse raw LLM dicts into typed ProposalOps
+            operations = _parse_ops_safe(raw_operations)
             if not operations:
                 continue
-            
+
+            # Enforce allowed ops restriction (typed: filter on op.kind)
+            allowed_ops = set(config.consolidation.nightly.allowed_ops)
+            operations = [op for op in operations if op.kind.value in allowed_ops]
+            if not operations:
+                continue
+
             # Determine target file
             status_file = os.path.join(config.memory_dir, "projects", f"{project_id}-status.md")
             project_file = os.path.join(config.memory_dir, "projects", f"{project_id}.md")
             target = status_file if os.path.exists(status_file) else project_file
-            
+
             stats = apply_operations(target, operations, nightly_policy=True)
             for k, v in stats.items():
                 total_stats[k] = total_stats.get(k, 0) + v
@@ -594,17 +619,17 @@ def run_nightly(lookback_days: int | None = None) -> dict[str, Any]:
 
             projects_processed += 1
             logger.info(f"Nightly compacted {project_id}: {stats}")
-            
+
         except Exception as e:
             logger.error(f"Nightly compaction failed for {project_id}: {e}")
-            
+
     # Nightly does NOT archive daily notes (left for weekly)
-    
+
     if projects_processed > 0:
         _git_commit(f"palinode: nightly {_utc_now().strftime('%Y-%m-%d')} — "
                     f"{total_stats['updated']}u {total_stats['superseded']}s"
                     f" (model: {model_used})")
-    
+
     return {
         "status": "success",
         "processed_notes": len(notes),

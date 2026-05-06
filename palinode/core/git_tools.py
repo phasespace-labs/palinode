@@ -12,10 +12,11 @@ import os
 import re
 import subprocess
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from palinode.core.config import config
+from palinode.core.db import utc_now as _utc_now
 
 logger = logging.getLogger("palinode.git_tools")
 
@@ -33,11 +34,6 @@ def _resolve_memory_path(file_path: str) -> str:
     if not resolved.startswith(base + os.sep) and resolved != base:
         raise ValueError(f"Path traversal rejected: {file_path}")
     return file_path
-
-
-def _utc_now() -> datetime:
-    """Return a timezone-aware UTC timestamp."""
-    return datetime.now(UTC)
 
 
 def _run_git(*args: str, check: bool = False) -> subprocess.CompletedProcess:

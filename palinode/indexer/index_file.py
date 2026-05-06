@@ -18,26 +18,62 @@ import os
 from typing import Any
 
 from palinode.core import embedder, parser, store
+from palinode.core import entity_graph
 from palinode.core.hashing import stable_md5_hexdigest
 
 logger = logging.getLogger("palinode.indexer")
 
 
+def is_already_indexed(chunk_id: str, content_hash: str) -> bool:
+    """Return True if this chunk is present with matching content_hash and a vec0 entry.
+
+    This is the dedup guard for the save/watcher race (#251, #326): when
+    ``/save`` embeds a file and the watcher fires from the same disk write,
+    the second path sees the rows from the first and returns early instead
+    of double-embedding.
+
+    The check is per-chunk (not per-file) because each markdown section is
+    chunked independently.  To test whether an entire file is indexed, call
+    this for every ``(chunk_id, content_hash)`` pair produced by parsing.
+
+    Args:
+        chunk_id: Stable MD5 of ``"{file_path}#{section_id}"``.
+        content_hash: SHA-256 hex digest of the section body.
+
+    Returns:
+        True iff the ``chunks`` row exists with a matching ``content_hash``
+        AND the ``chunks_vec`` row is present (the vec0 entry is real
+        storage; see ``_index_entries_present`` docstring for why FTS5
+        cannot serve as the presence check).
+    """
+    db = store.get_db()
+    try:
+        existing = db.execute(
+            "SELECT content_hash FROM chunks WHERE id = ?", (chunk_id,)
+        ).fetchone()
+        if not existing or existing["content_hash"] != content_hash:
+            return False
+        return _index_entries_present(db, chunk_id)
+    finally:
+        db.close()
+
+
 def _index_entries_present(db: Any, chunk_id: str) -> bool:
     """Return True iff the vec0 entry exists for ``chunk_id``.
 
-    Used by ``index_file`` to detect rows whose ``content_hash`` matches
-    the stored chunk but whose vector entry was never populated (e.g. the
-    embedder was unreachable on the original write, or the per-chunk
-    ``upsert_chunks`` transaction silently swallowed a vec0 insert error
-    and committed a chunks row with no embedding). In that case we treat
-    the row as "needs re-embed" rather than skipping silently (#251).
+    Used by ``is_already_indexed`` and ``index_file`` to detect rows whose
+    ``content_hash`` matches the stored chunk but whose vector entry was
+    never populated (e.g. the embedder was unreachable on the original
+    write, or the per-chunk ``upsert_chunks`` transaction silently
+    swallowed a vec0 insert error and committed a chunks row with no
+    embedding).  In that case we treat the row as "needs re-embed" rather
+    than skipping silently (#251).
 
     Notes
     -----
     The FTS5 ``chunks_fts`` table is declared with ``content=chunks`` (an
-    external-content index), so a ``SELECT … FROM chunks_fts WHERE rowid
-    = …`` always finds the row as long as the underlying ``chunks`` row
+    external-content index), so a ``SELECT ... FROM chunks_fts WHERE rowid
+    = ...`` always finds the row as long as the underlying ``chunks`` row
     exists — regardless of whether the inverted index actually holds any
     tokens for it. That makes it a useless presence check. The vec0
     ``chunks_vec`` table is real storage: a missing ``id`` row is the
@@ -111,6 +147,9 @@ def index_file(filepath: str, *, content: str | None = None) -> dict[str, Any]:
         valid_chunk_ids.append(chunk_id)
         content_hash = hashlib.sha256(sec["content"].encode()).hexdigest()
 
+        # Inline dedup check — same logic as is_already_indexed() but
+        # keeps the DB handle open for the three-way branch below
+        # (unchanged / needs-re-embed / new-content).
         db = store.get_db()
         existing = db.execute(
             "SELECT content_hash FROM chunks WHERE id = ?", (chunk_id,)
@@ -179,7 +218,7 @@ def index_file(filepath: str, *, content: str | None = None) -> dict[str, Any]:
     if chunks:
         store.upsert_chunks(chunks, skip_unchanged=False)
 
-    store.upsert_entities(filepath, metadata)
+    entity_graph.upsert_entities(filepath, metadata)
 
     # ``embedded`` is True if every section ended up indexed — either by
     # writing fresh chunks or by hitting the unchanged-and-indexed fast

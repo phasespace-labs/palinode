@@ -2,6 +2,7 @@ import pytest
 import httpx
 from unittest.mock import MagicMock
 from palinode.core.config import config
+from palinode.core.llm import LLMTimeout, LLMUnreachable
 from palinode.consolidation.runner import _call_llm_with_fallback, _build_model_chain
 
 @pytest.fixture
@@ -53,12 +54,12 @@ def test_primary_timeout_uses_fallback(run_config, monkeypatch):
     assert mock_post.call_args_list[1][0][0] == "http://fallback-1/v1/chat/completions"
 
 def test_all_models_fail_raises(run_config, monkeypatch):
-    """All models fail → RuntimeError raised"""
+    """All models fail → LLMTimeout raised (all were timeouts)"""
     mock_post = MagicMock()
     mock_post.side_effect = httpx.TimeoutException("timeout")
     monkeypatch.setattr(httpx, "post", mock_post)
 
-    with pytest.raises(RuntimeError, match="All 3 models failed"):
+    with pytest.raises(LLMTimeout, match="All 3 models timed out"):
         _call_llm_with_fallback("sys", "user")
     assert mock_post.call_count == 3
 
@@ -76,7 +77,7 @@ def test_fallback_logged(run_config, monkeypatch, caplog):
     _call_llm_with_fallback("sys", "user")
     
     log_text = caplog.text
-    assert "Model primary-model @ http://primary failed" in log_text
+    assert "Model primary-model @ http://primary timed out" in log_text
     assert "Fallback model succeeded: fallback-1 @ http://fallback-1" in log_text
 
 def test_empty_fallbacks_primary_only(monkeypatch):
@@ -89,7 +90,7 @@ def test_empty_fallbacks_primary_only(monkeypatch):
     mock_post.side_effect = httpx.TimeoutException("timeout")
     monkeypatch.setattr(httpx, "post", mock_post)
 
-    with pytest.raises(RuntimeError, match="All 1 models failed"):
+    with pytest.raises(LLMTimeout, match="All 1 models timed out"):
         _call_llm_with_fallback("sys", "user")
     assert mock_post.call_count == 1
 

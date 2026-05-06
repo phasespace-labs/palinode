@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 
 from palinode.api.server import app
 from palinode.core import store
+from palinode.core import entity_graph
 from palinode.core.config import config
 
 
@@ -92,9 +93,9 @@ def _insert_chunks(n: int) -> None:
 
 
 def _insert_entities(entity_refs: list[str]) -> None:
-    """Insert entity rows directly via store.upsert_entities()."""
+    """Insert entity rows directly via entity_graph.upsert_entities()."""
     metadata = {"entities": entity_refs, "category": "insights"}
-    store.upsert_entities("tests/fixture-entities.md", metadata)
+    entity_graph.upsert_entities("tests/fixture-entities.md", metadata)
 
 
 # ---------------------------------------------------------------------------

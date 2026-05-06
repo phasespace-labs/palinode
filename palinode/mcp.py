@@ -1119,7 +1119,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
             if context:
                 body["context"] = context
 
-            resp = await _post("/search", json=body, timeout=60.0)
+            resp = await _post("/search", json=body, timeout=90.0)
             if resp.status_code != 200:
                 return _text(f"Search failed: {resp.text}")
             return _text(_format_results(resp.json()))
@@ -1161,7 +1161,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
             if arguments.get("external_refs") is not None:
                 body["external_refs"] = arguments["external_refs"]
 
-            resp = await _post("/save", json=body)
+            resp = await _post("/save", json=body, timeout=90.0)
             if resp.status_code != 200:
                 return _text(f"Save failed: {resp.text}")
             data = resp.json()
@@ -1374,7 +1374,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
             if arguments.get("source"):
                 body["source"] = arguments["source"]
 
-            resp = await _post("/session-end", json=body)
+            resp = await _post("/session-end", json=body, timeout=90.0)
             if resp.status_code != 200:
                 return _text(f"Session-end failed: {resp.text}")
             data = resp.json()
@@ -1582,9 +1582,25 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+async def _warmup_embed() -> None:
+    """Fire a throwaway search on startup to pre-heat the embedding GPU.
+
+    BGE-M3 cold-starts take ~54 s when the GPU goes into low-power state
+    between sessions.  Firing this immediately — before the first real tool
+    call — means the GPU is warm by the time the user invokes palinode_save
+    or palinode_search.  Failures are silently swallowed; this is not on the
+    critical path.
+    """
+    try:
+        await _post("/search", json={"query": "warmup", "limit": 1}, timeout=90.0)
+    except Exception:
+        pass
+
+
 async def async_main() -> None:
     """Async boot sequence — start MCP server over stdio."""
     async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
+        asyncio.create_task(_warmup_embed())
         await server.run(
             read_stream,
             write_stream,

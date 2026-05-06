@@ -25,12 +25,12 @@ import glob
 import json
 import logging
 import os
-import subprocess
 import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from palinode.consolidation.proposal import OpKind, ProposalOp
 from palinode.core.config import config
 
 logger = logging.getLogger("palinode.write_time")
@@ -404,21 +404,18 @@ def _run_check_and_apply(
 
 def _translate_ops(
     contradiction_ops: list[dict], file_path: str
-) -> list[dict]:
-    """Translate _check_contradictions output into executor input format.
+) -> list[ProposalOp]:
+    """Translate _check_contradictions output into typed ProposalOps.
 
     _check_contradictions emits:
         {"operation": "UPDATE"|"DELETE", "item": {...}, "target_id": "...", ...}
 
-    The executor (apply_operations) expects:
-        {"op": "UPDATE"|"SUPERSEDE"|..., "id": "...", ...}
-
     Mappings:
-        "UPDATE"  → {"op": "UPDATE", ...}  (update the matched existing line)
-        "DELETE"  → {"op": "SUPERSEDE", ...}  (we don't delete; supersede instead)
+        "UPDATE"  -> ProposalOp(UPDATE, ...) (update the matched existing line)
+        "DELETE"  -> ProposalOp(SUPERSEDE, ...) (we don't delete; supersede instead)
         Everything else is filtered out by the caller.
     """
-    translated = []
+    translated: list[ProposalOp] = []
     for op in contradiction_ops:
         operation = op.get("operation", "").upper()
         target_id = op.get("target_id") or op.get("id")
@@ -428,22 +425,26 @@ def _translate_ops(
 
         if operation == "UPDATE":
             translated.append(
-                {
-                    "op": "UPDATE",
-                    "id": target_id,
-                    "new_text": op.get("new_text")
-                    or op.get("item", {}).get("content", ""),
-                    "reason": op.get("reason", "write-time dedup"),
-                }
+                ProposalOp(
+                    kind=OpKind.UPDATE,
+                    payload={
+                        "id": target_id,
+                        "new_text": op.get("new_text")
+                        or op.get("item", {}).get("content", ""),
+                        "reason": op.get("reason", "write-time dedup"),
+                    },
+                )
             )
         elif operation == "DELETE":
             translated.append(
-                {
-                    "op": "SUPERSEDE",
-                    "id": target_id,
-                    "superseded_by": op.get("item", {}).get("id", ""),
-                    "reason": op.get("reason", "write-time: superseded"),
-                }
+                ProposalOp(
+                    kind=OpKind.SUPERSEDE,
+                    payload={
+                        "id": target_id,
+                        "superseded_by": op.get("item", {}).get("id", ""),
+                        "reason": op.get("reason", "write-time: superseded"),
+                    },
+                )
             )
     return translated
 
@@ -457,19 +458,9 @@ def _git_commit_dedup(file_path: str) -> None:
     if not config.git.auto_commit:
         return
     try:
+        from palinode.core.git_persistence import commit_existing, GitPersistenceError
         rel = os.path.relpath(file_path, config.palinode_dir)
-        subprocess.run(
-            ["git", "add", rel],
-            cwd=config.palinode_dir,
-            check=False,
-            capture_output=True,
-        )
         msg = f"{config.git.commit_prefix} write-time dedup: {rel}"
-        subprocess.run(
-            ["git", "commit", "-m", msg],
-            cwd=config.palinode_dir,
-            check=False,
-            capture_output=True,
-        )
-    except Exception as e:  # noqa: BLE001
+        commit_existing(msg, [rel])
+    except (GitPersistenceError, OSError) as e:
         logger.error(f"write-time: git commit failed: {e}")

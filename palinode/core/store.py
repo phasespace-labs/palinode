@@ -22,11 +22,12 @@ from datetime import UTC, datetime, timedelta
 from palinode.core.config import config
 from palinode.core import parser as _parser
 
-_store_logger = __import__('logging').getLogger("palinode.store")
+# ── Extracted modules ────────────────────────────────────────────────────────
+from palinode.core.db import get_db, _utc_now, _ensure_db, _glob_md_files  # noqa: F401
+from palinode.core import entity_graph as _entity_graph
+import palinode.core.db as _db_mod
 
-# Module-level flag: once we've verified the DB state on first connect, skip
-# the check on subsequent calls (it's expensive — recursive glob of memory_dir).
-_db_checked: bool = False
+_store_logger = __import__('logging').getLogger("palinode.store")
 
 # ── Security Scanning ────────────────────────────────────────────────────────
 # Adapted from NousResearch/hermes-agent (MIT License)
@@ -42,11 +43,6 @@ INJECTION_PATTERNS = [
     r'javascript\s*:',
     r'system\s*prompt\s*:',
 ]
-
-
-def _utc_now() -> datetime:
-    """Return a timezone-aware UTC timestamp."""
-    return datetime.now(UTC)
 
 
 def scan_memory_content(content: str) -> tuple[bool, str]:
@@ -71,89 +67,6 @@ def scan_memory_content(content: str) -> tuple[bool, str]:
     if special_ratio > 0.4:
         return False, "Content has unusually high ratio of special characters"
     return True, "ok"
-
-def _glob_md_files(directory: str):
-    """Yield .md file paths under *directory* (recursive)."""
-    import glob as _glob
-    yield from _glob.iglob(os.path.join(directory, "**", "*.md"), recursive=True)
-
-
-def _ensure_db() -> None:
-    """Disambiguate first-run from misconfiguration before SQLite auto-creates.
-
-    Called once per process on the first ``get_db()`` invocation.  Sets the
-    module-level ``_db_checked`` flag so subsequent calls are free.
-
-    Three cases:
-    - DB already exists -> nothing to do; just connect normally.
-    - DB missing + memory_dir has 0 .md files (or PALINODE_ALLOW_FRESH_DB set)
-      -> legitimate first run; log clearly and allow creation.
-    - DB missing + memory_dir has .md files -> misconfiguration; raise
-      RuntimeError with actionable guidance for the operator.
-    """
-    global _db_checked
-    if _db_checked:
-        return
-
-    _db_checked = True
-
-    db_path = config.db_path
-    if os.path.exists(db_path):
-        # Normal operation -- DB is present, nothing to check.
-        return
-
-    memory_dir = config.memory_dir
-    allow_fresh = os.environ.get("PALINODE_ALLOW_FRESH_DB")
-
-    # Count .md files in memory_dir (recursive).  If the directory doesn't
-    # exist yet we treat that as 0 files (brand-new install).
-    try:
-        md_count = sum(1 for _ in _glob_md_files(memory_dir))
-    except (OSError, ValueError):
-        md_count = 0
-
-    if md_count == 0 or allow_fresh:
-        _store_logger.info(
-            "palinode.store: First run detected -- creating fresh database at %s "
-            "(memory_dir has %d .md file(s))",
-            db_path,
-            md_count,
-        )
-        return
-
-    # Memory files exist but no DB -- almost certainly a misconfiguration.
-    raise RuntimeError(
-        f"palinode found {md_count} memory file(s) at {memory_dir} "
-        f"but no database at {db_path}.\n"
-        "This usually means PALINODE_DIR or db_path is misconfigured.\n\n"
-        f"  - To verify:  ls {memory_dir}/*.md\n"
-        "  - If you intended to start fresh, set PALINODE_ALLOW_FRESH_DB=1\n"
-        "  - Otherwise, check that db_path in palinode.config.yaml matches "
-        "your memory_dir"
-    )
-
-
-def get_db() -> sqlite3.Connection:
-    """Gets an active connection to the SQLite database with vec extension active.
-
-    On the first call per process, verifies that the DB state is consistent
-    with the memory_dir contents -- raises RuntimeError on detected
-    misconfiguration (DB missing but .md files present).
-
-    Returns:
-        sqlite3.Connection: Database connection featuring vec.
-
-    Raises:
-        RuntimeError: If the database is missing but memory_dir contains .md
-            files, indicating a likely misconfiguration rather than first run.
-    """
-    _ensure_db()
-    db = sqlite3.connect(config.db_path)
-    db.enable_load_extension(True)
-    sqlite_vec.load(db)
-    db.enable_load_extension(False)
-    db.row_factory = sqlite3.Row
-    return db
 
 
 def _validated_embedding_dimensions() -> int:
@@ -511,7 +424,7 @@ def search(query_embedding: list[float], category: str | None = None,
     if context_entities and config.context.enabled and config.context.boost != 1.0:
         context_files: set[str] = set()
         for entity in context_entities:
-            for row in get_entity_files(entity):
+            for row in _entity_graph.get_entity_files(entity):
                 context_files.add(row["file_path"])
         if context_files:
             for r in results:
@@ -971,7 +884,7 @@ def search_hybrid(
     if context_entities and config.context.enabled and config.context.boost != 1.0:
         context_files: set[str] = set()
         for entity in context_entities:
-            for row in get_entity_files(entity):
+            for row in _entity_graph.get_entity_files(entity):
                 context_files.add(row["file_path"])
         if context_files:
             for key in sorted_keys:
@@ -1060,79 +973,6 @@ def search_hybrid(
             db.close()
 
     return merged
-
-def get_entity_files(entity_ref: str) -> list[dict[str, Any]]:
-    """Get all files that reference a specific entity."""
-    db = get_db()
-    cursor = db.cursor()
-    cursor.execute(
-        "SELECT file_path, category, last_seen FROM entities WHERE entity_ref = ? ORDER BY last_seen DESC",
-        (entity_ref,)
-    )
-    results = [{"file_path": row[0], "category": row[1], "last_seen": row[2]} for row in cursor.fetchall()]
-    db.close()
-    return results
-
-def get_entity_graph(entity_ref: str, depth: int = 1) -> dict[str, list[str]]:
-    """Get the entity graph — which entities appear together."""
-    db = get_db()
-    cursor = db.cursor()
-    cursor.execute("""
-        SELECT DISTINCT e2.entity_ref 
-        FROM entities e1
-        JOIN entities e2 ON e1.file_path = e2.file_path
-        WHERE e1.entity_ref = ? AND e2.entity_ref != ?
-    """, (entity_ref, entity_ref))
-    
-    co_occurring = [row[0] for row in cursor.fetchall()]
-    db.close()
-    return {entity_ref: co_occurring}
-
-
-def upsert_entities(file_path: str, metadata: dict[str, Any]) -> None:
-    """Extract and index entities from file metadata."""
-    entities = metadata.get("entities", [])
-    if not entities:
-        return
-        
-    db = get_db()
-    cursor = db.cursor()
-    category = metadata.get("category", "")
-    now = _utc_now().isoformat().replace("+00:00", "Z")
-    
-    for entity_ref in entities:
-        cursor.execute("""
-            INSERT OR REPLACE INTO entities (entity_ref, file_path, category, last_seen)
-            VALUES (?, ?, ?, ?)
-        """, (entity_ref, file_path, category, now))
-    
-    db.commit()
-    db.close()
-
-
-def detect_entities_in_text(text: str) -> list[str]:
-    """Detect known entity refs mentioned in text.
-    
-    Scans for entity names from the entities index.
-    Returns list of entity_ref strings (e.g., ['person/alice', 'project/alpha']).
-    """
-    db = get_db()
-    known_entities = db.execute(
-        "SELECT DISTINCT entity_ref FROM entities"
-    ).fetchall()
-    db.close()
-    
-    text_lower = text.lower()
-    detected = []
-    
-    for (entity_ref,) in known_entities:
-        # Extract the name part: "person/alice" -> "alice"
-        name = entity_ref.split("/")[-1].replace("-", " ")
-        if name in text_lower and len(name) > 2:
-            detected.append(entity_ref)
-    
-    return list(set(detected))
-
 
 def search_associative(
     query_text: str,
@@ -1252,121 +1092,6 @@ def search_associative(
     return sorted(results, key=lambda r: r["score"], reverse=True)[:top_k]
 
 
-def add_trigger(
-    trigger_id: str,
-    description: str, 
-    memory_file: str,
-    embedding: list[float],
-    threshold: float = 0.75,
-    cooldown_hours: int = 24,
-) -> None:
-    """Register a prospective trigger.
-    
-    Args:
-        trigger_id: Unique ID for this trigger.
-        description: What context should fire this (e.g., "LoRA training").
-        memory_file: Relative path to inject when fired.
-        embedding: Pre-computed embedding of the description.
-        threshold: Cosine similarity threshold to fire (0.0-1.0).
-        cooldown_hours: Hours between refires.
-    """
-    db = get_db()
-    now = _utc_now().isoformat().replace("+00:00", "Z")
-    db.execute("""
-        INSERT OR REPLACE INTO triggers (id, description, memory_file, threshold, cooldown_hours, created_at, enabled, fire_count)
-        VALUES (?, ?, ?, ?, ?, ?, 1, 0)
-    """, (trigger_id, description, memory_file, threshold, cooldown_hours, now))
-    
-    emb_json = json.dumps(embedding)
-    db.execute("""
-        INSERT OR REPLACE INTO triggers_vec (id, embedding)
-        VALUES (?, ?)
-    """, (trigger_id, emb_json))
-    
-    db.commit()
-    db.close()
-
-def check_triggers(
-    query_embedding: list[float],
-    cooldown_bypass: bool = False,
-) -> list[dict[str, Any]]:
-    """Check if any triggers match the current context.
-    
-    Args:
-        query_embedding: Embedding of the current user message.
-        cooldown_bypass: If True, ignore cooldown (useful for testing).
-    
-    Returns:
-        List of fired trigger dicts with memory_file and trigger info.
-    """
-    db = get_db()
-    query_vec_json = json.dumps(query_embedding)
-    
-    rows = db.execute("""
-        SELECT t.*, v.distance
-        FROM triggers_vec v
-        JOIN triggers t ON v.id = t.id
-        WHERE v.embedding MATCH ? AND k = 10
-    """, (query_vec_json,)).fetchall()
-    
-    results = []
-    now = _utc_now()
-    
-    for row in rows:
-        if not row["enabled"]:
-            continue
-            
-        dist = row["distance"] or 0
-        score = 1.0 - ((dist ** 2) / 2.0)
-        
-        if score >= row["threshold"]:
-            if not cooldown_bypass and row["last_fired"]:
-                last_fired_date = datetime.fromisoformat(row["last_fired"][:19])
-                hours_since = (now - last_fired_date).total_seconds() / 3600
-                if hours_since < row["cooldown_hours"]:
-                    continue  # In cooldown
-            
-            results.append({
-                "id": row["id"],
-                "description": row["description"],
-                "memory_file": row["memory_file"],
-                "score": score,
-            })
-            
-            # Since it fired, record it
-            update_trigger_fired(row["id"])
-            
-    db.close()
-    return results
-
-def list_triggers() -> list[dict]:
-    """Return all registered triggers with their stats."""
-    db = get_db()
-    rows = db.execute("SELECT id, description, memory_file, threshold, cooldown_hours, last_fired, fire_count, created_at, enabled FROM triggers ORDER BY created_at DESC").fetchall()
-    db.close()
-    return [dict(r) for r in rows]
-
-def delete_trigger(trigger_id: str) -> None:
-    """Remove a trigger."""
-    db = get_db()
-    db.execute("DELETE FROM triggers WHERE id = ?", (trigger_id,))
-    db.execute("DELETE FROM triggers_vec WHERE id = ?", (trigger_id,))
-    db.commit()
-    db.close()
-
-def update_trigger_fired(trigger_id: str) -> None:
-    """Record that a trigger fired — update last_fired and fire_count."""
-    db = get_db()
-    now = _utc_now().isoformat().replace("+00:00", "Z")
-    db.execute("""
-        UPDATE triggers 
-        SET last_fired = ?, fire_count = fire_count + 1
-        WHERE id = ?
-    """, (now, trigger_id))
-    db.commit()
-    db.close()
-
-
 def score_with_decay(
     base_score: float,
     importance: float,
@@ -1411,3 +1136,16 @@ def score_with_decay(
     frequency_boost = 1 + math.log1p(recall_count)
     
     return min(base_score * importance * decay * frequency_boost, 1.0)
+
+
+# ── Backward-compat proxy for _db_checked ───────────────────────────────────
+# Tests (test_db_disambiguation.py) read ``store._db_checked``.  The canonical
+# home is now ``palinode.core.db._db_checked``; this __getattr__ keeps reads
+# through ``store`` working.  Writes (``store._db_checked = X``) only update
+# the store module namespace, so tests that mutate the flag must import from
+# ``palinode.core.db`` directly (or use the ``_db_mod`` reference).
+
+def __getattr__(name: str):
+    if name == "_db_checked":
+        return _db_mod._db_checked
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

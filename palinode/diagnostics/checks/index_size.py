@@ -25,9 +25,9 @@ from __future__ import annotations
 
 import glob
 import sqlite3
-from datetime import datetime, timezone
 from pathlib import Path
 
+from palinode.core.db import utc_now as _utc_now_dt
 from palinode.diagnostics.registry import register
 from palinode.diagnostics.types import CheckResult, DoctorContext
 
@@ -35,7 +35,7 @@ _LOG_SUBPATH = ".palinode/db_size.log"
 
 
 def _utc_now() -> str:
-    return datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    return _utc_now_dt().isoformat().replace("+00:00", "Z")
 
 
 def _read_last_log_line(log_path: Path) -> tuple[str, int, int] | None:
