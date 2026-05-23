@@ -14,5 +14,16 @@
       "promptsDir": { "type": "string" }
     },
     "required": []
+  },
+  "contracts": {
+    "tools": [
+      "palinode_search",
+      "palinode_save",
+      "palinode_ingest",
+      "palinode_status",
+      "palinode_diff",
+      "palinode_blame",
+      "palinode_depends"
+    ]
   }
 }

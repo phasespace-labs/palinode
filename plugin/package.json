@@ -3,19 +3,29 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Palinode memory system for OpenClaw",
+  "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "types"
+  ],
   "dependencies": {
     "@sinclair/typebox": "0.34.47"
   },
   "openclaw": {
     "extensions": [
-      "./index.ts"
+      "./dist/index.js"
     ]
   },
   "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "tsc",
     "pretest": "python3 ../scripts/dump-parity-registry.py > parity-registry.json",
     "test": "vitest run"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.4.0",
     "vitest": "^2.1.9"
   }
 }
