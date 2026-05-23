@@ -4,6 +4,10 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ## Unreleased
 
+### Fixed
+
+- The deterministic consolidation executor now writes both target markdown files and `-history.md` sidecars via temp-file + `fsync` + atomic replace, so a mid-write crash preserves the last complete on-disk state instead of truncating a memory file (#310).
+
 ## [0.8.9] — 2026-05-05
 
 A reliability and architecture release. Closes the MCP cold-start timeout class and lands

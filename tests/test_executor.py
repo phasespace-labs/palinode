@@ -1,6 +1,7 @@
 import os
 import tempfile
 import pytest
+import palinode.consolidation.executor as executor_module
 from palinode.consolidation.executor import apply_operations, _nightly_merge_allowed
 from palinode.consolidation.proposal import OpKind, ProposalOp
 
@@ -105,6 +106,88 @@ def test_empty_operations_leave_file_unchanged(temp_memory_file):
         after = f.read()
     assert before == after
     assert stats == {"kept": 0, "updated": 0, "merged": 0, "superseded": 0, "archived": 0, "retracted": 0, "merge_rejected": 0}
+
+
+def test_atomic_main_write_failure_preserves_original_file(temp_memory_file, monkeypatch):
+    with open(temp_memory_file) as f:
+        before = f.read()
+
+    def fail_replace(src, dst):
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(executor_module.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        apply_operations(
+            temp_memory_file,
+            [
+                ProposalOp(
+                    kind=OpKind.UPDATE,
+                    payload={
+                        "id": "f2",
+                        "new_text": "- [2024-01-02] A significant update occurred",
+                    },
+                )
+            ],
+        )
+
+    with open(temp_memory_file) as f:
+        after = f.read()
+
+    assert after == before
+    temp_prefix = f".{os.path.basename(temp_memory_file)}."
+    leftovers = [
+        name
+        for name in os.listdir(os.path.dirname(temp_memory_file))
+        if name.startswith(temp_prefix)
+    ]
+    assert leftovers == []
+
+
+def test_atomic_history_write_failure_preserves_original_file(temp_memory_file, monkeypatch):
+    with open(temp_memory_file) as f:
+        before = f.read()
+
+    history_file = temp_memory_file.replace(".md", "-history.md")
+    original_replace = executor_module.os.replace
+
+    def fail_history_replace(src, dst):
+        if dst == history_file:
+            raise OSError("history replace failed")
+        return original_replace(src, dst)
+
+    monkeypatch.setattr(executor_module.os, "replace", fail_history_replace)
+
+    with pytest.raises(OSError, match="history replace failed"):
+        apply_operations(
+            temp_memory_file,
+            [
+                ProposalOp(
+                    kind=OpKind.SUPERSEDE,
+                    payload={
+                        "id": "f1",
+                        "new_text": "- [2024-01-04] The project was restarted",
+                        "reason": "Change of plans",
+                    },
+                )
+            ],
+        )
+
+    with open(temp_memory_file) as f:
+        after = f.read()
+
+    assert after == before
+    assert not os.path.exists(history_file)
+    temp_prefixes = {
+        f".{os.path.basename(temp_memory_file)}.",
+        f".{os.path.basename(history_file)}.",
+    }
+    leftovers = [
+        name
+        for name in os.listdir(os.path.dirname(temp_memory_file))
+        if any(name.startswith(prefix) for prefix in temp_prefixes)
+    ]
+    assert leftovers == []
 
 
 def test_retract_operation(temp_memory_file):

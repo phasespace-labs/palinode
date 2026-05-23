@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import re
 import logging
+import tempfile
 from typing import Any
 
 import yaml
@@ -63,6 +64,42 @@ def _nightly_merge_allowed(content: str, ids: list[str]) -> bool:
         return False
     # All dates must be the same calendar day
     return len(set(dates)) == 1
+
+
+def _fsync_directory(path: str) -> None:
+    """Flush directory metadata so the rename survives a crash."""
+    dir_fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
+
+
+def _atomic_write_text(file_path: str, content: str) -> None:
+    """Write text via temp file + fsync + replace in the target directory."""
+    directory = os.path.dirname(file_path) or "."
+    prefix = f".{os.path.basename(file_path)}."
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=prefix, suffix=".tmp")
+    try:
+        if os.path.exists(file_path):
+            os.fchmod(fd, os.stat(file_path).st_mode & 0o777)
+
+        with os.fdopen(fd, "w") as tmp_file:
+            fd = -1
+            tmp_file.write(content)
+            tmp_file.flush()
+            os.fsync(tmp_file.fileno())
+
+        os.replace(tmp_path, file_path)
+        _fsync_directory(directory)
+    except Exception:
+        if fd != -1:
+            os.close(fd)
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def apply_operations(
@@ -154,9 +191,7 @@ def apply_operations(
                     stats["retracted"] += 1
 
     # Write back
-    with open(file_path, 'w') as f:
-        f.write(content)
-
+    _atomic_write_text(file_path, content)
     return stats
 
 
@@ -282,9 +317,9 @@ def _append_to_history(file_path: str, fact_id: str, text: str) -> None:
     entry = f"- [{now}] {text} <!-- fact:{fact_id} -->\n"
     
     if os.path.exists(history_path):
-        with open(history_path, 'a') as f:
-            f.write(entry)
+        with open(history_path) as f:
+            history_content = f.read()
     else:
-        # Create history file
-        with open(history_path, 'w') as f:
-            f.write(f"---\ncategory: history\ncore: false\n---\n\n# History\n\n{entry}")
+        history_content = "---\ncategory: history\ncore: false\n---\n\n# History\n\n"
+
+    _atomic_write_text(history_path, history_content + entry)
