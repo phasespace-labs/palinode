@@ -4,9 +4,26 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ## Unreleased
 
+## [0.8.10] — 2026-05-22
+
+Crash-safe executor writes and plugin compatibility. No breaking changes.
+
 ### Fixed
 
-- The deterministic consolidation executor now writes both target markdown files and `-history.md` sidecars via temp-file + `fsync` + atomic replace, so a mid-write crash preserves the last complete on-disk state instead of truncating a memory file (#310).
+- The consolidation executor now writes target markdown files and `-history.md`
+  sidecars via temp-file + `fsync` + atomic replace, so a failed write preserves
+  the last complete on-disk state instead of truncating a memory file (#310).
+
+### Plugin
+
+- The OpenClaw plugin package now declares its tool contract, points at compiled
+  output, and includes the TypeScript build metadata needed by current
+  installers (#368).
+
+### Metadata
+
+- `pyproject.toml` and `server.json` now advertise `0.8.10`; the MCP registry
+  metadata points at the public `v0.8.10` release notes.
 
 ## [0.8.9] — 2026-05-05
 
