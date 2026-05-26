@@ -6,10 +6,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 TEMPLATE = Path(__file__).resolve().parent.parent / ".github" / "PULL_REQUEST_TEMPLATE.md"
 
 
 def test_pr_template_contains_smoke_args_reminder() -> None:
+    if not TEMPLATE.exists():
+        pytest.skip("dev-only PR template is not shipped in the public repo")
     text = TEMPLATE.read_text()
     assert "TOOL_SMOKE_ARGS" in text, (
         "PR template is missing the TOOL_SMOKE_ARGS checkbox"

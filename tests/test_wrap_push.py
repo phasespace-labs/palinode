@@ -10,13 +10,16 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).parent.parent
 
 
 def _wrap_md_content() -> str:
     path = REPO_ROOT / ".claude" / "commands" / "wrap.md"
-    assert path.exists(), f"wrap.md not found: {path}"
+    if not path.exists():
+        pytest.skip("dev-only .claude wrap command is not shipped in the public repo")
     return path.read_text()
 
 
