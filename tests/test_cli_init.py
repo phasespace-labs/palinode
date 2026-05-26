@@ -56,16 +56,25 @@ def test_ps_command_is_deterministic():
 
 
 def test_wrap_command_is_deterministic():
-    """/wrap must always call palinode_session_end, never palinode_save."""
+    """/wrap must call palinode_push then palinode_session_end, never palinode_save.
+
+    Since #353, /wrap is a two-step deterministic command: Step 1 push,
+    Step 2 session-end.  The old "Do not call any other tool" invariant no
+    longer holds — /wrap deliberately calls two tools in order.
+    """
     body = WRAP_COMMAND_BODY
     assert "palinode_session_end" in body
+    assert "palinode_push" in body, "wrap command must include palinode_push step (#353)"
     assert "summary" in body
     assert "decisions" in body
     assert "blockers" in body
     assert "This command is deterministic" in body
-    assert "Do not call any other tool" in body
     # Must tell the agent what to say after saving
     assert "safe to /clear now" in body
+    # Push must precede session-end
+    assert body.find("palinode_push") < body.find("palinode_session_end"), (
+        "palinode_push must appear before palinode_session_end (#353)"
+    )
     # Must NOT dispatch to palinode_save
     assert "palinode_save" not in body or "use `/ps`" in body
 

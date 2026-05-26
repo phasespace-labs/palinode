@@ -82,6 +82,10 @@ set -euo pipefail
 
 PALINODE_API="${PALINODE_API_URL:-http://localhost:6340}"
 MIN_MESSAGES="${PALINODE_HOOK_MIN_MESSAGES:-3}"
+# Max time (seconds) the curl POST is allowed to run.  Raise with
+# PALINODE_HOOK_TIMEOUT if your host is slow (cold Ollama, WAN Tailscale, NFS).
+# The Claude Code hook runner timeout in settings.json must be > this value.
+HOOK_TIMEOUT="${PALINODE_HOOK_TIMEOUT:-30}"
 
 # Reasons to capture on. Default broad: clear, logout, normal exit (other),
 # and non-interactive EOF. Override with PALINODE_HOOK_REASONS to narrow
@@ -144,7 +148,7 @@ curl -sS -o /dev/null \\
     '{summary: $summary, project: $project, source: $source, decisions: [], blockers: []}'
   )" \\
   --connect-timeout 5 \\
-  --max-time 10 || true
+  --max-time "${HOOK_TIMEOUT}" || true
 
 exit 0
 """
@@ -205,9 +209,17 @@ summary, decisions, and blockers.
 
 WRAP_COMMAND_BODY = """\
 ---
-description: Wrap up this session — structured session_end save before /clear.
+description: Wrap up this session — push to remote, then structured session_end save before /clear.
 ---
 
+**Step 1 — Push to remote (before archiving).**
+Call `palinode_push`. This syncs any local commits to the remote before the
+session is archived. If the push succeeds, continue. If it fails because there
+is no remote configured, print: `(no remote configured — skipping push)` and
+continue. If it fails for any other reason (conflict, auth, network), print the
+error and ask Paul whether to proceed or abort.
+
+**Step 2 — Archive the session.**
 Call `palinode_session_end` with:
 - `summary` — 1-2 sentences on what was accomplished this session
 - `decisions` — array of key decisions made, each with its rationale (the
@@ -217,15 +229,15 @@ Call `palinode_session_end` with:
 - `project` — the project slug from `.claude/CLAUDE.md` (or the directory
   name if no slug is set)
 
-After the tool returns, print exactly: `✓ session saved — safe to /clear now.`
+After both tools return, print exactly: `✓ session saved — safe to /clear now.`
 followed by the daily-note path from the tool result.
 
-Do not call any other tool. Do not save as a ProjectSnapshot first — this
-command is exclusively for structured session wrap-ups.
+Do not save as a ProjectSnapshot first — this command is exclusively for
+structured session wrap-ups.
 
-**This command is deterministic.** Always `palinode_session_end`. For a
-quick mid-session checkpoint, use `/save` instead (`/ps` also works as a
-back-compat alias).
+**This command is deterministic.** Step 1: `palinode_push`. Step 2:
+`palinode_session_end`. For a quick mid-session checkpoint, use `/save`
+instead (`/ps` also works as a back-compat alias).
 """
 
 
@@ -237,7 +249,7 @@ SETTINGS_HOOK_BLOCK = {
                     {
                         "type": "command",
                         "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/palinode-session-end.sh",
-                        "timeout": 15,
+                        "timeout": 35,
                     }
                 ]
             }

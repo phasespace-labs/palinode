@@ -8,13 +8,13 @@
     "url": "https://github.com/phasespace-labs/palinode",
     "source": "github"
   },
-  "version": "0.8.10",
+  "version": "0.8.12",
   "packages": [
     {
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "palinode",
-      "version": "0.8.10",
+      "version": "0.8.12",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
@@ -65,7 +65,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "palinode",
-      "version": "0.8.10",
+      "version": "0.8.12",
       "runtimeHint": "uvx",
       "transport": {
         "type": "streamable-http",

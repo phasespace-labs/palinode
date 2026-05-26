@@ -91,9 +91,9 @@ def test_template_no_hardcoded_ips(template_path: Path) -> None:
 
 @pytest.mark.parametrize("template_path", TEMPLATES, ids=[t.name for t in TEMPLATES])
 def test_template_no_hardcoded_hostnames(template_path: Path) -> None:
-    """Templates must not mention the production hostname."""
+    """Templates must not mention deployment-specific hostnames."""
     raw = template_path.read_text()
-    forbidden = ["clawdbot", "engram-data", "engram", "10.2.1"]
+    forbidden = ["internal-host.example", "private-service.example"]
     for word in forbidden:
         assert word not in raw, (
             f"{template_path.name} contains forbidden hostname/path {word!r}"

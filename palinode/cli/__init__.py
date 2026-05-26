@@ -17,7 +17,7 @@ from palinode.cli.git import blame, history, rollback, push, timeline
 from palinode.cli.query import entities
 from palinode.cli.session_end import session_end
 from palinode.cli.read import read
-from palinode.cli.list import list_cmd
+from palinode.cli.list_cmd import list_cmd
 from palinode.cli.lint import lint
 from palinode.cli.ingest import ingest
 from palinode.cli.prompt import prompt
@@ -29,6 +29,7 @@ from palinode.cli.obsidian_sync import obsidian_sync
 from palinode.cli.retrieval_stats import retrieval_stats
 from palinode.cli.import_vault import import_cmd
 from palinode.cli.depends import depends
+from palinode.cli.mcp_smoke import mcp_smoke
 
 def _print_version(ctx: click.Context, param: click.Parameter, value: bool) -> None:
     if not value or ctx.resilient_parsing:
@@ -123,6 +124,9 @@ main.add_command(import_cmd, name="import")
 # Dependency graph (#97)
 main.add_command(depends)
 
+# Harness smoke checklist (#345, parent #342)
+main.add_command(mcp_smoke, name="mcp-smoke")
+
 @main.command()
 @click.option("--watcher/--no-watcher", default=True, help="Run memory watcher")
 @click.option("--api/--no-api", default=True, help="Run API server")
@@ -203,6 +207,7 @@ def config_cmd():
 def config_view(fmt):
     """View current configuration."""
     from palinode.core.config import config
+    from palinode.cli._format import console
     import yaml
     import json
     from rich.syntax import Syntax
@@ -213,14 +218,22 @@ def config_view(fmt):
         syntax = Syntax(content, "json", theme="monokai")
     else:
         # Pydantic to dict then yaml
-        # We need to handle the nested dataclasses
+        # We need to handle the nested dataclasses. `list` resolved by-name
+        # was historically shadowed by the palinode.cli.list submodule
+        # (#274); we now reference the builtin directly through `builtins`
+        # as a belt-and-suspenders guard against any future name collision.
+        import builtins
         def to_dict(obj):
             if hasattr(obj, "__dict__"):
                 return {k: to_dict(v) for k, v in obj.__dict__.items() if not k.startswith("_")}
-            elif isinstance(obj, list):
-                return [to_dict(x) for x in obj]
-            else:
-                return obj
+            try:
+                if isinstance(obj, builtins.list):
+                    return [to_dict(x) for x in obj]
+            except TypeError:
+                # Defensive: a field that isn't a serialisable type still
+                # renders as repr() rather than crashing the whole view.
+                return repr(obj)
+            return obj
         content = yaml.dump(to_dict(config), sort_keys=False)
         syntax = Syntax(content, "yaml", theme="monokai")
     

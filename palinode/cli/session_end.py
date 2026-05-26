@@ -1,4 +1,5 @@
 import click
+import httpx
 from palinode.cli._api import HTTPStatusError, RequestError, api_client
 from palinode.cli._format import print_result, get_default_format, OutputFormat
 
@@ -47,6 +48,16 @@ def session_end(summary, decision, blocker, project, source, harness, cwd, model
         )
     except HTTPStatusError as e:
         raise click.ClickException(f"Session-end failed: {e.response.text}") from e
+    except httpx.ReadTimeout as e:
+        # Distinguish a slow-server timeout from a connection failure — the old
+        # message ("is palinode running?") was misleading when the API was up but
+        # the embedding + git commit path exceeded the request budget (#377).
+        from palinode.core.defaults import SESSION_END_TIMEOUT_SECONDS
+        raise click.ClickException(
+            f"Session-end timed out after {SESSION_END_TIMEOUT_SECONDS:.0f}s — "
+            "palinode-api is reachable but the embed+commit took too long. "
+            "Raise PALINODE_SESSION_END_TIMEOUT or check Ollama load."
+        ) from e
     except RequestError as e:
         raise click.ClickException(f"Cannot reach API — is palinode running? ({e})") from e
 

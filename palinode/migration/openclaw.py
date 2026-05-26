@@ -16,6 +16,7 @@ import hashlib
 import logging
 import os
 import re
+import subprocess
 from datetime import UTC, datetime
 from collections.abc import Callable
 from typing import Any
@@ -180,22 +181,26 @@ def _build_file_content(
 
 def _git_commit(memory_dir: str, staged_files: list[str], log_file: str | None) -> None:
     """Stage and commit migrated files in the memory repo."""
-    from palinode.core.git_persistence import commit_existing, GitPersistenceError
-
     files_to_add = [f for f in staged_files + ([log_file] if log_file else []) if f]
     if not files_to_add:
         return
-    # Convert absolute paths to relative (commit_existing uses config.memory_dir as cwd).
-    rel_paths = [os.path.relpath(f, memory_dir) for f in files_to_add]
+    subprocess.run(
+        ["git", "add", "--"] + files_to_add,
+        cwd=memory_dir,
+        check=False,
+        capture_output=True,
+    )
     date_str = datetime.now(UTC).strftime("%Y-%m-%d")
     msg = (
         f"palinode migrate openclaw: import {len(staged_files)} sections "
         f"from MEMORY.md ({date_str})"
     )
-    try:
-        commit_existing(msg, rel_paths)
-    except (GitPersistenceError, OSError) as e:
-        logger.error(f"Git commit failed: {e}")
+    subprocess.run(
+        ["git", "commit", "-m", msg],
+        cwd=memory_dir,
+        check=False,
+        capture_output=True,
+    )
 
 
 def run_migration(

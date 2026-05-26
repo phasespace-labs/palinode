@@ -120,6 +120,50 @@ the IDE's MCP settings panel instead.
 Available in IntelliJ IDEA, PyCharm, WebStorm, GoLand, Rider, CLion, DataGrip,
 and RubyMine. Requires AI Assistant 2025.1+ (bundled in 2025.2).
 
+### Codex CLI (OpenAI)
+
+Codex stores MCP servers in **TOML** format (not JSON) inside its own
+config file. Both the CLI and IDE extension share this config.
+
+| Scope | Path |
+|-------|------|
+| Global (all projects) | `~/.codex/config.toml` |
+| Project (trusted projects only) | `.codex/config.toml` in project root |
+
+Each MCP server is a TOML table: `[mcp_servers.palinode]`. Use
+`codex mcp` to manage servers from the CLI, or edit `config.toml`
+directly.
+
+```toml
+[mcp_servers.palinode]
+command = "palinode-mcp"
+
+[mcp_servers.palinode.env]
+PALINODE_API_HOST = "127.0.0.1"
+PALINODE_API_PORT = "6340"
+```
+
+### Antigravity (Google)
+
+Antigravity stores MCP config in a JSON file under the `.gemini`
+directory. The path is consistent across platforms:
+
+| Platform | Path |
+|----------|------|
+| macOS / Linux | `~/.gemini/antigravity/mcp_config.json` |
+| Windows | `%USERPROFILE%\.gemini\antigravity\mcp_config.json` |
+
+JSON shape: `{ "mcpServers": { "palinode": { ... } } }` — same as
+Claude Desktop.
+
+Access from the IDE: three-dot menu in chat > MCP Servers > Manage MCP
+Servers > View raw config.
+
+> **Note:** Antigravity is new (2026) and the config path structure may
+> evolve. If `~/.gemini/antigravity/mcp_config.json` does not exist,
+> check `~/.gemini/settings/mcp_config.json` as a fallback. See
+> issue #345 for updates.
+
 ### Other clients
 
 | Client | Config path |

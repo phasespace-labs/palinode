@@ -4,83 +4,129 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ## Unreleased
 
-## [0.8.10] — 2026-05-22
+## [0.8.12] — 2026-05-25
 
-Crash-safe executor writes and plugin compatibility. No breaking changes.
+Targeted hot-path patch tail to 0.8.11. Headline fix: `auto_summary` is no longer called synchronously inside `/save`. The inline LLM call could block the response for the model's full first-token latency; on a cold or contended Ollama this presented to REST consumers as a "write timeout" while writes were succeeding server-side. The release also delivers `/health/auto-summary` and a `/status.auto_summary` block so monitor agents can detect a stalled async summary pipeline, bounded snippets on `/search-associative`, and a `recallProfile` config field with five named presets in the openclaw-palinode plugin.
 
-### Fixed
+### Changed
 
-- The consolidation executor now writes target markdown files and `-history.md`
-  sidecars via temp-file + `fsync` + atomic replace, so a failed write preserves
-  the last complete on-disk state instead of truncating a memory file (#310).
-
-### Plugin
-
-- The OpenClaw plugin package now declares its tool contract, points at compiled
-  output, and includes the TypeScript build metadata needed by current
-  installers (#368).
-
-### Metadata
-
-- `pyproject.toml` and `server.json` now advertise `0.8.10`; the MCP registry
-  metadata points at the public `v0.8.10` release notes.
-
-## [0.8.9] — 2026-05-05
-
-A reliability and architecture release. Closes the MCP cold-start timeout class and lands
-four rounds of internal architecture deepening (no breaking changes). Two latent bugs
-surfaced and were fixed along the way.
-
-### Fixed
-
-- **MCP cold-start timeouts.** `palinode_save`, `palinode_search`, and `palinode_session_end`
-  now use explicit 90 s httpx timeouts instead of the 30 s / 60 s defaults. BGE-M3 cold-starts
-  on a warm-VRAM GPU take ~54 s on first inference; the old defaults caused `-32001 Request
-  timed out` errors from the MCP client before the response arrived.
-- **`_warmup_embed()` background task** fires on MCP stdio startup, pre-heating the embedding
-  GPU so the first real tool call doesn't hit the cold-start window.
-- **Trigger cooldown `TypeError`.** `check_triggers()` cooldown path subtracted a naive
-  datetime (parsed via `fromisoformat`) from an aware `_utc_now()`. Any second-fire of a real
-  trigger would raise `TypeError`. Hidden because no test exercised the cooldown-without-bypass
-  path against a real DB and the API layer caught it as a 500. Caught during the architecture
-  refactor.
-- **Frontmatter body truncation in consolidation runner.** `_get_decisions_for_project` used
-  `content.split('---')` without `maxsplit`. If a decision file's body contained a horizontal
-  rule, the body would be truncated at the first `---`. Fixed via the new
-  `consolidation/frontmatter` module.
+- **`auto_summary` is now async — moved off the `/save` hot path.** Previously `/save` called `_generate_summary` inline whenever a file qualified (`core:true`, no `summary`, content >= `min_content_chars`), blocking the response for the LLM's full first-token latency. On a cold or contended Ollama this could turn into a multi-second wait; REST consumers with conservative timeouts could see "write timeouts" while the write was actually succeeding server-side. The watcher already debounced `/generate-summaries` calls for files matching the same criteria (`palinode/indexer/watcher.py::_schedule_summary_generation`), so the fix is small: drop the inline call, surface `summary_pending: true` in the `/save` response when the file qualifies (mirroring the existing `description_pending` pattern), and let the watcher path do the LLM work out of band. Embeddings are unaffected — they still run inline.
 
 ### Added
 
-- **`deploy/systemd/palinode-embed-keepalive.{service,timer}.template`** — user-level systemd
-  timer that pings BGE-M3 every 20 minutes to keep GPU kernels warm between sessions.
-- **`EmbedderProtocol` and `LLMProvider`** typed Protocol classes for embedding and LLM
-  generation, each with `OllamaProvider` + `FakeProvider` adapters. Production callers
-  default-construct the real adapter; tests can inject `FakeProvider` to run without live
-  Ollama. Aligns with the tools-over-pipeline approach: model swaps become adapter swaps.
-- **`palinode/core/memory_paths`** with typed exception hierarchy (`MemoryPathError`,
-  `MemoryPathTraversal`, `MemoryPathNotFound`, `MemoryPathTooLarge`). Replaces
-  `HTTPException`-coupled path validation with typed errors that any surface can consume.
-- **`palinode/consolidation/proposal`** — typed `ProposalOp` dataclass and `OpKind` enum for
-  the consolidation pipeline. The deterministic executor now accepts typed ops instead of
-  `dict[str, Any]` with defensive runtime checks.
-- **`palinode/core/git_persistence`** — single seam for git write operations
-  (`write_and_commit`, `commit_existing`, `push`) with typed error hierarchy. Replaces 9
-  inline `subprocess.run(["git", ...])` call sites that had inconsistent `check=` semantics,
-  cwd resolution, and error handling.
+- **`/health/auto-summary` endpoint.** New auth-exempt health check parallel to `/health/watcher`, designed for external monitor agents to detect a stalled async summary pipeline. Returns `status: "ok" | "degraded" | "down"` with a `reason` field. Probes the auto_summary Ollama URL (which may differ from the embed URL), scans for pending files (`core:true`, no summary, body >= threshold) capped at 1000, and applies a decision tree: `down` if Ollama unreachable; `degraded` if pending backlog ≥ 50 OR last run had errors with non-zero pending OR last run > 30min old with non-zero pending; `ok` otherwise. Disabled `auto_summary` always returns `ok` with a clarifying `reason`.
+- **`auto_summary` block in `/status`.** Surfaces `last_run_at`, `last_run_duration_ms`, `last_run_count`, `last_run_errors`, `last_error`, `total_runs`, `total_errors` from a new module-level `_auto_summary_state` populated by `/generate-summaries` on every run. Mirrors the shape of the existing `reindex` and `write_time_*` observability blocks. Eleven regression tests in `tests/test_auto_summary_async.py`.
 
-### Internal
+### Fixed
 
-- **Architecture deepening pass (rounds 1–4).** `server.py` 3088 → 2398 lines (−22%);
-  `store.py` 1413 → 1158 lines (−18%). 14 new modules in `palinode/core/`, `palinode/api/`,
-  and `palinode/consolidation/`; 12 new direct unit-test files adding 100+ seam tests.
-  No behaviour changes outside the two bug fixes called out under Fixed.
-  - Round 1: `similarity`, `wiki`, `summarize`, `db`, `triggers`, `entity_graph` extracted;
-    `EmbedderProtocol` introduced.
-  - Round 2: `middleware`, `rate_limit`, `frontmatter` extracted; direct seam tests for
-    triggers, entity graph, indexer dedup, middleware, frontmatter.
-  - Round 3: `LLMProvider`, `memory_paths`, `ProposalOp` typed seams.
-  - Round 4: `git_persistence` write seam; callers migrated off the `store.py` re-export
-    facade onto canonical module imports.
+- **`/search-associative` now per-result snippet-enriches its response.** The associative spreading-activation endpoint was overlooked when `_enrich_with_snippets` landed for `/search` and `/search-recent`. A single associative hit on a multi-fact aggregated file could still return tens of KB of un-truncated `content`, defeating the budget guarantee that the rest of the search surface honours. Fix: one call to `_enrich_with_snippets(results, req.query, config.search.snippet_max_chars)` in `search_associative_api` mirrors the `/search` pattern. `content` is preserved untouched for API/CLI consumers; `snippet` and `content_truncated` are added per result. Three-test regression suite in `tests/test_search_associative_snippet.py` pins the behaviour.
+
+### Plugin
+
+- **openclaw-palinode: `recallProfile` config field + five named presets.** autoRecall was previously a binary switch with hardcoded four-source injection. A short prompt could expand into tens of thousands of tokens of effective input when semantic search matched large incident-style memory files and the model proceeded to reason about that prior incident rather than execute the current request. Size *and* modality were both wrong. Fix: named recall profiles (`coding`, `monitoring`, `investigation`, `writing`, `conversation`, plus `minimal` / `off`) compose source enablement, per-source caps, type allow/deny, and a total-budget hard cap. `coding` preserves existing behaviour (default if unspecified). `monitoring` ships triggers only, denies `RCA`/`Postmortem`/`Incident`/`Reflection`, caps at 3K. `recallProfileConfig` shallow-overrides individual fields without forking a preset. `autoRecall: false` still works (forces `off`). Plugin also switches semantic + associative result rendering to prefer the server's query-windowed `snippet` field over blunt `r.content.slice()`, with a fallback for older servers. Wrapping element now includes the profile name (`<palinode-memory profile="...">`) and the info log line surfaces profile + sources + final injection size for observability. Type filters (`type_allow` / `type_deny`) are forwarded defensively to `/search` and `/search-associative`; older Palinode servers ignore unknown body keys. Seven unit tests in `plugin/test/recall-profile.test.ts` pin the catalog shape and override semantics.
+
+## [0.8.11] — 2026-05-25
+
+M1 hardening tail + audit-driven critical-bug remediation. 13 issues closed across leak-regression guards (#341, #275-prep), MCP registry hygiene (#313), doctor FTS5 sync surfacing (#316), cross-surface session-end timeout (#377), /wrap push semantics (#353), embedder logging (#383), four silent-failure-returns-success criticals (#384–#387), Ollama context-window hardening (#335), and graceful-degrade auto-description (#336). Two audit deliverables shipped on dedicated branches (#337 logging, #378 session-end). One investigation comment drafted (#373 Claude Desktop). #338 (centralized Ollama client) explicitly deferred to v0.8.12.
+
+### Changed
+
+- **`upsert_chunks` return contract: `int` → `dict{written, vec_ok, fts_ok}` (#385).** The function previously returned a bare integer (chunks written). It now returns a dict so callers can detect per-index health without a separate query. `index_file` and `POST /save` both surface `indexed_vec` and `indexed_fts` from this result. MCP `palinode_save` warns when either flag is False.
+
+### Fixed
+
+- **`upsert_chunks` vec0 and FTS5 write failures are now logged and surfaced (#385 / C3).** Both the pre-INSERT DELETE and the INSERT-after-DELETE pair on `chunks_vec` were wrapped in bare `except Exception: pass`. A vec0 structural failure silently produced a `chunks` row with no corresponding `chunks_vec` row — the chunk was FTS5-searchable but invisible to vector search. Fix: vec0 final-retry failures log at ERROR with `exc_info=True`; FTS5 sync failures log at WARNING; the INSERT-first FTS5 pattern avoids the "malformed" DELETE-on-empty bug.
+- **`POST /save` now returns `git_committed`, `indexed_vec`, and `indexed_fts` (#386 / C4, #385).** The git auto-commit block logged at error level but the response had no field — `git_committed: false` was invisible to callers. Now `git_committed` is True only when `auto_commit=True` and the git subprocess completes without raising. Added `exc_info=True` to the error log. `indexed_vec` and `indexed_fts` are surfaced from `index_file` outcome. MCP `palinode_save` uses all three flags for the `_save_warnings` path.
+- **Consolidation runner YAML parse failures now log and count instead of silently skipping (#387 / C5).** `_collect_daily_notes` and `_get_decisions_for_project` both had `except Exception: pass/continue` on YAML parse errors. Corrupt frontmatter silently dropped files from consolidation. Fix: both log WARNING with filepath, exception, and recovery hint ("run `palinode lint`"). `_collect_daily_notes` returns `(notes, skipped_count)`; callers include `yaml_parse_errors` in the run summary when non-zero. Body text is still collected even when frontmatter fails.
+- **`recent_save_embeddings` DB open failure now logs WARNING instead of silently returning `[]` (#384 / C2).** A missing or corrupt DB caused the dedup window to silently disable, making every save appear unique. Now logs at WARNING with `db_path` and exception so operators can correlate dedup misses with infrastructure issues.
+
+- **`palinode/core/embedder.py` now has a logger; all Ollama failure paths surface (#383 / C1).** The module had no logger at all — every embed failure (timeout, HTTP error, connect error, unexpected response shape) was silent, forcing operators to correlate downstream symptoms (zero search hits, dedup misses, Phase 7 smoke flakes) with no log context. Added `logger = logging.getLogger(__name__)` and per-failure log calls: each exception class (TimeoutException, HTTPStatusError, ConnectError) logs at WARNING with `exc_info=True` and structured context (model, endpoint, text_len, timeout setting, retry index). Unexpected-shape 200 responses log at WARNING with `response_keys`. Successful embed logs at DEBUG with timing. Terminal all-endpoints-exhausted case logs at WARNING with model, url, text_len, and timeout_seconds — the exact context needed to correlate with smoke-rig reports. Raw text is never logged; only `text_len` appears so PII does not reach log aggregators.
+- **Session-end timeout raised to 90s on all three surfaces (#377).** The 30s CLI timeout and 10s hook curl timeout were too short for multi-decision payloads (BGE-M3 dedup embed + git commit on a remote Tailscale host). All three surfaces now use a shared `SESSION_END_TIMEOUT_SECONDS = 90.0` constant from `palinode.core.defaults` (overridable via `PALINODE_HOOK_TIMEOUT` / `PALINODE_SESSION_END_TIMEOUT` env vars). CLI, MCP, and hook all import or reference the same source of truth; module-load assertion guards in `cli/_api.py` and `mcp.py` catch future drift at import time. Hook script `PALINODE_HOOK_TIMEOUT` default is 30s; `settings.json` runner timeout raised to 35s to stay ahead of curl. CLI now distinguishes `ReadTimeout` (slow API, recoverable) from `ConnectError` (API down) with separate error messages. Eight new regression tests in `tests/test_session_end_timeout.py`.
+- **`/wrap` now pushes to remote before archiving (#353).** The `/wrap` slash command calls `palinode_push` (MCP tool) before `palinode_session_end`, so local commits are on the remote before the daily note is written and context is cleared. Skips silently when there are no unpushed commits or no remote is configured; surfaces a clear message on push failure so Paul can decide whether to proceed. `palinode init`'s `WRAP_COMMAND_BODY` is updated to match.
+- **Embed path hardened against Ollama context-window mismatch (#335).** When Ollama returns a 200 OK with `{"error": "prompt is too long for max context"}` (its silent-truncation failure mode when `num_ctx` is too small), `_embed_local` now raises `EmbeddingContextError` — a typed exception with `model`, `text_len`, and `ollama_message` attributes and a recovery hint pointing at the modelfile fix. Added a lazy preflight check (`check_model_context`) that queries `/api/show` on the first embed call and logs a WARNING if `num_ctx` is below 8192 (bge-m3's actual capability vs. Ollama's 4096 default — the exact regression from 2026-05-04). Preflight runs once per process (thread-safe) and never blocks embed on failure.
+- **`palinode_save` auto-description now has a hard timeout with graceful degrade (#336).** Previously the description-generation call to Ollama used a hardcoded 15 s timeout with no degrade path — a cold-loading or overloaded Ollama would stall every `/save` for the full duration. Now: (1) `_generate_description` has a configurable timeout (`config.auto_summary.describe_timeout_seconds`, default 5 s, override via `PALINODE_DESCRIBE_TIMEOUT_SECONDS`) that returns a `_DESCRIPTION_DEFERRED` sentinel on `TimeoutException`; (2) the `/save` handler detects the sentinel, saves the file without a description, and includes `description_pending: true` in the response so callers know to expect a fill-in; (3) the watcher detects files with no `description` field after any file event and schedules a debounced retry via `/generate-summaries` (10 s window, accumulates rapid saves). The audit Q2 finding is also fixed: non-timeout description failures (e.g. `ConnectError`) were logged at `INFO`; they now log at `WARNING`.
+
+### Added
+
+- `tests/test_server_json_version_alignment.py` — CI guard that fails if `server.json` top-level `version` or any `packages[*].version` drifts from `pyproject.toml[project.version]`. Silent drift was possible: `mcp-publisher publish` would ship the manifest with the wrong version pin with no runtime error to surface it. Four tests cover: top-level version match, per-package version match, JSON parseability, and TOML parseability — fail loud on missing files or corrupt parse so no check silently passes (#313).
+- **`palinode doctor` FTS5 sync check (#316).** New `fts5_sync` check detects row-count drift between the `chunks` source table and the `chunks_fts_docsize` FTS5 shadow table. A mid-write exception, schema migration, or crashed bulk-index run can leave FTS5 with fewer entries than `chunks`, causing BM25 keyword search to silently miss content. The check compares the two counts and fails with WARN + recovery hint ("run `palinode reindex`") when they diverge. Tagged `fast` — pure SQLite read, no network I/O. Surfaces automatically through `palinode_doctor` MCP tool and `GET /doctor?fast=true` API endpoint.
+
+## [0.8.10] — 2026-05-22
+
+M1 hardening + UX polish. This release carries forward the newer hardening, CLI, and docs-discipline work after the earlier public `0.8.9` reliability release. No breaking changes; one new opt-in MCP parameter (`palinode_search full=True`).
+
+### Removed
+
+- **Stop tracking `build/` and `dist/` artifacts in git (#295).** 45 stale build outputs (43 from `build/lib/palinode/*` and 2 from `dist/palinode-0.7.0*` — three releases old) were checked in. They go stale fast, bloat clones, and confuse `pip install -e .`. They were also the largest leak category caught by the 2026-05-01 pre-v0.8.7 scrub audit that triggered the #292 belt-and-suspenders path scrub. `.gitignore` now excludes `build/`, `dist/`, and `*.egg-info/` generically; regression guard in `tests/test_no_build_artifacts_tracked.py` fails CI if anyone re-adds them.
+
+### Changed
+
+- **`/search` API now populates a bounded `snippet` field on every result, and `palinode_search` MCP tool renders it by default (#352).** Pathologically large chunks (flat files with no section breaks could produce 50KB+ single chunks) used to blow the MCP tool-result budget — two routine searches were enough to exceed Claude Code's ceiling. The fix splits the contract: API preserves full `content` for CLI/API consumers, adds `snippet` (default cap 400 chars, configurable via `config.search.snippet_max_chars`) windowed on the first matched query term. MCP renders snippet by default with a "use palinode_read for full text" footer when anything was truncated; new `full=True` parameter on `palinode_search` opts into a 4KB-capped content render for the rare case it's needed. `palinode search` CLI also prefers the new `snippet` field over its prior blind 200-char content truncation, so TTY output now shows a centered match window instead of arbitrary leading text — with a legacy fallback when talking to an older API server.
+- **Silent-misconfiguration paths now warn loud-and-recoverably (M1 hardening, #273 + #354).**
+  - `load_config()` emits a `WARNING` when no `palinode.config.yaml` is found and built-in defaults are loaded, listing every path searched plus the recovery hint ("set `PALINODE_DIR` or drop a config file at..."). The stderr startup banner also changes from `Palinode config: defaults` to `Palinode config: ⚠ defaults (no config file found)` so production deployments where systemd wires `PALINODE_DIR` but an interactive ssh session doesn't can't silently run `palinode lint` against the wrong filesystem (#273).
+  - API server lifespan warns at startup when `config.git.auto_commit` is enabled but `memory_dir` is not a git repository — every `/save`'s `git commit` was silently no-op'ing with no operator signal. The warning includes the exact `git init <dir>` recovery command (#354).
+
+### Documentation
+
+- **`/save` endpoint docstring now shows the canonical request schema (#299)** — FastAPI's auto-generated `/docs` UI renders the docstring, so new integrators see `{content, type, slug, entities, title}` directly. Explicitly notes that the body field is `content` (not `body`) and that `category` is *derived* from `type`, not a separate input — the legacy/wrong shape that misled at least one smoke-test prompt.
+- **README API reference and inline `/save` endpoint docstring now document the request-body size cap (#298)** — `PALINODE_MAX_REQUEST_BYTES` default 5 MB. Code, README, OPERATIONS.md, and the endpoint docstring are now aligned. Added `tests/test_docs_schema_alignment.py` (5 tests) to keep code and docs in sync — fails CI if the constant changes without the docs being updated, or if the SaveRequest model grows a `body`/`category` field.
+
+### Fixed
+
+- **Executor writes are now crash-safe (#310).** The deterministic consolidation executor now writes both target markdown files and `-history.md` sidecars via temp-file + `fsync` + atomic replace, so a mid-write crash preserves the last complete on-disk state instead of truncating a memory file.
+- **`palinode config view` no longer crashes with `TypeError: isinstance() arg 2 must be a type` (#274).** Root cause: `from palinode.cli.list import list_cmd` had the side effect of binding the `palinode.cli.list` submodule onto the `palinode.cli` package namespace, shadowing the builtin `list`. The nested `to_dict` helper in `config_view` then resolved `list` to the submodule and `isinstance(obj, <module>)` raised. Fixed by renaming the submodule to `palinode/cli/list_cmd.py` (the CLI command name `palinode list` is unchanged). Also added a `builtins.list` reference + defensive `try/except TypeError` fallback in `to_dict` so any future unserialisable field degrades to `repr()` instead of crashing the whole view. While in the area, also fixed an undefined-`console` reference in `config_view` (separate latent bug previously hidden by the TypeError).
+
+### Added
+
+- Release-blocking `mcp-tool-coverage` CI job in `.github/workflows/ci.yml` and `.github/workflows/main-ci.yml` — runs `test_mcp_e2e.py` + `test_mcp_stdio.py` without `continue-on-error`, gating every PR and post-merge sweep on full MCP tool coverage (#346, parent #342).
+- `docs/LAUNCH-CHECKLIST.md` "Harness smoke (release blocker)" section with 9 per-harness checkboxes (Tier 1: Claude Code, Codex, Antigravity; Tier 2: Cursor, Claude Desktop, Cline, Zed, Windsurf, Continue) and a pointer to `docs/HARNESS-SMOKE.md` for procedures (#346, parent #342).
+- PR template checkbox reminding contributors to update `TOOL_SMOKE_ARGS` when adding or removing MCP tools (#346, parent #342).
+- `tests/test_launch_checklist_harness.py` and `tests/test_pr_template_smoke_args.py` regression guards for the new CI-gate infrastructure (#346, parent #342).
+- `docs/HARNESS-SMOKE.md` — per-harness smoke checklist covering all 9 Tier 1+2 MCP harnesses (Claude Code, Codex, Antigravity, Cursor, Claude Desktop, Cline, Zed, Windsurf, Continue) with a canonical 5-call sequence, expected output snippets, and troubleshooting notes. Tier 3 harnesses (OpenClaw, Hermes AI, Pi) documented as future/best-effort (#345, parent #342).
+- `palinode mcp-smoke` CLI subcommand — `--list` prints all supported harnesses with tier info (TTY-aware), `<harness>` prints a copy-paste smoke runbook, `--json` emits a parseable record, and `--record` appends a JSONL entry to `.palinode/harness-smoke-runs.jsonl` for launch-gate validation in Phase 4 (#346). Tier 3 harnesses are hard-refused with an explanatory message (#345, parent #342).
+- `docs/MCP-CONFIG-HOMES.md` — added Codex CLI (`~/.codex/config.toml`, TOML format) and Antigravity (`~/.gemini/antigravity/mcp_config.json`) config-path sections (#345).
+- `tests/integration/test_mcp_stdio.py` — end-to-end stdio JSON-RPC test that spawns `palinode-api` on a random port and drives `palinode-mcp` via real MCP `stdio_client` + `ClientSession` (#344, parent #342). Verifies the transport layer that every harness uses: `initialize` handshake, `tools/list` completeness, and `tools/call` over stdio for all 25 tools. Catches stdio framing, JSON-RPC ID handling, lifecycle, and env-var inheritance bugs that the in-process Phase 1 test (#343) cannot. Marked `@pytest.mark.slow` (~23s due to subprocess startup).
+- `tests/integration/_smoke_args.py` — shared `TOOL_SMOKE_ARGS` registry consumed by both `test_mcp_e2e.py` (Phase 1) and `test_mcp_stdio.py` (Phase 2). Single source of truth keeps in-process and stdio coverage in lockstep; the drift guard in `test_mcp_e2e.py` covers both.
+
+### Plugin
+
+- **OpenClaw plugin updated for 2026.5.x compatibility (#368).** Type and dev-dependency alignment for the OpenClaw plugin tree (`@types/node`, `typescript`) with the latest OpenClaw release; `package-lock.json` regenerated. No product-surface changes.
+
+## [0.8.9] — 2026-05-14
+
+M1 hardening + UX polish. Six issues closed across the silent-misconfiguration cluster (config defaults, git persistence), CLI bug fixes, MCP tool-result budget overruns, and per-PR CHANGELOG/doc discipline. No breaking changes; one new opt-in MCP parameter (`palinode_search full=True`).
+
+### Removed
+
+- **Stop tracking `build/` and `dist/` artifacts in git (#295).** 45 stale build outputs (43 from `build/lib/palinode/*` and 2 from `dist/palinode-0.7.0*` — three releases old) were checked in. They go stale fast, bloat clones, and confuse `pip install -e .`. They were also the largest leak category caught by the 2026-05-01 pre-v0.8.7 scrub audit that triggered the #292 belt-and-suspenders path scrub. `.gitignore` now excludes `build/`, `dist/`, and `*.egg-info/` generically; regression guard in `tests/test_no_build_artifacts_tracked.py` fails CI if anyone re-adds them.
+
+### Changed
+
+- **`/search` API now populates a bounded `snippet` field on every result, and `palinode_search` MCP tool renders it by default (#352).** Pathologically large chunks (flat files with no section breaks could produce 50KB+ single chunks) used to blow the MCP tool-result budget — two routine searches were enough to exceed Claude Code's ceiling. The fix splits the contract: API preserves full `content` for CLI/API consumers, adds `snippet` (default cap 400 chars, configurable via `config.search.snippet_max_chars`) windowed on the first matched query term. MCP renders snippet by default with a "use palinode_read for full text" footer when anything was truncated; new `full=True` parameter on `palinode_search` opts into a 4KB-capped content render for the rare case it's needed. `palinode search` CLI also prefers the new `snippet` field over its prior blind 200-char content truncation, so TTY output now shows a centered match window instead of arbitrary leading text — with a legacy fallback when talking to an older API server.
+- **Silent-misconfiguration paths now warn loud-and-recoverably (M1 hardening, #273 + #354).**
+  - `load_config()` emits a `WARNING` when no `palinode.config.yaml` is found and built-in defaults are loaded, listing every path searched plus the recovery hint ("set `PALINODE_DIR` or drop a config file at..."). The stderr startup banner also changes from `Palinode config: defaults` to `Palinode config: ⚠ defaults (no config file found)` so production deployments where systemd wires `PALINODE_DIR` but an interactive ssh session doesn't can't silently run `palinode lint` against the wrong filesystem (#273).
+  - API server lifespan warns at startup when `config.git.auto_commit` is enabled but `memory_dir` is not a git repository — every `/save`'s `git commit` was silently no-op'ing with no operator signal. The warning includes the exact `git init <dir>` recovery command (#354).
+
+### Documentation
+
+- **`/save` endpoint docstring now shows the canonical request schema (#299)** — FastAPI's auto-generated `/docs` UI renders the docstring, so new integrators see `{content, type, slug, entities, title}` directly. Explicitly notes that the body field is `content` (not `body`) and that `category` is *derived* from `type`, not a separate input — the legacy/wrong shape that misled at least one smoke-test prompt.
+- **README API reference and inline `/save` endpoint docstring now document the request-body size cap (#298)** — `PALINODE_MAX_REQUEST_BYTES` default 5 MB. Code, README, OPERATIONS.md, and the endpoint docstring are now aligned. Added `tests/test_docs_schema_alignment.py` (5 tests) to keep code and docs in sync — fails CI if the constant changes without the docs being updated, or if the SaveRequest model grows a `body`/`category` field.
+
+### Fixed
+
+- **`palinode config view` no longer crashes with `TypeError: isinstance() arg 2 must be a type` (#274).** Root cause: `from palinode.cli.list import list_cmd` had the side effect of binding the `palinode.cli.list` submodule onto the `palinode.cli` package namespace, shadowing the builtin `list`. The nested `to_dict` helper in `config_view` then resolved `list` to the submodule and `isinstance(obj, <module>)` raised. Fixed by renaming the submodule to `palinode/cli/list_cmd.py` (the CLI command name `palinode list` is unchanged). Also added a `builtins.list` reference + defensive `try/except TypeError` fallback in `to_dict` so any future unserialisable field degrades to `repr()` instead of crashing the whole view. While in the area, also fixed an undefined-`console` reference in `config_view` (separate latent bug previously hidden by the TypeError).
+
+### Added
+
+- Release-blocking `mcp-tool-coverage` CI job in `.github/workflows/ci.yml` and `.github/workflows/main-ci.yml` — runs `test_mcp_e2e.py` + `test_mcp_stdio.py` without `continue-on-error`, gating every PR and post-merge sweep on full MCP tool coverage (#346, parent #342).
+- `docs/LAUNCH-CHECKLIST.md` "Harness smoke (release blocker)" section with 9 per-harness checkboxes (Tier 1: Claude Code, Codex, Antigravity; Tier 2: Cursor, Claude Desktop, Cline, Zed, Windsurf, Continue) and a pointer to `docs/HARNESS-SMOKE.md` for procedures (#346, parent #342).
+- PR template checkbox reminding contributors to update `TOOL_SMOKE_ARGS` when adding or removing MCP tools (#346, parent #342).
+- `tests/test_launch_checklist_harness.py` and `tests/test_pr_template_smoke_args.py` regression guards for the new CI-gate infrastructure (#346, parent #342).
+- `docs/HARNESS-SMOKE.md` — per-harness smoke checklist covering all 9 Tier 1+2 MCP harnesses (Claude Code, Codex, Antigravity, Cursor, Claude Desktop, Cline, Zed, Windsurf, Continue) with a canonical 5-call sequence, expected output snippets, and troubleshooting notes. Tier 3 harnesses (OpenClaw, Hermes AI, Pi) documented as future/best-effort (#345, parent #342).
+- `palinode mcp-smoke` CLI subcommand — `--list` prints all supported harnesses with tier info (TTY-aware), `<harness>` prints a copy-paste smoke runbook, `--json` emits a parseable record, and `--record` appends a JSONL entry to `.palinode/harness-smoke-runs.jsonl` for launch-gate validation in Phase 4 (#346). Tier 3 harnesses are hard-refused with an explanatory message (#345, parent #342).
+- `docs/MCP-CONFIG-HOMES.md` — added Codex CLI (`~/.codex/config.toml`, TOML format) and Antigravity (`~/.gemini/antigravity/mcp_config.json`) config-path sections (#345).
+- `tests/integration/test_mcp_stdio.py` — end-to-end stdio JSON-RPC test that spawns `palinode-api` on a random port and drives `palinode-mcp` via real MCP `stdio_client` + `ClientSession` (#344, parent #342). Verifies the transport layer that every harness uses: `initialize` handshake, `tools/list` completeness, and `tools/call` over stdio for all 25 tools. Catches stdio framing, JSON-RPC ID handling, lifecycle, and env-var inheritance bugs that the in-process Phase 1 test (#343) cannot. Marked `@pytest.mark.slow` (~23s due to subprocess startup).
+- `tests/integration/_smoke_args.py` — shared `TOOL_SMOKE_ARGS` registry consumed by both `test_mcp_e2e.py` (Phase 1) and `test_mcp_stdio.py` (Phase 2). Single source of truth keeps in-process and stdio coverage in lockstep; the drift guard in `test_mcp_e2e.py` covers both.
 
 ## [0.8.8] — 2026-05-01
 
@@ -177,6 +223,7 @@ working without ceremony.
 - `palinode_depends` — milestone dependency modeling tool (#97). Reads `depends_on`, `blocks`, and `parallel_with` frontmatter from ProjectSnapshot files and returns the dependency neighbourhood for a slug; `--unblocked` (CLI) / `unblocked=true` (MCP/REST) returns all items whose every dependency is done. Exposed on all four surfaces: MCP (`palinode_depends`), REST (`GET /depends/{slug}`, `GET /depends/_unblocked`), CLI (`palinode depends <slug>`), and plugin (`palinode_depends`).
 - `palinode lint --deep-contradictions` — opt-in LLM-confirmed semantic contradiction check across all `type: Decision` memories. Uses embedding similarity to identify candidate pairs (configurable `--similarity-threshold`, default 0.75), then calls the configured LLM endpoint to classify each as CONTRADICTION / AGREEMENT / UNRELATED. Hard cap via `--max-llm-calls` (default 50). Default `palinode lint` is unchanged and makes no LLM calls (#98).
 - `tests/test_mcp_tool_count.py` — assertion test that keeps the `docs/MCP-SETUP.md` available-tools table in sync with `palinode/mcp.py` registered tools (#238).
+- `tests/integration/test_mcp_e2e.py` — every-tool smoke registry (`TOOL_SMOKE_ARGS`) and parametrized `test_every_tool_dispatches` exercise all 25 MCP tools in-process with minimal valid args; a drift guard `test_smoke_args_covers_all_tools` sources the tool list from `@server.list_tools()` so a new tool added without a smoke entry fails with a clear instruction (#343, parent #342). Lenient flag tolerates graceful errors for tools that legitimately can't complete in a sealed test env (`palinode_ingest`, `palinode_consolidate`, `palinode_push`, `palinode_doctor_deep`).
 - `docs/LAUNCH-CHECKLIST.md` — pre-launch readiness checklist for v1.0 (#125).
 - `docs/MCP-SETUP.md` — Codex CLI section (#52).
 - `docs/INSTALL-CLAUDE-CODE.md` — Cursor, Antigravity IDE, and Codex CLI sections with skill paths and MCP config locations (#52).

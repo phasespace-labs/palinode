@@ -109,10 +109,18 @@ def search(
             for res in results:
                 score_str = f"[{res['score']:.2f}] " if score else ""
                 title = res.get("file", "Untitled")
-                content = res.get("content", "").strip()[:200] + "..." if len(res.get("content", "")) > 200 else res.get("content", "")
-                
+                # #352: prefer the API-provided snippet — already match-windowed
+                # and bounded. Fall back to the legacy blind-truncation path
+                # when talking to an older API server that doesn't populate it.
+                snippet = res.get("snippet")
+                if snippet is not None:
+                    body = snippet.strip()
+                else:
+                    raw = res.get("content", "")
+                    body = raw.strip()[:200] + "..." if len(raw) > 200 else raw
+
                 console.print(f"[bold blue]{score_str}{title}[/bold blue]")
-                console.print(f"  {content}")
+                console.print(f"  {body}")
                 console.print()
                 
     except Exception as e:

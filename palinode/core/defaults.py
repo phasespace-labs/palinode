@@ -67,6 +67,27 @@ SAVE_SOURCE_HEADER: str = "X-Palinode-Source"
 SAVE_SOURCE_API_DEFAULT: str = "api"
 
 
+# ── Session-end timeouts (#377) ──────────────────────────────────────────────
+
+#: HTTP request timeout (in seconds) for ``POST /session-end`` on every
+#: surface that calls it directly (CLI, MCP).  90 seconds matches the
+#: embed-path budget introduced in 9d5ec74 (fix(mcp): raise embed-path
+#: timeouts to 90 s; add GPU keepalive).  Multi-decision payloads + BGE-M3
+#: dedup embed + git commit on a remote host can together exceed the old 30s
+#: default and produce misleading "is palinode running?" errors.
+#:
+#: The env-var ``PALINODE_SESSION_END_TIMEOUT`` overrides this at runtime so
+#: operators on faster infra don't have to rebuild to tighten it.
+SESSION_END_TIMEOUT_SECONDS: float = float(
+    __import__("os").environ.get("PALINODE_SESSION_END_TIMEOUT", "90")
+)
+
+#: Sentinel for cross-surface drift assertions.  Any module that imports
+#: ``SESSION_END_TIMEOUT_SECONDS`` should assert it equals this at import
+#: time, so a future maintainer who changes the default here will immediately
+#: see which surfaces must be updated.
+_SESSION_END_TIMEOUT_SENTINEL: float = 90.0
+
 # ── Session-end dedup (#126) ─────────────────────────────────────────────────
 
 #: Lookback window (in minutes) over which ``session_end`` checks recently
@@ -100,6 +121,8 @@ __all__ = [
     "HISTORY_LIMIT_DEFAULT",
     "SAVE_SOURCE_HEADER",
     "SAVE_SOURCE_API_DEFAULT",
+    "SESSION_END_TIMEOUT_SECONDS",
+    "_SESSION_END_TIMEOUT_SENTINEL",
     "SESSION_END_DEDUP_WINDOW_MINUTES",
     "SESSION_END_DEDUP_THRESHOLD",
     "ALLOWED_MEMORY_EXTENSIONS",

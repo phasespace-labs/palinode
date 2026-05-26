@@ -143,6 +143,10 @@ class AutoSummaryConfig:
     max_chars: int = 120
     min_content_chars: int = 200
     ollama_url: str | None = None
+    # #336: hard timeout for the /api/generate call inside _generate_description.
+    # Default 5s so a cold Ollama model (15+ s latency) doesn't block /save.
+    # Override via PALINODE_DESCRIBE_TIMEOUT_SECONDS env var.
+    describe_timeout_seconds: float = 5.0
 
 @dataclass
 class SearchConfig:
@@ -155,6 +159,10 @@ class SearchConfig:
     hybrid_enabled: bool = True
     dedup_score_gap: float = 0.2
     daily_penalty: float = 0.3  # Multiplier for daily/ files (0.3 = 30% of original score)
+    # #352: cap per-result body returned by /search via the `snippet` field.
+    # MCP renders snippet by default; full chunk content remains available
+    # through `content` (API/CLI) or the `full=true` flag on palinode_search.
+    snippet_max_chars: int = 400
 
 @dataclass
 class NightlyConfig:
@@ -558,6 +566,13 @@ def load_config() -> Config:
         cfg.scope.harness = os.environ["PALINODE_HARNESS"]
     if "PALINODE_AGENT" in os.environ:
         cfg.scope.agent = os.environ["PALINODE_AGENT"]
+    if "PALINODE_DESCRIBE_TIMEOUT_SECONDS" in os.environ:
+        try:
+            cfg.auto_summary.describe_timeout_seconds = float(
+                os.environ["PALINODE_DESCRIBE_TIMEOUT_SECONDS"]
+            )
+        except ValueError:
+            pass
 
     # Warn if PALINODE_DIR is set but db_path was not updated to match
     if "PALINODE_DIR" in os.environ:
@@ -581,15 +596,32 @@ def load_config() -> Config:
     except (OSError, ValueError):
         num_files = 0
 
+    # #273: when defaults are loaded, surface the fact LOUDLY — a dim "defaults"
+    # label is easy to miss when systemd wires PALINODE_DIR but an interactive
+    # ssh session doesn't. Production deployments hit this when humans invoke
+    # `palinode lint`, ad-hoc cron, or `claude --mcp` outside the systemd unit
+    # env and silently run against the wrong filesystem. Two-pronged signal:
+    #   1. A "⚠ defaults" prefix in the banner.
+    #   2. A logger.warning listing every path we searched, so the user can
+    #      see exactly where to drop a config file.
+    if loaded_path is None:
+        _logger.warning(
+            "no palinode.config.yaml found — using built-in defaults. "
+            "Searched: %s. Set PALINODE_DIR or place a config file in one of "
+            "these locations to suppress this warning.",
+            ", ".join(config_paths),
+        )
+
     # Diagnostic banner — write to stderr so machine-readable stdout
     # (e.g. `palinode doctor --json | jq`) stays clean. Per Unix convention,
     # informational/diagnostic output belongs on stderr.
+    banner_label = "⚠ defaults (no config file found)" if loaded_path is None else loaded_path
     print(
-        f"Palinode config: {loaded_path or 'defaults'} "
+        f"Palinode config: {banner_label} "
         f"({num_files} files, {cfg.embeddings.primary.model} @ {cfg.embeddings.primary.url})",
         file=sys.stderr,
     )
-    
+
     return cfg
 
 

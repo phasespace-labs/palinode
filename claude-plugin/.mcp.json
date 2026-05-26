@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "palinode": {
+      "command": "palinode-mcp",
+      "args": [],
+      "env": {}
+    }
+  }
+}

@@ -71,7 +71,12 @@ def test_save_defaults_source_to_cli(mock_memory_dir):
     """
     runner = CliRunner()
 
-    with patch("palinode.cli._api.api_client.save") as mock_save:
+    # Patch at the call site (save.py's module-level reference), not at the
+    # definition site (_api.py).  test_session_end_timeout.py deletes
+    # palinode.cli._api from sys.modules and reimports it, which creates a
+    # fresh api_client object.  save.py still holds the pre-reload reference,
+    # so patching _api.api_client after the reload misses the call entirely.
+    with patch("palinode.cli.save.api_client.save") as mock_save:
         mock_save.return_value = {"file": "test", "id": "test"}
         result = runner.invoke(save, ["test", "--type", "Insight"])
 
@@ -136,7 +141,12 @@ def test_session_end_includes_source(mock_memory_dir):
         # the in-process handler is happy with empty lists.
         return session_end_api(SessionEndRequest(**clean))
 
-    with patch("palinode.cli._api.api_client.session_end", side_effect=_fake_session_end), \
+    # Patch at the call site (session_end.py's module-level reference), not
+    # at _api.py.  test_session_end_timeout.py evicts palinode.cli._api from
+    # sys.modules and reimports it; session_end.py's own api_client binding
+    # therefore diverges from the freshly-created one in _api — patching
+    # _api.api_client.session_end no longer intercepts the real call.
+    with patch("palinode.cli.session_end.api_client.session_end", side_effect=_fake_session_end), \
          patch("subprocess.run"), \
          patch("palinode.api.server._generate_description", return_value="t"):
         result = runner.invoke(session_end, ["Tested something", "--source", "claude-code", "--project", "palinode"])

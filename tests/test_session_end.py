@@ -77,7 +77,7 @@ def test_project_from_cwd_helper():
 
     assert _project_from_cwd("/Users/alice/Code/my-project") == "my-project"
     assert _project_from_cwd("/Users/alice/Code/my-project/") == "my-project"
-    assert _project_from_cwd("/workspace/Code/My Project") == "my-project"
+    assert _project_from_cwd("/Users/alice/Code/My Project") == "my-project"
     assert _project_from_cwd("") is None
     assert _project_from_cwd(None) is None
     # Trailing slash + odd chars

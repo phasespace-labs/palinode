@@ -117,7 +117,22 @@ def _api_url(path: str) -> str:
 # header.  The API uses this when the body doesn't explicitly set `source`,
 # giving consistent provenance across the four surfaces without each tool
 # dispatcher having to thread a default through every call site.
-from palinode.core.defaults import SAVE_SOURCE_HEADER as _SOURCE_HEADER
+from palinode.core.defaults import (
+    SAVE_SOURCE_HEADER as _SOURCE_HEADER,
+    SESSION_END_TIMEOUT_SECONDS as _SESSION_END_TIMEOUT,
+    _SESSION_END_TIMEOUT_SENTINEL as _SENTINEL,
+)
+import os as _os
+
+# Cross-surface drift guard (#377): assert the constant matches its sentinel
+# unless the operator has set an explicit env-var override.
+assert _SESSION_END_TIMEOUT == _SENTINEL or _os.environ.get(
+    "PALINODE_SESSION_END_TIMEOUT"
+), (
+    f"SESSION_END_TIMEOUT_SECONDS ({_SESSION_END_TIMEOUT}) differs from sentinel "
+    f"({_SENTINEL}) without PALINODE_SESSION_END_TIMEOUT override — "
+    "update mcp.py or defaults.py to stay in sync (#377)"
+)
 
 _DEFAULT_HEADERS = {_SOURCE_HEADER: "mcp"}
 
@@ -151,11 +166,24 @@ def _text(content: str) -> list[types.TextContent]:
     return [types.TextContent(type="text", text=content)]
 
 
-def _format_results(results: list[dict[str, Any]]) -> str:
-    """Format search results as clean text — minimal context burn."""
+_FULL_CONTENT_HARD_CAP = 4000  # Politeness ceiling for full=True (#352).
+
+
+def _format_results(results: list[dict[str, Any]], full: bool = False) -> str:
+    """Format search results as clean text — minimal context burn.
+
+    Renders ``snippet`` by default (populated by ``/search`` per #352) so
+    pathologically large chunks don't blow the MCP tool-result budget. When
+    ``full=True``, renders ``content`` capped at ``_FULL_CONTENT_HARD_CAP``;
+    callers that want untruncated bodies should use ``palinode_read``.
+
+    Falls back to a defensive 400-char ``content`` slice if neither field is
+    populated (older API or external caller).
+    """
     if not results:
         return "No results found."
     parts = []
+    any_truncated = False
     for r in results:
         file_path = r.get("file_path", "")
         # Strip absolute prefix if present
@@ -183,8 +211,33 @@ def _format_results(results: list[dict[str, Any]]) -> str:
                 f"{_PRETTY_KEYS.get(k, k)}: {v}" for k, v in ext_refs.items()
             ]
             refs_label = " [" + ", ".join(ref_parts) + "]"
-        parts.append(f"[{rel}] ({score_pct}% match){fresh_label}{refs_label}\n{r.get('content', '').strip()}")
-    return "\n\n---\n\n".join(parts)
+
+        # #352: pick body — snippet (default) or capped content (full=True).
+        if full:
+            body = (r.get("content") or "")[:_FULL_CONTENT_HARD_CAP]
+            if r.get("content") and len(r["content"]) > _FULL_CONTENT_HARD_CAP:
+                body = body.rstrip() + "…"
+                any_truncated = True
+        else:
+            body = r.get("snippet")
+            if body is None:
+                # Defensive fallback for callers that bypass the snippet
+                # enrichment path. 400 matches snippet_max_chars default.
+                body = (r.get("content") or "")[:400]
+            if r.get("content_truncated"):
+                any_truncated = True
+
+        parts.append(
+            f"[{rel}] ({score_pct}% match){fresh_label}{refs_label}\n{(body or '').strip()}"
+        )
+
+    rendered = "\n\n---\n\n".join(parts)
+    if any_truncated and not full:
+        rendered += (
+            "\n\n(some results truncated — call palinode_search with full=true, "
+            "or palinode_read <file> for the complete text.)"
+        )
+    return rendered
 
 
 def _resolve_save_type(arg_type: str | None, arg_ps: bool | None) -> str:
@@ -337,6 +390,17 @@ async def list_tools() -> list[types.Tool]:
                             "= stricter.  Defaults to MCP-tuned value from "
                             "config when omitted."
                         ),
+                    },
+                    "full": {
+                        "type": "boolean",
+                        "description": (
+                            "Return full chunk content instead of bounded "
+                            "snippets (#352). Default false keeps tool "
+                            "results within MCP budget; use sparingly when "
+                            "you genuinely need the whole chunk body. For "
+                            "the complete file, call palinode_read."
+                        ),
+                        "default": False,
                     },
                 },
                 "required": ["query"],
@@ -1119,10 +1183,13 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
             if context:
                 body["context"] = context
 
-            resp = await _post("/search", json=body, timeout=90.0)
+            resp = await _post("/search", json=body, timeout=60.0)
             if resp.status_code != 200:
                 return _text(f"Search failed: {resp.text}")
-            return _text(_format_results(resp.json()))
+            # #352: `full` is purely a rendering choice — the API always
+            # populates `snippet` and preserves `content`, so the MCP picks
+            # which to render without an extra round-trip.
+            return _text(_format_results(resp.json(), full=bool(arguments.get("full"))))
 
         # ── save ──────────────────────────────────────────────────────────
         elif name == "palinode_save":
@@ -1161,13 +1228,24 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
             if arguments.get("external_refs") is not None:
                 body["external_refs"] = arguments["external_refs"]
 
-            resp = await _post("/save", json=body, timeout=90.0)
+            resp = await _post("/save", json=body)
             if resp.status_code != 200:
                 return _text(f"Save failed: {resp.text}")
             data = resp.json()
             file_path = data.get("file_path", "")
             # Show relative path
             rel = file_path.rsplit("/palinode/", 1)[-1] if "/palinode/" in file_path else file_path
+            # Surface per-index health signals from #385 if either index
+            # write failed — these are warnings, not save failures.
+            warnings: list[str] = []
+            if not data.get("indexed_vec", True):
+                warnings.append("vec index write failed (chunk absent from vector search)")
+            if not data.get("indexed_fts", True):
+                warnings.append("FTS5 sync failed (periodic rebuild will recover)")
+            if not data.get("git_committed", True):
+                warnings.append("git auto-commit failed (file on disk, not versioned)")
+            if warnings:
+                return _text(f"Saved to {rel} [warnings: {'; '.join(warnings)}]")
             return _text(f"Saved to {rel}")
 
         # ── ingest ────────────────────────────────────────────────────────
@@ -1374,7 +1452,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
             if arguments.get("source"):
                 body["source"] = arguments["source"]
 
-            resp = await _post("/session-end", json=body, timeout=90.0)
+            resp = await _post("/session-end", json=body, timeout=_SESSION_END_TIMEOUT)
             if resp.status_code != 200:
                 return _text(f"Session-end failed: {resp.text}")
             data = resp.json()
@@ -1582,25 +1660,9 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-async def _warmup_embed() -> None:
-    """Fire a throwaway search on startup to pre-heat the embedding GPU.
-
-    BGE-M3 cold-starts take ~54 s when the GPU goes into low-power state
-    between sessions.  Firing this immediately — before the first real tool
-    call — means the GPU is warm by the time the user invokes palinode_save
-    or palinode_search.  Failures are silently swallowed; this is not on the
-    critical path.
-    """
-    try:
-        await _post("/search", json={"query": "warmup", "limit": 1}, timeout=90.0)
-    except Exception:
-        pass
-
-
 async def async_main() -> None:
     """Async boot sequence — start MCP server over stdio."""
     async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
-        asyncio.create_task(_warmup_embed())
         await server.run(
             read_stream,
             write_stream,

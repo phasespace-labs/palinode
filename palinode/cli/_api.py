@@ -1,7 +1,18 @@
 import os
 import httpx
 from palinode.core.config import config
-from palinode.core.defaults import SAVE_SOURCE_HEADER
+from palinode.core.defaults import SAVE_SOURCE_HEADER, SESSION_END_TIMEOUT_SECONDS, _SESSION_END_TIMEOUT_SENTINEL
+
+# Cross-surface drift guard (#377): all three entry points (CLI, MCP, hook) must
+# use SESSION_END_TIMEOUT_SECONDS from defaults.  If the sentinel changes without
+# this module being updated, this assertion fires at import time.
+assert SESSION_END_TIMEOUT_SECONDS == _SESSION_END_TIMEOUT_SENTINEL or os.environ.get(
+    "PALINODE_SESSION_END_TIMEOUT"
+), (
+    f"SESSION_END_TIMEOUT_SECONDS ({SESSION_END_TIMEOUT_SECONDS}) differs from sentinel "
+    f"({_SESSION_END_TIMEOUT_SENTINEL}) without PALINODE_SESSION_END_TIMEOUT override — "
+    "update cli/_api.py or defaults.py to stay in sync (#377)"
+)
 
 # Re-exported for CLI commands that need to catch API errors without
 # importing httpx directly (ADR-010: HTTP-layer monopoly).
@@ -220,7 +231,7 @@ class PalinodeAPI:
             payload["session_id"] = session_id
         if duration_seconds is not None:
             payload["duration_seconds"] = duration_seconds
-        response = self.client.post("/session-end", json=payload, timeout=30.0)
+        response = self.client.post("/session-end", json=payload, timeout=SESSION_END_TIMEOUT_SECONDS)
         response.raise_for_status()
         return response.json()
 

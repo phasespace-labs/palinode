@@ -20,11 +20,16 @@ import urllib.request
 from palinode.core import store, parser, embedder  # noqa: F401  (embedder re-exported for test patches)
 from palinode.core.config import config
 from palinode.indexer.index_file import index_file
-from palinode.core.db import utc_now as _utc_now
 import json
+from datetime import UTC, datetime
 
 logger = logging.getLogger("palinode.watcher")
 logger.setLevel(logging.INFO)
+
+
+def _utc_now() -> datetime:
+    """Return a timezone-aware UTC timestamp."""
+    return datetime.now(UTC)
 
 
 class JsonlFormatter(logging.Formatter):
@@ -56,7 +61,10 @@ class PalinodeHandler(FileSystemEventHandler):
         super().__init__()
         self.last_processed: dict[str, float] = {}
         self._summary_timer: threading.Timer | None = None
-        
+        self._description_timer: threading.Timer | None = None
+        # Files needing description retry, accumulated between debounce ticks.
+        self._description_pending: list[str] = []
+
     def _trigger_summaries(self) -> None:
         """Hits the summary generation API to auto-fill missing summaries."""
         logger.info("Triggering POST /generate-summaries from watcher...")
@@ -74,6 +82,57 @@ class PalinodeHandler(FileSystemEventHandler):
         self._summary_timer = threading.Timer(5.0, self._trigger_summaries)
         self._summary_timer.daemon = True
         self._summary_timer.start()
+
+    def _fill_pending_descriptions(self) -> None:
+        """Re-call description generation for files that had it deferred.
+
+        #336: watcher-retry half of the graceful-degrade design. After the
+        description-generation timeout during /save, the watcher detects files
+        still missing their description field and calls /generate-summaries
+        (which triggers the API to fill any missing descriptions) or directly
+        re-saves description for each file.
+
+        Runs from a debounced timer after file events. Logs WARNING if Ollama
+        is still unavailable so the operator can correlate.
+        """
+        pending = list(self._description_pending)
+        self._description_pending.clear()
+        if not pending:
+            return
+        logger.info(
+            "Watcher: retrying deferred descriptions for %d file(s): %s",
+            len(pending), [os.path.basename(f) for f in pending[:5]],
+        )
+        # Trigger /generate-summaries which has a walk-all-pending-files path.
+        # This is the same mechanism used by the summary retry — reuse it so
+        # there's one code path for "fill missing LLM metadata".
+        try:
+            api_port = config.services.api.port
+            api_host = config.services.api.host
+            # B310 rationale: loopback URL derived from config, not user input
+            fill_req = urllib.request.Request(  # nosec B310
+                f"http://{api_host}:{api_port}/generate-summaries",
+                method="POST",
+            )
+            urllib.request.urlopen(fill_req, timeout=120)  # nosec B310
+            logger.info("Watcher: description retry POST /generate-summaries completed")
+        except Exception as e:
+            logger.warning(
+                "Watcher: description retry failed (will retry on next event): %s", e
+            )
+
+    def _schedule_description_fill(self, filepath: str) -> None:
+        """Debounce description fill calls across multiple rapid file events.
+
+        Accumulates filepaths; fires _fill_pending_descriptions once after
+        10 s of inactivity so a batch of file events doesn't hammer the API.
+        """
+        self._description_pending.append(filepath)
+        if self._description_timer is not None:
+            self._description_timer.cancel()
+        self._description_timer = threading.Timer(10.0, self._fill_pending_descriptions)
+        self._description_timer.daemon = True
+        self._description_timer.start()
         
     def is_valid_file(self, path: str) -> bool:
         """Deduce runtime viability for system memory ingestion boundaries.
@@ -150,6 +209,16 @@ class PalinodeHandler(FileSystemEventHandler):
         if metadata.get("core") is True and not metadata.get("summary"):
             logger.info(f"File {filepath} has core:true but lacks summary. Scheduling generation...")
             self._schedule_summary_generation()
+
+        # #336: trigger description retry for files where description was deferred
+        # during /save (timeout path). Detects absence of the description field
+        # rather than an empty string — the save path leaves it unset when deferred.
+        if not metadata.get("description"):
+            logger.debug(
+                "Watcher: %s has no description — scheduling deferred description fill",
+                os.path.basename(filepath),
+            )
+            self._schedule_description_fill(filepath)
 
     def on_modified(self, event: FileModifiedEvent | DirModifiedEvent) -> None:
         """Hook triggered implicitly by watchdog native listener.

@@ -1,7 +1,0 @@
-[Unit]
-Description=Palinode BGE-M3 GPU keepalive ping
-After=network.target
-
-[Service]
-Type=oneshot
-ExecStart=/bin/bash -c 'curl -s --max-time 30 -X POST "${OLLAMA_URL}/api/embed" -H "Content-Type: application/json" -d "{\"model\":\"bge-m3\",\"input\":\"keepalive\"}" > /dev/null 2>&1'

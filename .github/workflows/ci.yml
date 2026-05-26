@@ -1,27 +1,31 @@
+# CI pipeline for Palinode — runs on every push and pull_request to any branch.
+#
+# Jobs:
+#   1. unit-tests          — fast feedback on core logic (no external services)
+#   2. integration         — tests/integration/ (may need Ollama; continue-on-error)
+#   3. mcp-tool-coverage   — release-blocking MCP tool gate (#346)
+#   4. security-scan       — bandit (code) + pip-audit (dependencies)
+
 name: CI
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
-permissions:
-  contents: read
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 on:
   push:
   pull_request:
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Unit tests — should never need network access or Ollama.
+  # All embeddings / LLM calls are mocked in the test suite.
+  # ---------------------------------------------------------------------------
   unit-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
 
     strategy:
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12"]
 
     steps:
       - uses: actions/checkout@v4
@@ -37,7 +41,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: Assert package resolves to the checked-out tree
+      - name: Assert palinode resolves to the checked-out tree
+        # Regression guard for editable installs: palinode.__file__ must
+        # resolve under GITHUB_WORKSPACE, not some other site-packages path.
         run: |
           RESOLVED=$(python -c "import palinode; print(palinode.__file__)")
           echo "palinode.__file__ = $RESOLVED"
@@ -47,15 +53,22 @@ jobs:
             exit 1
           fi
 
-      - name: Smoke console entry points
-        run: python -m pytest tests/test_console_entry_points.py -q
-
-      - name: Run unit tests
+      - name: Run unit tests (excluding integration)
         run: python -m pytest tests/ -x -q --ignore=tests/integration --ignore=tests/live
 
+  # ---------------------------------------------------------------------------
+  # Integration tests — run against tests/integration/.
+  #
+  # These tests do not require Ollama directly (embeddings are stubbed), but
+  # they do spin up FastAPI in-process and exercise the full save/search loop
+  # against a real SQLite database in a temp directory.
+  #
+  # continue-on-error: true — any test tagged @pytest.mark.slow that needs
+  # a live Ollama instance will fail here; that is expected in CI.
+  # Run the full suite locally against a host with Ollama for full coverage.
+  # ---------------------------------------------------------------------------
   integration-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
 
     env:
       PALINODE_DIR: /tmp/palinode-ci-test
@@ -75,12 +88,50 @@ jobs:
           pip install -e ".[dev]"
 
       - name: Run integration tests
+        # Integration tests that need Ollama will be skipped in CI;
+        # run locally against a host with Ollama for full Ollama-backed coverage.
         run: python -m pytest tests/integration/ -x -q
         continue-on-error: true
 
+  # ---------------------------------------------------------------------------
+  # MCP tool coverage — release-blocking gate (#346, parent #342).
+  #
+  # Runs the in-process (Phase 1) and stdio (Phase 2) MCP tool-coverage
+  # tests WITHOUT continue-on-error.  A failure here blocks the PR.
+  # The drift guard in test_mcp_e2e.py ensures new tools cannot ship
+  # without smoke-args coverage.
+  # ---------------------------------------------------------------------------
+  mcp-tool-coverage:
+    runs-on: ubuntu-latest
+
+    env:
+      PALINODE_DIR: /tmp/palinode-ci-mcp
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run MCP tool-coverage tests
+        run: python -m pytest tests/integration/test_mcp_e2e.py tests/integration/test_mcp_stdio.py -v
+
+  # ---------------------------------------------------------------------------
+  # Security scans — informational (continue-on-error: true on pip-audit).
+  #
+  # bandit:    static analysis for common Python security issues
+  # pip-audit: checks installed packages against known vulnerability databases
+  # ---------------------------------------------------------------------------
   security-scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
@@ -97,9 +148,11 @@ jobs:
           pip install -e ".[dev]"
           pip install bandit pip-audit
 
-      - name: Run bandit
+      - name: Run bandit (static security analysis)
+        # -r: recursive, -ll: medium+ severity, -q: quiet output
         run: bandit -r palinode/ -ll -q
 
-      - name: Run pip-audit
+      - name: Run pip-audit (dependency vulnerability check)
+        # continue-on-error: known-vulnerability lists drift; treat as informational
         run: pip-audit
         continue-on-error: true

@@ -45,9 +45,13 @@ M3.5-EXECUTE-PROMPT.md
 .DS_Store
 
 # Build artifacts
+# #295: generic Python build outputs — rebuilt fresh by publish-pypi.yml on
+# tag push, so tracking them in git only causes staleness and bloat.
+build/
+dist/
+*.egg-info/
 plugin/node_modules/
 plugin/dist/
-palinode.egg-info/
 __pycache__/
 *.pyc
 *.cover

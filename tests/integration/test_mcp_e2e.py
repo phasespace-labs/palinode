@@ -488,3 +488,85 @@ def test_missing_required_arg_save(dispatch):
     text = result[0].text
     # ValueError from _resolve_save_type (no type or ps) or KeyError on content
     assert text is not None
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: every-tool smoke (issue #343, parent #342)
+#
+# Registry-driven test that exercises every MCP tool with minimal valid args.
+# The smoke-args registry is shared with the stdio JSON-RPC test (#344) via
+# tests/integration/_smoke_args.py — both surfaces stay in lockstep.
+# ---------------------------------------------------------------------------
+
+
+from tests.integration._smoke_args import (
+    DISPATCH_ERROR_PREFIXES,
+    TOOL_SMOKE_ARGS,
+    registered_tool_names,
+)
+
+
+def test_smoke_args_covers_all_tools():
+    """Drift guard: every tool registered in @server.list_tools() must have a
+    TOOL_SMOKE_ARGS entry, and the registry must not contain stale tool names.
+
+    When a new MCP tool is added to palinode/mcp.py without a smoke-args
+    entry, this test fails with a clear instruction to add one.
+    """
+    registered = set(registered_tool_names())
+    covered = set(TOOL_SMOKE_ARGS.keys())
+    missing = registered - covered
+    extra = covered - registered
+    assert not missing, (
+        f"New MCP tool(s) registered without a TOOL_SMOKE_ARGS entry: "
+        f"{sorted(missing)}. Add minimal valid args to TOOL_SMOKE_ARGS "
+        f"in tests/integration/_smoke_args.py."
+    )
+    assert not extra, (
+        f"TOOL_SMOKE_ARGS has entries for tools not registered in "
+        f"palinode/mcp.py: {sorted(extra)}. Remove the stale entry "
+        f"or fix the tool name."
+    )
+
+
+@pytest.fixture()
+def seeded_env(api_tc, isolated_env):
+    """isolated_env + a pre-seeded insights/smoke-target.md.
+
+    Several tools (read, history, blame, rollback, cluster_neighbors) need a
+    target file to exercise.  A single shared seed keeps the parametrized
+    smoke test reproducible without per-tool setup.
+    """
+    api_tc.post("/save", json={
+        "content": "Seed file for the parametrized MCP smoke suite.",
+        "type": "Insight",
+        "slug": "smoke-target",
+    })
+    return isolated_env
+
+
+@pytest.mark.parametrize(
+    "tool_name,args,lenient",
+    [(name, args, lenient) for name, (args, lenient) in TOOL_SMOKE_ARGS.items()],
+    ids=list(TOOL_SMOKE_ARGS.keys()),
+)
+def test_every_tool_dispatches(dispatch, seeded_env, tool_name, args, lenient):
+    """Every MCP tool dispatches without raising and returns a non-empty TextContent.
+
+    Strict tools (lenient=False) must not return a dispatcher error response.
+    Lenient tools may return graceful error text in test env — only the
+    no-crash invariant is checked.
+    """
+    result = _run(dispatch(tool_name, args))
+    assert isinstance(result, list), f"{tool_name}: expected list, got {type(result).__name__}"
+    assert len(result) == 1, f"{tool_name}: expected 1 TextContent, got {len(result)}"
+    text = result[0].text
+    assert text and len(text) > 0, f"{tool_name}: returned empty text"
+
+    if not lenient:
+        for prefix in DISPATCH_ERROR_PREFIXES:
+            if text.startswith(prefix):
+                pytest.fail(
+                    f"{tool_name} returned dispatcher error response: "
+                    f"{text[:300]!r}"
+                )

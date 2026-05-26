@@ -182,7 +182,7 @@ palinode diff --days 7
 
 ## Tools
 
-21 tools available through every interface:
+25 tools available through every interface:
 
 | Tool | What It Does |
 |------|-------------|
@@ -207,6 +207,10 @@ palinode diff --days 7
 | `orphan_repair` | Find semantic matches for broken `[[wikilinks]]` |
 | `doctor` | Fast diagnostic pass — 18+ checks across paths, services, config, index |
 | `doctor_deep` | Full diagnostic with canary write test (~10–15s) |
+| `cluster_neighbors` | Find top-K semantically related files NOT already wiki-linked — surface implicit relationships for cross-link proposals |
+| `topic_coverage` | Given a short topic phrase, return whether any existing wiki page already covers it (binary `covered` / `best_match` / `similarity`) |
+| `depends` | Dependency tree (or unblocked-items list) from `depends_on` / `blocks` / `parallel_with` frontmatter on ProjectSnapshots |
+| `timeline` | _Deprecated — use `history` with `detail='full'`._ Commit-level evolution of a file with per-commit diffs |
 
 Every tool is accessible as `palinode_<name>` via MCP, `palinode <name>` via CLI, or `POST/GET /<name>` via the REST API.
 
@@ -334,7 +338,7 @@ Optional: a chat model for consolidation (any 7B+ works), OpenClaw for agent plu
 | `GET` | `/status` | Health check + stats |
 | `POST` | `/search` | Hybrid search with filters |
 | `POST` | `/search-associative` | Entity graph traversal |
-| `POST` | `/save` | Create a typed memory file |
+| `POST` | `/save` | Create a typed memory file. Schema: `{content, type, slug?, entities?, title?}`. Body cap **5 MB** (override via `PALINODE_MAX_REQUEST_BYTES`). |
 | `POST` | `/ingest-url` | Fetch URL, save as research |
 | `GET/POST` | `/triggers` | Prospective recall triggers |
 | `POST` | `/consolidate` | Run or preview compaction |

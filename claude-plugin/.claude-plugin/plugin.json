@@ -1,0 +1,24 @@
+{
+  "name": "palinode",
+  "description": "Persistent memory for AI agents. Git-versioned markdown files as source of truth, hybrid SQLite-vec + FTS5 search, deterministic compaction. Every line in your agent's brain has a git blame.",
+  "version": "0.6.1",
+  "author": {
+    "name": "Paul Kyle",
+    "url": "https://github.com/Paul-Kyle"
+  },
+  "homepage": "https://github.com/phasespace-labs/palinode",
+  "repository": "https://github.com/phasespace-labs/palinode",
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "persistence",
+    "markdown",
+    "git",
+    "agent",
+    "mcp",
+    "sqlite-vec",
+    "bge-m3",
+    "compaction",
+    "local-first"
+  ]
+}

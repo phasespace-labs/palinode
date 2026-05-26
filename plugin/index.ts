@@ -22,6 +22,97 @@ const DEFAULTS = {
   autoCapture: true,
   autoRecall: true,
   midTurnMode: "none" as "none" | "summary" | "full",
+  recallProfile: "coding" as RecallProfileName,
+};
+
+// ----------------------------------------------------------------------------
+// Recall profiles (#391 / #394)
+//
+// Pre-composed points in the (sources × types × per-source caps × total budget)
+// space. The plugin owns "which profile" via the OpenClaw config; the Palinode
+// server exposes primitives (max_chars, type_allow/deny). Profile names are a
+// plugin-level vocabulary — Palinode does not need to know what "monitoring"
+// means.
+//
+// Modal taxonomy the presets sit on:
+//   - acting     (probe/deploy/ingest) — operational state, deny past-tense reflection
+//   - deciding   (architecture/design) — past decisions + rationale
+//   - investigating (diagnosis) — RCAs, postmortems, incidents
+//   - composing  (writing/code) — patterns, voice, style
+//   - conversing (open chat) — people/preferences, recent state
+// ----------------------------------------------------------------------------
+
+export type RecallSource = "core" | "semantic" | "associative" | "triggers";
+
+export type RecallProfileConfig = {
+  sources: RecallSource[];
+  coreMaxCharsPerFile?: number;
+  coreBudget?: number;
+  semanticLimit?: number;
+  semanticMaxChars?: number;
+  associativeLimit?: number;
+  associativeMaxChars?: number;
+  triggersLimit?: number;
+  triggersMaxCharsEach?: number;
+  typeAllow?: string[];     // forwarded to /search via type_allow once server supports it
+  typeDeny?: string[];
+  totalBudget?: number;     // hard cap across all sources; injection clipped here
+};
+
+export type RecallProfileName =
+  | "coding"
+  | "monitoring"
+  | "investigation"
+  | "writing"
+  | "conversation"
+  | "minimal"
+  | "off";
+
+export const PROFILES: Record<RecallProfileName, RecallProfileConfig> = {
+  coding: {
+    sources: ["core", "semantic", "associative", "triggers"],
+    coreMaxCharsPerFile: 3000,
+    coreBudget: 8000,
+    semanticLimit: 5,
+    semanticMaxChars: 700,
+    associativeLimit: 3,
+    associativeMaxChars: 500,
+    triggersLimit: 10,
+    triggersMaxCharsEach: 2000,
+    totalBudget: 25000,
+  },
+  monitoring: {
+    sources: ["triggers"],
+    triggersLimit: 3,
+    triggersMaxCharsEach: 1000,
+    typeDeny: ["RCA", "Postmortem", "Incident", "Reflection"],
+    totalBudget: 3000,
+  },
+  investigation: {
+    sources: ["semantic", "associative"],
+    semanticLimit: 8,
+    semanticMaxChars: 1500,
+    associativeLimit: 5,
+    associativeMaxChars: 1000,
+    typeAllow: ["RCA", "Postmortem", "Incident", "Decision", "Insight"],
+    totalBudget: 25000,
+  },
+  writing: {
+    sources: ["core"],
+    coreMaxCharsPerFile: 2500,
+    coreBudget: 6000,
+    totalBudget: 6000,
+  },
+  conversation: {
+    sources: ["core", "triggers"],
+    coreMaxCharsPerFile: 2000,
+    coreBudget: 3000,
+    triggersLimit: 5,
+    triggersMaxCharsEach: 800,
+    totalBudget: 5000,
+  },
+  minimal: { sources: [], totalBudget: 0 },
+  off:     { sources: [], totalBudget: 0 },
 };
 
 type PalinodeConfig = {
@@ -31,6 +122,8 @@ type PalinodeConfig = {
   autoCapture: boolean;
   autoRecall: boolean;
   midTurnMode: "none" | "summary" | "full";
+  recallProfile: RecallProfileName;
+  recallProfileConfig?: Partial<RecallProfileConfig>;  // per-field override over the named preset
 };
 
 // Config schema follows standard OpenClaw plugin pattern
@@ -40,12 +133,21 @@ const _palinodeConfigSchema = Type.Object({
   promptsDir: Type.String({ default: DEFAULTS.promptsDir }),
   autoCapture: Type.Boolean({ default: DEFAULTS.autoCapture }),
   autoRecall: Type.Boolean({ default: DEFAULTS.autoRecall }),
+  recallProfile: Type.String({ default: DEFAULTS.recallProfile }),
 });
 
 const palinodeConfigSchema = {
   ..._palinodeConfigSchema,
   parse(value: unknown): PalinodeConfig {
     const cfg = (value || {}) as Record<string, unknown>;
+    const profileName = (typeof cfg.recallProfile === "string" && (cfg.recallProfile as string) in PROFILES)
+      ? (cfg.recallProfile as RecallProfileName)
+      : DEFAULTS.recallProfile;
+    const overrideRaw = cfg.recallProfileConfig;
+    const recallProfileConfig =
+      (overrideRaw && typeof overrideRaw === "object" && !Array.isArray(overrideRaw))
+        ? (overrideRaw as Partial<RecallProfileConfig>)
+        : undefined;
     return {
       palinodeApiUrl:
         typeof cfg.palinodeApiUrl === "string"
@@ -62,9 +164,26 @@ const palinodeConfigSchema = {
       autoCapture: cfg.autoCapture !== false,
       autoRecall: cfg.autoRecall !== false,
       midTurnMode: (["none", "summary", "full"].includes(cfg.midTurnMode as string) ? cfg.midTurnMode : "none") as "none" | "summary" | "full",
+      recallProfile: profileName,
+      recallProfileConfig,
     };
   },
 };
+
+/**
+ * Compose the active recall configuration from the named profile + override.
+ *
+ * - `autoRecall: false` short-circuits to "off" (empty sources, zero budget).
+ * - Unknown profile names fall back to "coding" defensively at parse time.
+ * - `recallProfileConfig` shallow-overrides individual fields on the base preset,
+ *   so callers can ship `recallProfile: "monitoring"` and bump `triggersLimit`
+ *   to 5 without forking the whole preset.
+ */
+export function resolveProfile(cfg: Pick<PalinodeConfig, "autoRecall" | "recallProfile" | "recallProfileConfig">): RecallProfileConfig {
+  if (cfg.autoRecall === false) return PROFILES.off;
+  const base = PROFILES[cfg.recallProfile] ?? PROFILES.coding;
+  return { ...base, ...(cfg.recallProfileConfig ?? {}) };
+}
 
 // ============================================================================
 // Helpers
@@ -582,6 +701,11 @@ const palinodePlugin = {
           forceFullCoreNext = false; // Consume the flag
         }
 
+        // #391/#394: resolve the active recall profile up front. Empty sources
+        // (off / minimal / autoRecall: false) short-circuit before any I/O.
+        const profile = resolveProfile(cfg);
+        if (profile.sources.length === 0) return;
+
         // Skip semantic search for trivial/short messages — just inject core
         const trivialMessage = event.prompt.trim().length < 15 ||
           /^(ok|yep|yay|hmm|hm|yes|no|sure|thanks|thx|cool|got it|nice|lol|k|👍|👎|✅|🙏)\.?$/i.test(event.prompt.trim());
@@ -590,20 +714,21 @@ const palinodePlugin = {
           let coreContent = "";
 
           // Phase 1: Load all files with core: true
-          // Turn 1 and every N turns: full content
-          // Mid-turns: controlled by midTurnMode config:
-          //   "none"    — skip core entirely (just topic search, saves ~200 tokens/turn)
-          //   "summary" — inject one-line summaries only
-          //   "full"    — inject full core every turn (expensive)
-          const CORE_FILE_MAX = 3000;  // Per-file character limit
-          const CORE_TOTAL_MAX = 8000; // Total budget for all core files (~2K tokens)
+          // Gated by `profile.sources.includes("core")` (#391/#394) — profiles
+          // like "monitoring" and "investigation" skip core entirely.
+          // Within core-enabled profiles, midTurnMode still controls full vs
+          // summary vs none for mid-turns.
+          const CORE_FILE_MAX = profile.coreMaxCharsPerFile ?? 3000;
+          const CORE_TOTAL_MAX = profile.coreBudget ?? 8000;
           const midTurnMode = cfg.midTurnMode || "none";
           const dirsToScan = ["people", "projects", "decisions", "insights"];
           let coreBudgetRemaining = CORE_TOTAL_MAX;
 
-          // On non-full turns with mode "none", skip core entirely
-          if (!fullCoreThisTurn && midTurnMode === "none") {
-            // No core injection — the model still has turn 1's context
+          const coreEnabled = profile.sources.includes("core");
+          // On non-full turns with mode "none", skip core entirely.
+          // Profile-disabled core also skips entirely.
+          if (!coreEnabled || (!fullCoreThisTurn && midTurnMode === "none")) {
+            // No core injection — the model still has turn 1's context (or core is profile-disabled)
           } else {
             for (const dir of dirsToScan) {
               const fullDir = resolveWithin(cfg.palinodeDir, dir);
@@ -647,24 +772,33 @@ const palinodePlugin = {
             }
           }
 
-          // Phase 2: Topic-specific retrieval based on the user's message
-          // Skip for trivial messages — no value in searching for "ok" or "yay"
+          // Phase 2: Topic-specific retrieval based on the user's message.
+          // Gated by `profile.sources.includes("semantic")` (#391/#394).
+          // Skip for trivial messages — no value in searching for "ok" or "yay".
           let topicContent = "";
-          if (!trivialMessage) {
+          if (!trivialMessage && profile.sources.includes("semantic")) {
             try {
+              const semBody: Record<string, unknown> = {
+                query: event.prompt,
+                limit: profile.semanticLimit ?? 5,
+              };
+              // Forward type filters defensively — older Palinode servers ignore unknown keys.
+              if (profile.typeAllow) semBody.type_allow = profile.typeAllow;
+              if (profile.typeDeny)  semBody.type_deny  = profile.typeDeny;
               const results = await palinodeFetch(cfg.palinodeApiUrl, "/search", {
                 method: "POST",
-                body: JSON.stringify({
-                  query: event.prompt,
-                  limit: 5,
-                }),
+                body: JSON.stringify(semBody),
               });
               if (results && results.length > 0) {
+                const cap = profile.semanticMaxChars ?? 700;
                 topicContent = results
-                  .map(
-                    (r: any) =>
-                      `[${r.category || "memory"}] ${r.content.slice(0, 700)}`,
-                  )
+                  .map((r: any) => {
+                    // Prefer server-side query-windowed snippet (#359/#392).
+                    // Fall back to blunt slice for older servers / empty snippets.
+                    const body = ((r.snippet ?? "") as string).trim() ||
+                                 ((r.content ?? "") as string).slice(0, cap);
+                    return `[${r.category || "memory"}] ${body}`;
+                  })
                   .join("\n\n");
               }
             } catch {
@@ -672,20 +806,31 @@ const palinodePlugin = {
             }
           }
 
-          if (!coreContent && !topicContent) return;
-
           // Phase 3: Associative Recall (Entity Graph)
+          // Gated by `profile.sources.includes("associative")` (#391/#394).
+          // Note: prior to #392/#393, /search-associative returned un-truncated
+          // content. The snippet-preference fallback covers older servers.
           let assocContent = "";
-          if (!trivialMessage) {
+          if (!trivialMessage && profile.sources.includes("associative")) {
             try {
+              const assocBody: Record<string, unknown> = {
+                query: event.prompt,
+                seed_entities: [],
+                limit: profile.associativeLimit ?? 3,
+              };
+              if (profile.typeAllow) assocBody.type_allow = profile.typeAllow;
+              if (profile.typeDeny)  assocBody.type_deny  = profile.typeDeny;
               const assoc = await palinodeFetch(cfg.palinodeApiUrl, "/search-associative", {
                   method: "POST",
-                  body: JSON.stringify({ query: event.prompt, seed_entities: [], limit: 3 })
+                  body: JSON.stringify(assocBody),
               });
               if (assoc && assoc.length > 0) {
-                  assocContent = assoc.map(
-                      (r: any) => `[Related Context via Entity Graph] File: ${r.file_path}\n${r.content.slice(0, 500)}`
-                  ).join("\n\n");
+                  const cap = profile.associativeMaxChars ?? 500;
+                  assocContent = assoc.map((r: any) => {
+                    const body = ((r.snippet ?? "") as string).trim() ||
+                                 ((r.content ?? "") as string).slice(0, cap);
+                    return `[Related Context via Entity Graph] File: ${r.file_path}\n${body}`;
+                  }).join("\n\n");
               }
             } catch {
               // degrade gracefully
@@ -693,22 +838,26 @@ const palinodePlugin = {
           }
 
           // Phase 4: Prospective Triggers
+          // Gated by `profile.sources.includes("triggers")` (#391/#394).
+          // Trigger count + per-trigger char cap are profile-driven.
           let triggerContent = "";
-          if (!trivialMessage) {
+          if (!trivialMessage && profile.sources.includes("triggers")) {
             try {
               const triggers = await palinodeFetch(cfg.palinodeApiUrl, "/check-triggers", {
                   method: "POST",
                   body: JSON.stringify({ query: event.prompt })
               });
               if (triggers && triggers.length > 0) {
-                  triggerContent = triggers.map((t: any) => {
+                  const nMax = profile.triggersLimit ?? 10;
+                  const triggerCap = profile.triggersMaxCharsEach ?? 2000;
+                  triggerContent = triggers.slice(0, nMax).map((t: any) => {
                       const triggerPath = resolveWithin(cfg.palinodeDir, t.memory_file);
                       if (!triggerPath) {
                           return `\n[TRIGGER SKIPPED: ${t.description}] -> Unsafe path: ${t.memory_file}`;
                       }
                       const content = readFileIfExists(triggerPath);
                       if (content) {
-                          return `\n\n--- Triggered: ${t.description} (${t.memory_file}) ---\n${content.slice(0, 2000)}`;
+                          return `\n\n--- Triggered: ${t.description} (${t.memory_file}) ---\n${content.slice(0, triggerCap)}`;
                       } else {
                           return `\n[TRIGGER FIRED: ${t.description}] -> File: ${t.memory_file} (file not found)`;
                       }
@@ -719,7 +868,12 @@ const palinodePlugin = {
             }
           }
 
-          let injection = "<palinode-memory>\n";
+          // Nothing to inject — bail before scrubbing/logging.
+          if (!coreContent && !topicContent && !assocContent && !triggerContent) {
+            return;
+          }
+
+          let injection = `<palinode-memory profile="${cfg.recallProfile}">\n`;
           if (coreContent) {
             // Capacity display line — inspired by NousResearch/hermes-agent prompt_builder.py
             // Lets the agent see how full core memory is and consolidate proactively
@@ -740,11 +894,22 @@ const palinodePlugin = {
           }
           injection += "</palinode-memory>";
 
+          // #391/#394: enforce total-budget hard cap across all sources.
+          // Prevents pathological compound growth (observed monitor prompt class: 69K tokens
+          // from a single autoRecall firing on a 200-token cron prompt).
+          if (profile.totalBudget && injection.length > profile.totalBudget) {
+            injection = injection.slice(0, profile.totalBudget) +
+              `\n…[truncated by recallProfile total budget: ${profile.totalBudget} chars]\n</palinode-memory>`;
+          }
+
           // Scrub sensitive content before injection
           injection = scrubSensitive(injection, cfg.palinodeDir);
 
           api.logger.info(
-            `openclaw-palinode: turn ${sessionTurnCount} — ${fullCoreThisTurn ? "FULL core" : "summary-only"} + ${topicContent ? "topic search" : "no search"}`,
+            `openclaw-palinode: turn ${sessionTurnCount} — profile="${cfg.recallProfile}" ` +
+            `sources=[${profile.sources.join(",")}] ` +
+            `${fullCoreThisTurn ? "FULL core" : "summary-only"} + ${topicContent ? "topic search" : "no search"} ` +
+            `(${injection.length} chars)`,
           );
 
           if (pendingEsReceipt) {

@@ -16,15 +16,19 @@ import os
 import re
 import logging
 import tempfile
+from datetime import UTC, datetime
 from typing import Any
 
 import yaml
 
-from palinode.consolidation.proposal import OpKind, ProposalOp
 from palinode.core.config import config
-from palinode.core.db import utc_now as _utc_now
 
 logger = logging.getLogger("palinode.consolidation.executor")
+
+
+def _utc_now() -> datetime:
+    """Return a timezone-aware UTC timestamp."""
+    return datetime.now(UTC)
 
 
 def _normalize_fact_text(text: str) -> str:
@@ -102,18 +106,12 @@ def _atomic_write_text(file_path: str, content: str) -> None:
         raise
 
 
-def apply_operations(
-    file_path: str,
-    operations: list[ProposalOp],
-    *,
-    nightly_policy: bool = False,
-) -> dict:
-    """Apply a list of typed operations to a memory file.
+def apply_operations(file_path: str, operations: list[dict], *, nightly_policy: bool = False) -> dict:
+    """Apply a list of operations to a memory file.
 
     Args:
         file_path: Path to the target markdown file.
-        operations: List of ProposalOp instances (call parse_op() at the
-            boundary to convert raw LLM dicts before passing them here).
+        operations: List of operation dicts with 'op' key.
         nightly_policy: When True, MERGE ops are subject to the same-day guard:
             only facts sharing the same ``[YYYY-MM-DD]`` date prefix may be
             merged.  Cross-date or undated MERGE proposals are rejected with a
@@ -129,25 +127,28 @@ def apply_operations(
     stats = {"kept": 0, "updated": 0, "merged": 0, "superseded": 0, "archived": 0, "retracted": 0, "merge_rejected": 0}
 
     for op in operations:
-        kind = op.kind
-        p = op.payload
+        if not isinstance(op, dict):
+            logger.warning(f"Malformed operation (expected dict, got {type(op).__name__}): {op}")
+            continue
 
-        if kind == OpKind.KEEP:
+        op_type = op.get("op", "KEEP").upper()
+
+        if op_type == "KEEP":
             stats["kept"] += 1
             continue
 
-        elif kind == OpKind.UPDATE:
-            fact_id = p.get("id")
-            new_text = p.get("new_text", "")
+        elif op_type == "UPDATE":
+            fact_id = op.get("id")
+            new_text = op.get("new_text", "")
             if fact_id and new_text:
                 updated_content = _update_fact(content, fact_id, new_text)
                 if updated_content != content:
                     content = updated_content
                     stats["updated"] += 1
-
-        elif kind == OpKind.MERGE:
-            ids = p.get("ids", [])
-            new_text = p.get("new_text", "")
+        
+        elif op_type == "MERGE":
+            ids = op.get("ids", [])
+            new_text = op.get("new_text", "")
             if ids and new_text:
                 if nightly_policy and not _nightly_merge_allowed(content, ids):
                     id_list = ", ".join(ids)
@@ -161,29 +162,29 @@ def apply_operations(
                 if merged_content != content:
                     content = merged_content
                     stats["merged"] += 1
-
-        elif kind == OpKind.SUPERSEDE:
-            fact_id = p.get("id")
-            new_text = p.get("new_text", "")
-            reason = p.get("reason", "")
+        
+        elif op_type == "SUPERSEDE":
+            fact_id = op.get("id")
+            new_text = op.get("new_text", "")
+            reason = op.get("reason", "")
             if fact_id and new_text:
                 superseded_content = _supersede_fact(content, fact_id, new_text, reason, file_path)
                 if superseded_content != content:
                     content = superseded_content
                     stats["superseded"] += 1
-
-        elif kind == OpKind.ARCHIVE:
-            fact_id = p.get("id")
-            reason = p.get("rationale", p.get("reason", ""))
+        
+        elif op_type == "ARCHIVE":
+            fact_id = op.get("id")
+            reason = op.get("rationale", op.get("reason", ""))
             if fact_id:
                 archived_content = _archive_fact(content, fact_id, reason, file_path)
                 if archived_content != content:
                     content = archived_content
                     stats["archived"] += 1
 
-        elif kind == OpKind.RETRACT:
-            fact_id = p.get("id")
-            reason = p.get("reason", p.get("rationale", ""))
+        elif op_type == "RETRACT":
+            fact_id = op.get("id")
+            reason = op.get("reason", op.get("rationale", ""))
             if fact_id:
                 retracted_content = _retract_fact(content, fact_id, reason, file_path)
                 if retracted_content != content:
@@ -192,6 +193,7 @@ def apply_operations(
 
     # Write back
     _atomic_write_text(file_path, content)
+    
     return stats
 
 

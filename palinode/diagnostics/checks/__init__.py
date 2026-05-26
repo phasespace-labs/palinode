@@ -18,3 +18,4 @@ from palinode.diagnostics.checks import reindex_state  # noqa: F401
 from palinode.diagnostics.checks import git_remote  # noqa: F401
 from palinode.diagnostics.checks import claude_md  # noqa: F401
 from palinode.diagnostics.checks import audit_log  # noqa: F401
+from palinode.diagnostics.checks import fts5_sync  # noqa: F401
