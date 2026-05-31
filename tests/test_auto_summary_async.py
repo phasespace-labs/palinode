@@ -166,6 +166,84 @@ class TestGenerateSummariesState:
 
 
 # ---------------------------------------------------------------------------
+# /generate-summaries also backfills descriptions (#405)
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateDescriptionsBackfill:
+    """#405: the /generate-summaries walk fills missing descriptions too —
+    the watcher's description-fill route depends on this. Descriptions are not
+    core-gated; every file missing one gets it."""
+
+    def test_backfill_injects_missing_description(self, client, tmp_path):
+        sub = tmp_path / "insights"
+        sub.mkdir()
+        fp = sub / "needs-desc.md"
+        # Non-core so the summary path is a no-op — isolates description backfill.
+        fp.write_text(
+            "---\nid: needs-desc\ntype: Insight\n---\nBody content here.\n"
+        )
+        with patch("palinode.api.server._generate_description",
+                   return_value="A generated description."):
+            res = client.post("/generate-summaries")
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["descriptions_generated"] == 1, body
+        assert body["description_errors"] == 0, body
+        # Summary path untouched (file is not core).
+        assert body["summaries_generated"] == 0, body
+
+        text = fp.read_text()
+        assert 'description: "A generated description."' in text
+
+        state = _server_mod._auto_summary_state
+        assert state["last_run_descriptions"] == 1
+        assert state["last_run_description_errors"] == 0
+
+    def test_backfill_skips_file_with_existing_description(self, client, tmp_path):
+        sub = tmp_path / "insights"
+        sub.mkdir()
+        fp = sub / "has-desc.md"
+        fp.write_text(
+            "---\nid: has-desc\ntype: Insight\ndescription: already here\n---\nBody.\n"
+        )
+        with patch("palinode.api.server._generate_description") as mock_desc:
+            res = client.post("/generate-summaries")
+        assert res.status_code == 200, res.text
+        assert res.json()["descriptions_generated"] == 0
+        mock_desc.assert_not_called()
+
+    def test_backfill_counts_deferred_description_as_error(self, client, tmp_path):
+        """When _generate_description defers (Ollama slow/circuit-open), the
+        backfill counts it as a transient error and does not write the sentinel."""
+        sub = tmp_path / "insights"
+        sub.mkdir()
+        fp = sub / "deferred-desc.md"
+        fp.write_text("---\nid: deferred-desc\ntype: Insight\n---\nBody.\n")
+        with patch("palinode.api.server._generate_description",
+                   return_value=_server_mod._DESCRIPTION_DEFERRED):
+            res = client.post("/generate-summaries")
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["descriptions_generated"] == 0
+        assert body["description_errors"] == 1
+        # The sentinel object must never be written into frontmatter.
+        assert "description:" not in fp.read_text()
+
+    def test_backfill_skips_descriptions_when_disabled(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(config.auto_summary, "enabled", False)
+        sub = tmp_path / "insights"
+        sub.mkdir()
+        fp = sub / "disabled-desc.md"
+        fp.write_text("---\nid: disabled-desc\ntype: Insight\n---\nBody.\n")
+        with patch("palinode.api.server._generate_description") as mock_desc:
+            res = client.post("/generate-summaries")
+        assert res.status_code == 200, res.text
+        assert res.json()["descriptions_generated"] == 0
+        mock_desc.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # /status surfaces auto_summary block
 # ---------------------------------------------------------------------------
 
@@ -179,7 +257,8 @@ class TestStatusAutoSummaryBlock:
         assert "auto_summary" in body, body
         block = body["auto_summary"]
         for key in ("enabled", "last_run_at", "last_run_count",
-                    "last_run_errors", "last_error", "total_runs"):
+                    "last_run_errors", "last_run_descriptions",
+                    "last_run_description_errors", "last_error", "total_runs"):
             assert key in block, f"missing {key} in {block}"
 
 
@@ -200,8 +279,10 @@ class TestHealthAutoSummary:
 
     def test_down_when_ollama_unreachable(self, client, monkeypatch):
         monkeypatch.setattr(config.auto_summary, "enabled", True)
-        with patch("palinode.api.server.httpx.get",
-                   side_effect=httpx.ConnectError("offline", request=MagicMock())):
+        # #338 Phase 5: liveness now goes through OllamaClient.ping(), not httpx.get.
+        fake = MagicMock(name="OllamaClient")
+        fake.ping.return_value = False
+        with patch("palinode.api.server.get_ollama_client", return_value=fake):
             res = client.get("/health/auto-summary")
         assert res.status_code == 200, res.text
         body = res.json()
@@ -210,15 +291,18 @@ class TestHealthAutoSummary:
 
     def test_ok_when_reachable_no_backlog(self, client, monkeypatch):
         monkeypatch.setattr(config.auto_summary, "enabled", True)
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        with patch("palinode.api.server.httpx.get", return_value=mock_resp):
+        fake = MagicMock(name="OllamaClient")
+        fake.ping.return_value = True
+        with patch("palinode.api.server.get_ollama_client", return_value=fake):
             res = client.get("/health/auto-summary")
         assert res.status_code == 200, res.text
         body = res.json()
         assert body["status"] == "ok", body
         assert body["ollama_reachable"] is True
         assert body["pending_count"] == 0
+        # #405: description backlog surfaced alongside the summary backlog.
+        assert body["pending_descriptions"] == 0
+        assert "last_run_descriptions" in body
 
     def test_auth_exempt(self, client):
         # /health/auto-summary must not require bearer auth — monitor agents

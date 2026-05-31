@@ -13,9 +13,9 @@ Output:
 from __future__ import annotations
 
 import json
-import os
 import logging
-from datetime import datetime
+import os
+from collections.abc import Sequence
 
 import httpx
 
@@ -24,11 +24,17 @@ from palinode.core.config import config
 logger = logging.getLogger("palinode.migration.mem0_export")
 
 QDRANT_URL = "http://localhost:6333"
-COLLECTIONS = ["mem0_attractor", "mem0_governor", "mem0_gradient"]
+DEFAULT_COLLECTIONS = ("mem0_memories",)
 BATCH_SIZE = 100  # Qdrant scroll batch size
 
 
-def export_all() -> str:
+def _collection_names() -> list[str]:
+    raw = os.environ.get("PALINODE_MEM0_COLLECTIONS", "")
+    names = [name.strip() for name in raw.split(",") if name.strip()]
+    return names or list(DEFAULT_COLLECTIONS)
+
+
+def export_all(collections: Sequence[str] | None = None) -> str:
     """Export all Mem0 memories from Qdrant to JSON.
 
     Returns:
@@ -40,7 +46,7 @@ def export_all() -> str:
 
     all_memories = []
 
-    for collection in COLLECTIONS:
+    for collection in collections or _collection_names():
         logger.info(f"Exporting {collection}...")
         memories = _scroll_collection(collection)
         logger.info(f"  Exported {len(memories)} memories from {collection}")
@@ -92,7 +98,7 @@ def _scroll_collection(collection: str) -> list[dict]:
                 "created_at": payload.get("createdAt", ""),
                 "hash": payload.get("hash", ""),
                 "session_type": payload.get("session_type", ""),
-                "user_id": payload.get("userId", "clawd"),
+                "user_id": payload.get("userId", ""),
             })
 
         offset = result.get("next_page_offset")

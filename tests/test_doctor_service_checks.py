@@ -242,7 +242,7 @@ def _ps_output_with_watcher(pid: int = 12345) -> str:
     """Fake ps -ef output that includes a watcher process."""
     return (
         "UID        PID  PPID  C STIME TTY          TIME CMD\n"
-        f"clawd    {pid}  1     0 10:00 ?        00:00:01 "
+        f"alice    {pid}  1     0 10:00 ?        00:00:01 "
         f"/usr/bin/python3 -m {_WATCHER_MODULE}\n"
     )
 
@@ -250,7 +250,7 @@ def _ps_output_with_watcher(pid: int = 12345) -> str:
 def _ps_output_without_watcher() -> str:
     return (
         "UID        PID  PPID  C STIME TTY          TIME CMD\n"
-        "clawd    9999  1     0 10:00 ?        00:00:01 /usr/bin/python3 other_module\n"
+        "alice    9999  1     0 10:00 ?        00:00:01 /usr/bin/python3 other_module\n"
     )
 
 

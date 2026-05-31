@@ -55,6 +55,20 @@ This is the file the desktop app reads. The path is not surfaced in the
 app's UI. After editing it, quit and relaunch Claude Desktop for changes
 to take effect.
 
+> **Warning: Editing `claude_desktop_config.json` — quit Claude Desktop first
+> (`cmd+Q` on macOS / `Alt+F4` on Windows). Edits made while the app is running
+> are overwritten on the next quit: the app reads the config at launch, holds a
+> stripped copy in memory, and writes that copy back to disk when it exits —
+> silently destroying any edit you made during the session. Claude Desktop also
+> only accepts stdio (`command`+`args`) MCP entries — a `"url"`-form entry is
+> silently stripped on quit.**
+>
+> **Correct recovery order: quit Claude Desktop → edit the file → relaunch.**
+>
+> One-line repro: add a `"url"` key to a server entry, keep Claude Desktop open,
+> edit the file to fix it, then quit — the fixed entry is gone on next open.
+> (#373)
+
 ### Claude Desktop 3p variant (macOS only)
 
 ```

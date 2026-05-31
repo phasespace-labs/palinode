@@ -365,7 +365,7 @@ wheels = [
 
 [[package]]
 name = "palinode"
-version = "0.7.2"
+version = "0.8.13"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -389,19 +389,19 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "click" },
-    { name = "fastapi" },
-    { name = "httpx" },
-    { name = "mcp" },
-    { name = "pydantic" },
+    { name = "click", specifier = ">=8.1" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "mcp", specifier = ">=1.10" },
+    { name = "pydantic", specifier = ">=2.7,<3.0" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-asyncio", marker = "extra == 'dev'" },
-    { name = "python-frontmatter" },
-    { name = "pyyaml" },
-    { name = "rich" },
-    { name = "sqlite-vec" },
-    { name = "uvicorn" },
-    { name = "watchdog" },
+    { name = "python-frontmatter", specifier = ">=1.1" },
+    { name = "pyyaml", specifier = ">=6.0,<7.0" },
+    { name = "rich", specifier = ">=13.7" },
+    { name = "sqlite-vec", specifier = ">=0.1.6" },
+    { name = "uvicorn", specifier = ">=0.32" },
+    { name = "watchdog", specifier = ">=4.0" },
 ]
 provides-extras = ["dev"]
 

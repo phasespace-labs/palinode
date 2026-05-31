@@ -9,58 +9,30 @@ from __future__ import annotations
 import logging
 import os
 import threading
-import time
 from typing import Optional
 
 import httpx
 from palinode.core.config import config
+from palinode.core.ollama_client import (
+    EmbeddingContextError,
+    OllamaError,
+    OllamaRole,
+    _is_ctx_overflow_message,
+    get_ollama_client,
+)
 
 logger = logging.getLogger(__name__)
 
-# --------------------------------------------------------------------------
-# Typed exceptions — #335
-# --------------------------------------------------------------------------
-
-
-class EmbeddingContextError(RuntimeError):
-    """Raised when Ollama rejects an embed call due to context-window overflow.
-
-    Callers can catch this specifically to truncate the input, split into
-    sub-chunks, or pick a larger model — rather than receiving a silent empty
-    list that looks identical to a connectivity failure.
-
-    Attributes:
-        model: The Ollama model name.
-        text_len: Character length of the rejected input.
-        ollama_message: The raw error string from Ollama's response body.
-    """
-
-    def __init__(self, model: str, text_len: int, ollama_message: str) -> None:
-        self.model = model
-        self.text_len = text_len
-        self.ollama_message = ollama_message
-        super().__init__(
-            f"Ollama context-window overflow — model={model!r} text_len={text_len} "
-            f"error={ollama_message!r}. "
-            f"Recovery: increase num_ctx in the modelfile (e.g. ollama create {model} "
-            f"with 'PARAMETER num_ctx 8192'), truncate the input before calling embed(), "
-            f"or split into smaller chunks."
-        )
-
+# EmbeddingContextError and _is_ctx_overflow_message now live in
+# palinode.core.ollama_client (so the client can raise the error from inside the
+# embed path without a circular import) and are re-exported here for backward
+# compatibility — existing `from palinode.core.embedder import
+# EmbeddingContextError` imports keep working (#338 Phase 3).
+__all__ = ["EmbeddingContextError", "embed", "embed_query", "check_model_context"]
 
 # --------------------------------------------------------------------------
 # Context-window preflight check — #335
 # --------------------------------------------------------------------------
-
-# Patterns in Ollama error responses that indicate context overflow.
-# Ollama 0.3+ returns these in the JSON body with HTTP 200.
-_CTX_OVERFLOW_PATTERNS = (
-    "too long for max context",
-    "prompt is too long",
-    "context length exceeded",
-    "exceeds context",
-    "num_ctx",
-)
 
 # Minimum expected num_ctx for the embed model. bge-m3 supports 8192;
 # the Ollama default is 4096 which silently truncates/errors on large chunks.
@@ -69,12 +41,6 @@ _MIN_EXPECTED_CTX = 8192
 # Preflight guard — only check once per process.
 _preflight_lock = threading.Lock()
 _preflight_done = False
-
-
-def _is_ctx_overflow_message(message: str) -> bool:
-    """Return True if the Ollama error message indicates context overflow."""
-    msg_lower = message.lower()
-    return any(p in msg_lower for p in _CTX_OVERFLOW_PATTERNS)
 
 
 def check_model_context(
@@ -89,23 +55,18 @@ def check_model_context(
     regardless; this is purely diagnostic.
 
     Args:
-        url: Ollama base URL (defaults to config).
+        url: Deprecated/ignored — the centralized client resolves the EMBED URL
+            from config (#338 Phase 3). Kept for signature compatibility.
         model: Model name (defaults to config).
         min_ctx: Minimum acceptable num_ctx value (default 8192 for bge-m3).
     """
-    if url is None:
-        url = config.embeddings.primary.url
     if model is None:
         model = config.embeddings.primary.model
 
     try:
-        resp = httpx.post(
-            f"{url}/api/show",
-            json={"name": model},
-            timeout=httpx.Timeout(5.0, connect=3.0),
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        # #338 Phase 3: route /api/show through the centralized client (EMBED
+        # role). retries=0 — preflight is best-effort and must not amplify load.
+        data = get_ollama_client().show(model, role=OllamaRole.EMBED, retries=0)
         # Ollama /api/show returns model_info with key "llama.context_length"
         # for GGUF models. For bge-m3 the key is typically under model_info.
         model_info = data.get("model_info", {})
@@ -138,8 +99,9 @@ def check_model_context(
                 "embed preflight: model=%s num_ctx=%d (>= %d — ok)",
                 model, ctx_int, min_ctx,
             )
-    except (httpx.HTTPError, OSError, ValueError, KeyError) as e:
-        # Preflight is best-effort; never block embed on it.
+    except (OllamaError, OSError, ValueError, KeyError) as e:
+        # Preflight is best-effort; never block embed on it. OllamaError covers
+        # connect/timeout/HTTP/circuit-open from the centralized client.
         logger.debug(
             "embed preflight: /api/show check skipped for model=%s: %s",
             model, e,
@@ -213,90 +175,27 @@ def _embed_local(text: str) -> list[float]:
     # warning about misconfigured modelfiles (#335).
     _run_preflight_once()
 
-    url = config.embeddings.primary.url
     model = config.embeddings.primary.model
-    timeout = get_local_timeout()
 
-    for attempt, (endpoint, payload_key) in enumerate(
-        [("/api/embed", "input"), ("/api/embeddings", "prompt")]
-    ):
-        t0 = time.monotonic()
-        try:
-            response = httpx.post(
-                f"{url}{endpoint}",
-                json={"model": model, payload_key: text},
-                timeout=timeout,
-            )
-            response.raise_for_status()
-            elapsed_ms = (time.monotonic() - t0) * 1000
-
-            data = response.json()
-            if "embeddings" in data and len(data["embeddings"]) > 0:
-                logger.debug(
-                    "embed ok — model=%s endpoint=%s text_len=%d elapsed_ms=%.0f",
-                    model, endpoint, len(text), elapsed_ms,
-                )
-                return data["embeddings"][0]
-            elif "embedding" in data:
-                logger.debug(
-                    "embed ok — model=%s endpoint=%s text_len=%d elapsed_ms=%.0f",
-                    model, endpoint, len(text), elapsed_ms,
-                )
-                return data["embedding"]
-
-            # Response was 200 but contained neither expected key.
-            # Detect Ollama's context-overflow pattern — it returns HTTP 200
-            # with {"error": "prompt is too long for max context"} (#335).
-            error_msg = data.get("error", "")
-            if error_msg and _is_ctx_overflow_message(error_msg):
-                raise EmbeddingContextError(
-                    model=model,
-                    text_len=len(text),
-                    ollama_message=error_msg,
-                )
-
-            logger.warning(
-                "embed: unexpected Ollama response shape — model=%s endpoint=%s "
-                "text_len=%d response_keys=%r; trying next endpoint",
-                model, endpoint, len(text), list(data.keys()),
-            )
-
-        except EmbeddingContextError:
-            # Re-raise immediately — this is a typed signal, not a retry-able error.
-            raise
-        except httpx.TimeoutException as e:
-            logger.warning(
-                "embed: timeout on attempt %d — model=%s endpoint=%s "
-                "text_len=%d timeout_s=%s: %s",
-                attempt + 1, model, endpoint, len(text),
-                config.embeddings.primary.timeout_seconds, e,
-                exc_info=True,
-            )
-            continue
-        except httpx.HTTPStatusError as e:
-            logger.warning(
-                "embed: HTTP %s on attempt %d — model=%s endpoint=%s "
-                "text_len=%d: %s",
-                e.response.status_code, attempt + 1, model, endpoint, len(text), e,
-                exc_info=True,
-            )
-            continue
-        except httpx.RequestError as e:
-            # ConnectError, ReadError, etc — Ollama process may be down.
-            logger.warning(
-                "embed: connection error on attempt %d — model=%s endpoint=%s "
-                "text_len=%d: %s",
-                attempt + 1, model, endpoint, len(text), e,
-                exc_info=True,
-            )
-            continue
-
-    logger.warning(
-        "embed: all endpoints exhausted — model=%s url=%s text_len=%d "
-        "timeout_s=%s; returning empty vector",
-        model, url, len(text), config.embeddings.primary.timeout_seconds,
-    )
-    return []
+    # #338 Phase 3: route through the centralized client. It owns the
+    # /api/embed → /api/embeddings fallback, retry/backoff, circuit breaking,
+    # and the structured per-call JSON logging (palinode.ollama.events). This
+    # wrapper preserves the public contract: returns [] on connectivity/timeout
+    # failure, re-raises EmbeddingContextError on a context-window overflow.
+    try:
+        return get_ollama_client().embed(text)
+    except EmbeddingContextError:
+        # Typed signal — propagate so callers can truncate / split (#335).
+        raise
+    except OllamaError as e:
+        # Connect/timeout/HTTP/circuit-open/unexpected-shape — degrade to an
+        # empty vector (the contract the indexer relies on to skip + retry).
+        # text_len, not raw text, so logs never carry user content.
+        logger.warning(
+            "embed failed — model=%s text_len=%d: %s; returning empty vector",
+            model, len(text), e,
+        )
+        return []
 
 
 def _embed_gemini(text: str, dimension: int = 768, task_type: str = "RETRIEVAL_DOCUMENT") -> list[float]:

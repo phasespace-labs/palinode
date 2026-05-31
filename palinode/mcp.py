@@ -166,6 +166,33 @@ def _text(content: str) -> list[types.TextContent]:
     return [types.TextContent(type="text", text=content)]
 
 
+# #416: write-path tools can commit server-side even when the client's request
+# times out. A slow LLM-derived field (auto_summary, embedding refresh) can
+# outlast the HTTP timeout *after* the durable write has already landed, so the
+# generic "Request ... timed out" message led operators to retry blindly and
+# create duplicate entries. For these tools, surface the verify-before-retry
+# path instead.
+_WRITE_PATH_TOOLS = frozenset({"palinode_save", "palinode_session_end"})
+
+
+def _timeout_message(tool: str) -> str:
+    """Build the client-facing message for an httpx timeout (#416).
+
+    Write-path tools get a verify-before-retry hint because the save may have
+    succeeded server-side; read-path tools keep the plain timeout message.
+    """
+    if tool in _WRITE_PATH_TOOLS:
+        return (
+            f"Timeout: `{tool}` did not return before the request timeout. "
+            "The write may have succeeded server-side — a slow auto-summary or "
+            "embedding step can outlast the timeout after the durable save has "
+            "already landed. Before retrying, call `palinode_search` with a "
+            "distinctive phrase from your content to confirm whether it saved; "
+            "retrying blindly can create a duplicate entry."
+        )
+    return f"Error: Request to {_api_url('')} timed out."
+
+
 _FULL_CONTENT_HARD_CAP = 4000  # Politeness ceiling for full=True (#352).
 
 
@@ -416,7 +443,10 @@ async def list_tools() -> list[types.Tool]:
                 "Save a memory to Palinode. Use for important facts, decisions, insights, "
                 "or project updates worth remembering across sessions. Provide either "
                 "`type` (one of the enum values) or `ps=true` for the ProjectSnapshot "
-                "shortcut — exactly one is required."
+                "shortcut — exactly one is required. "
+                "If this call times out, the save may still have committed server-side: "
+                "call `palinode_search` with a distinctive phrase from your content to "
+                "confirm before retrying, so you don't create a duplicate entry."
             ),
             inputSchema={
                 "type": "object",
@@ -1100,7 +1130,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
     is_error = first_text.startswith(("Error", "API Error", "Search failed", "Save failed",
                                       "Ingest failed", "Push failed", "Consolidation failed",
                                       "Session-end failed", "Lint failed",
-                                      "Doctor failed", "Doctor (deep) failed"))
+                                      "Doctor failed", "Doctor (deep) failed",
+                                      "Timeout:"))
     _audit.log_call(
         name, arguments, duration_ms,
         status="error" if is_error else "success",
@@ -1652,7 +1683,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
     except httpx.ConnectError:
         return _text(f"Error: Cannot reach Palinode API at {_api_url('')}. Is palinode-api running?")
     except httpx.TimeoutException:
-        return _text(f"Error: Request to {_api_url('')} timed out.")
+        return _text(_timeout_message(name))
     except Exception as e:
         logger.exception(f"Tool {name} failed")
         return _text(f"Error: {e}")

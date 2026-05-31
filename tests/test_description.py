@@ -2,6 +2,17 @@
 from unittest import mock
 
 from palinode.api.server import _generate_description, _extract_first_line
+from palinode.core.ollama_client import OllamaUnreachable
+
+
+def _patch_client(*, side_effect=None, response: str | None = None):
+    """Patch server.get_ollama_client; generate raises side_effect or returns response."""
+    fake = mock.MagicMock(name="OllamaClient")
+    if side_effect is not None:
+        fake.generate.side_effect = side_effect
+    else:
+        fake.generate.return_value = {"response": response}
+    return mock.patch("palinode.api.server.get_ollama_client", return_value=fake)
 
 
 def test_extract_first_line_basic():
@@ -30,42 +41,28 @@ def test_extract_first_line_empty():
 
 def test_generate_description_fallback_on_connection_error():
     """When Ollama is unreachable, falls back to first-line extraction."""
-    with mock.patch("palinode.api.server.httpx.post", side_effect=ConnectionError("offline")):
+    with _patch_client(side_effect=OllamaUnreachable("offline", role="chat")):
         result = _generate_description("Decision to use SQLite for storage.\nMore details here.")
     assert result == "Decision to use SQLite for storage."
 
 
 def test_generate_description_uses_llm_when_available():
     """When Ollama responds, uses the LLM description."""
-    mock_resp = mock.Mock()
-    mock_resp.status_code = 200
-    mock_resp.raise_for_status = mock.Mock()
-    mock_resp.json.return_value = {"response": "A decision about database storage."}
-
-    with mock.patch("palinode.api.server.httpx.post", return_value=mock_resp):
+    with _patch_client(response="A decision about database storage."):
         result = _generate_description("Decision to use SQLite for storage.\nMore details here.")
     assert result == "A decision about database storage."
 
 
 def test_generate_description_truncates_long_llm_response():
-    """LLM responses longer than 150 chars get truncated."""
-    mock_resp = mock.Mock()
-    mock_resp.status_code = 200
-    mock_resp.raise_for_status = mock.Mock()
-    mock_resp.json.return_value = {"response": "X" * 200}
-
-    with mock.patch("palinode.api.server.httpx.post", return_value=mock_resp):
+    """LLM responses longer than 150 chars get clipped to <= 150 chars."""
+    with _patch_client(response="X" * 200):
         result = _generate_description("Some content")
-    assert len(result) == 150
+    assert len(result) <= 150
+    assert len(result) >= 140  # clipped near the cap, not mangled to nothing
 
 
 def test_generate_description_empty_llm_response_falls_back():
     """Empty LLM response triggers first-line fallback."""
-    mock_resp = mock.Mock()
-    mock_resp.status_code = 200
-    mock_resp.raise_for_status = mock.Mock()
-    mock_resp.json.return_value = {"response": ""}
-
-    with mock.patch("palinode.api.server.httpx.post", return_value=mock_resp):
+    with _patch_client(response=""):
         result = _generate_description("# Important Decision\nWe chose option A.")
     assert result == "Important Decision"

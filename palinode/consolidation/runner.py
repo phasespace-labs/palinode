@@ -17,11 +17,11 @@ import subprocess
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
-import httpx
 import yaml
 
 from palinode.core.config import config
 from palinode.core import store, embedder
+from palinode.core.ollama_client import OllamaError, OllamaRole, get_ollama_client
 
 logger = logging.getLogger("palinode.consolidation")
 
@@ -182,32 +182,33 @@ def _call_llm_with_fallback(system_prompt: str, user_prompt: str) -> tuple[str, 
         RuntimeError: All models in chain failed.
     """
     chain = _build_model_chain()
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    client = get_ollama_client()
 
     last_error = None
     for i, endpoint in enumerate(chain):
         try:
-            response = httpx.post(
-                f"{endpoint['url']}/v1/chat/completions",
-                json={
-                    "model": endpoint["model"],
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "temperature": config.consolidation.llm_temperature,
-                    "max_tokens": config.consolidation.llm_max_tokens,
-                },
+            # #338 Phase 4: route through the centralized client (CONSOLIDATION
+            # role). retries=0 — the fallback chain itself is the retry strategy,
+            # so the client shouldn't re-hammer each (slow, 600 s) host.
+            result = client.chat_completions(
+                messages,
+                model=endpoint["model"],
+                base_url=endpoint["url"],
+                temperature=config.consolidation.llm_temperature,
+                max_tokens=config.consolidation.llm_max_tokens,
                 timeout=600.0,
+                retries=0,
+                role=OllamaRole.CONSOLIDATION,
             )
-            response.raise_for_status()
-            result = response.json()["choices"][0]["message"]["content"]
-
             if i > 0:
                 logger.info(f"Fallback model succeeded: {endpoint['model']} @ {endpoint['url']} (primary failed)")
-
             return result, endpoint["model"]
 
-        except (httpx.TimeoutException, httpx.HTTPStatusError, Exception) as e:
+        except OllamaError as e:
             last_error = e
             logger.warning(f"Model {endpoint['model']} @ {endpoint['url']} failed: {e}")
             continue

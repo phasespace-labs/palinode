@@ -1,19 +1,24 @@
 """Tests for palinode_save auto-description graceful degradation — issue #336.
 
 Covers:
-- _DESCRIPTION_DEFERRED sentinel is returned from _generate_description on timeout.
+- _DESCRIPTION_DEFERRED sentinel is returned from _generate_description on timeout
+  (now an OllamaTimeout from the centralized client) AND on circuit-open (#338).
 - On non-timeout failure, _generate_description returns the first-line fallback.
 - /save API returns description_pending: True when description was deferred.
 - /save API does NOT return description_pending when description succeeded.
 - /save API does NOT return description_pending on non-timeout failure (fallback used).
-- config.auto_summary.describe_timeout_seconds controls the timeout.
+- config.auto_summary.describe_timeout_seconds controls the timeout passed to the client.
 - PALINODE_DESCRIBE_TIMEOUT_SECONDS env var overrides the config.
 - The INFO→WARNING level fix for Ollama description failures (audit Q2).
+- _clean_llm_oneliner preamble-strip + clean length-clip (#338 Phase 2 auto_summary UX).
+
+As of #338 Phase 2, _generate_description / _generate_summary route through
+palinode.core.ollama_client.get_ollama_client() rather than calling httpx.post
+directly, so these tests patch the client seam (server.get_ollama_client).
 
 NOTE: test_api_bearer_auth.py calls importlib.reload(palinode.api.server), which
 rebinds _DESCRIPTION_DEFERRED to a new object(). All sentinel access here goes
-through _server_sentinel() to read the current module binding at assertion time,
-not the stale pre-reload object captured at import time.
+through _server_sentinel() to read the current module binding at assertion time.
 """
 from __future__ import annotations
 
@@ -21,88 +26,94 @@ import logging
 import os
 from unittest.mock import MagicMock, patch
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 import palinode.api.server as _server_mod
-from palinode.api.server import app
+from palinode.api.server import _clean_llm_oneliner, app
 from palinode.core.config import config
+from palinode.core.ollama_client import (
+    OllamaCircuitOpen,
+    OllamaError,
+    OllamaTimeout,
+    OllamaUnreachable,
+)
 
 
 def _server_sentinel() -> object:
-    """Return the current _DESCRIPTION_DEFERRED from the server module.
-
-    Reads the live binding so that post-reload sentinel identity is correct.
-    """
+    """Return the current _DESCRIPTION_DEFERRED from the server module."""
     return _server_mod._DESCRIPTION_DEFERRED
 
 
+def _patch_client(*, side_effect=None, response: str | None = None):
+    """Patch server.get_ollama_client to return a fake whose .generate is configured.
+
+    ``side_effect`` raises (e.g. OllamaTimeout); ``response`` returns
+    ``{"response": response}`` from generate().
+    """
+    fake = MagicMock(name="OllamaClient")
+    if side_effect is not None:
+        fake.generate.side_effect = side_effect
+    else:
+        fake.generate.return_value = {"response": response}
+    return patch("palinode.api.server.get_ollama_client", return_value=fake), fake
+
+
 # ---------------------------------------------------------------------------
-# _generate_description — sentinel on timeout
+# _generate_description — sentinel on timeout / circuit-open
 # ---------------------------------------------------------------------------
 
 
 def test_timeout_returns_deferred_sentinel():
-    """TimeoutException → _DESCRIPTION_DEFERRED (not a string, not None)."""
-    with patch(
-        "palinode.api.server.httpx.post",
-        side_effect=httpx.TimeoutException("timed out", request=MagicMock()),
-    ):
+    """OllamaTimeout → _DESCRIPTION_DEFERRED (not a string, not None)."""
+    p, _ = _patch_client(side_effect=OllamaTimeout("timed out", role="chat"))
+    with p:
         result = _server_mod._generate_description("some content to describe")
+    assert result is _server_sentinel(), f"Expected _DESCRIPTION_DEFERRED, got {result!r}"
 
-    assert result is _server_sentinel(), (
-        f"Expected _DESCRIPTION_DEFERRED, got {result!r}"
-    )
+
+def test_circuit_open_returns_deferred_sentinel():
+    """#338: a known-bad host (circuit open) also defers, like a timeout."""
+    p, _ = _patch_client(side_effect=OllamaCircuitOpen("circuit open", role="chat"))
+    with p:
+        result = _server_mod._generate_description("some content to describe")
+    assert result is _server_sentinel(), f"Expected _DESCRIPTION_DEFERRED, got {result!r}"
 
 
 def test_connect_error_falls_back_to_first_line():
-    """Non-timeout failure (ConnectError) → first-line fallback, not sentinel."""
-    with patch(
-        "palinode.api.server.httpx.post",
-        side_effect=httpx.ConnectError("offline", request=MagicMock()),
-    ):
+    """Non-timeout failure (unreachable) → first-line fallback, not sentinel."""
+    p, _ = _patch_client(side_effect=OllamaUnreachable("offline", role="chat"))
+    with p:
         result = _server_mod._generate_description("# My Memory Title\nDetails below.")
-
     assert isinstance(result, str), f"Expected str fallback, got {result!r}"
     assert result == "My Memory Title"
     assert result is not _server_sentinel()
 
 
 def test_success_returns_llm_string():
-    """Successful LLM call returns the LLM description as a string."""
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status = MagicMock()
-    mock_resp.json.return_value = {"response": "A decision about storage."}
-
-    with patch("palinode.api.server.httpx.post", return_value=mock_resp):
+    """Successful LLM call returns the (cleaned) description as a string."""
+    p, _ = _patch_client(response="A decision about storage.")
+    with p:
         result = _server_mod._generate_description("Decision to use SQLite.")
-
     assert result == "A decision about storage."
     assert result is not _server_sentinel()
 
 
 # ---------------------------------------------------------------------------
-# _generate_description — timeout uses configurable timeout, not hardcoded 15.0
+# _generate_description — timeout + single-shot are passed to the client
 # ---------------------------------------------------------------------------
 
 
-def test_describe_timeout_used_from_config():
-    """The timeout passed to httpx.post must come from config.auto_summary.describe_timeout_seconds."""
-    posted_timeouts: list[object] = []
-
-    def capture_post(*args, **kwargs):
-        posted_timeouts.append(kwargs.get("timeout"))
-        raise httpx.TimeoutException("timed out", request=MagicMock())
-
-    with patch("palinode.api.server.httpx.post", side_effect=capture_post):
+def test_describe_timeout_and_retries_passed_to_client():
+    """The client must be called with the configured timeout and retries=0 (#336)."""
+    p, fake = _patch_client(side_effect=OllamaTimeout("t", role="chat"))
+    with p:
         with patch.object(config.auto_summary, "describe_timeout_seconds", 3.0):
             _server_mod._generate_description("test content")
-
-    assert posted_timeouts, "httpx.post was not called"
-    assert posted_timeouts[0] == 3.0, (
-        f"Expected timeout 3.0, got {posted_timeouts[0]!r}"
-    )
+    assert fake.generate.called, "client.generate was not called"
+    kwargs = fake.generate.call_args.kwargs
+    assert kwargs.get("timeout") == 3.0, f"Expected timeout 3.0, got {kwargs.get('timeout')!r}"
+    assert kwargs.get("retries") == 0, "inline description must be single-shot (retries=0)"
 
 
 def test_describe_timeout_env_override(monkeypatch):
@@ -110,9 +121,7 @@ def test_describe_timeout_env_override(monkeypatch):
     from palinode.core.config import load_config
     monkeypatch.setenv("PALINODE_DESCRIBE_TIMEOUT_SECONDS", "7.5")
     cfg = load_config()
-    assert cfg.auto_summary.describe_timeout_seconds == 7.5, (
-        f"Expected 7.5, got {cfg.auto_summary.describe_timeout_seconds!r}"
-    )
+    assert cfg.auto_summary.describe_timeout_seconds == 7.5
 
 
 def test_describe_timeout_env_override_invalid_value_ignored(monkeypatch):
@@ -120,10 +129,53 @@ def test_describe_timeout_env_override_invalid_value_ignored(monkeypatch):
     from palinode.core.config import load_config
     monkeypatch.setenv("PALINODE_DESCRIBE_TIMEOUT_SECONDS", "not-a-number")
     cfg = load_config()
-    # Should still be the default — invalid value silently discarded.
-    assert cfg.auto_summary.describe_timeout_seconds == 5.0, (
-        f"Expected 5.0 default, got {cfg.auto_summary.describe_timeout_seconds!r}"
-    )
+    assert cfg.auto_summary.describe_timeout_seconds == 5.0
+
+
+# ---------------------------------------------------------------------------
+# _clean_llm_oneliner — preamble strip + clean clip (#338 Phase 2)
+# ---------------------------------------------------------------------------
+
+
+class TestCleanLlmOneliner:
+
+    def test_passthrough_when_clean_and_short(self):
+        assert _clean_llm_oneliner("A decision about storage.", 150) == "A decision about storage."
+
+    def test_strips_the_memory_describes_preamble(self):
+        out = _clean_llm_oneliner("The memory describes a centralized client.", 150)
+        assert out == "A centralized client."
+
+    def test_strips_here_is_the_summary_preamble(self):
+        out = _clean_llm_oneliner("Here is the summary: adopt the client.", 150)
+        assert out == "Adopt the client."
+
+    def test_strips_label_prefix(self):
+        assert _clean_llm_oneliner("Summary: use SQLite.", 150) == "Use SQLite."
+
+    def test_leaves_legitimate_subject_alone(self):
+        # "The system decided ..." is a fine summary — must NOT be stripped.
+        s = "The system decided to consolidate Ollama traffic."
+        assert _clean_llm_oneliner(s, 150) == s
+
+    def test_clips_overshoot_at_word_boundary_not_midword(self):
+        long = ("A centralized OllamaClient was adopted to manage all traffic, "
+                "adding resilience via circuit breakers and retries everywhere now.")
+        out = _clean_llm_oneliner(long, 60)
+        assert len(out) <= 60
+        assert out.endswith("…")
+        assert "  " not in out
+        # last visible word is not chopped mid-token
+        assert not out[:-1].rstrip().endswith("-")
+
+    def test_prefers_sentence_boundary_when_present(self):
+        s = "Adopt the client. It also adds retries and circuit breaking for resilience."
+        out = _clean_llm_oneliner(s, 40)
+        assert out == "Adopt the client."
+
+    def test_empty_input_returns_empty(self):
+        assert _clean_llm_oneliner("", 150) == ""
+        assert _clean_llm_oneliner("   ", 150) == ""
 
 
 # ---------------------------------------------------------------------------
@@ -153,11 +205,7 @@ def _patch_scan():
 
 
 def _patch_desc_timeout():
-    """Make _generate_description return the deferred sentinel.
-
-    Fetches the sentinel from the module at call time so post-reload tests
-    still get the correct object identity.
-    """
+    """Make _generate_description return the deferred sentinel."""
     return patch(
         "palinode.api.server._generate_description",
         return_value=_server_sentinel(),
@@ -165,26 +213,27 @@ def _patch_desc_timeout():
 
 
 def _patch_desc_success(text: str = "A clear description."):
-    """Make _generate_description return a real string."""
-    return patch(
-        "palinode.api.server._generate_description",
-        return_value=text,
-    )
+    return patch("palinode.api.server._generate_description", return_value=text)
 
 
 def _patch_desc_fallback():
-    """Make _generate_description return a first-line fallback (string, not sentinel)."""
-    return patch(
-        "palinode.api.server._generate_description",
-        return_value="First line fallback",
-    )
+    return patch("palinode.api.server._generate_description", return_value="First line fallback")
 
 
 class TestSaveDescriptionPending:
+    """#405: description generation is fully deferred off the /save hot path.
 
-    def test_save_returns_description_pending_true_on_timeout(self, client):
-        """When description times out, response must include description_pending: True."""
-        with _patch_scan(), _patch_embed(), _patch_desc_timeout():
+    /save never calls _generate_description inline — it sets description_pending
+    for eligible files and the watcher-driven /generate-summaries backfill lands
+    the description later. (Pre-#405, /save called the LLM inline with a #336
+    timeout/circuit-breaker, which still blocked up to describe_timeout_seconds
+    on a warm-but-slow model.)
+    """
+
+    def test_save_does_not_invoke_generate_description(self, client):
+        """The /save hot path must NOT call the description LLM (#405)."""
+        with _patch_scan(), _patch_embed(), \
+                patch("palinode.api.server._generate_description") as mock_desc:
             res = client.post(
                 "/save",
                 json={
@@ -194,64 +243,71 @@ class TestSaveDescriptionPending:
                 },
             )
         assert res.status_code == 200, res.text
-        body = res.json()
-        assert body.get("description_pending") is True, (
-            f"Expected description_pending: true, got: {body}"
-        )
+        mock_desc.assert_not_called()
 
-    def test_save_does_not_include_description_pending_on_success(self, client):
-        """Successful description → description_pending absent (or False) in response."""
-        with _patch_scan(), _patch_embed(), _patch_desc_success():
+    def test_save_returns_description_pending_true_for_eligible(self, client):
+        """Eligible save (enabled, no description provided) → description_pending."""
+        with _patch_scan(), _patch_embed():
             res = client.post(
                 "/save",
                 json={
-                    "content": "Successful save with description.",
+                    "content": "Important decision about architecture.",
+                    "type": "Decision",
+                    "slug": "pending-true",
+                },
+            )
+        assert res.status_code == 200, res.text
+        assert res.json().get("description_pending") is True
+
+    def test_save_omits_description_pending_when_description_provided(self, client):
+        """A caller-supplied description is respected; no deferral."""
+        with _patch_scan(), _patch_embed():
+            res = client.post(
+                "/save",
+                json={
+                    "content": "Save with a provided description.",
                     "type": "Insight",
-                    "slug": "successful-save",
+                    "slug": "provided-desc",
+                    "metadata": {"description": "Caller-supplied description."},
+                },
+            )
+        assert res.status_code == 200, res.text
+        assert not res.json().get("description_pending")
+
+    def test_save_omits_description_pending_when_auto_summary_disabled(self, client, monkeypatch):
+        """auto_summary.enabled is the master switch — disabled → no description work."""
+        monkeypatch.setattr(config.auto_summary, "enabled", False)
+        with _patch_scan(), _patch_embed(), \
+                patch("palinode.api.server._generate_description") as mock_desc:
+            res = client.post(
+                "/save",
+                json={
+                    "content": "Save with auto_summary disabled.",
+                    "type": "Insight",
+                    "slug": "disabled-desc",
+                },
+            )
+        assert res.status_code == 200, res.text
+        assert not res.json().get("description_pending")
+        mock_desc.assert_not_called()
+
+    def test_save_still_returns_200_without_blocking_on_llm(self, client):
+        """/save commits the file and returns 200 with no inline LLM call (#405)."""
+        with _patch_scan(), _patch_embed(), \
+                patch("palinode.api.server._generate_description") as mock_desc:
+            res = client.post(
+                "/save",
+                json={
+                    "content": "This is saved without waiting on any model.",
+                    "type": "Insight",
+                    "slug": "no-block-test",
                 },
             )
         assert res.status_code == 200, res.text
         body = res.json()
-        assert not body.get("description_pending"), (
-            f"description_pending should be absent or False on success: {body}"
-        )
-
-    def test_save_does_not_include_description_pending_on_fallback(self, client):
-        """Non-timeout failure (fallback used) → description_pending absent in response.
-
-        The fallback path uses first-line extraction — that IS a real description,
-        just not LLM-generated. The watcher should not re-schedule a retry.
-        """
-        with _patch_scan(), _patch_embed(), _patch_desc_fallback():
-            res = client.post(
-                "/save",
-                json={
-                    "content": "First line fallback test content.",
-                    "type": "Insight",
-                    "slug": "fallback-test",
-                },
-            )
-        assert res.status_code == 200, res.text
-        body = res.json()
-        assert not body.get("description_pending"), (
-            f"description_pending should be absent on fallback (non-timeout): {body}"
-        )
-
-    def test_save_still_returns_200_on_description_timeout(self, client):
-        """Even when description times out, /save must return 200 (file is on disk)."""
-        with _patch_scan(), _patch_embed(), _patch_desc_timeout():
-            res = client.post(
-                "/save",
-                json={
-                    "content": "This will be saved even if description times out.",
-                    "type": "Insight",
-                    "slug": "timeout-200-test",
-                },
-            )
-        assert res.status_code == 200, res.text
-        body = res.json()
-        assert "file_path" in body, "file_path must be in response even on description timeout"
-        assert os.path.exists(body["file_path"]), "file must be on disk even on description timeout"
+        assert "file_path" in body
+        assert os.path.exists(body["file_path"])
+        mock_desc.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -260,30 +316,39 @@ class TestSaveDescriptionPending:
 
 
 def test_non_timeout_failure_logged_at_warning_not_info(caplog):
-    """Audit Q2: Ollama description failure (non-timeout) must log at WARNING, not INFO."""
+    """Audit Q2: Ollama description failure (non-timeout) must log at WARNING."""
+    p, _ = _patch_client(side_effect=OllamaUnreachable("offline", role="chat"))
     with caplog.at_level(logging.WARNING, logger="palinode.api.server"):
-        with patch(
-            "palinode.api.server.httpx.post",
-            side_effect=httpx.ConnectError("offline", request=MagicMock()),
-        ):
+        with p:
             _server_mod._generate_description("some content")
-
-    warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert warning_records, (
-        "No WARNING emitted for non-timeout Ollama description failure — "
-        "should have been upgraded from INFO (audit Q2)"
+    assert [r for r in caplog.records if r.levelno == logging.WARNING], (
+        "No WARNING emitted for non-timeout Ollama description failure"
     )
 
 
 def test_timeout_failure_logged_at_warning(caplog):
-    """Timeout also logs at WARNING (higher priority than non-timeout fallback)."""
+    """Timeout also logs at WARNING."""
+    p, _ = _patch_client(side_effect=OllamaTimeout("timed out", role="chat"))
     with caplog.at_level(logging.WARNING, logger="palinode.api.server"):
-        with patch(
-            "palinode.api.server.httpx.post",
-            side_effect=httpx.TimeoutException("timed out", request=MagicMock()),
-        ):
+        with p:
             _server_mod._generate_description("some content")
-
     warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert warning_records, "No WARNING emitted for timeout description failure"
-    assert "deferred" in warning_records[0].message.lower() or "timed out" in warning_records[0].message.lower()
+    msg = warning_records[0].message.lower()
+    assert "deferred" in msg or "circuit" in msg or "slow" in msg
+
+
+def test_generate_summary_returns_empty_on_error():
+    """_generate_summary returns '' on any OllamaError (timeout/circuit/unreachable)."""
+    p, _ = _patch_client(side_effect=OllamaError("boom", role="chat"))
+    with p:
+        assert _server_mod._generate_summary("some content to summarize") == ""
+
+
+def test_generate_summary_cleans_and_clips():
+    """_generate_summary routes a successful response through _clean_llm_oneliner."""
+    p, _ = _patch_client(response="The memory describes a clean summary path.")
+    with p:
+        out = _server_mod._generate_summary("content")
+    assert not out.lower().startswith("the memory")
+    assert out == "A clean summary path."

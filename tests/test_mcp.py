@@ -3,10 +3,16 @@
 Pure-function helpers that the dispatcher delegates to. These tests don't
 exercise the async tool dispatch — they cover only the logic the dispatcher
 calls into, which is what changes most often and is easiest to regress.
+
+The timeout-message tests (#416) also drive the async dispatcher directly with
+a mocked slow server, since the verify-before-retry contract lives in the
+dispatcher's except block, not in a pure helper alone.
 """
+import httpx
 import pytest
 
-from palinode.mcp import _coerce_str_array, _resolve_save_type
+import palinode.mcp as mcp
+from palinode.mcp import _coerce_str_array, _dispatch_tool, _resolve_save_type, _timeout_message
 
 
 # ---- _coerce_str_array (#147 — JSON-encoded array args from MCP clients) ----
@@ -79,3 +85,62 @@ def test_resolve_save_type_neither_specified():
 def test_resolve_save_type_falsy_ps_treated_as_unset():
     # ps=False with a real type should pass the type through
     assert _resolve_save_type("Decision", False) == "Decision"
+
+
+# ---- _timeout_message (#416 — verify-before-retry hint on write-path timeout) ----
+
+
+def test_timeout_message_save_warns_verify_before_retry():
+    msg = _timeout_message("palinode_save")
+    assert "palinode_save" in msg
+    assert "may have succeeded server-side" in msg
+    # The actionable hint: search before retrying so you don't duplicate.
+    assert "palinode_search" in msg
+    assert "duplicate" in msg
+    # Audit classifies write-path timeouts as errors via this prefix (mcp.py).
+    assert msg.startswith("Timeout:")
+
+
+def test_timeout_message_session_end_is_write_path():
+    msg = _timeout_message("palinode_session_end")
+    assert "palinode_session_end" in msg
+    assert "palinode_search" in msg
+    assert msg.startswith("Timeout:")
+
+
+def test_timeout_message_read_path_keeps_plain_message():
+    # Read-path tools shouldn't tell the model to dedup-check — nothing was written.
+    msg = _timeout_message("palinode_search")
+    assert "timed out" in msg
+    assert "duplicate" not in msg
+    assert "palinode_search" not in msg.replace("Error:", "")  # no self-referential hint
+
+
+# ---- async dispatcher: slow server surfaces the right message (#416) ----
+
+
+async def _raise_timeout(*args, **kwargs):
+    """Stand-in for a server that never answers before the request timeout."""
+    raise httpx.ReadTimeout("simulated slow auto_summary (>request timeout)")
+
+
+@pytest.mark.asyncio
+async def test_dispatch_save_timeout_surfaces_verify_hint(monkeypatch):
+    monkeypatch.setattr(mcp, "_post", _raise_timeout)
+    result = await _dispatch_tool(
+        "palinode_save", {"content": "a distinctive phrase", "ps": True}
+    )
+    text = result[0].text
+    assert text.startswith("Timeout:")
+    assert "palinode_search" in text
+    assert "duplicate" in text
+
+
+@pytest.mark.asyncio
+async def test_dispatch_search_timeout_keeps_plain_message(monkeypatch):
+    monkeypatch.setattr(mcp, "_post", _raise_timeout)
+    result = await _dispatch_tool("palinode_search", {"query": "anything"})
+    text = result[0].text
+    # Read path: plain timeout, no misleading dedup advice.
+    assert "timed out" in text
+    assert "duplicate" not in text

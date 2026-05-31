@@ -18,28 +18,35 @@ from unittest import mock
 import httpx
 import pytest
 
+from palinode.core.ollama_client import OllamaError, OllamaTimeout, OllamaUnreachable
+
+
+def _patch_client(side_effect):
+    """Patch server.get_ollama_client so .generate raises side_effect."""
+    fake = mock.MagicMock(name="OllamaClient")
+    fake.generate.side_effect = side_effect
+    return mock.patch("palinode.api.server.get_ollama_client", return_value=fake)
+
 
 # ── _generate_description ────────────────────────────────────────────────
+# As of #338 Phase 2 these route through the centralized Ollama client, which
+# raises typed OllamaError subclasses; programming bugs (TypeError/...) still
+# propagate uncaught.
 
 
-def test_generate_description_catches_httpx_error() -> None:
+def test_generate_description_catches_ollama_error() -> None:
     from palinode.api.server import _generate_description
 
-    with mock.patch(
-        "palinode.api.server.httpx.post",
-        side_effect=httpx.ConnectError("offline"),
-    ):
+    with _patch_client(OllamaUnreachable("offline", role="chat")):
         result = _generate_description("first line\nsecond line")
     assert result == "first line"
 
 
-def test_generate_description_catches_json_decode() -> None:
+def test_generate_description_catches_bad_body() -> None:
+    """A non-JSON body surfaces from the client as OllamaError → fallback, not a raw decode error."""
     from palinode.api.server import _generate_description
 
-    fake = mock.Mock()
-    fake.raise_for_status = mock.Mock()
-    fake.json.side_effect = json.JSONDecodeError("nope", "doc", 0)
-    with mock.patch("palinode.api.server.httpx.post", return_value=fake):
+    with _patch_client(OllamaError("non-JSON body", role="chat")):
         result = _generate_description("first line")
     assert result == "first line"
 
@@ -48,10 +55,7 @@ def test_generate_description_propagates_typeerror() -> None:
     """A TypeError is a programming bug — must NOT be silently swallowed."""
     from palinode.api.server import _generate_description
 
-    with mock.patch(
-        "palinode.api.server.httpx.post",
-        side_effect=TypeError("bug"),
-    ):
+    with _patch_client(TypeError("bug")):
         with pytest.raises(TypeError):
             _generate_description("first line\nsecond line")
 
@@ -59,13 +63,10 @@ def test_generate_description_propagates_typeerror() -> None:
 # ── _generate_summary ────────────────────────────────────────────────────
 
 
-def test_generate_summary_catches_httpx_error() -> None:
+def test_generate_summary_catches_ollama_error() -> None:
     from palinode.api.server import _generate_summary
 
-    with mock.patch(
-        "palinode.api.server.httpx.post",
-        side_effect=httpx.ReadTimeout("slow"),
-    ):
+    with _patch_client(OllamaTimeout("slow", role="chat")):
         assert _generate_summary("hello") == ""
 
 
@@ -73,10 +74,7 @@ def test_generate_summary_propagates_attributeerror() -> None:
     """AttributeError is a programming bug — must NOT be silently swallowed."""
     from palinode.api.server import _generate_summary
 
-    with mock.patch(
-        "palinode.api.server.httpx.post",
-        side_effect=AttributeError("bug"),
-    ):
+    with _patch_client(AttributeError("bug")):
         with pytest.raises(AttributeError):
             _generate_summary("hello")
 
@@ -85,13 +83,21 @@ def test_generate_summary_propagates_attributeerror() -> None:
 
 
 def test_status_ollama_probe_catches_connection_error() -> None:
-    """Connection failure during ollama probe → ollama_reachable=False."""
+    """Connection failure during ollama probe → ollama_reachable=False.
+
+    #338 Phase 5: liveness goes through OllamaClient.ping() (returns False on a
+    connect error); status_api also reads metrics() for its `ollama` block.
+    """
     from palinode.api import server
+
+    fake_client = mock.MagicMock(name="OllamaClient")
+    fake_client.ping.return_value = False
+    fake_client.metrics.return_value = {}
 
     with (
         mock.patch(
-            "palinode.api.server.httpx.get",
-            side_effect=httpx.ConnectError("nope"),
+            "palinode.api.server.get_ollama_client",
+            return_value=fake_client,
         ),
         mock.patch.object(server.store, "get_stats", return_value={
             "total_chunks": 0,

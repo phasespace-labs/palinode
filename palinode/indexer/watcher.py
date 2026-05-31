@@ -210,10 +210,13 @@ class PalinodeHandler(FileSystemEventHandler):
             logger.info(f"File {filepath} has core:true but lacks summary. Scheduling generation...")
             self._schedule_summary_generation()
 
-        # #336: trigger description retry for files where description was deferred
-        # during /save (timeout path). Detects absence of the description field
-        # rather than an empty string — the save path leaves it unset when deferred.
-        if not metadata.get("description"):
+        # #405: trigger description fill for files missing a description. The
+        # auto-description is now always deferred off the /save hot path (#405,
+        # extending the #336 timeout path), so the watcher is the normal route
+        # for descriptions to land, not just the timeout-retry route. Gated on
+        # auto_summary.enabled — the master switch for all LLM enrichment — so
+        # disabling it stops description scheduling too.
+        if config.auto_summary.enabled and not metadata.get("description"):
             logger.debug(
                 "Watcher: %s has no description — scheduling deferred description fill",
                 os.path.basename(filepath),

@@ -47,6 +47,7 @@ is checked AND `mcp-tool-coverage` CI is green on the release SHA.**
 
 ## Quality gates
 - [ ] `palinode doctor` passes on fresh install (no warnings)
+- [ ] Release checklist complete on main
 - [ ] Pre-launch: resolve any open `P0`/`P1` labeled issues
 
 ## Hardening (M1)

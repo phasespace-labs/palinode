@@ -65,6 +65,17 @@ This project uses Palinode for persistent memory via MCP (server name: `palinode
 ### Project slug
 This project's slug is `{project_slug}`. Pass it as the `project` argument to
 `palinode_save` and `palinode_session_end` so status rolls up correctly.
+{wrap_policy_note}"""
+
+
+# Appended to the CLAUDE.md memory block only when `--wrap-policy heavy` is
+# chosen (#419). This is the inspectable record of which `/wrap` variant the
+# repo runs — the behaviour itself lives in the scaffolded wrap.md body.
+WRAP_POLICY_HEAVY_NOTE = """
+### Wrap policy
+`wrap-policy: heavy` — `/wrap` in this repo runs the heavy sequence (merge →
+push → triage dangling items → `palinode_session_end`), halting loudly on any
+failure. See `.claude/commands/wrap.md` for the exact contract.
 """
 
 
@@ -241,6 +252,74 @@ instead (`/ps` also works as a back-compat alias).
 """
 
 
+# Heavy `/wrap` variant (#419). Scaffolded into `.claude/commands/wrap.md`
+# only when `palinode init --wrap-policy heavy` is chosen. The light body
+# above stays the default — heavy is opt-in per repo because it takes
+# repo-mutating actions (merge, push) that must never be a surprise.
+WRAP_HEAVY_COMMAND_BODY = """\
+---
+description: "Heavy wrap (wrap-policy: heavy) — merge, push, triage dangling items, then structured session_end. Halts on any failure."
+---
+
+**This repo runs the heavy `/wrap` (`wrap-policy: heavy`).** Unlike the light
+variant, `/wrap` here lands the session's work before archiving: it merges,
+pushes, triages dangling items, and only then records the session. Run the
+four steps **in order**. Any failure **halts the sequence** — print why and
+stop; do not silently skip ahead.
+
+**Step 1 — Merge.**
+Find any open PR on the current branch.
+- If exactly one PR is open and its CI is green and review is satisfied:
+  squash-merge it with a sensible message (subject line summarising the
+  change, body referencing the issue). For `main`-eligible solo-dev repos a
+  squash-merge is fine.
+- If multiple PRs are open: **list them and stop** unless the user passed
+  `--all` to this command.
+- If the merge cannot proceed (merge conflict, CI not green, review pending):
+  **halt.** Print the blocking reason and do not continue to Step 2. The
+  operator decides what to do.
+
+**Step 2 — Push.**
+`git push` any unpushed commits on `main` and any non-merged feature branches
+that still have follow-up work. **Never force-push by default.**
+- If a push fails (non-fast-forward, branch protection, auth, network):
+  **halt.** Print the error and do not continue to Step 3.
+
+**Step 3 — Triage dangling items.**
+Route everything this session flagged-but-didn't-act-on into the
+four-destination hierarchy (papercut / INBOX / GH issue / Palinode) defined in
+the workspace `CLAUDE.md`.
+- Scan the session for items the agent marked but deferred ("worth a
+  papercut", "file this", "separate concern", "TODO").
+- Run the `triage` skill in **dry-run**, present its recommendations, and get
+  one-shot OK before applying anything. **If routing is uncertain, ask — do
+  not guess.**
+- papercut / INBOX items: append to the matching concern doc (honour
+  "append before create" — never spawn a new file when an existing doc fits).
+- GH-issue items: draft the body; for solo-dev iteration repos you may
+  auto-file with a sensible label.
+- `Decision` / `Insight` items: save directly via `palinode_save`.
+
+**Step 4 — Archive the session (LAST).**
+Call `palinode_session_end` with `summary`, `decisions`, `blockers`, and
+`project` (the slug from `.claude/CLAUDE.md`). Fired last so the record
+captures the post-merge SHAs, the freshly-filed issue numbers, and the
+papercut/INBOX updates — reference *what the wrap did* (merged #X, pushed Y,
+filed #Z, appended N items), not just the work.
+- If Palinode is unreachable: **continue** — print a warning and emit a stub
+  markdown block the operator can save manually later. Ending without a
+  Palinode record is acceptable; silently skipping with no warning is not.
+
+After all steps, print: `✓ heavy wrap complete — safe to /clear now.` and the
+daily-note path (or the stub path if Palinode was down).
+
+**This command is deterministic in sequence** (merge → push → triage →
+session_end) **but halts loudly on any failure.** For a repo that should not
+auto-merge, use the light `/wrap` instead (scaffold with the default
+`--wrap-policy light`).
+"""
+
+
 SETTINGS_HOOK_BLOCK = {
     "hooks": {
         "SessionEnd": [
@@ -285,8 +364,13 @@ def _ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
-def _write_claude_md(path: Path, project_slug: str, force: bool) -> str:
-    block = CLAUDE_MD_BLOCK.format(project_slug=project_slug)
+def _write_claude_md(
+    path: Path, project_slug: str, force: bool, wrap_policy: str = "light"
+) -> str:
+    wrap_policy_note = WRAP_POLICY_HEAVY_NOTE if wrap_policy == "heavy" else ""
+    block = CLAUDE_MD_BLOCK.format(
+        project_slug=project_slug, wrap_policy_note=wrap_policy_note
+    )
     _ensure_parent(path)
     if not path.exists():
         path.write_text(block)
@@ -644,6 +728,17 @@ def _merge_mcp_json(path: Path, force: bool) -> str:
     help="Install /save, /ps (back-compat alias), and /wrap slash commands for save-before-clear reflex",
 )
 @click.option(
+    "--wrap-policy",
+    type=click.Choice(["light", "heavy"]),
+    default="light",
+    help=(
+        "Which /wrap variant to scaffold (#419). 'light' (default): /wrap just "
+        "pushes + session_end. 'heavy': /wrap also merges, pushes, and triages "
+        "dangling items before archiving — opt-in per repo because it mutates "
+        "the repo (merge/push)."
+    ),
+)
+@click.option(
     "--obsidian/--no-obsidian",
     default=False,
     help=(
@@ -678,6 +773,7 @@ def init(
     claudemd,
     hook,
     slash,
+    wrap_policy,
     obsidian,
     force_obsidian,
     force,
@@ -733,7 +829,9 @@ def init(
         if slash:
             click.echo(f"  {save_cmd.relative_to(target)}  (/save slash command — canonical)")
             click.echo(f"  {ps_cmd.relative_to(target)}  (/ps slash command — back-compat alias)")
-            click.echo(f"  {wrap_cmd.relative_to(target)}  (/wrap slash command)")
+            click.echo(
+                f"  {wrap_cmd.relative_to(target)}  (/wrap slash command — {wrap_policy} policy)"
+            )
         if mcp:
             click.echo(f"  {mcp_json.relative_to(target)}  (MCP server block)")
         if obsidian:
@@ -746,14 +844,19 @@ def init(
 
     results = []
     if claudemd:
-        results.append(("CLAUDE.md", _write_claude_md(claude_md, slug, force)))
+        results.append(
+            ("CLAUDE.md", _write_claude_md(claude_md, slug, force, wrap_policy))
+        )
     if hook:
         results.append(("hook script", _write_hook_script(hook_script, force)))
         results.append(("settings.json", _merge_settings(settings, force)))
     if slash:
         results.append(("/save command", _write_slash_command(save_cmd, SAVE_COMMAND_BODY, force)))
         results.append(("/ps command (alias)", _write_slash_command(ps_cmd, PS_COMMAND_BODY, force)))
-        results.append(("/wrap command", _write_slash_command(wrap_cmd, WRAP_COMMAND_BODY, force)))
+        wrap_body = WRAP_HEAVY_COMMAND_BODY if wrap_policy == "heavy" else WRAP_COMMAND_BODY
+        results.append(
+            (f"/wrap command ({wrap_policy})", _write_slash_command(wrap_cmd, wrap_body, force))
+        )
     if mcp:
         results.append((".mcp.json", _merge_mcp_json(mcp_json, force)))
     if obsidian:

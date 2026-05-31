@@ -1,20 +1,22 @@
 """Tests for embed-path context-window hardening — issue #335.
 
-Covers:
-- EmbeddingContextError is raised (not silently swallowed) when Ollama returns
-  an explicit context-overflow error in a 200 OK body.
-- The typed exception carries model, text_len, and ollama_message attributes.
-- check_model_context() warns when num_ctx < min_ctx.
-- check_model_context() does not warn when num_ctx >= min_ctx.
-- check_model_context() is silent on /api/show failure (best-effort preflight).
-- The preflight runs at most once per embed call (guard flag).
+As of #338 Phase 3, `embedder._embed_local` delegates to the centralized
+`OllamaClient.embed()`, which owns the dual-endpoint fallback, vector parsing,
+and context-overflow detection (those mechanics are tested directly in
+`tests/test_ollama_client.py`). This file covers the *embedder wrapper* contract:
+
+- `_embed_local` re-raises `EmbeddingContextError` (does not swallow it to []).
+- `_embed_local` returns [] on any other `OllamaError`.
+- `embed()` (public) propagates `EmbeddingContextError`.
+- `_is_ctx_overflow_message` (re-exported from ollama_client) classifies correctly.
+- `check_model_context()` warns / stays silent based on the client's /api/show.
+- The preflight runs at most once per process.
 """
 from __future__ import annotations
 
 import logging
 from unittest.mock import MagicMock, patch
 
-import httpx
 import pytest
 
 from palinode.core import embedder
@@ -23,10 +25,29 @@ from palinode.core.embedder import (
     _is_ctx_overflow_message,
     check_model_context,
 )
+from palinode.core.ollama_client import OllamaError, OllamaUnreachable
+
+
+def _client_with_embed(*, embed_return=None, embed_side_effect=None):
+    fake = MagicMock(name="OllamaClient")
+    if embed_side_effect is not None:
+        fake.embed.side_effect = embed_side_effect
+    else:
+        fake.embed.return_value = embed_return
+    return patch("palinode.core.embedder.get_ollama_client", return_value=fake)
+
+
+def _client_with_show(*, show_return=None, show_side_effect=None):
+    fake = MagicMock(name="OllamaClient")
+    if show_side_effect is not None:
+        fake.show.side_effect = show_side_effect
+    else:
+        fake.show.return_value = show_return
+    return patch("palinode.core.embedder.get_ollama_client", return_value=fake)
 
 
 # ---------------------------------------------------------------------------
-# _is_ctx_overflow_message
+# _is_ctx_overflow_message (re-exported helper)
 # ---------------------------------------------------------------------------
 
 
@@ -45,161 +66,77 @@ def test_is_ctx_overflow_message(msg, expected):
 
 
 # ---------------------------------------------------------------------------
-# EmbeddingContextError — raised on context-overflow body
+# _embed_local wrapper — propagates EmbeddingContextError, [] on other errors
 # ---------------------------------------------------------------------------
 
 
-def test_context_overflow_response_raises_typed_exception():
-    """Ollama 200 OK with context-overflow error body → EmbeddingContextError."""
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status = MagicMock()
-    mock_resp.json.return_value = {"error": "prompt is too long for max context"}
-
-    with patch("palinode.core.embedder._run_preflight_once"):
-        with patch("palinode.core.embedder.httpx.post", return_value=mock_resp):
-            with pytest.raises(EmbeddingContextError) as exc_info:
-                embedder._embed_local("x" * 5000)
-
-    err = exc_info.value
-    assert err.text_len == 5000
-    assert "prompt is too long for max context" in err.ollama_message
-    # Recovery hint must be in the message
-    assert "num_ctx" in str(err).lower() or "truncate" in str(err).lower()
+def test_embed_local_propagates_context_error():
+    """A ctx overflow from the client must propagate, not degrade to []."""
+    err = EmbeddingContextError(model="bge-m3", text_len=5000, ollama_message="prompt is too long")
+    with patch("palinode.core.embedder._run_preflight_once"), _client_with_embed(embed_side_effect=err):
+        with pytest.raises(EmbeddingContextError) as ei:
+            embedder._embed_local("x" * 5000)
+    assert ei.value.text_len == 5000
+    assert "too long" in ei.value.ollama_message
+    assert "num_ctx" in str(ei.value).lower() or "truncate" in str(ei.value).lower()
 
 
-def test_context_overflow_exception_carries_model_attribute():
-    """EmbeddingContextError.model must match the configured model."""
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status = MagicMock()
-    mock_resp.json.return_value = {"error": "too long for max context"}
-
-    with patch("palinode.core.embedder._run_preflight_once"):
-        with patch("palinode.core.embedder.httpx.post", return_value=mock_resp):
-            with pytest.raises(EmbeddingContextError) as exc_info:
-                embedder._embed_local("test")
-
-    assert exc_info.value.model == embedder.config.embeddings.primary.model
+def test_embed_local_returns_empty_on_ollama_error():
+    """Connectivity/timeout/unexpected-shape (any OllamaError) → []."""
+    with patch("palinode.core.embedder._run_preflight_once"), \
+            _client_with_embed(embed_side_effect=OllamaUnreachable("offline", role="embed")):
+        result = embedder._embed_local("some text")
+    assert result == []
 
 
-def test_context_overflow_not_retried_on_other_endpoint():
-    """EmbeddingContextError must re-raise immediately, not try the next endpoint.
-
-    The overflow applies to the model's context, not the endpoint — retrying
-    a different endpoint would just fail again with the same error.
-    """
-    call_count = 0
-
-    def side_effect(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        mock_resp = MagicMock()
-        mock_resp.raise_for_status = MagicMock()
-        mock_resp.json.return_value = {"error": "prompt is too long for max context"}
-        return mock_resp
-
-    with patch("palinode.core.embedder._run_preflight_once"):
-        with patch("palinode.core.embedder.httpx.post", side_effect=side_effect):
-            with pytest.raises(EmbeddingContextError):
-                embedder._embed_local("big text")
-
-    # Should have been called once (first endpoint), not twice.
-    assert call_count == 1, (
-        f"httpx.post called {call_count} times — context overflow should stop at first endpoint"
-    )
-
-
-def test_non_overflow_error_body_does_not_raise_typed_exception():
-    """A 200 OK with a non-overflow error key → warning, not EmbeddingContextError."""
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status = MagicMock()
-    mock_resp.json.return_value = {"error": "model not found"}
-
-    with patch("palinode.core.embedder._run_preflight_once"):
-        with patch("palinode.core.embedder.httpx.post", return_value=mock_resp):
-            # Must NOT raise EmbeddingContextError — just return [].
-            result = embedder._embed_local("some text")
-
-    assert result == [], "non-overflow error body should return empty list"
-
-
-def test_context_overflow_logged_before_raise(caplog):
-    """EmbeddingContextError must be raise-able by callers — verify the raise propagates."""
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status = MagicMock()
-    mock_resp.json.return_value = {"error": "too long for max context"}
-
-    with patch("palinode.core.embedder._run_preflight_once"):
-        with patch("palinode.core.embedder.httpx.post", return_value=mock_resp):
-            with pytest.raises(EmbeddingContextError):
-                embedder.embed("test text")
+def test_embed_public_propagates_context_error():
+    """embed() (public entry) also surfaces EmbeddingContextError."""
+    err = EmbeddingContextError(model="bge-m3", text_len=4, ollama_message="too long for max context")
+    with patch("palinode.core.embedder._run_preflight_once"), _client_with_embed(embed_side_effect=err):
+        with pytest.raises(EmbeddingContextError):
+            embedder.embed("test text")
 
 
 # ---------------------------------------------------------------------------
-# check_model_context — preflight ctx check
+# check_model_context — preflight ctx check (now via client.show)
 # ---------------------------------------------------------------------------
 
 
-def _make_show_resp(ctx_value):
-    """Build a mock /api/show response with the given num_ctx value."""
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status = MagicMock()
-    mock_resp.json.return_value = {
-        "model_info": {"llama.context_length": ctx_value},
-    }
-    return mock_resp
+def _show_resp(ctx_value):
+    return {"model_info": {"llama.context_length": ctx_value}}
 
 
 def test_preflight_warns_when_ctx_below_minimum(caplog):
-    """check_model_context warns at WARNING level when num_ctx < min_ctx."""
     with caplog.at_level(logging.WARNING, logger="palinode.core.embedder"):
-        with patch("palinode.core.embedder.httpx.post", return_value=_make_show_resp(4096)):
+        with _client_with_show(show_return=_show_resp(4096)):
             check_model_context(min_ctx=8192)
-
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert warnings, "no WARNING emitted when num_ctx < min_ctx"
-    assert "4096" in warnings[0].message, "actual ctx value missing from warning"
-    assert "8192" in warnings[0].message, "minimum ctx value missing from warning"
-    assert "modelfile" in warnings[0].message.lower(), "recovery hint missing from warning"
-    assert "num_ctx" in warnings[0].message, "modelfile parameter name missing from warning"
+    assert "4096" in warnings[0].message
+    assert "8192" in warnings[0].message
+    assert "modelfile" in warnings[0].message.lower()
+    assert "num_ctx" in warnings[0].message
 
 
 def test_preflight_silent_when_ctx_meets_minimum(caplog):
-    """check_model_context must NOT warn when num_ctx >= min_ctx."""
     with caplog.at_level(logging.WARNING, logger="palinode.core.embedder"):
-        with patch("palinode.core.embedder.httpx.post", return_value=_make_show_resp(8192)):
+        with _client_with_show(show_return=_show_resp(8192)):
             check_model_context(min_ctx=8192)
-
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert not warnings, f"spurious WARNING when num_ctx is sufficient: {warnings}"
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
 
 
 def test_preflight_silent_on_show_failure(caplog):
-    """check_model_context must not raise when /api/show is unreachable."""
     with caplog.at_level(logging.WARNING, logger="palinode.core.embedder"):
-        with patch(
-            "palinode.core.embedder.httpx.post",
-            side_effect=httpx.ConnectError("offline", request=MagicMock()),
-        ):
-            # Must not raise
-            check_model_context()
-
-    # Should not emit a WARNING for a connect failure — just DEBUG.
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert not warnings, f"spurious WARNING on /api/show connect failure: {warnings}"
+        with _client_with_show(show_side_effect=OllamaUnreachable("offline", role="embed")):
+            check_model_context()  # must not raise
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
 
 
 def test_preflight_silent_on_missing_ctx_key(caplog):
-    """If /api/show doesn't expose num_ctx, preflight skips silently."""
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status = MagicMock()
-    mock_resp.json.return_value = {"model_info": {}}  # no llama.context_length
-
     with caplog.at_level(logging.WARNING, logger="palinode.core.embedder"):
-        with patch("palinode.core.embedder.httpx.post", return_value=mock_resp):
+        with _client_with_show(show_return={"model_info": {}}):
             check_model_context()
-
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert not warnings, f"spurious WARNING when num_ctx key absent: {warnings}"
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
 
 
 # ---------------------------------------------------------------------------
@@ -208,29 +145,15 @@ def test_preflight_silent_on_missing_ctx_key(caplog):
 
 
 def test_preflight_runs_at_most_once_per_process(monkeypatch):
-    """_run_preflight_once must call check_model_context exactly once
-    regardless of how many times _embed_local is called.
-    """
     import palinode.core.embedder as emb_mod
 
     call_log: list[int] = []
-
-    def fake_check(*args, **kwargs):
-        call_log.append(1)
-
-    # Reset the guard so we get a clean test.
     monkeypatch.setattr(emb_mod, "_preflight_done", False)
-    monkeypatch.setattr(emb_mod, "check_model_context", fake_check)
+    monkeypatch.setattr(emb_mod, "check_model_context", lambda *a, **k: call_log.append(1))
 
-    success_resp = MagicMock()
-    success_resp.raise_for_status = MagicMock()
-    success_resp.json.return_value = {"embeddings": [[0.1] * 10]}
-
-    with patch("palinode.core.embedder.httpx.post", return_value=success_resp):
+    with _client_with_embed(embed_return=[0.1] * 10):
         emb_mod._embed_local("call 1")
         emb_mod._embed_local("call 2")
         emb_mod._embed_local("call 3")
 
-    assert len(call_log) == 1, (
-        f"check_model_context called {len(call_log)} times — should be exactly once"
-    )
+    assert len(call_log) == 1

@@ -4,6 +4,8 @@
  * Persistent memory system — files as truth, vectors as search.
  * Connects to the Palinode Python API for search/save operations.
  * Injects core memory at session start, extracts memories at session end.
+ *
+ * Host-side install / opt-in flags: see plugin/INSTALL.md
  */
 
 import * as fs from "fs";
@@ -895,8 +897,9 @@ const palinodePlugin = {
           injection += "</palinode-memory>";
 
           // #391/#394: enforce total-budget hard cap across all sources.
-          // Prevents pathological compound growth (observed monitor prompt class: 69K tokens
-          // from a single autoRecall firing on a 200-token cron prompt).
+          // Prevents pathological compound growth — observed monitor prompt
+          // class: 69K tokens from a single autoRecall firing on a 200-token
+          // cron prompt.
           if (profile.totalBudget && injection.length > profile.totalBudget) {
             injection = injection.slice(0, profile.totalBudget) +
               `\n…[truncated by recallProfile total budget: ${profile.totalBudget} chars]\n</palinode-memory>`;

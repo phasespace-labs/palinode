@@ -22,11 +22,11 @@ import math
 import os
 from typing import Any
 
-import httpx
 import frontmatter as _frontmatter
 
 from palinode.core.config import config
 from palinode.core import parser
+from palinode.core.ollama_client import OllamaError, OllamaRole, get_ollama_client
 
 logger = logging.getLogger("palinode.lint.contradictions")
 
@@ -179,22 +179,24 @@ def _call_llm_for_contradiction(
         "then a one-sentence explanation."
     )
     try:
-        response = httpx.post(
-            f"{llm_url}/v1/chat/completions",
-            json={
-                "model": llm_model,
-                "messages": [
-                    {"role": "system", "content": _CONTRADICTION_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "temperature": temperature,
-                "max_tokens": 150,
-            },
+        # #338 Phase 4: route through the centralized client (CONSOLIDATION role,
+        # OpenAI-compatible /v1/chat/completions). retries=0 — a contradiction
+        # check is best-effort; a failure just yields UNKNOWN.
+        content = get_ollama_client().chat_completions(
+            [
+                {"role": "system", "content": _CONTRADICTION_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            model=llm_model,
+            base_url=llm_url,
+            temperature=temperature,
+            max_tokens=150,
             timeout=60.0,
+            retries=0,
+            role=OllamaRole.CONSOLIDATION,
         )
-        response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"].strip()
-    except Exception as exc:
+        return content.strip()
+    except OllamaError as exc:
         logger.warning("LLM call for contradiction check failed: %s", exc)
         return ""
 

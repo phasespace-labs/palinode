@@ -424,6 +424,12 @@ def mcp_config(output_json: bool) -> None:
             "  Claude Code CLI reads: [cyan]~/.claude.json[/cyan]  (mcpServers under your project entry)\n"
             "  Edit the file that matches the client you are configuring."
         )
+        console.print()
+        console.print(
+            "[yellow]Claude Desktop warning:[/yellow] quit the app (cmd+Q) before editing its config.\n"
+            "  Edits made while it is running are overwritten on quit.\n"
+            "  Claude Desktop also only accepts stdio (command+args) entries — url-form entries are silently stripped."
+        )
     elif system == "Windows":
         console.print(
             "[bold]Which file to edit?[/bold]\n"
@@ -431,12 +437,24 @@ def mcp_config(output_json: bool) -> None:
             "  Claude Code CLI reads: [cyan]~/.claude.json[/cyan]\n"
             "  Edit the file that matches the client you are configuring."
         )
+        console.print()
+        console.print(
+            "[yellow]Claude Desktop warning:[/yellow] quit the app before editing its config.\n"
+            "  Edits made while it is running are overwritten on quit.\n"
+            "  Claude Desktop also only accepts stdio (command+args) entries — url-form entries are silently stripped."
+        )
     else:
         console.print(
             "[bold]Which file to edit?[/bold]\n"
             "  Claude Desktop (Linux) reads: [cyan]~/.config/Claude/claude_desktop_config.json[/cyan]\n"
             "  Claude Code CLI reads: [cyan]~/.claude.json[/cyan]\n"
             "  Edit the file that matches the client you are configuring."
+        )
+        console.print()
+        console.print(
+            "[yellow]Claude Desktop warning:[/yellow] quit the app before editing its config.\n"
+            "  Edits made while it is running are overwritten on quit.\n"
+            "  Claude Desktop also only accepts stdio (command+args) entries — url-form entries are silently stripped."
         )
     console.print()
     console.print("See [cyan]docs/MCP-CONFIG-HOMES.md[/cyan] for the full reference.")

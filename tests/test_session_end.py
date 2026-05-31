@@ -2,7 +2,24 @@
 import os
 from unittest import mock
 
+import pytest
+
 from palinode.core.config import config
+
+
+@pytest.fixture(autouse=True)
+def _isolate_db(tmp_path, monkeypatch):
+    """Point config.db_path at a per-test DB so session-end dedup never queries
+    the real ~/palinode database.
+
+    These tests monkeypatch ``memory_dir`` but historically not ``db_path``;
+    ``_check_session_end_dedup`` reads recent embeddings from ``db_path``. On a
+    machine where real Ollama is reachable (so embeds succeed), the dedup could
+    match a prior identical save in the real DB and skip the individual file,
+    failing these tests non-deterministically. Isolating ``db_path`` here keeps
+    the dedup window empty per test.
+    """
+    monkeypatch.setattr(config, "db_path", str(tmp_path / ".palinode.db"))
 
 
 def test_session_end_creates_daily_and_individual(tmp_path, monkeypatch):
@@ -41,7 +58,11 @@ def test_session_end_creates_daily_and_individual(tmp_path, monkeypatch):
     # Individual file should have frontmatter with entities
     ind_content = open(individual_file).read()
     assert "project/palinode" in ind_content
-    assert "description:" in ind_content
+    # #405: the auto-description is no longer written inline on save — it is
+    # deferred to the watcher-driven /generate-summaries backfill, so the file
+    # is born without a description field (the mock above is never invoked on
+    # the save hot path now). The description lands later, out of band.
+    assert "description:" not in ind_content
 
 
 def test_session_end_no_project(tmp_path, monkeypatch):

@@ -122,3 +122,8 @@ pytest -k "session_end" -v
 # Integration tests (require a running palinode-api)
 pytest tests/integration/ -v
 ```
+
+## Release Checks
+
+Before pushing a PR, run the focused tests for the code you changed and any
+release checklist items that apply to the affected surface.

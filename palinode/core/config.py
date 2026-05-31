@@ -258,7 +258,7 @@ class DoctorConfig:
 
                   When empty (the default), the built-in plausible roots are
                   used (home, ~/palinode, ~/palinode-data, /var/lib/palinode,
-                  and a few historical clawd paths).
+                  and a few historical local paths).
 
                   When non-empty, ONLY the listed paths are searched — the
                   built-in list is bypassed entirely.  This lets operators pin

@@ -91,9 +91,17 @@ def test_template_no_hardcoded_ips(template_path: Path) -> None:
 
 @pytest.mark.parametrize("template_path", TEMPLATES, ids=[t.name for t in TEMPLATES])
 def test_template_no_hardcoded_hostnames(template_path: Path) -> None:
-    """Templates must not mention deployment-specific hostnames."""
+    """Templates must not mention any specific deployment hostname or legacy name.
+
+    Synthetic guard: catches site-specific hostnames, legacy-rename leftovers,
+    and RFC 1918 IP literals slipping into install-time templates.
+    """
     raw = template_path.read_text()
-    forbidden = ["internal-host.example", "private-service.example"]
+    forbidden = [
+        "example-host",     # synthetic specific hostname
+        "old-name-data",    # synthetic legacy-rename data-dir pattern
+        "192.0.2.",         # RFC 5737 TEST-NET-1 — stands in for any hardcoded IP
+    ]
     for word in forbidden:
         assert word not in raw, (
             f"{template_path.name} contains forbidden hostname/path {word!r}"
