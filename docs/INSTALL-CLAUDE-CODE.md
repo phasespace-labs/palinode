@@ -1,6 +1,6 @@
 # Installing Palinode with Claude Code
 
-Palinode gives Claude Code persistent memory via MCP — 25 tools for searching, saving, diagnosing, and managing memories across sessions. The `palinode-session` skill auto-captures milestones and decisions during coding, so your memory stays fresh without manual effort.
+Palinode gives Claude Code persistent memory via MCP — 26 tools for searching, saving, diagnosing, and managing memories across sessions. The `palinode-session` skill auto-captures milestones and decisions during coding, so your memory stays fresh without manual effort.
 
 ## Prerequisites
 
@@ -214,8 +214,8 @@ The MCP server needs to be reachable from your IDE. Options:
 
 The Palinode **API server** (port 6340) supports an optional bearer-token
 auth layer — off by default for local dev, required when binding to a
-non-loopback address. If you reach Palinode from another machine (private VPN,
-VPN, LAN), generate a token and configure both server and client.
+non-loopback address. If you reach Palinode from another machine (private VPN
+or LAN), generate a token and configure both server and client.
 
 On the server:
 
@@ -245,7 +245,7 @@ In your MCP client config, attach the token via the `headers` block:
 > 6340), which the MCP server proxies to. The **MCP server itself** (port
 > 6341) does not yet enforce auth at the HTTP transport — that's a
 > follow-up. If you expose port 6341 directly to the network, front it
-> with a reverse proxy or restrict access via VPN/firewall ACLs / a firewall
+> with a reverse proxy or restrict access via VPN ACLs / a firewall
 > until the MCP-side auth lands.
 
 If you set `PALINODE_API_BIND_INTENT=public` (the explicit public-exposure
@@ -393,11 +393,11 @@ Cursor does not use `CLAUDE.md` — add memory instructions to your `.cursorrule
 
 ---
 
-## Generic IDE
+## Generic IDEs
 
-Some IDEs provide a native MCP menu for server registration, so no JSON config file editing is needed.
+Many MCP-compatible IDEs provide a native MCP menu for server registration. No JSON config file editing is needed when your client supports URL-based server entries.
 
-1. Open the 3-dot MCP menu → **Add Server** → enter `http://your-server:6341/mcp/` as the endpoint URL.
+1. Open the MCP menu → **Add Server** → enter `http://your-server:6341/mcp/` as the endpoint URL.
 2. Session skill installs under `.agent/skills/`:
 
 ```bash

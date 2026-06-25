@@ -27,7 +27,7 @@ Your agent's memory is a folder of markdown files. Palinode indexes them with hy
 | **Cursor** | `.cursor/skills/` | `.cursor/mcp.json` |
 | **VS Code + Claude** (Continue / Cline) | `~/.claude/skills/` | see [MCP-INSTALL-RECIPES.md](docs/MCP-INSTALL-RECIPES.md) |
 | **JetBrains + Claude** | `~/.claude/skills/` | `~/.claude.json` |
-| **Generic IDEs** | `.agent/skills/` | native MCP registration where available |
+| **Generic IDEs** | `.agent/skills/` or client-specific | native MCP menu or config file |
 | **Codex CLI** | N/A (no skills) | `~/.codex/config.toml` |
 
 All platforms share the same MCP server — install once on your server, connect from any IDE. See [docs/MCP-SETUP.md](docs/MCP-SETUP.md) and [docs/MCP-INSTALL-RECIPES.md](docs/MCP-INSTALL-RECIPES.md) for per-client config snippets.
@@ -88,6 +88,10 @@ That's the entire client config. Works with Claude Code, Claude Desktop, Cursor,
 **Compact** — Weekly consolidation where an LLM proposes structured operations (KEEP / UPDATE / MERGE / SUPERSEDE / ARCHIVE) and a deterministic executor applies them. The LLM never touches your files directly. Every compaction is a git commit you can review, blame, or revert.
 
 **Audit** — `git blame` any fact. `git diff` any change. `rollback` any mistake. These aren't just git-compatible files — `palinode_diff`, `palinode_blame`, and `palinode_rollback` are first-class tools your agent can call.
+
+**Provenance UI** — The API includes a read-only, loopback-only `/ui` for browsing memory health, search results, recent diffs, quality queues, compaction history, and per-file provenance. It renders the same markdown files and git lineage the tools use; it is not a second store.
+
+**Write semantics** — Saves can carry `sources:` quote anchors, `priority`, and `update_policy` (`append` or `replace`). Ephemeral monitoring memories can use `ttl` / `expires_at`, then `archive-expired` deterministically flips expired files to `status: archived` so they stay auditable while dropping out of default recall. Telemetry memories are excluded from normal recall unless a caller opts in with `include_telemetry`.
 
 ---
 
@@ -184,7 +188,7 @@ palinode diff --days 7
 
 ## Tools
 
-25 tools available through every interface:
+26 tools available across the MCP, CLI, and REST surfaces. Core recall/write tools are also available through the plugin surface:
 
 | Tool | What It Does |
 |------|-------------|
@@ -196,6 +200,7 @@ palinode diff --days 7
 | `status` | Health check — file counts, index stats, service status |
 | `entities` | Entity graph — cross-references between memories |
 | `consolidate` | Preview or run LLM-powered compaction |
+| `archive_expired` | Archive memories whose `expires_at` has passed while keeping them on disk and in git |
 | `diff` | What changed in the last N days |
 | `blame` | Trace a fact back to the commit that recorded it |
 | `history` | Git history for a file with diff stats and rename tracking |
@@ -214,7 +219,7 @@ palinode diff --days 7
 | `depends` | Dependency tree (or unblocked-items list) from `depends_on` / `blocks` / `parallel_with` frontmatter on ProjectSnapshots |
 | `timeline` | _Deprecated — use `history` with `detail='full'`._ Commit-level evolution of a file with per-commit diffs |
 
-Every tool is accessible as `palinode_<name>` via MCP, `palinode <name>` via CLI, or `POST/GET /<name>` via the REST API.
+MCP tools use the `palinode_<name>` form. CLI commands use `palinode <name>` (hyphenated where appropriate, such as `archive-expired`), and REST routes expose the same operations over HTTP.
 
 ---
 
