@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "palinode"
-version = "0.8.14"
+version = "0.8.15"
 description = "The memory substrate for AI agents and developer tools. Git-versioned, file-native, MCP-first."
 authors = [
   {name = "Paul Kyle", email = "paul@phasespace.co"}
@@ -90,6 +90,7 @@ timeout_method = "thread"
 packages = [
     "palinode",
     "palinode.api",
+    "palinode.api.routers",
     "palinode.api.ui",
     "palinode.cli",
     "palinode.consolidation",

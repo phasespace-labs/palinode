@@ -8,13 +8,13 @@
     "url": "https://github.com/phasespace-labs/palinode",
     "source": "github"
   },
-  "version": "0.8.14",
+  "version": "0.8.15",
   "packages": [
     {
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "palinode",
-      "version": "0.8.14",
+      "version": "0.8.15",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
@@ -65,7 +65,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "palinode",
-      "version": "0.8.14",
+      "version": "0.8.15",
       "runtimeHint": "uvx",
       "transport": {
         "type": "streamable-http",
@@ -127,8 +127,8 @@
   "_meta": {
     "io.modelcontextprotocol.registry/publisher-provided": {
       "tool": "mcp-publisher",
-      "release": "v0.8.14",
-      "release_notes_url": "https://github.com/phasespace-labs/palinode/releases/tag/v0.8.14"
+      "release": "v0.8.15",
+      "release_notes_url": "https://github.com/phasespace-labs/palinode/releases/tag/v0.8.15"
     }
   }
 }

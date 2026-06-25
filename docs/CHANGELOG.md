@@ -4,6 +4,17 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ## Unreleased
 
+## [0.8.15] — 2026-06-24
+
+### Fixed
+
+- **Wheel packaging includes the split API router package.** v0.8.14's source
+  tree was correct, but the wheel omitted `palinode.api.routers`, so an
+  installed `palinode` console command crashed while importing
+  `palinode.api.server`. `pyproject.toml` now includes
+  `palinode.api.routers` in the explicit package list, and a regression test
+  checks that every in-tree Python package directory is listed before release.
+
 ## [0.8.14] — 2026-06-24
 
 The memory-architecture release. Two themes land together. **The provenance wedge** opens with a read-only, loopback-only local UI (`/ui`, Phases 0+1 — dashboard, browse/search, diffs, compaction review, quality queues, per-fact provenance panel) and a source-citation capture path (`sources:` quote+hash anchors, #459) — the audit-grade-memory read surface, all plaintext, shipping ahead of any signed layer. **The ADR-015 write-semantics axis** lands the `update_policy` append/replace declaration (#431), TTL / auto-archive for ephemeral monitoring memories (#482), telemetry recall-exclusion (#398), incident-status lifecycle validation, and the deterministic-executor guards that stop consolidation from forking a living document (SUPERSEDE/ARCHIVE/RETRACT refused on `update_policy: replace`). The recall-feedback loop is made durable end-to-end — the #371 write-back is grounded into ADR-007 demand-decay importance (#86) and hardened against four adversarial defects (recall-stat pollution, re-index metadata wipe, RETRACT fork, metadata-bypass validation). Under the hood, `api/server.py` is fully decomposed into router modules (server is now pure assembly, #314) alongside ranker / op-parse / enrichment / `_shared` extractions, and **every memory-file mutation now routes through one atomic choke point with per-file commits** (#564/#565/#566/#567) — pure substrate consolidation through one auditable write path. Plus the formal executor-determinism spec (#312), an OpenAI-compat CHAT fallback chain (#464), `session_end(push=true)` one-call note-ship (#378), `init --skills` (#474), and a `fastapi<0.137` pin closing the routeless-API regression (#544).
