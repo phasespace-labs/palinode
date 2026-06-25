@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Palinode · {{ title }}{% endblock %}
+{% block crumb %}<a href="{{ url_for('ui_dashboard') }}">memory</a> / {{ category or "uncategorized" }} / <b>{{ slug }}</b>{% endblock %}
+{% block health_pill %}
+  {% if broken_seal %}
+  <span class="pill broken"><span class="d"></span>tampered</span>
+  {% else %}
+  <span class="pill"><span class="d"></span>verified</span>
+  {% endif %}
+{% endblock %}
+{% block content %}
+<div class="content">
+  <article class="doc">
+    <div class="kicker">{{ kicker }}</div>
+    <h1>{{ title }}</h1>
+    <div class="chips">
+      <span class="chip">id <b>{{ memory_id }}</b></span>
+      {% if confidence is not none %}<span class="chip">confidence <b>{{ confidence }}</b></span>{% endif %}
+      {% if recall_count %}<span class="chip">recalled <b>{{ recall_count }}×</b></span>{% endif %}
+      {% for chip in extra_chips %}<span class="chip">{{ chip.label }} <b>{{ chip.value }}</b></span>{% endfor %}
+    </div>
+    <div class="body">
+      {{ body_html | safe }}
+    </div>
+  </article>
+
+  <aside class="prov{% if broken_seal %} broken-seal{% endif %}">
+    <div class="prov-head">
+      <span class="prov-title">Provenance</span>
+      {% if broken_seal %}
+      <span class="seal broken">✕ seal broken</span>
+      {% else %}
+      <span class="seal">✓ chain intact</span>
+      {% endif %}
+    </div>
+    <div class="prov-sub">why the agent believes this — and whether it’s been touched</div>
+    <div class="line">
+      {% for row in rows %}
+      <div class="row{% if row.state %} {{ row.state }}{% endif %}">
+        <div class="rk">{{ row.kicker }}</div>
+        <div class="rv">
+          {%- if row.href -%}
+            <a class="vlink{% if row.mono %} mono{% endif %}" href="{{ row.href }}">{{ row.mono or row.value }}</a>
+            {%- if row.mono %} · {{ row.value }}{% endif -%}
+          {%- elif row.mono -%}
+            <span class="mono">{{ row.mono }}</span> · {{ row.value }}
+          {%- else -%}
+            {{ row.value }}
+          {%- endif -%}
+          {%- for b in row.badges %} <span class="badge {{ b.kind }}">{{ b.text }}</span>{% endfor -%}
+          {%- if row.gap_tag %} <span class="tag-gap">{{ row.gap_tag }}</span>{% endif -%}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </aside>
+</div>
+{% endblock %}

@@ -78,7 +78,7 @@ Concrete data points the team should sanity-check before picking option A:
   Five L4 tests × 30 PRs/day = **~$0.75/day**, or ~$22/month. Acceptable
   if reruns are bounded.
 - **Local Ollama (qwen3-coder:30b):** zero $-cost, ~5-10s/test on the
-  5060 VM, but means CI must reach that VM (Tailscale on shared CI is
+  5060 VM, but means CI must reach that VM (private VPN on shared CI is
   not a default).
 - **Re-run amplification:** a 1-in-20 flake rate × an auto-retry policy
   triples cost; rate-limit/lock to one retry max.
@@ -89,7 +89,7 @@ Concrete data points the team should sanity-check before picking option A:
 ## Open questions for the design discussion
 
 1. Does the team have a CI provider that can reach the local Ollama VM
-   over Tailscale? (Affects whether option A's "free local LLM" path is
+   over private VPN? (Affects whether option A's "free local LLM" path is
    available, or whether we're locked into cloud.)
 2. What's the acceptable false-red rate on a per-PR signal? <1% means
    option B (snapshots) is the only path; ~5% is fine for option A with

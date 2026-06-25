@@ -47,9 +47,11 @@ class PalinodeAPI:
         threshold: float | None = None,
         since_days: int | None = None,
         types: list[str] | None = None,
+        min_priority: int | None = None,
         date_after: str | None = None,
         date_before: str | None = None,
         include_daily: bool | None = None,
+        include_telemetry: bool | None = None,
     ):
         # ADR-010 / #163: forward the full canonical search surface.
         # Non-None params land in the body verbatim; None means "API default".
@@ -64,12 +66,16 @@ class PalinodeAPI:
             payload["since_days"] = since_days
         if types:
             payload["types"] = list(types)
+        if min_priority is not None:
+            payload["min_priority"] = min_priority
         if date_after:
             payload["date_after"] = date_after
         if date_before:
             payload["date_before"] = date_before
         if include_daily:
             payload["include_daily"] = True
+        if include_telemetry:
+            payload["include_telemetry"] = True
 
         response = self.client.post("/search", json=payload)
         response.raise_for_status()
@@ -87,8 +93,11 @@ class PalinodeAPI:
         slug: str | None = None,
         core: bool | None = None,
         confidence: float | None = None,
+        priority: int | None = None,
         metadata: dict | None = None,
         external_refs: dict | None = None,
+        update_policy: str | None = None,
+        sources: list[dict] | None = None,
     ):
         payload: dict = {
             "content": content,
@@ -111,10 +120,16 @@ class PalinodeAPI:
             payload["core"] = core
         if confidence is not None:
             payload["confidence"] = confidence
+        if priority is not None:
+            payload["priority"] = priority
         if metadata is not None:
             payload["metadata"] = metadata
         if external_refs is not None:
             payload["external_refs"] = external_refs
+        if update_policy is not None:
+            payload["update_policy"] = update_policy
+        if sources is not None:
+            payload["sources"] = sources
         params = {"sync": "true"} if sync else None
         response = self.client.post("/save", json=payload, params=params)
         response.raise_for_status()
@@ -208,8 +223,9 @@ class PalinodeAPI:
         trigger: str | None = None,
         session_id: str | None = None,
         duration_seconds: int | None = None,
+        push: bool | None = None,
     ):
-        """Capture session outcomes via the API.  ADR-010 / #170 (#145 fields)."""
+        """Capture session outcomes via the API.  ADR-010 / #170 (#145 fields, #378 push)."""
         payload: dict = {"summary": summary}
         if decisions:
             payload["decisions"] = list(decisions)
@@ -231,6 +247,8 @@ class PalinodeAPI:
             payload["session_id"] = session_id
         if duration_seconds is not None:
             payload["duration_seconds"] = duration_seconds
+        if push is not None:
+            payload["push"] = push
         response = self.client.post("/session-end", json=payload, timeout=SESSION_END_TIMEOUT_SECONDS)
         response.raise_for_status()
         return response.json()
@@ -246,6 +264,11 @@ class PalinodeAPI:
 
     def consolidate(self, dry_run: bool = False, nightly: bool = False):
         response = self.client.post("/consolidate", json={"dry_run": dry_run, "nightly": nightly})
+        response.raise_for_status()
+        return response.json()
+
+    def archive_expired(self, dry_run: bool = False):
+        response = self.client.post("/archive-expired", json={"dry_run": dry_run})
         response.raise_for_status()
         return response.json()
 

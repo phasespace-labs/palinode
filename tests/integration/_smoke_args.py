@@ -16,6 +16,7 @@ Each entry is (args, lenient):
 from __future__ import annotations
 
 import asyncio
+import os
 
 
 TOOL_SMOKE_ARGS: dict[str, tuple[dict, bool]] = {
@@ -52,11 +53,25 @@ TOOL_SMOKE_ARGS: dict[str, tuple[dict, bool]] = {
     "palinode_cluster_neighbors": ({"file_path": "insights/smoke-target.md"}, False),
     "palinode_topic_coverage":    ({"query": "smoke topic phrase"}, False),
 
+    # Deterministic maintenance sweep — dry-run completes in a clean env
+    "palinode_archive_expired":   ({"dry_run": True}, False),
+
     # Lenient — legitimately may error in test env
     "palinode_ingest":            ({"url": "https://example.com/"}, True),       # no network in CI
     "palinode_consolidate":       ({"dry_run": True}, True),                     # needs LLM
     "palinode_push":              ({}, True),                                    # needs git remote
     "palinode_doctor_deep":       ({}, True),                                    # canary writes + network
+}
+
+
+# Tools excluded from hermetic parametrized dispatch (e2e + stdio).
+# Entry stays in TOOL_SMOKE_ARGS so the drift guard still fires if the tool
+# is removed from palinode/mcp.py; only execution is suppressed.
+SKIP_TOOLS: dict[str, str] = {
+    "palinode_doctor_deep": (
+        "issues live network probes and canary writes; "
+        "not safe in a hermetic CI env"
+    ),
 }
 
 
@@ -74,6 +89,7 @@ DISPATCH_ERROR_PREFIXES: tuple[str, ...] = (
     "Doctor (deep) failed",
     "Lint failed",
     "Consolidation failed",
+    "Archive-expired sweep failed",
     "Push failed",
     "Ingest failed",
     "Unknown tool",
@@ -83,5 +99,13 @@ DISPATCH_ERROR_PREFIXES: tuple[str, ...] = (
 def registered_tool_names() -> list[str]:
     """Source of truth: the running MCP server's @server.list_tools() output."""
     from palinode.mcp import list_tools
-    tools = asyncio.run(list_tools())
+    previous = os.environ.get("PALINODE_MCP_SURFACE")
+    os.environ["PALINODE_MCP_SURFACE"] = "full"
+    try:
+        tools = asyncio.run(list_tools())
+    finally:
+        if previous is None:
+            os.environ.pop("PALINODE_MCP_SURFACE", None)
+        else:
+            os.environ["PALINODE_MCP_SURFACE"] = previous
     return [t.name for t in tools]

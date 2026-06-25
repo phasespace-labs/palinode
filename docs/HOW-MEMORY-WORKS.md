@@ -376,6 +376,7 @@ Palinode memory files optionally carry three fields from the [IETF Knowledge Uni
 |---|---|---|
 | `ku_version` | string (`"1.0"`) | Marks the file as KU-aligned at this draft revision. |
 | `confidence` | float (0.0–1.0) | Author's or system's confidence in the memory content. Surfaced as a top-level key in search results. |
+| `priority` | integer (1–5) | Human-assigned recall priority. Missing means normal (`3`). It adds only a small bounded ranking nudge and is separate from the system-assigned ADR-007 `importance` decay float. |
 | `lifecycle` | `"active"` \| `"archived"` \| `"deprecated"` | Mirrors Palinode's existing `status` field in KU vocabulary. If `lifecycle` is absent, the parser falls back to `status` when the value maps; otherwise defaults to `"active"`. |
 
 **Auto-population:** Set `ku_compat: enabled: true` in `palinode.config.yaml` to automatically write `ku_version` and `lifecycle` on every save.

@@ -8,7 +8,9 @@
 └────────────┘
 ```
 
-**The memory substrate for AI agents and developer tools. Git-versioned, file-native, MCP-first.**
+**Audit-grade memory for AI coding agents. Git-versioned and file-native — every fact your agent recalls, you can `blame`, `diff`, and `rollback`. MCP-first, so one memory works in every editor.**
+
+Agent memory is becoming a commodity. *Auditable* agent memory is not: Palinode is the memory layer where every remembered fact is a line in a git-versioned markdown file — readable, diffable, attributable to the commit that recorded it, and revertible when it's wrong. No black-box vector store you have to trust.
 
 Your agent's memory is a folder of markdown files. Palinode indexes them with hybrid search, compacts them with an LLM, and serves them through MCP — so the same memory works in Claude Code, Cursor, Windsurf, Zed, VS Code (Continue/Cline), and any other MCP-compatible editor. Bring your own Obsidian vault, or use Palinode as one: `palinode init --obsidian /path/to/vault` scaffolds a full vault with graph defaults, daily-notes wiring, and an LLM-maintained wiki contract. Enterprises can govern AI memory the same way they govern code. If every service crashes, `cat` still works.
 
@@ -25,7 +27,7 @@ Your agent's memory is a folder of markdown files. Palinode indexes them with hy
 | **Cursor** | `.cursor/skills/` | `.cursor/mcp.json` |
 | **VS Code + Claude** (Continue / Cline) | `~/.claude/skills/` | see [MCP-INSTALL-RECIPES.md](docs/MCP-INSTALL-RECIPES.md) |
 | **JetBrains + Claude** | `~/.claude/skills/` | `~/.claude.json` |
-| **Antigravity IDE** | `.agent/skills/` | native 3-dot MCP menu |
+| **Generic IDEs** | `.agent/skills/` | native MCP registration where available |
 | **Codex CLI** | N/A (no skills) | `~/.codex/config.toml` |
 
 All platforms share the same MCP server — install once on your server, connect from any IDE. See [docs/MCP-SETUP.md](docs/MCP-SETUP.md) and [docs/MCP-INSTALL-RECIPES.md](docs/MCP-INSTALL-RECIPES.md) for per-client config snippets.

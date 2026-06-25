@@ -1,0 +1,196 @@
+/* Palinode provenance UI — design system.
+ *
+ * Ported verbatim from the editorial provenance mockup (fact.html <style>).
+ * Warm paper, serif headlines, monospace for hashes/IDs/commits, deep-teal
+ * accent, oxblood for the tamper / broken-seal state. Shipped in-package,
+ * offline-first — no CDN.
+ */
+:root{
+  --paper:#faf8f3; --panel:#ffffff; --ink:#1f1d1a; --muted:#807a70;
+  --faint:#a8a299; --rule:#e8e3d8; --rule-strong:#d8d2c4;
+  --accent:#1f5e5b; --accent-soft:#e7efed;
+  --ok:#2f6b4f; --ok-soft:#e6efe9; --warn:#9b2c2c; --warn-soft:#f4e7e5;
+  /* --gap: de-emphasized "not yet captured" text. Darkened from the mockup's
+     #b6b0a6 (2.0:1 on paper — fails WCAG) to 4.84:1 so the gated/placeholder
+     text clears AA while still reading as quieter than --ink/--muted. */
+  --gap:#736d61;
+  --serif:"Iowan Old Style","Charter",Georgia,"Times New Roman",serif;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
+  font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.app{display:grid;grid-template-columns:232px 1fr;min-height:100vh}
+
+/* ── sidebar ── */
+.side{border-right:1px solid var(--rule);padding:26px 20px;background:#f6f3ec}
+.brand{font-family:var(--serif);font-size:20px;letter-spacing:.14em;
+  text-transform:uppercase;font-weight:600}
+.brand .dot{color:var(--accent)}
+.brand a{color:inherit;text-decoration:none}
+.tagline{font-size:11px;color:var(--muted);letter-spacing:.04em;margin-top:3px}
+nav{margin-top:34px;display:flex;flex-direction:column;gap:2px}
+nav a{display:flex;justify-content:space-between;align-items:center;
+  padding:7px 10px;border-radius:6px;color:var(--ink);text-decoration:none;
+  font-size:13.5px}
+nav a .n{color:var(--faint);font-family:var(--mono);font-size:11px}
+nav a:hover{background:#efeae0}
+nav a.active{background:var(--accent-soft);color:var(--accent);font-weight:600}
+nav a.active .n{color:var(--accent)}
+.side-foot{margin-top:34px;padding-top:16px;border-top:1px solid var(--rule);
+  font-size:11px;color:var(--faint);font-family:var(--mono);line-height:1.7}
+/* Long PALINODE_DIR paths must not bleed under the content rule. Break on any
+   character (paths have few break opportunities) and ellipsize a 3rd overflow
+   line. Short paths like ~/palinode render fully and untruncated. */
+.side-foot .side-path{display:-webkit-box;-webkit-box-orient:vertical;
+  -webkit-line-clamp:3;line-clamp:3;overflow:hidden;word-break:break-all;
+  overflow-wrap:anywhere}
+
+/* ── header ── */
+.main{display:flex;flex-direction:column}
+header{display:flex;align-items:center;justify-content:space-between;
+  padding:16px 32px;border-bottom:1px solid var(--rule);background:var(--paper)}
+.crumb{font-family:var(--mono);font-size:12px;color:var(--muted)}
+.crumb b{color:var(--ink);font-weight:500}
+.crumb a{color:var(--muted);text-decoration:none}
+.crumb a:hover{color:var(--accent)}
+.health{display:flex;gap:18px;font-size:12px;color:var(--muted)}
+.health b{color:var(--ink);font-variant-numeric:tabular-nums}
+.health .pill{display:inline-flex;align-items:center;gap:6px;
+  background:var(--ok-soft);color:var(--ok);padding:3px 10px;border-radius:999px;
+  font-weight:600;font-size:11.5px}
+.health .pill .d{width:6px;height:6px;border-radius:50%;background:var(--ok)}
+/* broken-seal: recolor the header pill to oxblood */
+.health .pill.broken{background:var(--warn-soft);color:var(--warn)}
+.health .pill.broken .d{background:var(--warn)}
+
+/* ── content grid ── */
+.content{display:grid;grid-template-columns:1fr 388px;gap:0;flex:1}
+.doc{padding:36px 40px;border-right:1px solid var(--rule);max-width:680px}
+.kicker{font-family:var(--mono);font-size:11px;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--accent);margin-bottom:10px}
+.doc h1{font-family:var(--serif);font-weight:600;font-size:27px;line-height:1.25;
+  margin:0 0 18px}
+.chips{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:26px}
+.chip{font-family:var(--mono);font-size:11px;color:var(--muted);
+  border:1px solid var(--rule-strong);border-radius:5px;padding:3px 8px;background:#fff}
+.chip b{color:var(--ink);font-weight:500}
+.body{font-family:var(--serif);font-size:16.5px;line-height:1.72;color:#2a2723}
+.body p{margin:0 0 15px}
+.body code{font-family:var(--mono);font-size:13px;background:#f2efe8;
+  padding:1px 5px;border-radius:4px}
+.body pre{background:#f2efe8;padding:12px 14px;border-radius:6px;overflow:auto}
+.body pre code{background:none;padding:0}
+.body a{color:var(--accent);text-decoration:none;border-bottom:1px solid var(--accent-soft)}
+.body blockquote{margin:0 0 15px;padding:4px 0 4px 16px;border-left:3px solid var(--rule-strong);
+  color:var(--muted);font-style:italic}
+.body h1,.body h2,.body h3,.body h4{font-family:var(--serif);font-weight:600;
+  line-height:1.3;margin:24px 0 12px}
+.body ul,.body ol{margin:0 0 15px;padding-left:22px}
+.body table{border-collapse:collapse;margin:0 0 15px;font-family:var(--sans);font-size:14px}
+.body th,.body td{border:1px solid var(--rule-strong);padding:5px 10px;text-align:left}
+
+/* ── provenance panel ── */
+.prov{padding:30px 28px;background:var(--panel)}
+.prov-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
+.prov-title{font-family:var(--serif);font-size:15px;font-weight:600}
+.seal{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;
+  color:var(--ok);background:var(--ok-soft);padding:4px 10px;border-radius:999px}
+/* broken-seal: recolor the panel seal to oxblood */
+.seal.broken{color:var(--warn);background:var(--warn-soft)}
+.prov-sub{font-size:11.5px;color:var(--faint);margin-bottom:22px}
+
+.line{position:relative;padding-left:26px}
+.line::before{content:"";position:absolute;left:6px;top:6px;bottom:6px;
+  width:2px;background:var(--rule-strong)}
+.row{position:relative;padding:0 0 20px}
+.row::before{content:"";position:absolute;left:-22.5px;top:4px;width:11px;height:11px;
+  border-radius:50%;background:#fff;border:2px solid var(--accent)}
+.row.gap::before{border-color:var(--gap);background:#fff}
+.row.ok::before{border-color:var(--ok);background:var(--ok)}
+.row.warn::before{border-color:var(--warn);background:var(--warn)}
+.rk{font-family:var(--mono);font-size:10.5px;letter-spacing:.05em;
+  text-transform:uppercase;color:var(--faint);margin-bottom:2px}
+.rv{font-size:13.5px;color:var(--ink);line-height:1.45}
+.rv .mono{font-family:var(--mono);font-size:12px;color:#403c36}
+.rv .vlink{color:var(--accent);text-decoration:none}
+.rv .badge{display:inline-block;font-size:10px;font-family:var(--mono);
+  padding:1px 6px;border-radius:4px;margin-left:6px;vertical-align:1px}
+.rv .badge.ok{background:var(--ok-soft);color:var(--ok)}
+.rv .badge.t{background:var(--accent-soft);color:var(--accent)}
+.row.gap .rv{color:var(--gap);font-style:italic}
+.row.warn .rv{color:var(--warn);font-weight:500}
+/* broken-seal: grey the attestation badges */
+.broken-seal .rv .badge.ok,.broken-seal .rv .badge.t{
+  background:#efeae0;color:var(--faint)}
+.tag-gap{font-family:var(--mono);font-size:9.5px;color:var(--gap);
+  border:1px dashed var(--gap);border-radius:4px;padding:1px 5px;margin-left:6px;font-style:normal}
+
+/* ── dashboard ── */
+.dash{padding:36px 40px;max-width:900px}
+.dash h1{font-family:var(--serif);font-weight:600;font-size:27px;margin:0 0 6px}
+.dash .lede{color:var(--muted);font-size:14px;margin:0 0 30px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;margin-bottom:34px}
+.card{background:var(--panel);border:1px solid var(--rule);border-radius:8px;padding:18px 18px}
+.card .num{font-family:var(--serif);font-size:30px;font-weight:600;font-variant-numeric:tabular-nums}
+.card .lbl{font-family:var(--mono);font-size:11px;letter-spacing:.05em;
+  text-transform:uppercase;color:var(--muted);margin-top:4px}
+.card.warn .num{color:var(--warn)}
+.card.accent .num{color:var(--accent)}
+.section-h{font-family:var(--mono);font-size:11px;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--accent);margin:0 0 12px}
+.empty{color:var(--muted);font-style:italic;font-size:13.5px}
+.empty code{font-family:var(--mono);font-size:12px;background:#f2efe8;padding:1px 5px;border-radius:4px}
+/* Unindexed-store explainer: files exist on disk but the index is empty. */
+.notice{background:var(--accent-soft);border:1px solid #cfe0dd;border-radius:8px;
+  padding:12px 16px;margin:0 0 30px;font-size:13px;color:#22433f;line-height:1.55}
+.notice b{color:var(--accent)}
+.notice code{font-family:var(--mono);font-size:12px;background:#fff;
+  border:1px solid #cfe0dd;padding:1px 5px;border-radius:4px}
+.flist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.flist li a{display:block;padding:6px 8px;border-radius:5px;color:var(--ink);
+  text-decoration:none;font-family:var(--mono);font-size:12.5px}
+.flist li a:hover{background:#efeae0;color:var(--accent)}
+.flist li .meta{color:var(--muted);font-size:11px}
+.section-h .n{color:var(--faint);font-family:var(--mono);font-size:11px}
+a.vlink{color:var(--accent);text-decoration:none}
+
+/* ── P1: search + filters (memory list) ── */
+.searchbar{display:flex;gap:8px;margin:0 0 28px;max-width:560px}
+.searchbar input[type=search]{flex:1;font-family:var(--sans);font-size:14px;
+  padding:9px 12px;border:1px solid var(--rule-strong);border-radius:7px;
+  background:#fff;color:var(--ink)}
+.searchbar input[type=search]:focus{outline:none;border-color:var(--accent)}
+.searchbar button{font-family:var(--sans);font-size:13px;font-weight:600;
+  padding:9px 16px;border:1px solid var(--accent);border-radius:7px;
+  background:var(--accent);color:#fff;cursor:pointer}
+.searchbar button:hover{background:#1a4f4c}
+.filters{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 26px}
+.fchip{font-family:var(--mono);font-size:11.5px;color:var(--muted);
+  border:1px solid var(--rule-strong);border-radius:999px;padding:4px 11px;
+  background:#fff;text-decoration:none}
+.fchip:hover{border-color:var(--accent);color:var(--accent)}
+.fchip.on{background:var(--accent-soft);border-color:var(--accent);
+  color:var(--accent);font-weight:600}
+.snippet{font-family:var(--serif);font-size:13px;color:var(--muted);
+  margin-top:3px;line-height:1.5;white-space:normal}
+
+/* ── P1: commit rows (diffs + compaction) ── */
+.commit{padding:8px;border-radius:6px}
+.commit:hover{background:#f6f3ec}
+.commit-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.commit-head .mono{font-family:var(--mono);font-size:12px;color:var(--accent)}
+.commit-head .meta{color:var(--faint);font-family:var(--mono);font-size:11px}
+.commit-msg{font-family:var(--sans);font-size:13.5px;color:var(--ink)}
+.commit-files{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 0 0}
+.fpill{font-family:var(--mono);font-size:11px;color:var(--muted);
+  border:1px solid var(--rule);border-radius:5px;padding:2px 7px;background:#fff;
+  text-decoration:none}
+.fpill:hover{border-color:var(--accent);color:var(--accent)}
+
+/* freshness tints (meaning-bearing, AA-legible) */
+.fresh-fresh{color:var(--ok)}
+.fresh-stale{color:var(--warn)}
+.fresh-aging{color:var(--muted)}
+.fresh-unknown{color:var(--faint)}

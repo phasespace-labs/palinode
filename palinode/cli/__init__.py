@@ -10,6 +10,7 @@ from palinode.cli.save import save
 from palinode.cli.status import status
 from palinode.cli.diff import diff
 from palinode.cli.consolidate import consolidate
+from palinode.cli.archive_expired import archive_expired
 from palinode.cli.trigger import trigger
 from palinode.cli.doctor import doctor
 from palinode.cli.manage import reindex, rebuild_fts, split_layers, bootstrap_ids, migrate_mem0
@@ -69,6 +70,7 @@ main.add_command(save)
 main.add_command(status)
 main.add_command(diff)
 main.add_command(consolidate)
+main.add_command(archive_expired)
 main.add_command(trigger)
 main.add_command(doctor)
 

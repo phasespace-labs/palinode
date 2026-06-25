@@ -25,6 +25,7 @@ import urllib.parse
 import socket
 import ipaddress
 
+from palinode.core import git_tools
 from palinode.core.config import config
 from palinode.core.hashing import stable_md5_hexdigest
 
@@ -326,8 +327,7 @@ def write_research_file(
     doc = f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n# {name}\n\n{content}\n"
 
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    with open(filepath, "w") as f:
-        f.write(doc)
+    git_tools.write_memory_file(filepath, doc)
 
     return filepath
 

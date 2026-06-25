@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -30,6 +31,18 @@ from palinode.consolidation.runner import (
     _get_decisions_for_project,
 )
 from palinode.core.config import config
+
+
+def _recent(days_ago: int = 1) -> str:
+    """A daily-note date (YYYY-MM-DD) within the consolidation lookback window.
+
+    These tests previously hardcoded May-2026 dates, which aged out of the
+    30-day ``_collect_daily_notes`` window once ``today - 30d`` passed them — a
+    date-bomb that flipped the skip counts (a file outside the window is never
+    read, so its corrupt frontmatter isn't counted). Compute dates relative to
+    today so the fixtures always sit inside the window.
+    """
+    return (datetime.now(UTC) - timedelta(days=days_ago)).strftime("%Y-%m-%d")
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +69,7 @@ class TestCollectDailyNotesYamlParseWarning:
     def test_corrupt_frontmatter_logs_warning(self, memory_dir, caplog):
         """A daily note with invalid YAML frontmatter must emit a WARNING."""
         daily_dir = memory_dir / "daily"
-        bad_file = daily_dir / "2026-05-24.md"
+        bad_file = daily_dir / f"{_recent(1)}.md"
         bad_file.write_text(
             "---\n"
             "id: [unclosed bracket\n"  # invalid YAML
@@ -72,7 +85,7 @@ class TestCollectDailyNotesYamlParseWarning:
             "_collect_daily_notes must emit WARNING when YAML parse fails (#387)"
         )
         combined = " ".join(r.getMessage() for r in warning_records)
-        assert "2026-05-24.md" in combined or "yaml" in combined.lower() or "parse" in combined.lower(), (
+        assert bad_file.name in combined or "yaml" in combined.lower() or "parse" in combined.lower(), (
             f"Warning must mention the bad file or 'parse'. Got: {combined!r}"
         )
         assert "palinode lint" in combined, (
@@ -82,10 +95,10 @@ class TestCollectDailyNotesYamlParseWarning:
     def test_corrupt_frontmatter_increments_skip_count(self, memory_dir, caplog):
         """Each file with unparseable YAML increments the returned skip count."""
         daily_dir = memory_dir / "daily"
-        (daily_dir / "2026-05-23.md").write_text(
+        (daily_dir / f"{_recent(1)}.md").write_text(
             "---\ncorrupt: [bad\n---\n\nBody A.\n"
         )
-        (daily_dir / "2026-05-22.md").write_text(
+        (daily_dir / f"{_recent(2)}.md").write_text(
             "---\nid: good\n---\n\nBody B.\n"
         )
 
@@ -99,8 +112,8 @@ class TestCollectDailyNotesYamlParseWarning:
     def test_two_corrupt_files_count_two(self, memory_dir, caplog):
         """Two bad files → skip count 2."""
         daily_dir = memory_dir / "daily"
-        (daily_dir / "2026-05-23.md").write_text("---\nbad: [open\n---\n\nBody A.\n")
-        (daily_dir / "2026-05-22.md").write_text("---\nalso: {bad\n---\n\nBody B.\n")
+        (daily_dir / f"{_recent(1)}.md").write_text("---\nbad: [open\n---\n\nBody A.\n")
+        (daily_dir / f"{_recent(2)}.md").write_text("---\nalso: {bad\n---\n\nBody B.\n")
 
         with caplog.at_level(logging.WARNING, logger="palinode.consolidation"):
             _notes, skipped = _collect_daily_notes(lookback_days=30)
@@ -116,7 +129,7 @@ class TestCollectDailyNotesYamlParseWarning:
         dropped — the body text may still contain useful project/person refs.
         """
         daily_dir = memory_dir / "daily"
-        (daily_dir / "2026-05-24.md").write_text(
+        (daily_dir / f"{_recent(1)}.md").write_text(
             "---\nbad: [frontmatter\n---\n\n"
             "This note mentions project/palinode and has useful content.\n"
         )
@@ -135,7 +148,7 @@ class TestCollectDailyNotesYamlParseWarning:
     def test_good_file_returns_zero_skip_count(self, memory_dir):
         """A well-formed file produces skip count 0."""
         daily_dir = memory_dir / "daily"
-        (daily_dir / "2026-05-24.md").write_text(
+        (daily_dir / f"{_recent(1)}.md").write_text(
             "---\nid: good-note\ncategory: daily\n---\n\nGood body.\n"
         )
 

@@ -14,7 +14,7 @@ Covers:
 
 As of #338 Phase 2, _generate_description / _generate_summary route through
 palinode.core.ollama_client.get_ollama_client() rather than calling httpx.post
-directly, so these tests patch the client seam (server.get_ollama_client).
+directly, so these tests patch the client seam (enrichment.get_ollama_client).
 
 NOTE: test_api_bearer_auth.py calls importlib.reload(palinode.api.server), which
 rebinds _DESCRIPTION_DEFERRED to a new object(). All sentinel access here goes
@@ -46,7 +46,7 @@ def _server_sentinel() -> object:
 
 
 def _patch_client(*, side_effect=None, response: str | None = None):
-    """Patch server.get_ollama_client to return a fake whose .generate is configured.
+    """Patch enrichment.get_ollama_client to return a fake whose .generate is configured.
 
     ``side_effect`` raises (e.g. OllamaTimeout); ``response`` returns
     ``{"response": response}`` from generate().
@@ -56,7 +56,7 @@ def _patch_client(*, side_effect=None, response: str | None = None):
         fake.generate.side_effect = side_effect
     else:
         fake.generate.return_value = {"response": response}
-    return patch("palinode.api.server.get_ollama_client", return_value=fake), fake
+    return patch("palinode.api.enrichment.get_ollama_client", return_value=fake), fake
 
 
 # ---------------------------------------------------------------------------

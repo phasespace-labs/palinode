@@ -1,21 +1,30 @@
 """Tests for #114 (content_hash in frontmatter) and #113 (confidence field)."""
 import hashlib
+import importlib
 import pytest
 import yaml
+from click.testing import CliRunner
 from fastapi.testclient import TestClient
-from palinode.api.server import app
+from palinode.cli._api import PalinodeAPI
+from palinode.cli.save import save as save_cmd
+from palinode.api.server import SaveRequest, app, save_api
 from palinode.core.config import config
+from pydantic import ValidationError
 from unittest.mock import patch
 
 client = TestClient(app)
+cli_save_mod = importlib.import_module("palinode.cli.save")
 
 
 @pytest.fixture
 def mock_memory_dir(tmp_path):
     old_memory_dir = config.memory_dir
+    old_auto_commit = config.git.auto_commit
     config.memory_dir = str(tmp_path)
+    config.git.auto_commit = False
     yield str(tmp_path)
     config.memory_dir = old_memory_dir
+    config.git.auto_commit = old_auto_commit
 
 
 def _read_frontmatter(file_path: str) -> dict:
@@ -151,3 +160,97 @@ class TestConfidence:
 
         metadata, _ = parse_markdown(raw)
         assert metadata["confidence"] == 0.75
+
+
+class TestPriority:
+    def test_save_with_priority(self, mock_memory_dir):
+        """When priority is provided, it appears in frontmatter."""
+        with patch("palinode.core.store.scan_memory_content", return_value=(True, "OK")):
+            res = save_api(SaveRequest(
+                content="Critical priority fact",
+                type="Decision",
+                priority=5,
+            ))
+
+        fm = _read_frontmatter(res["file_path"])
+        assert fm["priority"] == 5
+
+    def test_save_without_priority_omits_field(self, mock_memory_dir):
+        """When priority is not provided, it should NOT appear in frontmatter."""
+        with patch("palinode.core.store.scan_memory_content", return_value=(True, "OK")):
+            res = save_api(SaveRequest(
+                content="No priority specified",
+                type="Insight",
+            ))
+
+        fm = _read_frontmatter(res["file_path"])
+        assert "priority" not in fm
+
+    @pytest.mark.parametrize("priority", [0, 6])
+    def test_save_invalid_priority_rejected(self, mock_memory_dir, priority):
+        with pytest.raises(ValidationError):
+            SaveRequest(
+                content="Bad priority",
+                type="Insight",
+                priority=priority,
+            )
+
+    def test_cli_api_client_forwards_priority(self):
+        captured = {}
+
+        class _FakeResp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"file_path": "/x", "id": "x"}
+
+        class _FakeClient:
+            def post(self, path, json=None, params=None):
+                captured["json"] = json
+                return _FakeResp()
+
+        api = PalinodeAPI.__new__(PalinodeAPI)
+        api.client = _FakeClient()
+        api.save("body", "Insight", priority=4)
+        assert captured["json"]["priority"] == 4
+
+    def test_cli_importance_flag_maps_to_priority(self, monkeypatch):
+        captured = {}
+
+        def fake_save(*args, **kwargs):
+            captured.update(kwargs)
+            return {"file_path": "/tmp/memory.md", "id": "insights-memory"}
+
+        monkeypatch.setattr(cli_save_mod.api_client, "save", fake_save)
+        result = CliRunner().invoke(
+            save_cmd,
+            ["Important body", "--type", "Insight", "--importance", "4"],
+        )
+        assert result.exit_code == 0
+        assert captured["priority"] == 4
+
+    @pytest.mark.parametrize(("flag", "expected"), [("--important", 4), ("--critical", 5)])
+    def test_cli_priority_shortcuts(self, monkeypatch, flag, expected):
+        captured = {}
+
+        def fake_save(*args, **kwargs):
+            captured.update(kwargs)
+            return {"file_path": "/tmp/memory.md", "id": "insights-memory"}
+
+        monkeypatch.setattr(cli_save_mod.api_client, "save", fake_save)
+        result = CliRunner().invoke(save_cmd, ["Body", "--type", "Insight", flag])
+        assert result.exit_code == 0
+        assert captured["priority"] == expected
+
+    def test_cli_priority_flags_conflict(self, monkeypatch):
+        def fake_save(*args, **kwargs):
+            raise AssertionError("save should not be called")
+
+        monkeypatch.setattr(cli_save_mod.api_client, "save", fake_save)
+        result = CliRunner().invoke(
+            save_cmd,
+            ["Body", "--type", "Insight", "--importance", "4", "--critical"],
+        )
+        assert result.exit_code != 0
+        assert "conflict" in result.output.lower()

@@ -39,6 +39,14 @@ from palinode.cli._format import console, print_result, get_default_format, Outp
     ),
 )
 @click.option(
+    "--importance",
+    "priority",
+    type=click.IntRange(1, 5),
+    help="Human-assigned memory priority (1–5). Stored as `priority` frontmatter.",
+)
+@click.option("--important", is_flag=True, help="Shortcut for --importance 4.")
+@click.option("--critical", is_flag=True, help="Shortcut for --importance 5.")
+@click.option(
     "--metadata-json",
     "metadata",
     help=(
@@ -60,6 +68,30 @@ from palinode.cli._format import console, print_result, get_default_format, Outp
 )
 @click.option("--source", help="Source surface (e.g., claude-code, cursor, api)")
 @click.option(
+    "--cite",
+    "sources",
+    multiple=True,
+    metavar="REF::QUOTE",
+    help=(
+        "Source-citation anchor in REF::QUOTE form (split on the first '::'). "
+        "Repeatable. REF is a path under the memory dir; QUOTE is the exact "
+        "cited passage. The integrity hash is computed on save. "
+        "e.g. --cite 'research/paper.md::the exact cited passage'"
+    ),
+)
+@click.option(
+    "--update-policy",
+    "update_policy",
+    type=click.Choice(["append", "replace"]),
+    default=None,
+    help=(
+        "Write-semantics axis (ADR-015). 'append' (default) is episodic; "
+        "'replace' marks a living/current-state document — re-saving the same "
+        "slug updates it in place and consolidation never supersedes/archives "
+        "it. Persisted as sticky frontmatter."
+    ),
+)
+@click.option(
     "--sync/--no-sync",
     default=False,
     help="Run the write-time contradiction check inline and include its result "
@@ -78,9 +110,14 @@ def save(
     slug,
     core,
     confidence,
+    priority,
+    important,
+    critical,
     metadata,
     external_ref_pairs,
     source,
+    sources,
+    update_policy,
     sync,
     fmt,
 ):
@@ -110,6 +147,15 @@ def save(
         console.print("[red]Error: Must provide --type or --ps.[/red]")
         click.Abort()
         return
+
+    priority_flags = int(priority is not None) + int(important) + int(critical)
+    if priority_flags > 1:
+        console.print("[red]Error: --importance, --important, and --critical conflict. Pick one.[/red]")
+        raise click.Abort()
+    if important:
+        priority = 4
+    elif critical:
+        priority = 5
 
     # Parse --metadata-json into a dict.  Reject non-object payloads to
     # keep the API contract clear (metadata merges into a dict frontmatter).
@@ -142,6 +188,20 @@ def save(
             key, _, value = pair.partition("=")
             external_refs[key.strip()] = value
 
+    # Parse --cite REF::QUOTE pairs into source-citation anchors (#459).
+    # Split on the FIRST '::' so quotes may themselves contain '::'.
+    source_anchors: list[dict] | None = None
+    if sources:
+        source_anchors = []
+        for raw in sources:
+            if "::" not in raw:
+                console.print(
+                    f"[red]Error: --cite must be REF::QUOTE, got: {raw!r}[/red]"
+                )
+                raise click.Abort()
+            ref, _, quote = raw.partition("::")
+            source_anchors.append({"ref": ref.strip(), "quote": quote})
+
     try:
         # ADR-010 / #167: do not default source here.  The HTTP client sets
         # X-Palinode-Source: cli on every request; only forward `source` in
@@ -157,8 +217,11 @@ def save(
             slug=slug,
             core=core,
             confidence=confidence,
+            priority=priority,
             metadata=metadata,
             external_refs=external_refs,
+            update_policy=update_policy,
+            sources=source_anchors,
         )
 
         output_fmt = OutputFormat(fmt) if fmt else get_default_format()

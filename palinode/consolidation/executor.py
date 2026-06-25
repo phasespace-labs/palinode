@@ -15,13 +15,14 @@ from __future__ import annotations
 import os
 import re
 import logging
-import tempfile
 from datetime import UTC, datetime
 from typing import Any
 
 import yaml
 
+from palinode.core import git_tools
 from palinode.core.config import config
+from palinode.consolidation.op_parse import op_kind
 
 logger = logging.getLogger("palinode.consolidation.executor")
 
@@ -29,6 +30,50 @@ logger = logging.getLogger("palinode.consolidation.executor")
 def _utc_now() -> datetime:
     """Return a timezone-aware UTC timestamp."""
     return datetime.now(UTC)
+
+
+def _is_replace_policy(content: str) -> bool:
+    """Return True if the file's frontmatter declares ``update_policy: replace``.
+
+    ADR-015 §2.2: a ``replace`` doc is a living/current-state document that
+    consolidation must never SUPERSEDE/ARCHIVE-into-history. Parses the
+    frontmatter via the shared markdown parser; any parse failure falls open to
+    ``False`` (no protection) so a malformed file never blocks consolidation.
+
+    A WARNING is emitted on the fail-open path when the raw text contains
+    ``update_policy: replace`` but the parsed metadata does not — this
+    indicates frontmatter corruption that silently removed the protection.
+    The fail-open behaviour is intentional and preserved (#483).
+    """
+    try:
+        from palinode.core.parser import parse_markdown
+
+        metadata, _ = parse_markdown(content)
+    except Exception as exc:  # noqa: BLE001 — defensive: never let the guard raise
+        # parse_markdown itself swallows exceptions internally, so this branch
+        # is a last-resort safety net. Log with the hint regardless.
+        logger.warning(
+            "replace-guard: unexpected error parsing frontmatter — "
+            "falling open to no-protection (doc may be unprotected): %s",
+            exc,
+        )
+        return False
+
+    protected = metadata.get("update_policy") == "replace"
+
+    # Cheap post-parse corruption check (#483): the parser returns {} on
+    # garbled frontmatter — if the raw text contains the policy declaration
+    # but the parsed metadata does not, the frontmatter silently failed and
+    # the protection is lost. Warn so operators can detect this without
+    # blocking consolidation.
+    if not protected and "update_policy: replace" in content:
+        logger.warning(
+            "replace-guard: raw text contains 'update_policy: replace' but "
+            "parsed metadata does not — frontmatter may be corrupt; "
+            "falling open to no-protection (doc may be unprotected)",
+        )
+
+    return protected
 
 
 def _normalize_fact_text(text: str) -> str:
@@ -70,40 +115,15 @@ def _nightly_merge_allowed(content: str, ids: list[str]) -> bool:
     return len(set(dates)) == 1
 
 
-def _fsync_directory(path: str) -> None:
-    """Flush directory metadata so the rename survives a crash."""
-    dir_fd = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(dir_fd)
-    finally:
-        os.close(dir_fd)
-
-
 def _atomic_write_text(file_path: str, content: str) -> None:
-    """Write text via temp file + fsync + replace in the target directory."""
-    directory = os.path.dirname(file_path) or "."
-    prefix = f".{os.path.basename(file_path)}."
-    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=prefix, suffix=".tmp")
-    try:
-        if os.path.exists(file_path):
-            os.fchmod(fd, os.stat(file_path).st_mode & 0o777)
+    """Write text atomically via the git_tools mutation choke point.
 
-        with os.fdopen(fd, "w") as tmp_file:
-            fd = -1
-            tmp_file.write(content)
-            tmp_file.flush()
-            os.fsync(tmp_file.fileno())
-
-        os.replace(tmp_path, file_path)
-        _fsync_directory(directory)
-    except Exception:
-        if fd != -1:
-            os.close(fd)
-        try:
-            os.unlink(tmp_path)
-        except FileNotFoundError:
-            pass
-        raise
+    All memory-file writes route through :func:`git_tools.write_memory_file`
+    (the single atomic write primitive) so mutation-time behavior is
+    centralized in one place. Retained as a thin local alias because the
+    executor calls it from two sites (op write-back + history append).
+    """
+    git_tools.write_memory_file(file_path, content)
 
 
 def apply_operations(file_path: str, operations: list[dict], *, nightly_policy: bool = False) -> dict:
@@ -119,19 +139,48 @@ def apply_operations(file_path: str, operations: list[dict], *, nightly_policy: 
 
     Returns:
         Stats dict: {kept, updated, merged, superseded, archived, retracted,
-                     merge_rejected}.
+                     merge_rejected, protected_rejected}.
     """
     with open(file_path) as f:
         content = f.read()
 
-    stats = {"kept": 0, "updated": 0, "merged": 0, "superseded": 0, "archived": 0, "retracted": 0, "merge_rejected": 0}
+    # ADR-015 §2.2 / #431 §3: a memory declaring `update_policy: replace` is a
+    # living/current-state document. Consolidation may UPDATE it in place but
+    # must NEVER SUPERSEDE it (strikethrough + spawn a "supersedes-" sibling)
+    # or ARCHIVE-into-history it — either would fork the single current fact
+    # into a stale historical snapshot, the exact failure mode the axis exists
+    # to prevent. Read the file's own declared regime once and guard the
+    # history-forking ops. Parse defensively: an unreadable/garbled frontmatter
+    # falls open to today's behaviour (no protection) rather than blocking
+    # consolidation entirely.
+    is_replace_doc = _is_replace_policy(content)
+
+    stats = {"kept": 0, "updated": 0, "merged": 0, "superseded": 0, "archived": 0, "retracted": 0, "merge_rejected": 0, "protected_rejected": 0}
 
     for op in operations:
         if not isinstance(op, dict):
             logger.warning(f"Malformed operation (expected dict, got {type(op).__name__}): {op}")
             continue
 
-        op_type = op.get("op", "KEEP").upper()
+        op_type = op_kind(op) or "KEEP"
+
+        # ADR-015 §2.2: refuse history-forking ops on a living (replace) doc.
+        # UPDATE/MERGE/KEEP keep the one current fact current. SUPERSEDE and
+        # ARCHIVE move content into history. RETRACT is ALSO history-forking on
+        # a living doc (H3): _retract_fact strikethrough-tombstones the current
+        # fact in place AND appends a `-history.md` sibling — exactly the stale-
+        # snapshot fork this axis forbids. A provably-wrong value in a living
+        # document must be corrected with UPDATE, not tombstoned; guard RETRACT.
+        if is_replace_doc and op_type in ("SUPERSEDE", "ARCHIVE", "RETRACT"):
+            logger.warning(
+                "%s rejected by update_policy=replace guard (living document): "
+                "%s on %s",
+                op_type,
+                op.get("id"),
+                file_path,
+            )
+            stats["protected_rejected"] += 1
+            continue
 
         if op_type == "KEEP":
             stats["kept"] += 1
@@ -309,19 +358,48 @@ def _retract_fact(content: str, fact_id: str, reason: str, file_path: str) -> st
     return updated_content
 
 
+def _ensure_archived_frontmatter(content: str) -> str:
+    """Ensure a history file's frontmatter carries ``status: archived`` (#485).
+
+    History files hold ARCHIVE'd / SUPERSEDE'd facts. They must be excluded
+    from default recall (``config.search.exclude_status = ["archived"]``) while
+    staying indexed and retrievable on demand. The status lives in file-level
+    frontmatter, which the indexer propagates to every chunk's metadata.
+
+    Legacy history files created before this fix lack the field; inject it on
+    the next append rather than leaving them leaking into recall.
+    """
+    fm_match = re.match(r'^---\n(.*?)\n---\n', content, re.DOTALL)
+    if not fm_match:
+        # No frontmatter at all — prepend a complete archived block.
+        return "---\ncategory: history\ncore: false\nstatus: archived\n---\n\n" + content
+    fm_body = fm_match.group(1)
+    if re.search(r'^status:', fm_body, re.MULTILINE):
+        return content  # already carries an explicit status; respect it
+    new_fm_body = fm_body + "\nstatus: archived"
+    return content[:fm_match.start(1)] + new_fm_body + content[fm_match.end(1):]
+
+
 def _append_to_history(file_path: str, fact_id: str, text: str) -> None:
-    """Append an entry to the corresponding history file."""
+    """Append an entry to the corresponding history file.
+
+    The history file carries ``status: archived`` frontmatter so its content
+    (archived + superseded facts) is suppressed from default recall while
+    remaining indexed and retrievable on demand — preserving the audit trail
+    PROGRAM.md's "never hard-delete" contract requires (#485).
+    """
     base = re.sub(r'-status\.md$', '', file_path)
     base = re.sub(r'\.md$', '', base)
     history_path = f"{base}-history.md"
-    
+
     now = _utc_now().strftime("%Y-%m-%d %H:%M")
     entry = f"- [{now}] {text} <!-- fact:{fact_id} -->\n"
-    
+
     if os.path.exists(history_path):
         with open(history_path) as f:
             history_content = f.read()
+        history_content = _ensure_archived_frontmatter(history_content)
     else:
-        history_content = "---\ncategory: history\ncore: false\n---\n\n# History\n\n"
+        history_content = "---\ncategory: history\ncore: false\nstatus: archived\n---\n\n# History\n\n"
 
     _atomic_write_text(history_path, history_content + entry)

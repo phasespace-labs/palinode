@@ -25,7 +25,7 @@ import pytest
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
-from tests.integration._smoke_args import TOOL_SMOKE_ARGS
+from tests.integration._smoke_args import SKIP_TOOLS, TOOL_SMOKE_ARGS
 
 
 def _free_port() -> int:
@@ -174,6 +174,8 @@ async def test_every_tool_dispatches_via_stdio(api_subprocess):
             await session.initialize()
 
             for tool_name, (args, _lenient) in TOOL_SMOKE_ARGS.items():
+                if tool_name in SKIP_TOOLS:
+                    continue  # excluded from hermetic stdio run — see _smoke_args.SKIP_TOOLS
                 try:
                     result = await session.call_tool(tool_name, args)
                 except Exception as e:

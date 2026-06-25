@@ -38,6 +38,7 @@ from typing import Optional
 import click
 
 from palinode.api.server import _apply_wiki_footer
+from palinode.core import git_tools
 from palinode.core.config import config
 from palinode.core.parser import parse_markdown
 
@@ -201,8 +202,7 @@ def obsidian_sync(apply: bool, include_glob: Optional[str], exclude_glob: Option
 
         if apply:
             try:
-                with open(filepath, "w", encoding="utf-8") as fh:
-                    fh.write(updated)
+                git_tools.write_memory_file(filepath, updated)
                 click.echo(f"updated: {rel} (added: {slug_str})")
             except OSError as exc:
                 errors.append((rel, f"write error: {exc}"))

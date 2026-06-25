@@ -80,6 +80,27 @@ def test_light_and_heavy_bodies_differ():
     assert "Step 1 — Merge" not in WRAP_COMMAND_BODY
 
 
+def test_heavy_merge_step_handles_non_github_remote():
+    """#440: the merge step must gracefully skip (not halt) on a non-GitHub
+    remote (e.g. Gitea), and must name the non-`gh` filing path."""
+    body = WRAP_HEAVY_COMMAND_BODY
+    # graceful-skip language for the gh-can't-see-this-host case
+    assert "known GitHub host" in body
+    assert "skip this step" in body.lower()
+    # Gitea / non-gh tooling is named
+    assert "Gitea" in body
+    assert "tea" in body  # the Gitea CLI
+
+
+def test_heavy_push_step_lists_and_can_stop_before_pushing():
+    """#440: the push step must state the all-or-nothing assumption and
+    stop-and-ask on not-ready commits rather than pushing blind."""
+    body = WRAP_HEAVY_COMMAND_BODY
+    assert "all-or-nothing" in body or "all** unpushed" in body
+    assert "@{u}..HEAD" in body  # lists what would push
+    assert "stop-and-ask" in body
+
+
 # ---------------------------------------------------------------------------
 # Default (light) scaffold — unchanged behaviour, no wrap-policy line
 # ---------------------------------------------------------------------------

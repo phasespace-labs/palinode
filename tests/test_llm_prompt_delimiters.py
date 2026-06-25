@@ -81,7 +81,7 @@ def _capture_prompt(method: callable, content: str) -> str:
 
     fake = MagicMock(name="OllamaClient")
     fake.generate.side_effect = fake_generate
-    with patch("palinode.api.server.get_ollama_client", return_value=fake):
+    with patch("palinode.api.enrichment.get_ollama_client", return_value=fake):
         method(content)
     assert "prompt" in captured, f"{method.__name__} did not call client.generate"
     return captured["prompt"]

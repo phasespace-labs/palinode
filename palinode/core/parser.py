@@ -257,6 +257,32 @@ def parse_markdown(content: str) -> tuple[dict[str, Any], list[dict[str, str]]]:
 VALID_LIFECYCLES: tuple[str, ...] = ("active", "archived", "deprecated")
 DEFAULT_LIFECYCLE: str = "active"
 
+# ADR-015 §2.1 (#431, #430): write-semantics axis, orthogonal to `type`.
+#   append  — current behaviour; every save is an episodic file (the default).
+#   replace — re-saving the same (folder, slug) updates the one file in place;
+#             the file is a living/current-state document. Consolidation must
+#             never SUPERSEDE/ARCHIVE-into-history a `replace` doc (executor
+#             guard), and `created_at` is preserved across overwrites (PR-A).
+# Persisted as sticky frontmatter so the file declares its own regime.
+VALID_UPDATE_POLICIES: tuple[str, ...] = ("append", "replace")
+DEFAULT_UPDATE_POLICY: str = "append"
+
+# ADR-015 §2.2 (#398): incident lifecycle lives in the `status` field on a
+# *fixed* type — no new memory types. These values are deliberately DISJOINT
+# from VALID_LIFECYCLES (active/archived/deprecated) and from the default
+# search-exclusion set (`config.search.exclude_status` == ["archived"]), so an
+# incident's status never collides with status-based recall exclusion: an
+# `open`/`monitoring`/`resolved` incident is never silently excluded from
+# search. See `VALID_STATUSES` for the combined writer-supplied allow-set.
+VALID_INCIDENT_STATUSES: tuple[str, ...] = ("open", "monitoring", "resolved")
+
+# Combined allow-set for a writer-supplied `status` field: the existing
+# lifecycle vocabulary (which the parser already maps to KU `lifecycle` and the
+# store uses for `exclude_status` filtering) PLUS the incident lifecycle. A
+# `status` outside this set is rejected at the save surface so a typo'd status
+# can't silently slip past exclusion logic.
+VALID_STATUSES: tuple[str, ...] = VALID_LIFECYCLES + VALID_INCIDENT_STATUSES
+
 
 def parse_ku_fields(metadata: dict[str, Any]) -> dict[str, Any]:
     """Extract IETF Knowledge Unit frontmatter fields from parsed metadata.
@@ -394,6 +420,48 @@ def parse_external_refs(metadata: dict[str, Any]) -> dict[str, str] | None:
             result[str(key)] = str(value)
 
     return result if result else None
+
+
+def parse_sources(metadata: dict[str, Any]) -> list[dict[str, str]]:
+    """Extract the ``sources:`` quote anchors from parsed frontmatter (#459).
+
+    Each anchor is a ``{ref, quote, quote_hash}`` dict pointing a memory at the
+    exact passage it cites in another file. This is the typed accessor for the
+    capture half of the source-citation path; the verifier
+    (:mod:`palinode.core.quote_verify`) reads the same ``sources:`` list.
+
+    Returns a list of normalized anchor dicts. Malformed entries (non-dict, or
+    missing ``ref``/``quote``) are dropped with a soft warning — consistent with
+    the parser's existing soft-fail style. Returns ``[]`` when the field is
+    absent or not a list, so a file with no anchors round-trips as a clean
+    no-op.
+
+    Args:
+        metadata: Parsed frontmatter dict (as returned by ``parse_markdown``).
+
+    Returns:
+        List of ``{ref, quote, quote_hash}`` dicts (``quote_hash`` may be ``""``).
+    """
+    raw = metadata.get("sources")
+    if not isinstance(raw, list):
+        return []
+
+    anchors: list[dict[str, str]] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            logger.warning("sources entry is not a dict (%s); dropped", type(entry).__name__)
+            continue
+        ref = str(entry.get("ref", "")).strip()
+        quote = str(entry.get("quote", "")).strip()
+        if not ref or not quote:
+            logger.warning("sources entry missing ref or quote; dropped")
+            continue
+        anchors.append({
+            "ref": ref,
+            "quote": quote,
+            "quote_hash": str(entry.get("quote_hash", "")).strip(),
+        })
+    return anchors
 
 
 def parse_scope(

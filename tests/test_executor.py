@@ -1,8 +1,13 @@
+import logging
 import os
 import tempfile
+
 import pytest
+
+import palinode.core.parser as parser_module
+import palinode.core.git_tools as git_tools_module
 import palinode.consolidation.executor as executor_module
-from palinode.consolidation.executor import apply_operations, _nightly_merge_allowed
+from palinode.consolidation.executor import apply_operations, _is_replace_policy, _nightly_merge_allowed
 
 @pytest.fixture
 def temp_memory_file():
@@ -79,6 +84,10 @@ def test_archive_operation(temp_memory_file):
     with open(history_file) as f:
         hist = f.read()
     assert "Archived" in hist
+    # #485: the history file must carry `status: archived` so the relocated
+    # fact is suppressed from default recall (exclude_status) rather than
+    # leaking back in as active content.
+    assert "status: archived" in hist
     os.remove(history_file)
 
 def test_malformed_operations(temp_memory_file):
@@ -95,7 +104,7 @@ def test_missing_fields_are_skipped(temp_memory_file):
         {"op": "SUPERSEDE", "new_text": "Replacement"},
         {"op": "ARCHIVE"},
     ])
-    assert stats == {"kept": 0, "updated": 0, "merged": 0, "superseded": 0, "archived": 0, "retracted": 0, "merge_rejected": 0}
+    assert stats == {"kept": 0, "updated": 0, "merged": 0, "superseded": 0, "archived": 0, "retracted": 0, "merge_rejected": 0, "protected_rejected": 0}
 
 def test_missing_fact_id_is_noop(temp_memory_file):
     stats = apply_operations(temp_memory_file, [{"op": "SUPERSEDE", "id": "missing", "new_text": "Replacement"}])
@@ -109,7 +118,7 @@ def test_empty_operations_leave_file_unchanged(temp_memory_file):
     with open(temp_memory_file) as f:
         after = f.read()
     assert before == after
-    assert stats == {"kept": 0, "updated": 0, "merged": 0, "superseded": 0, "archived": 0, "retracted": 0, "merge_rejected": 0}
+    assert stats == {"kept": 0, "updated": 0, "merged": 0, "superseded": 0, "archived": 0, "retracted": 0, "merge_rejected": 0, "protected_rejected": 0}
 
 
 def test_atomic_main_write_failure_preserves_original_file(temp_memory_file, monkeypatch):
@@ -182,6 +191,137 @@ def test_atomic_history_write_failure_preserves_original_file(temp_memory_file, 
         if any(name.startswith(prefix) for prefix in temp_prefixes)
     ]
     assert leftovers == []
+
+
+def test_atomic_history_new_file_creation_failure_cleans_temp_file(temp_memory_file, monkeypatch):
+    with open(temp_memory_file) as f:
+        before = f.read()
+
+    history_file = temp_memory_file.replace(".md", "-history.md")
+    original_replace = executor_module.os.replace
+
+    def fail_history_creation_replace(src, dst):
+        if dst == history_file and not os.path.exists(history_file):
+            raise OSError("history creation replace failed")
+        return original_replace(src, dst)
+
+    monkeypatch.setattr(executor_module.os, "replace", fail_history_creation_replace)
+
+    with pytest.raises(OSError, match="history creation replace failed"):
+        apply_operations(
+            temp_memory_file,
+            [{"op": "ARCHIVE", "id": "f2", "reason": "No longer relevant"}],
+        )
+
+    with open(temp_memory_file) as f:
+        after = f.read()
+
+    assert after == before
+    assert not os.path.exists(history_file)
+    temp_prefixes = {
+        f".{os.path.basename(temp_memory_file)}.",
+        f".{os.path.basename(history_file)}.",
+    }
+    leftovers = [
+        name
+        for name in os.listdir(os.path.dirname(temp_memory_file))
+        if any(name.startswith(prefix) for prefix in temp_prefixes)
+    ]
+    assert leftovers == []
+
+
+def test_atomic_write_directory_fsync_failure_propagates_and_cleans_temp(temp_memory_file, monkeypatch):
+    directory = os.path.dirname(temp_memory_file)
+
+    def fail_directory_fsync(path):
+        if path == directory:
+            raise OSError("directory fsync failed")
+
+    # The atomic write primitive (and its directory fsync) now live in
+    # git_tools; the executor delegates to it via the mutation choke point.
+    monkeypatch.setattr(git_tools_module, "_fsync_directory", fail_directory_fsync)
+
+    with pytest.raises(OSError, match="directory fsync failed"):
+        apply_operations(
+            temp_memory_file,
+            [{"op": "UPDATE", "id": "f2", "new_text": "- [2024-01-02] A significant update occurred"}],
+        )
+
+    with open(temp_memory_file) as f:
+        content = f.read()
+
+    assert "A significant update occurred <!-- fact:f2 -->" in content
+    temp_prefix = f".{os.path.basename(temp_memory_file)}."
+    leftovers = [
+        name
+        for name in os.listdir(os.path.dirname(temp_memory_file))
+        if name.startswith(temp_prefix)
+    ]
+    assert leftovers == []
+
+
+def test_replace_policy_parse_exception_warns_and_falls_open(
+    temp_memory_file,
+    monkeypatch,
+    caplog,
+):
+    with open(temp_memory_file, "w") as f:
+        f.write(
+            "---\nid: living-doc\nupdate_policy: replace\n---\n\n"
+            "- [2024-01-01] Current living fact <!-- fact:f1 -->\n"
+        )
+
+    def raise_parse_error(_content):
+        raise RuntimeError("parser unavailable")
+
+    monkeypatch.setattr(parser_module, "parse_markdown", raise_parse_error)
+
+    with caplog.at_level(logging.WARNING, logger="palinode.consolidation.executor"):
+        assert _is_replace_policy("---\nupdate_policy: replace\n---\n") is False
+        stats = apply_operations(
+            temp_memory_file,
+            [{"op": "SUPERSEDE", "id": "f1", "new_text": "new state", "reason": "test"}],
+        )
+
+    assert "unexpected error parsing frontmatter" in caplog.text
+    assert "falling open to no-protection" in caplog.text
+    assert stats["protected_rejected"] == 0
+    assert stats["superseded"] == 1
+    history_file = temp_memory_file.replace(".md", "-history.md")
+    assert os.path.exists(history_file)
+    os.remove(history_file)
+
+
+def test_replace_policy_corrupt_metadata_warning_warns_and_falls_open(
+    temp_memory_file,
+    monkeypatch,
+    caplog,
+):
+    with open(temp_memory_file, "w") as f:
+        f.write(
+            "---\nid: living-doc\nupdate_policy: replace\n---\n\n"
+            "- [2024-01-01] Current living fact <!-- fact:f1 -->\n"
+        )
+
+    def parse_without_policy(content):
+        return {"id": "living-doc"}, content
+
+    monkeypatch.setattr(parser_module, "parse_markdown", parse_without_policy)
+
+    with caplog.at_level(logging.WARNING, logger="palinode.consolidation.executor"):
+        assert _is_replace_policy("---\nupdate_policy: replace\n---\n") is False
+        stats = apply_operations(
+            temp_memory_file,
+            [{"op": "SUPERSEDE", "id": "f1", "new_text": "new state", "reason": "test"}],
+        )
+
+    assert "raw text contains 'update_policy: replace'" in caplog.text
+    assert "frontmatter may be corrupt" in caplog.text
+    assert stats["protected_rejected"] == 0
+    assert stats["superseded"] == 1
+    history_file = temp_memory_file.replace(".md", "-history.md")
+    assert os.path.exists(history_file)
+    os.remove(history_file)
 
 
 def test_retract_operation(temp_memory_file):

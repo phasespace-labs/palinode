@@ -59,6 +59,8 @@ These are the spellings the registry agreed on. Forbidden aliases are flagged in
 | Memory type (closed enum)       | `type`               | `kind`, `category`                      |
 | ProjectSnapshot shortcut        | `ps` (boolean)       | `is_ps`, `snapshot`                     |
 | Dry-run preview flag            | `dry_run`            | `--execute` (negation), `preview`       |
+| Human recall priority           | `priority` (1–5)     | `importance` frontmatter/API field      |
+| Minimum recall priority filter  | `min_priority`       | `min_importance`                        |
 | Source-surface attribution      | `X-Palinode-Source` header (preferred) or `source` field | per-surface `source` literals |
 
 ### Categories — exact set
@@ -93,6 +95,7 @@ A few parameters are surface-specific by design — they exist to make a surface
 
 - **`save --ps` / MCP `ps`** — shorthand for `type=ProjectSnapshot`. Resolved locally before the API call. The CLI and MCP have it; the API and plugin do not need it.
 - **CLI `save --file <path>`** — read content from a file rather than passing inline. Local convenience; the API takes content directly.
+- **CLI `save --importance N` / `--important` / `--critical`** — ergonomic aliases that map to canonical `priority` (`--important` = 4, `--critical` = 5). Do not expose human priority as API/frontmatter `importance`; that name remains the ADR-007 system demand-decay float.
 
 If a surface adds sugar, document it here.
 

@@ -40,6 +40,18 @@ def _load_pyproject_version() -> str:
     return version
 
 
+def _registry_version(version: str) -> str:
+    """Strip a PEP 440 local-version segment (``+internal``) for registry comparison.
+
+    `server.json` is the public MCP-registry manifest; a local-version label like
+    ``0.8.13+internal`` must never appear there (``mcp-publisher`` would ship a
+    malformed/unpublishable version). Internal builds legitimately set a ``+local``
+    segment in ``pyproject.toml``, so the drift guard compares the *public* version
+    (everything before ``+``) and lets the local label diverge. See #454.
+    """
+    return version.split("+", 1)[0]
+
+
 def _load_server_json() -> dict:
     """Return parsed server.json.
 
@@ -69,9 +81,10 @@ def test_server_json_top_level_version_matches_pyproject():
         "server.json has no top-level `version` field. "
         "Add it or the registry manifest is malformed. See #313."
     )
-    assert server_version == pyproject_version, (
-        f"server.json version ({server_version!r}) does not match "
-        f"pyproject.toml version ({pyproject_version!r}). "
+    assert server_version == _registry_version(pyproject_version), (
+        f"server.json version ({server_version!r}) does not match the public "
+        f"(local-segment-stripped) pyproject.toml version "
+        f"({_registry_version(pyproject_version)!r}, from {pyproject_version!r}). "
         "Update server.json to match — it is the MCP registry manifest. "
         "A mismatch causes `mcp-publisher publish` to ship a wrong-version entry. "
         "See #313."
@@ -99,9 +112,10 @@ def test_server_json_package_versions_match_pyproject():
             f"server.json packages[{i}] has no `version` field. "
             f"Package entry: {pkg!r}. See #313."
         )
-        assert pkg_version == pyproject_version, (
+        assert pkg_version == _registry_version(pyproject_version), (
             f"server.json packages[{i}].version ({pkg_version!r}) does not match "
-            f"pyproject.toml version ({pyproject_version!r}). "
+            f"the public pyproject.toml version "
+            f"({_registry_version(pyproject_version)!r}, from {pyproject_version!r}). "
             f"Package identifier: {pkg.get('identifier', '<unknown>')}. "
             "Update all package version pins in server.json to match pyproject.toml. "
             "See #313."

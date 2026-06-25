@@ -18,6 +18,7 @@ from typing import Optional
 
 import frontmatter as fm_lib
 
+from palinode.core import git_tools
 from palinode.core.parser import slugify, parse_markdown
 
 logger = logging.getLogger("palinode.import_vault")
@@ -364,7 +365,11 @@ def execute_import(
 
         try:
             plan.dest_path.parent.mkdir(parents=True, exist_ok=True)
-            plan.dest_path.write_text(plan.content, encoding="utf-8")
+            # Route the write through the git_tools mutation choke point so the
+            # vault-import write uses the same atomic primitive as every other
+            # memory mutation (#564). Committing is left to the import CLI layer
+            # (this function may target a dir other than config.memory_dir).
+            git_tools.write_memory_file(str(plan.dest_path), plan.content)
             result.written.append(plan.dest_path)
         except OSError as exc:
             result.errors.append((plan.dest_path, f"write error: {exc}"))

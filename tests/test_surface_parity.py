@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import os
 import typing
 from typing import Any
 
@@ -108,7 +109,15 @@ def _mcp_tools() -> dict[str, dict[str, Any]]:
     if _MCP_TOOL_CACHE is None:
         from palinode.mcp import list_tools as mcp_list_tools
 
-        tools = asyncio.run(mcp_list_tools())
+        previous = os.environ.get("PALINODE_MCP_SURFACE")
+        os.environ["PALINODE_MCP_SURFACE"] = "full"
+        try:
+            tools = asyncio.run(mcp_list_tools())
+        finally:
+            if previous is None:
+                os.environ.pop("PALINODE_MCP_SURFACE", None)
+            else:
+                os.environ["PALINODE_MCP_SURFACE"] = previous
         _MCP_TOOL_CACHE = {t.name: t.inputSchema for t in tools}
     return _MCP_TOOL_CACHE
 

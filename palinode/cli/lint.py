@@ -113,6 +113,20 @@ def lint(fmt, deep_contradictions, max_llm_calls, similarity_threshold):
 
     console.print("")
 
+    # #459: source-citation anchor integrity (drifted / missing / tampered).
+    source_issues = data.get("source_anchor_issues", [])
+    if source_issues:
+        console.print(f"[bold yellow]Source Anchor Issues ({len(source_issues)})[/bold yellow]")
+        for si in source_issues:
+            for anchor in si["anchors"]:
+                console.print(
+                    f"  - {si['file']}: [{anchor['status']}] {anchor['ref']} — {anchor['detail']}"
+                )
+    else:
+        console.print("[green]✓ No source-anchor issues[/green]")
+
+    console.print("")
+
     core_count = data.get("core_count", 0)
     if core_count > 10:
         console.print(f"[bold red]Core Files: {core_count}[/bold red] (recommended: ≤10 — prune with `palinode list --core-only`)")

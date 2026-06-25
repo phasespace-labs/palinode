@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Palinode · compaction{% endblock %}
+{% block crumb %}<b>compaction</b>{% endblock %}
+{% block content %}
+<div class="dash">
+  <h1>Compaction review</h1>
+  <p class="lede">The last consolidation passes over the last {{ compaction.days }} days,
+    read from git history. Read-only — this view never triggers consolidation.</p>
+
+  <h2 class="section-h">{{ compaction.pass_count }} consolidation pass{{ '' if compaction.pass_count == 1 else 'es' }}</h2>
+  {% if compaction.passes %}
+  <ul class="flist">
+    {% for p in compaction.passes %}
+    <li class="commit">
+      <div class="commit-head">
+        <span class="mono">{{ p.hash }}</span>
+        <span class="meta">{{ p.date }}</span>
+        <span class="commit-msg">{{ p.message }}</span>
+      </div>
+      {% if p.files %}
+      <div class="commit-files">
+        {% for f in p.files %}
+        <a class="fpill" href="{{ url_for('ui_memory', file_path=f.id) }}">{{ f.path }}</a>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="empty">No consolidation passes recorded in the last {{ compaction.days }} days.</p>
+  {% endif %}
+
+  <h2 class="section-h">History files <span class="meta">— archived-fact audit trail</span></h2>
+  {% if compaction.history_files %}
+  <ul class="flist">
+    {% for f in compaction.history_files %}
+    <li><a href="{{ url_for('ui_memory', file_path=f.id) }}">{{ f.path }}</a></li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="empty">No <code>-history.md</code> files yet — none of your memories have been superseded.</p>
+  {% endif %}
+</div>
+{% endblock %}

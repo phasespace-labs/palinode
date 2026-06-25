@@ -201,3 +201,73 @@ def test_session_end_auto_derives_project_from_cwd(tmp_path, monkeypatch):
     ind_path = result["individual_file"]
     assert "session-end-" in os.path.basename(ind_path)
     assert "my-project" in os.path.basename(ind_path)
+
+
+# ---- #378: session_end push parameter (ship the note in one call) -----------
+
+
+def _run_session_end_with_push(tmp_path, monkeypatch, *, push, auto_push,
+                               push_result="Pushed to origin/main successfully."):
+    """Drive session_end_api with git mocked out, returning (result, push_mock).
+
+    subprocess.run is mocked so the commit step no-ops on a non-repo tmp dir;
+    git_tools.push is mocked so we assert the push DECISION and response wiring
+    without needing a real remote.
+    """
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    monkeypatch.setattr(config.git, "auto_commit", True)
+    monkeypatch.setattr(config.git, "auto_push", auto_push)
+
+    with mock.patch("palinode.api.server._generate_description", return_value="x"), \
+         mock.patch("palinode.api.server.subprocess.run"), \
+         mock.patch("palinode.api.server.git_tools.push", return_value=push_result) as mpush:
+        from palinode.api.server import session_end_api, SessionEndRequest
+
+        req = SessionEndRequest(summary="ship it", source="test", push=push)
+        result = session_end_api(req)
+    return result, mpush
+
+
+def test_session_end_push_true_ships_note(tmp_path, monkeypatch):
+    """push=True invokes the push and reports pushed=True, even with auto_push off (#378)."""
+    result, mpush = _run_session_end_with_push(
+        tmp_path, monkeypatch, push=True, auto_push=False)
+    assert mpush.called, "push=True must invoke git_tools.push (#378)"
+    assert result["pushed"] is True
+    assert result["committed"] is True
+
+
+def test_session_end_no_push_by_default(tmp_path, monkeypatch):
+    """push omitted + auto_push off ⇒ committed but NOT pushed (legacy default)."""
+    result, mpush = _run_session_end_with_push(
+        tmp_path, monkeypatch, push=None, auto_push=False)
+    assert not mpush.called, "default flow must not push when auto_push is off"
+    assert result["pushed"] is False
+    assert result["committed"] is True
+
+
+def test_session_end_push_none_falls_back_to_auto_push(tmp_path, monkeypatch):
+    """push=None defers to config.git.auto_push (True ⇒ push)."""
+    result, mpush = _run_session_end_with_push(
+        tmp_path, monkeypatch, push=None, auto_push=True)
+    assert mpush.called, "push=None must honor auto_push=True"
+    assert result["pushed"] is True
+
+
+def test_session_end_push_false_overrides_auto_push(tmp_path, monkeypatch):
+    """push=False suppresses the push even when auto_push is on."""
+    result, mpush = _run_session_end_with_push(
+        tmp_path, monkeypatch, push=False, auto_push=True)
+    assert not mpush.called, "push=False must override auto_push=True"
+    assert result["pushed"] is False
+
+
+def test_session_end_push_failure_reported_honestly(tmp_path, monkeypatch):
+    """A failed push (no remote/conflict) reports pushed=False so the wrap can
+    tell the user the note is committed-but-not-pushed (#378)."""
+    result, mpush = _run_session_end_with_push(
+        tmp_path, monkeypatch, push=True, auto_push=False,
+        push_result="Push failed: no configured push destination")
+    assert mpush.called
+    assert result["pushed"] is False
+    assert result["committed"] is True

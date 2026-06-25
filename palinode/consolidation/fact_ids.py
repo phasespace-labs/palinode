@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import re
 from palinode.core.config import config
-from palinode.core import parser
+from palinode.core import parser, git_tools
 from palinode.core.hashing import stable_md5_hexdigest
 
 
@@ -51,9 +51,8 @@ def add_fact_ids_to_file(file_path: str) -> int:
             new_lines.append(line)
     
     if modified:
-        with open(file_path, 'w') as f:
-            f.writelines(new_lines)
-    
+        git_tools.write_memory_file(file_path, "".join(new_lines))
+
     return count
 
 

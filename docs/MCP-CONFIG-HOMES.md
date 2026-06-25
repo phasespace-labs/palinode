@@ -157,15 +157,15 @@ PALINODE_API_HOST = "127.0.0.1"
 PALINODE_API_PORT = "6340"
 ```
 
-### Antigravity (Google)
+### Generic IDE
 
-Antigravity stores MCP config in a JSON file under the `.gemini`
+Some IDEs store MCP config in a JSON file under a hidden config
 directory. The path is consistent across platforms:
 
 | Platform | Path |
 |----------|------|
-| macOS / Linux | `~/.gemini/antigravity/mcp_config.json` |
-| Windows | `%USERPROFILE%\.gemini\antigravity\mcp_config.json` |
+| macOS / Linux | `~/.gemini/generic-ide/mcp_config.json` |
+| Windows | `%USERPROFILE%\.gemini\generic-ide\mcp_config.json` |
 
 JSON shape: `{ "mcpServers": { "palinode": { ... } } }` — same as
 Claude Desktop.
@@ -173,8 +173,8 @@ Claude Desktop.
 Access from the IDE: three-dot menu in chat > MCP Servers > Manage MCP
 Servers > View raw config.
 
-> **Note:** Antigravity is new (2026) and the config path structure may
-> evolve. If `~/.gemini/antigravity/mcp_config.json` does not exist,
+> **Note:** IDE MCP config path structures may
+> evolve. If the documented MCP config file does not exist,
 > check `~/.gemini/settings/mcp_config.json` as a fallback. See
 > issue #345 for updates.
 

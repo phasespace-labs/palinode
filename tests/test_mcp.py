@@ -124,6 +124,17 @@ async def _raise_timeout(*args, **kwargs):
     raise httpx.ReadTimeout("simulated slow auto_summary (>request timeout)")
 
 
+class _FakeResponse:
+    status_code = 200
+    text = "OK"
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
 @pytest.mark.asyncio
 async def test_dispatch_save_timeout_surfaces_verify_hint(monkeypatch):
     monkeypatch.setattr(mcp, "_post", _raise_timeout)
@@ -144,3 +155,43 @@ async def test_dispatch_search_timeout_keeps_plain_message(monkeypatch):
     # Read path: plain timeout, no misleading dedup advice.
     assert "timed out" in text
     assert "duplicate" not in text
+
+
+@pytest.mark.asyncio
+async def test_dispatch_save_forwards_priority(monkeypatch):
+    captured = {}
+
+    async def fake_post(path, json=None, timeout=30.0):
+        captured["path"] = path
+        captured["json"] = json
+        return _FakeResponse({"file_path": "/palinode/decisions/mcp-priority.md", "id": "decisions-mcp-priority"})
+
+    monkeypatch.setattr(mcp, "_post", fake_post)
+    result = await _dispatch_tool(
+        "palinode_save",
+        {"content": "body", "type": "Decision", "priority": 5},
+    )
+
+    assert captured["path"] == "/save"
+    assert captured["json"]["priority"] == 5
+    assert "Saved" in result[0].text
+
+
+@pytest.mark.asyncio
+async def test_dispatch_search_forwards_min_priority(monkeypatch):
+    captured = {}
+
+    async def fake_post(path, json=None, timeout=30.0):
+        captured["path"] = path
+        captured["json"] = json
+        return _FakeResponse([])
+
+    monkeypatch.setattr(mcp, "_post", fake_post)
+    result = await _dispatch_tool(
+        "palinode_search",
+        {"query": "anything", "min_priority": 4},
+    )
+
+    assert captured["path"] == "/search"
+    assert captured["json"]["min_priority"] == 4
+    assert "No results" in result[0].text

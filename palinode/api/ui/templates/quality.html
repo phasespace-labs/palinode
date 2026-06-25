@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Palinode · quality{% endblock %}
+{% block crumb %}<b>quality</b>{% endblock %}
+{% block content %}
+<div class="dash">
+  <h1>Quality queues</h1>
+  <p class="lede">What needs attention — from <code>lint</code>. Each item links to its fact.</p>
+
+  {% for q in quality.queues %}
+  <h2 class="section-h">{{ q.label }} <span class="n">{{ q.rows|length }}</span>
+    <span class="meta">— {{ q.blurb }}</span></h2>
+  {% if q.rows %}
+  <ul class="flist">
+    {% if q.kind == 'contradictions' %}
+    {% for r in q.rows %}
+    <li><span class="mono">{{ r.entity }}</span> <span class="meta">— {{ r.issue }}</span></li>
+    {% endfor %}
+    {% else %}
+    {% for r in q.rows %}
+    <li><a href="{{ url_for('ui_memory', file_path=r.id) }}">{{ r.path }}
+      {% if r.detail %}<span class="meta">· {{ r.detail }}</span>{% endif %}</a></li>
+    {% endfor %}
+    {% endif %}
+  </ul>
+  {% else %}
+  <p class="empty">Nothing here — clean.</p>
+  {% endif %}
+  {% endfor %}
+</div>
+{% endblock %}

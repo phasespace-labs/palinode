@@ -99,7 +99,9 @@ def run_lint_pass() -> dict[str, Any]:
     contradictions = []  # Heuristic placeholder
     missing_entities: list[str] = []
     missing_descriptions: list[str] = []
+    missing_priority: list[str] = []
     wiki_drift: list[dict[str, Any]] = []
+    source_anchor_issues: list[dict[str, Any]] = []
     core_count = 0
 
     now = datetime.now(timezone.utc)
@@ -145,9 +147,12 @@ def run_lint_pass() -> dict[str, Any]:
         
         # 1. Missing fields
         missing = []
-        if not meta.get("id"): missing.append("id")
-        if not meta.get("type"): missing.append("type")
-        if not meta.get("category"): missing.append("category")
+        if not meta.get("id"):
+            missing.append("id")
+        if not meta.get("type"):
+            missing.append("type")
+        if not meta.get("category"):
+            missing.append("category")
         if missing:
             missing_fields.append({"file": path, "missing": missing})
             
@@ -156,8 +161,10 @@ def run_lint_pass() -> dict[str, Any]:
         if category and not path.startswith("daily/"):
             slug = path.split(os.sep)[-1].replace(".md", "")
             # Removing any layer suffixes like -status or -history
-            if slug.endswith("-status"): slug = slug[:-7]
-            if slug.endswith("-history"): slug = slug[:-8]
+            if slug.endswith("-status"):
+                slug = slug[:-7]
+            if slug.endswith("-history"):
+                slug = slug[:-8]
             
             own_entity_ref = f"{category}/{slug}"
             has_entities = len(meta.get("entities", [])) > 0
@@ -178,6 +185,10 @@ def run_lint_pass() -> dict[str, Any]:
         # 5. Core count
         if meta.get("core"):
             core_count += 1
+
+        # 6. Missing human priority on core and decision memories.
+        if (meta.get("core") is True or meta.get("type") == "Decision") and "priority" not in meta:
+            missing_priority.append(path)
 
         # 6. Stale
         if meta.get("status") == "active":
@@ -202,16 +213,37 @@ def run_lint_pass() -> dict[str, Any]:
         drift_warnings = check_wiki_drift(meta, body)
         if drift_warnings:
             wiki_drift.append({"file": path, "warnings": drift_warnings})
+
+        # 8. Source-citation anchors (#459) — verify each ``sources:`` anchor's
+        # integrity hash and that the cited quote still appears in its source.
+        # Clean no-op for files with no anchors (verify returns []). Only
+        # non-OK results are reported as health findings.
+        if meta.get("sources"):
+            from palinode.core.quote_verify import verify_memory_sources
+            try:
+                results = verify_memory_sources(path, base_dir)
+            except OSError:
+                results = []
+            bad = [
+                {"ref": r.ref, "status": r.status.value, "detail": r.message}
+                for r in results
+                if not r.ok
+            ]
+            if bad:
+                source_anchor_issues.append({"file": path, "anchors": bad})
                     
     # 4. Contradictions heuristics
     # Simple check: Any entity that has multiple active files
     file_statuses = {}
     for f in all_files:
          cat = f["metadata"].get("category", "")
-         if not cat or f["path"].startswith("daily/"): continue
+         if not cat or f["path"].startswith("daily/"):
+             continue
          slug = f["path"].split(os.sep)[-1].replace(".md", "")
-         if slug.endswith("-status"): slug = slug[:-7]
-         if slug.endswith("-history"): slug = slug[:-8]
+         if slug.endswith("-status"):
+             slug = slug[:-7]
+         if slug.endswith("-history"):
+             slug = slug[:-8]
          ent = f"{cat}/{slug}"
          
          status = f["metadata"].get("status", "active")
@@ -226,13 +258,22 @@ def run_lint_pass() -> dict[str, Any]:
     # Deduplicate contradictions
     unique_contradictions = [dict(t) for t in {tuple(d.items()) for d in contradictions}]
 
+    # Count of memory files scanned, excluding daily/ logs — the same set the
+    # orphaned / stale / missing-description counts above are derived from. A UI
+    # showing this as the "memories" total stays coherent with those counts
+    # regardless of index state (markdown is the source of truth, not the DB).
+    total_files = sum(1 for f in all_files if not f["path"].startswith("daily/"))
+
     return {
+        "total_files": total_files,
         "orphaned_files": orphaned_files,
         "stale_files": stale_files,
         "missing_fields": missing_fields,
         "contradictions": unique_contradictions,
         "missing_entities": missing_entities,
         "missing_descriptions": missing_descriptions,
+        "missing_priority": missing_priority,
         "wiki_drift": wiki_drift,
+        "source_anchor_issues": source_anchor_issues,
         "core_count": core_count,
     }

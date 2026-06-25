@@ -18,11 +18,26 @@ import sys
 import glob
 from pathlib import Path
 from dataclasses import field
+from typing import Literal
 from pydantic.dataclasses import dataclass
 from pydantic import TypeAdapter, ValidationError
 import yaml
 
 _logger = logging.getLogger("palinode.config")
+ToolSurface = Literal["core", "full"]
+VALID_TOOL_SURFACES: set[str] = {"core", "full"}
+
+
+def validate_tool_surface(value: str, source: str = "tool_surface") -> ToolSurface:
+    normalized = value.strip().lower()
+    if normalized not in VALID_TOOL_SURFACES:
+        raise ValueError(
+            f"{source} must be one of {sorted(VALID_TOOL_SURFACES)}, got {value!r}"
+        )
+    if normalized == "core":
+        return "core"
+    return "full"
+
 
 def _expand_path(path_str: str) -> str:
     """Expand ~ and normalizes path."""
@@ -143,10 +158,35 @@ class AutoSummaryConfig:
     max_chars: int = 120
     min_content_chars: int = 200
     ollama_url: str | None = None
+    # #464: wire protocol for the CHAT *primary* (model @ ollama_url). "ollama" =
+    # Ollama-native /api/generate (the default; back-compat). "openai" = an
+    # OpenAI-compatible /v1/chat/completions endpoint (LM Studio, vLLM, the
+    # Sonnet shim, etc.) — set this when the primary is e.g. an MLX model served
+    # by LM Studio. The llm_fallbacks chain below is always OpenAI-compat
+    # regardless of this setting. When "openai", any primary failure (not just a
+    # brownout) cascades to the fallback chain, since an OpenAI primary is
+    # typically a remote host with configured backups.
+    api: str = "ollama"
     # #336: hard timeout for the /api/generate call inside _generate_description.
     # Default 5s so a cold Ollama model (15+ s latency) doesn't block /save.
     # Override via PALINODE_DESCRIBE_TIMEOUT_SECONDS env var.
     describe_timeout_seconds: float = 5.0
+    # #464: OpenAI-compat fallback chain for the CHAT role (auto-description /
+    # auto-summary), walked in order on primary failure. Mirrors
+    # ConsolidationConfig.llm_fallbacks — each entry is {model, url} pointing at
+    # an OpenAI-compatible /v1/chat/completions endpoint (a second qwen host, the
+    # Sonnet shim, etc.). With api="ollama" the chain fires when the native
+    # primary browns out (OllamaTimeout / OllamaCircuitOpen); with api="openai"
+    # it fires on any primary failure. Empty default = today's behavior, zero
+    # change. Reached only from the watcher-driven /generate-summaries backfill
+    # (the /save hot path doesn't enrich inline post-#405), so configured
+    # fallbacks never egress on the save path.
+    llm_fallbacks: list[dict] = field(default_factory=list)
+    # #464: per-/generate-summaries-run cap on files that may escalate to a CHAT
+    # fallback. Bounds Anthropic egress when the local chat host is chronically
+    # down and one backfill walk spans a large deferred backlog. 0 = unlimited
+    # (explicit opt-out). Only applies when llm_fallbacks is non-empty.
+    llm_fallback_max_per_run: int = 10
 
 @dataclass
 class SearchConfig:
@@ -208,14 +248,44 @@ class ConsolidationConfig:
 
 @dataclass
 class DecayConfig:
-    """Algorithm constraints matching temporal decay curves settings."""
+    """Algorithm constraints matching temporal decay curves settings.
+
+    ADR-007 (demand-decay importance, grounded in 31 d of prod telemetry)
+    replaces the per-type decay model below with a single empirical
+    demand-decay clock. ``importance`` is now *decayed distinct-session
+    explicit demand*: reinforced by an exponential-approach nudge on each
+    qualifying demand (§3.3), decayed on read at rank time (§3.3/§3.4).
+    """
     enabled: bool = False
+    # DEPRECATED (ADR-007 §3.4): the per-type taus were pre-data guesses for a
+    # *type-based* decay model. They are superseded by `importance_tau_days`
+    # (the single empirical demand-decay clock). Retained only so existing
+    # configs validate and `score_with_decay` (legacy, decay-ranker path)
+    # keeps working; they are NOT used as the decay clock for the ADR-007
+    # decay-on-read term. Remove once no config references them.
     tau_critical: int = 180
     tau_decisions: int = 60
     tau_insights: int = 90
     tau_general: int = 30
     tau_status: int = 7
     tau_ephemeral: int = 1
+    # DEPRECATED (ADR-007 §3.3): the old additive `+0.01` nudge — too small and
+    # the wrong shape for the Zipfian demand distribution (26 demands → only
+    # 0.76). Superseded by the exponential-approach reinforcement below
+    # (`importance_alpha`). Kept only for backward-compatible config loading.
+    importance_nudge: float = 0.01
+    # Recall-feedback loop (ADR-006/007, #371) — demand-decay importance (ADR-007).
+    # Access metadata (recall_count / last_recalled) is always written on
+    # retrieval, independent of the decay ranker `enabled` flag (which only gates
+    # the legacy score_with_decay re-rank term). The *importance* nudge is gated
+    # on explicit, session-deduplicated demand (§3.2) and reinforces by
+    # exponential approach toward `importance_cap`:
+    #     importance ← importance + (cap − importance) · importance_alpha
+    # NULL importance is treated as `importance_base` (0.5) before nudging.
+    importance_base: float = 0.5          # neutral prior (NULL ⇒ base); decay floor
+    importance_cap: float = 0.95          # leaves headroom for #259 human max (1.0)
+    importance_alpha: float = 0.08        # reinforcement rate per distinct-session demand
+    importance_tau_days: float = 14.0     # demand-decay time constant (decay-on-read)
 
 @dataclass
 class ApiServiceConfig:
@@ -397,6 +467,7 @@ class CompactionConfig:
 class Config:
     """Global configuration model mapping all schema structures format maps formats outputs."""
     memory_dir: str = "~/palinode"
+    tool_surface: ToolSurface = "full"
     # Sentinel `None` means "default to memory_dir/.palinode.db, tracking
     # PALINODE_DIR overrides at load time". See __post_init__ + load_config.
     # An explicit string (e.g. from palinode.config.yaml) is taken at face value.
@@ -558,6 +629,10 @@ def load_config() -> Config:
             cfg.services.api.port = int(os.environ["PALINODE_API_PORT"])
         except ValueError:
             pass
+    if "PALINODE_MCP_SURFACE" in os.environ:
+        cfg.tool_surface = validate_tool_surface(
+            os.environ["PALINODE_MCP_SURFACE"], "PALINODE_MCP_SURFACE"
+        )
     if "PALINODE_ORG" in os.environ:
         cfg.scope.org = os.environ["PALINODE_ORG"]
     if "PALINODE_MEMBER" in os.environ:

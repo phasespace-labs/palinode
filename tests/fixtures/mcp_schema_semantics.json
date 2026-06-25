@@ -1,0 +1,322 @@
+{
+  "palinode_archive_expired": {
+    "description": "Archive ephemeral memories whose `expires_at` has passed (ADR-015 \u00a72.3 TTL regime). Deterministic + idempotent \u2014 flips expired memories to status: archived so they drop out of default recall while staying on disk. Set `dry_run=true` to preview.",
+    "params": {
+      "dry_run": {}
+    },
+    "required": []
+  },
+  "palinode_blame": {
+    "description": "Trace a fact back to when it was first recorded. Shows which session or commit created each line in a memory file.",
+    "params": {
+      "file": {},
+      "file_path": {},
+      "search": {}
+    },
+    "required": []
+  },
+  "palinode_cluster_neighbors": {
+    "description": "Given a memory file path, find the top-K semantically related files that are NOT currently linked to or from it (no existing [[wikilink]] in either direction). Use during wiki-maintenance passes to surface implicit relationships that no wikilink yet captures \u2014 the LLM can then propose new cross-links. Preprocessing strips wikilink syntax and the auto-generated `## See also` footer so notes linking the same entities don't false-positive as related.",
+    "params": {
+      "file_path": {},
+      "min_similarity": {},
+      "top_k": {}
+    },
+    "required": [
+      "file_path"
+    ]
+  },
+  "palinode_consolidate": {
+    "description": "Run a manual knowledge consolidation pass.  Set `dry_run=true` to preview the proposed operations without applying them.",
+    "params": {
+      "dry_run": {},
+      "nightly": {}
+    },
+    "required": []
+  },
+  "palinode_dedup_suggest": {
+    "description": "Given draft memory content the LLM is about to save, return the top-K existing memory files whose embeddings are semantically near it. Use BEFORE writing a new memory to decide 'create new' vs 'update existing'. Each result includes a `strong_dup` flag \u2014 when true (similarity \u2265 0.90), the existing file is a near-paraphrase and the LLM should usually update rather than create. Preprocessing strips wikilink syntax and the auto-generated `## See also` footer so notes linking the same entities don't false-positive as duplicates.",
+    "params": {
+      "content": {},
+      "min_similarity": {},
+      "top_k": {}
+    },
+    "required": [
+      "content"
+    ]
+  },
+  "palinode_depends": {
+    "description": "Return the dependency tree for a milestone or task slug, or list all unblocked items. Reads depends_on / blocks / parallel_with frontmatter from ProjectSnapshot files. Set unblocked=true to answer 'what can I work on right now?' across all slugs.",
+    "params": {
+      "slug": {},
+      "unblocked": {}
+    },
+    "required": []
+  },
+  "palinode_diff": {
+    "description": "Show what memories changed recently. Use to review what was learned, decisions made, or facts updated in the last N days.",
+    "params": {
+      "days": {},
+      "paths": {}
+    },
+    "required": []
+  },
+  "palinode_doctor": {
+    "description": "Fast palinode health check (<500ms). Skips network probes and canary writes. Checks path integrity, config consistency, and env-var drift. Use this first; call palinode_doctor_deep when results are unclear.",
+    "params": {},
+    "required": []
+  },
+  "palinode_doctor_deep": {
+    "description": "Full palinode health check including network probes and canary write tests. Takes 10-15s. Use when palinode_doctor reports unclear results or you need to verify the API, watcher, and service connectivity.",
+    "params": {},
+    "required": []
+  },
+  "palinode_entities": {
+    "description": "List all known entities, or get memory files referencing a specific entity.",
+    "params": {
+      "entity_ref": {}
+    },
+    "required": []
+  },
+  "palinode_history": {
+    "description": "Show the change history of a memory file. Tracks renames (--follow) and includes diff stats per commit. Use detail='full' for the commit-level evolution view (previously palinode_timeline).",
+    "params": {
+      "detail": {
+        "enum": [
+          "summary",
+          "full"
+        ]
+      },
+      "file_path": {},
+      "limit": {}
+    },
+    "required": [
+      "file_path"
+    ]
+  },
+  "palinode_ingest": {
+    "description": "Fetch a URL and save it as a research reference in Palinode memory.",
+    "params": {
+      "name": {},
+      "url": {}
+    },
+    "required": [
+      "url"
+    ]
+  },
+  "palinode_lint": {
+    "description": "Scan memory for health issues: orphaned files, stale active files (>90 days), missing frontmatter fields, and potential contradictions. Returns a report without modifying files.",
+    "params": {},
+    "required": []
+  },
+  "palinode_list": {
+    "description": "List memory files, optionally filtered by category or core status. Use to browse what memories exist before reading or searching.",
+    "params": {
+      "category": {
+        "enum": [
+          "people",
+          "projects",
+          "decisions",
+          "insights",
+          "research"
+        ]
+      },
+      "core_only": {}
+    },
+    "required": []
+  },
+  "palinode_orphan_repair": {
+    "description": "Given a `[[wikilink]]` whose target file does not exist, return existing memory files semantically near the link target text. Use during wiki-maintenance passes to either propose a redirect (rename the link to point at an existing file) or to create the missing target file with informed context about its semantic neighbours. Accepts either `[[name]]` or bare `name`.",
+    "params": {
+      "broken_link": {},
+      "min_similarity": {},
+      "top_k": {}
+    },
+    "required": [
+      "broken_link"
+    ]
+  },
+  "palinode_prompt": {
+    "description": "List, read, or activate versioned LLM prompts stored as memory files in the prompts/ directory. Use 'list' to browse available prompts, 'read' to view a specific prompt's content, or 'activate' to set a prompt version as active (deactivates others of the same task).",
+    "params": {
+      "action": {
+        "enum": [
+          "list",
+          "read",
+          "activate"
+        ]
+      },
+      "name": {},
+      "task": {
+        "enum": [
+          "compaction",
+          "extraction",
+          "update",
+          "classification",
+          "nightly-consolidation"
+        ]
+      }
+    },
+    "required": [
+      "action"
+    ]
+  },
+  "palinode_push": {
+    "description": "Sync memory changes to GitHub for backup and cross-machine access.",
+    "params": {},
+    "required": []
+  },
+  "palinode_read": {
+    "description": "Read the full contents of a memory file. Use after palinode_list or palinode_search to see the complete content of a specific file.",
+    "params": {
+      "file_path": {},
+      "meta": {}
+    },
+    "required": [
+      "file_path"
+    ]
+  },
+  "palinode_rollback": {
+    "description": "Revert a memory file to a previous version. Safe: creates a new commit preserving the old version in history. Defaults to dry run.",
+    "params": {
+      "commit": {},
+      "dry_run": {},
+      "file": {},
+      "file_path": {}
+    },
+    "required": []
+  },
+  "palinode_save": {
+    "description": "Save a memory to Palinode. Use for important facts, decisions, insights, or project updates worth remembering across sessions. Provide either `type` (one of the enum values) or `ps=true` for the ProjectSnapshot shortcut \u2014 exactly one is required. If this call times out, the save may still have committed server-side: call `palinode_search` with a distinctive phrase from your content to confirm before retrying, so you don't create a duplicate entry.",
+    "params": {
+      "confidence": {},
+      "content": {},
+      "core": {},
+      "entities": {},
+      "external_refs": {},
+      "metadata": {},
+      "priority": {},
+      "project": {},
+      "ps": {},
+      "slug": {},
+      "source": {},
+      "sources": {},
+      "title": {},
+      "type": {
+        "enum": [
+          "PersonMemory",
+          "Decision",
+          "ProjectSnapshot",
+          "Insight",
+          "ResearchRef",
+          "ActionItem"
+        ]
+      },
+      "update_policy": {
+        "enum": [
+          "append",
+          "replace"
+        ]
+      }
+    },
+    "required": [
+      "content"
+    ]
+  },
+  "palinode_search": {
+    "description": "Search Palinode memory for relevant context about people, projects, decisions, insights, or research. Returns the most relevant memory file excerpts ranked by semantic similarity.",
+    "params": {
+      "category": {
+        "enum": [
+          "people",
+          "projects",
+          "decisions",
+          "insights",
+          "research"
+        ]
+      },
+      "date_after": {},
+      "date_before": {},
+      "full": {},
+      "include_daily": {},
+      "include_telemetry": {},
+      "limit": {},
+      "min_priority": {},
+      "query": {},
+      "since_days": {},
+      "threshold": {},
+      "types": {
+        "items_enum": [
+          "PersonMemory",
+          "Decision",
+          "ProjectSnapshot",
+          "Insight",
+          "ResearchRef",
+          "ActionItem"
+        ]
+      }
+    },
+    "required": [
+      "query"
+    ]
+  },
+  "palinode_session_end": {
+    "description": "Call at the end of a coding or chat session to capture key outcomes to persistent memory. Writes a session summary to today's daily notes and appends status to relevant project files. Provide a brief summary of what was accomplished, decisions made, and any blockers.",
+    "params": {
+      "blockers": {},
+      "decisions": {},
+      "project": {},
+      "push": {},
+      "source": {},
+      "summary": {}
+    },
+    "required": [
+      "summary"
+    ]
+  },
+  "palinode_status": {
+    "description": "Check Palinode health: API reachability, index stats, last watcher run.",
+    "params": {},
+    "required": []
+  },
+  "palinode_timeline": {
+    "description": "Deprecated: use palinode_history with detail='full' instead. Shows commit-level evolution of a memory file including unified diffs per commit.",
+    "params": {
+      "file_path": {},
+      "limit": {}
+    },
+    "required": [
+      "file_path"
+    ]
+  },
+  "palinode_topic_coverage": {
+    "description": "Given a topic phrase (not a file), check whether any wiki page already covers it. Returns {covered: bool, best_match: str | null, similarity: float}. Use BEFORE ingesting new content to ask 'is this already covered?'. Different framing from palinode_dedup_suggest: takes a short topic phrase rather than full draft content, and answers the binary 'already covered?' question.",
+    "params": {
+      "min_similarity": {},
+      "query": {}
+    },
+    "required": [
+      "query"
+    ]
+  },
+  "palinode_trigger": {
+    "description": "Register or manage a prospective trigger for Palinode. When a future user message semantically matches the description, the specified memory file will be automatically injected.",
+    "params": {
+      "action": {
+        "enum": [
+          "create",
+          "list",
+          "delete"
+        ]
+      },
+      "cooldown_hours": {},
+      "description": {},
+      "memory_file": {},
+      "threshold": {},
+      "trigger_id": {}
+    },
+    "required": [
+      "action"
+    ]
+  }
+}

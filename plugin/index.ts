@@ -187,6 +187,54 @@ export function resolveProfile(cfg: Pick<PalinodeConfig, "autoRecall" | "recallP
   return { ...base, ...(cfg.recallProfileConfig ?? {}) };
 }
 
+export type InjectionParts = {
+  coreContent?: string;
+  topicContent?: string;
+  assocContent?: string;
+  triggerContent?: string;
+  coreBudget?: number;
+};
+
+export type InjectionFrame =
+  | { kind: "system"; systemContext: string; prependContext?: never }
+  | { kind: "fallback"; prependContext: string; systemContext?: never };
+
+export function composeInjection(parts: InjectionParts, profileName: RecallProfileName): string {
+  let injection = `<palinode-memory profile="${profileName}">\n`;
+  if (parts.coreContent) {
+    // Capacity display line — inspired by NousResearch/hermes-agent prompt_builder.py
+    // Lets the agent see how full core memory is and consolidate proactively
+    const totalChars = parts.coreContent.length;
+    const maxChars = parts.coreBudget ?? 8000;
+    const pct = Math.round((totalChars / maxChars) * 100);
+    const capacityLine = `[Core Memory: ${totalChars.toLocaleString()} / ${maxChars.toLocaleString()} chars — ${pct}%]\n\n`;
+    injection += `## Core Memory\n${capacityLine}${parts.coreContent}\n`;
+  }
+  if (parts.topicContent) {
+    injection += `\n## Relevant Context\n${parts.topicContent}\n`;
+  }
+  if (parts.assocContent) {
+    injection += `\n## Associative Context\n${parts.assocContent}\n`;
+  }
+  if (parts.triggerContent) {
+    injection += `\n## IMPORTANT Triggers\n${parts.triggerContent}\n`;
+  }
+  injection += "</palinode-memory>";
+  return injection;
+}
+
+export function composeInjectionFrame(injection: string, systemRoleAvailable = true): InjectionFrame {
+  if (systemRoleAvailable) {
+    return { kind: "system", systemContext: injection };
+  }
+  return {
+    kind: "fallback",
+    prependContext:
+      `<|reference_context|>\n${injection}\n<|end_reference_context|>\n\n` +
+      "<|user_instruction_follows|>\n",
+  };
+}
+
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -313,6 +361,17 @@ const palinodePlugin = {
           include_daily: Type.Optional(
             Type.Boolean({ description: "Include daily session notes in results (default false)." }),
           ),
+          min_priority: Type.Optional(
+            Type.Number({ description: "Only return memories with priority >= this value (1–5)." }),
+          ),
+          include_telemetry: Type.Optional(
+            Type.Boolean({
+              description:
+                "Include machine/monitor telemetry writes (metadata.kind: telemetry). " +
+                "Default false — telemetry is hard-excluded from recall so monitoring " +
+                "churn does not pollute results (ADR-015 §5).",
+            }),
+          ),
         }),
         async execute(_toolCallId: string, params: any) {
           try {
@@ -327,6 +386,8 @@ const palinodePlugin = {
             if (params.date_after !== undefined) body.date_after = params.date_after;
             if (params.date_before !== undefined) body.date_before = params.date_before;
             if (params.include_daily !== undefined) body.include_daily = params.include_daily;
+            if (params.min_priority !== undefined) body.min_priority = params.min_priority;
+            if (params.include_telemetry !== undefined) body.include_telemetry = params.include_telemetry;
             const results = await palinodeFetch(
               cfg.palinodeApiUrl,
               "/search",
@@ -422,6 +483,38 @@ const palinodePlugin = {
           ),
           source: Type.Optional(
             Type.String({ description: "Source surface that created this memory (e.g. 'claude-code'). Auto-detected if omitted." }),
+          ),
+          priority: Type.Optional(
+            Type.Number({ description: "Memory priority (1–5). Higher values surface in priority-filtered recall." }),
+          ),
+          update_policy: Type.Optional(
+            Type.Union(
+              [Type.Literal("append"), Type.Literal("replace")],
+              {
+                description:
+                  "Write-semantics axis (ADR-015). 'append' (default) is episodic. " +
+                  "'replace' marks this as a living/current-state document: re-saving " +
+                  "the same slug updates it in place and consolidation will never " +
+                  "supersede/archive it into history. Persisted as sticky frontmatter.",
+              },
+            ),
+          ),
+          sources: Type.Optional(
+            Type.Array(
+              Type.Object({
+                ref: Type.String({ description: "Path under the memory dir of the cited source." }),
+                quote: Type.String({ description: "The exact passage cited from the source." }),
+                quote_hash: Type.Optional(
+                  Type.String({ description: "Integrity hash; computed on save if omitted." }),
+                ),
+              }),
+              {
+                description:
+                  "Source-citation anchors (#459): each {ref, quote, quote_hash} " +
+                  "anchors this memory to the exact passage it cites. quote_hash is " +
+                  "computed server-side when omitted; the verifier reads these back.",
+              },
+            ),
           ),
         }),
         async execute(_toolCallId: string, params: any) {
@@ -875,26 +968,16 @@ const palinodePlugin = {
             return;
           }
 
-          let injection = `<palinode-memory profile="${cfg.recallProfile}">\n`;
-          if (coreContent) {
-            // Capacity display line — inspired by NousResearch/hermes-agent prompt_builder.py
-            // Lets the agent see how full core memory is and consolidate proactively
-            const totalChars = coreContent.length;
-            const maxChars = CORE_TOTAL_MAX;
-            const pct = Math.round((totalChars / maxChars) * 100);
-            const capacityLine = `[Core Memory: ${totalChars.toLocaleString()} / ${maxChars.toLocaleString()} chars — ${pct}%]\n\n`;
-            injection += `## Core Memory\n${capacityLine}${coreContent}\n`;
-          }
-          if (topicContent) {
-            injection += `\n## Relevant Context\n${topicContent}\n`;
-          }
-          if (assocContent) {
-            injection += `\n## Associative Context\n${assocContent}\n`;
-          }
-          if (triggerContent) {
-            injection += `\n## IMPORTANT Triggers\n${triggerContent}\n`;
-          }
-          injection += "</palinode-memory>";
+          let injection = composeInjection(
+            {
+              coreContent,
+              topicContent,
+              assocContent,
+              triggerContent,
+              coreBudget: CORE_TOTAL_MAX,
+            },
+            cfg.recallProfile,
+          );
 
           // #391/#394: enforce total-budget hard cap across all sources.
           // Prevents pathological compound growth — observed monitor prompt
@@ -920,7 +1003,7 @@ const palinodePlugin = {
             pendingEsReceipt = null;
           }
 
-          return { prependContext: injection };
+          return { systemContext: injection };
         } catch (err) {
           api.logger.warn(`openclaw-palinode: recall failed: ${String(err)}`);
         }

@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Palinode · diffs{% endblock %}
+{% block crumb %}<b>diffs</b>{% endblock %}
+{% block content %}
+<div class="dash">
+  <h1>Recent changes</h1>
+  <p class="lede">Memory writes over the last {{ diffs.days }} days, from git — newest first.</p>
+
+  {% if diffs.groups %}
+  {% for g in diffs.groups %}
+  <h2 class="section-h">{{ g.day }}</h2>
+  <ul class="flist">
+    {% for c in g.commits %}
+    <li class="commit">
+      <div class="commit-head">
+        <span class="mono">{{ c.hash }}</span>
+        {% if c.time %}<span class="meta">{{ c.time }}</span>{% endif %}
+        <span class="commit-msg">{{ c.message }}</span>
+      </div>
+      {% if c.files %}
+      <div class="commit-files">
+        {% for f in c.files %}
+        <a class="fpill" href="{{ url_for('ui_memory', file_path=f.id) }}">{{ f.path }}</a>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% endfor %}
+  {% else %}
+  <p class="empty">No memory changes in the last {{ diffs.days }} days (or the store is not a git repo).</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -204,6 +204,121 @@ def test_hook_script_default_reason_allowlist_is_broad():
     assert "bypass_permissions_disabled}" not in HOOK_SCRIPT
 
 
+# ---- Hook script floor gates (#378: dedup / dry-run / fallback) ----------
+
+
+def _run_hook(tmp_path, transcript_text, *, env=None, reason="clear",
+              session_id="s1"):
+    """Render HOOK_SCRIPT to disk and run it with a stub PATH (curl + jq).
+
+    Returns (CompletedProcess, fallback_path). The stub `curl` records its
+    invocation to ``$STUB_DIR/curl-called`` and honours ``CURL_FAIL=1`` to
+    simulate an API failure so the fallback path can be exercised.
+    """
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text(transcript_text)
+
+    hook = tmp_path / "hook.sh"
+    hook.write_text(HOOK_SCRIPT)
+
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    # Stub curl: record the call; fail if CURL_FAIL=1 (exit 22, like curl -f 4xx).
+    (stub_dir / "curl").write_text(
+        '#!/bin/bash\n'
+        'echo "$@" >> "$STUB_DIR/curl-called"\n'
+        '[ "${CURL_FAIL:-0}" = "1" ] && exit 22\n'
+        'exit 0\n'
+    )
+    (stub_dir / "curl").chmod(0o755)
+
+    real_jq = subprocess.run(["command", "-v", "jq"], capture_output=True,
+                             text=True, executable="/bin/bash").stdout.strip()
+    payload = json.dumps({
+        "transcript_path": str(transcript),
+        "session_id": session_id,
+        "cwd": str(tmp_path),
+        "reason": reason,
+    })
+    full_env = {
+        "PATH": f"{stub_dir}:/usr/bin:/bin",
+        "STUB_DIR": str(stub_dir),
+        "CLAUDE_PROJECT_DIR": str(tmp_path),
+        "HOME": str(tmp_path),
+    }
+    if env:
+        full_env.update(env)
+    proc = subprocess.run(
+        ["/bin/bash", str(hook)],
+        input=payload, capture_output=True, text=True, env=full_env,
+    )
+    fallback = tmp_path / ".claude" / "session-floor-fallback.jsonl"
+    return proc, fallback, (stub_dir / "curl-called")
+
+
+_NONTRIVIAL = (
+    '{"type":"user","message":{"content":"first ask"}}\n'
+    '{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}\n'
+    '{"type":"user","message":{"content":"second"}}\n'
+    '{"type":"user","message":{"content":"third"}}\n'
+)
+
+
+def test_hook_skips_when_wrap_already_ran(tmp_path):
+    """If the transcript holds a palinode_session_end call, the floor is
+    redundant — skip (no curl POST)."""
+    transcript = _NONTRIVIAL + (
+        '{"type":"assistant","message":{"content":'
+        '[{"type":"tool_use","name":"palinode_session_end","input":{}}]}}\n'
+    )
+    proc, _fallback, curl_called = _run_hook(tmp_path, transcript)
+    assert proc.returncode == 0, proc.stderr
+    assert not curl_called.exists(), "curl POST fired despite /wrap having run"
+
+
+def test_hook_force_overrides_wrap_dedup(tmp_path):
+    """PALINODE_HOOK_FORCE=1 captures even when /wrap ran."""
+    transcript = _NONTRIVIAL + (
+        '{"type":"assistant","message":{"content":'
+        '[{"type":"tool_use","name":"palinode_session_end","input":{}}]}}\n'
+    )
+    proc, _fallback, curl_called = _run_hook(
+        tmp_path, transcript, env={"PALINODE_HOOK_FORCE": "1"})
+    assert proc.returncode == 0, proc.stderr
+    assert curl_called.exists(), "FORCE=1 should capture regardless of /wrap"
+
+
+def test_hook_dryrun_writes_nothing(tmp_path):
+    """Dry-run prints the payload and never POSTs."""
+    proc, _fallback, curl_called = _run_hook(
+        tmp_path, _NONTRIVIAL, env={"PALINODE_HOOK_DRYRUN": "1"})
+    assert proc.returncode == 0, proc.stderr
+    assert "DRYRUN" in proc.stdout
+    assert not curl_called.exists(), "dry-run must not POST"
+
+
+def test_hook_fallback_log_on_api_failure(tmp_path):
+    """When the POST fails, the capture is appended to the fallback log so it
+    isn't lost."""
+    proc, fallback, curl_called = _run_hook(
+        tmp_path, _NONTRIVIAL, env={"CURL_FAIL": "1"})
+    assert proc.returncode == 0, proc.stderr
+    assert curl_called.exists(), "curl should have been attempted"
+    assert fallback.exists(), "failed POST must route to the fallback log"
+    line = json.loads(fallback.read_text().strip())
+    assert "summary" in line and "project" in line
+
+
+def test_hook_happy_path_posts_once_no_fallback(tmp_path):
+    """A non-trivial session with a healthy API POSTs once and writes no
+    fallback."""
+    proc, fallback, curl_called = _run_hook(tmp_path, _NONTRIVIAL)
+    assert proc.returncode == 0, proc.stderr
+    assert curl_called.exists()
+    assert "/session-end" in curl_called.read_text()
+    assert not fallback.exists()
+
+
 # ---- Scaffolding flow ---------------------------------------------------
 
 

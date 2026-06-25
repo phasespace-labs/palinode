@@ -3,7 +3,6 @@ import click
 from palinode.cli._api import api_client
 from palinode.cli._format import print_result, console, OutputFormat, get_default_format
 from palinode.core.config import config
-from rich.panel import Panel
 
 
 def _cli_resolve_context() -> list[str] | None:
@@ -52,6 +51,11 @@ def _cli_resolve_context() -> list[str] | None:
     ),
 )
 @click.option(
+    "--min-priority",
+    type=click.IntRange(1, 5),
+    help="Only return memories with human-assigned priority at least N (missing defaults to 3).",
+)
+@click.option(
     "--date-after",
     help="Only return memories created/updated after this ISO date (e.g. 2026-01-01).",
 )
@@ -64,6 +68,14 @@ def _cli_resolve_context() -> list[str] | None:
     is_flag=True,
     help="Include daily/ session notes at full rank (default: penalized).",
 )
+@click.option(
+    "--include-telemetry",
+    is_flag=True,
+    help=(
+        "Include machine/monitor telemetry writes (metadata.kind: telemetry). "
+        "Default: hard-excluded from recall (ADR-015)."
+    ),
+)
 @click.option("--format", "fmt", type=click.Choice(["json", "text"]), help="Output format")
 @click.option("--score/--no-score", default=False, help="Show relevance scores")
 @click.option("--no-context", is_flag=True, help="Disable ambient context boost")
@@ -74,9 +86,11 @@ def search(
     threshold,
     since_days,
     types,
+    min_priority,
     date_after,
     date_before,
     include_daily,
+    include_telemetry,
     fmt,
     score,
     no_context,
@@ -92,9 +106,11 @@ def search(
             threshold=threshold,
             since_days=since_days,
             types=list(types) if types else None,
+            min_priority=min_priority,
             date_after=date_after,
             date_before=date_before,
             include_daily=include_daily or None,
+            include_telemetry=include_telemetry or None,
         )
         
         output_fmt = OutputFormat(fmt) if fmt else get_default_format()

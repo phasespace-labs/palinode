@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Palinode · dashboard{% endblock %}
+{% block crumb %}<b>dashboard</b>{% endblock %}
+{% block content %}
+<div class="dash">
+  <h1>Memory health</h1>
+  <p class="lede">A read-only view of what the agent remembers — and whether it holds up.</p>
+
+  <div class="cards">
+    <div class="card accent">
+      <div class="num">{{ "{:,}".format(total_memories or 0) }}</div>
+      <div class="lbl">memories</div>
+    </div>
+    <div class="card">
+      <div class="num">{{ "{:,}".format(total_chunks or 0) }}</div>
+      <div class="lbl">chunks</div>
+    </div>
+    <div class="card">
+      <div class="num">{{ "{:,}".format(core_count or 0) }}</div>
+      <div class="lbl">core</div>
+    </div>
+    <div class="card{% if stale_count %} warn{% endif %}">
+      <div class="num">{{ stale_count or 0 }}</div>
+      <div class="lbl">stale</div>
+    </div>
+    <div class="card{% if orphaned_count %} warn{% endif %}">
+      <div class="num">{{ orphaned_count or 0 }}</div>
+      <div class="lbl">orphaned</div>
+    </div>
+    <div class="card{% if missing_descriptions %} warn{% endif %}">
+      <div class="num">{{ missing_descriptions or 0 }}</div>
+      <div class="lbl">no description</div>
+    </div>
+    <div class="card{% if contradictions %} warn{% endif %}">
+      <div class="num">{{ contradictions or 0 }}</div>
+      <div class="lbl">contradictions</div>
+    </div>
+    <div class="card">
+      <div class="num">{{ git_commits_7d or 0 }}</div>
+      <div class="lbl">commits / 7d</div>
+    </div>
+  </div>
+
+  {% if unindexed %}
+  <div class="notice">
+    <b>{{ "{:,}".format(total_memories or 0) }} memories on disk, 0 indexed.</b>
+    The search index is empty — start the watcher (<code>palinode-watcher</code>)
+    to embed them. Counts above come from the files; chunks, search, and the
+    recent list stay empty until indexing runs.
+  </div>
+  {% endif %}
+
+  <h2 class="section-h">Recent memory</h2>
+  {% if recent %}
+  <ul class="flist">
+    {% for m in recent %}
+    <li><a href="{{ url_for('ui_memory', file_path=m.path) }}">{{ m.path }}
+      {% if m.type %}<span class="meta">· {{ m.type }}</span>{% endif %}</a></li>
+    {% endfor %}
+  </ul>
+  {% elif unindexed %}
+  <p class="empty">Nothing indexed yet — start <code>palinode-watcher</code> to populate this list.</p>
+  {% else %}
+  <p class="empty">No memories yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

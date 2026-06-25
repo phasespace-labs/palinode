@@ -200,9 +200,13 @@ REGISTRY: tuple[Operation, ...] = (
             ),
             CanonicalParam(name="since_days", type="integer"),
             CanonicalParam(name="types", type="array"),
+            CanonicalParam(name="min_priority", type="integer"),
             CanonicalParam(name="date_after", type="string"),
             CanonicalParam(name="date_before", type="string"),
             CanonicalParam(name="include_daily", type="boolean"),
+            # ADR-015 §5 (#480): telemetry-exclusion override; default false so
+            # monitoring writes don't pollute recall. First-class on all surfaces.
+            CanonicalParam(name="include_telemetry", type="boolean"),
         ),
         cli_command="search",
         mcp_tool="palinode_search",
@@ -226,11 +230,26 @@ REGISTRY: tuple[Operation, ...] = (
             CanonicalParam(name="project", type="string"),
             CanonicalParam(name="metadata", type="object"),
             CanonicalParam(name="confidence", type="number"),
+            CanonicalParam(name="priority", type="integer"),
             CanonicalParam(name="external_refs", type="object"),
             CanonicalParam(name="title", type="string"),
             CanonicalParam(name="slug", type="string"),
             CanonicalParam(name="core", type="boolean"),
             CanonicalParam(name="source", type="string"),
+            # ADR-015 §5 (#480): write-semantics axis. "append" (default) is
+            # episodic; "replace" marks a living/current-state document. First-class
+            # on all surfaces so callers don't need to tunnel it through metadata.
+            CanonicalParam(
+                name="update_policy",
+                type="string",
+                enum=("append", "replace"),
+            ),
+            # #459: source-citation anchors. A list of {ref, quote, quote_hash}
+            # dicts; the quote_hash is computed/verified on save. First-class on
+            # all surfaces so callers don't tunnel citations through metadata.
+            # The CLI surfaces this as the repeatable ``--cite REF::QUOTE`` flag
+            # (dest ``sources``); MCP/API/plugin take the structured list.
+            CanonicalParam(name="sources", type="array"),
         ),
         cli_command="save",
         mcp_tool="palinode_save",
@@ -248,6 +267,18 @@ REGISTRY: tuple[Operation, ...] = (
         cli_command="consolidate",
         mcp_tool="palinode_consolidate",
         api_endpoint=("POST", "/consolidate"),
+        exempt_surfaces=frozenset({"plugin"}),
+        known_drift={},
+    ),
+    # ── archive-expired (ADR-015 §2.3 TTL sweep, #482) ──────────────────────
+    Operation(
+        name="archive_expired",
+        canonical_params=(
+            CanonicalParam(name="dry_run", type="boolean"),
+        ),
+        cli_command="archive-expired",
+        mcp_tool="palinode_archive_expired",
+        api_endpoint=("POST", "/archive-expired"),
         exempt_surfaces=frozenset({"plugin"}),
         known_drift={},
     ),

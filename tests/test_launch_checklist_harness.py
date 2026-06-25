@@ -14,7 +14,7 @@ CHECKLIST = Path(__file__).resolve().parent.parent / "docs" / "LAUNCH-CHECKLIST.
 TIER_1_2_HARNESSES = [
     "Claude Code",
     "Codex",
-    "Antigravity",
+    "Generic IDE",
     "Cursor",
     "Claude Desktop",
     "Cline",

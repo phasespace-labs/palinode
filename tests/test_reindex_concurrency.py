@@ -73,6 +73,7 @@ def test_single_reindex_succeeds(client):
     """A lone /reindex call with no markdown files returns status=success."""
     with (
         mock.patch("glob.glob", return_value=[]),
+        mock.patch("palinode.core.store.gc_orphaned_chunks", return_value=(0, 0)),
         mock.patch("palinode.core.store.rebuild_fts", return_value=0),
     ):
         resp = client.post("/reindex")
@@ -81,6 +82,8 @@ def test_single_reindex_succeeds(client):
     body = resp.json()
     assert body["status"] == "success"
     assert "files_reindexed" in body
+    assert body["gc_paths_removed"] == 0
+    assert body["gc_chunks_removed"] == 0
 
 
 def test_409_detail_message(client):
@@ -136,6 +139,7 @@ def test_reindex_state_resets_after_completion(client):
     """_reindex_state["running"] is False after /reindex completes."""
     with (
         mock.patch("glob.glob", return_value=[]),
+        mock.patch("palinode.core.store.gc_orphaned_chunks", return_value=(0, 0)),
         mock.patch("palinode.core.store.rebuild_fts", return_value=0),
     ):
         resp = client.post("/reindex")
@@ -171,11 +175,14 @@ def test_reindex_state_tracks_progress(tmp_path, monkeypatch):
             "palinode.indexer.watcher.PalinodeHandler.is_valid_file",
             return_value=True,
         ),
+        mock.patch("palinode.core.store.gc_orphaned_chunks", return_value=(1, 2)),
         mock.patch("palinode.core.store.rebuild_fts", return_value=0),
     ):
         resp = c.post("/reindex")
 
     assert resp.status_code == 200
+    assert resp.json()["gc_paths_removed"] == 1
+    assert resp.json()["gc_chunks_removed"] == 2
     # During processing, running should have been True
     assert any(s["running"] for s in state_snapshots)
     # total_files should have been set before the loop

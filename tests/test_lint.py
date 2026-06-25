@@ -1,7 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from palinode.core.lint import run_lint_pass
 from palinode.core.config import config
-import os
 
 def test_lint_pass(tmp_path, monkeypatch):
     """Test the lint logic with simulated memory files."""
@@ -34,7 +33,6 @@ def test_lint_pass(tmp_path, monkeypatch):
     # 6. Contradiction file 2 (duplicate entity slug, both active)
     contra2 = tmp_path / "insights"
     contra2.mkdir(exist_ok=True)
-    contra2_file = contra2 / "contra.md"
     # Actually wait, our contradiction logic creates entity ref like f"{cat}/{slug}".
     # Let's put it in the same category!
     contra_dup = people_dir / "contra-status.md"
@@ -58,6 +56,7 @@ def test_lint_pass(tmp_path, monkeypatch):
     # M0: Validate new keys exist
     assert "missing_entities" in result
     assert "missing_descriptions" in result
+    assert "missing_priority" in result
     assert "core_count" in result
 
 
@@ -118,3 +117,32 @@ def test_lint_core_count(tmp_path, monkeypatch):
 
     result = run_lint_pass()
     assert result["core_count"] == 1
+
+
+def test_lint_missing_priority_for_core_and_decisions_only(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    insights_dir = tmp_path / "insights"
+    decisions_dir = tmp_path / "decisions"
+    projects_dir = tmp_path / "projects"
+    insights_dir.mkdir()
+    decisions_dir.mkdir()
+    projects_dir.mkdir()
+
+    (decisions_dir / "decision.md").write_text(
+        "---\nid: decisions-decision\ncategory: decisions\ntype: Decision\n---\nBody"
+    )
+    (projects_dir / "core.md").write_text(
+        "---\nid: projects-core\ncategory: projects\ntype: ProjectSnapshot\ncore: true\n---\nBody"
+    )
+    (insights_dir / "insight.md").write_text(
+        "---\nid: insights-insight\ncategory: insights\ntype: Insight\n---\nBody"
+    )
+    (decisions_dir / "prioritized.md").write_text(
+        "---\nid: decisions-prioritized\ncategory: decisions\ntype: Decision\npriority: 4\n---\nBody"
+    )
+
+    result = run_lint_pass()
+    assert any("decision.md" in f for f in result["missing_priority"])
+    assert any("core.md" in f for f in result["missing_priority"])
+    assert not any("insight.md" in f for f in result["missing_priority"])
+    assert not any("prioritized.md" in f for f in result["missing_priority"])

@@ -372,7 +372,7 @@ def test_minute_9_10_preprocessing_keeps_shared_entity_notes_distinct(api_client
 
     # Note A: about infrastructure decisions
     resp_a = client.post("/save", json={
-        "content": "Infrastructure decision: use Tailscale FQDN over IP in all configs",
+        "content": "Infrastructure decision: use private VPN FQDN over IP in all configs",
         "type": "Decision",
         "slug": "infra-network-decision",
         "entities": ["project/palinode"],
@@ -407,7 +407,7 @@ def test_minute_9_10_preprocessing_keeps_shared_entity_notes_distinct(api_client
     # Query with Note A's content — Note B should NOT dominate the results
     # (it has completely different tokens after preprocessing strips the entity footer)
     dedup_resp = client.post("/dedup-suggest", json={
-        "content": "Infrastructure decision: use Tailscale FQDN over IP in all configs",
+        "content": "Infrastructure decision: use private VPN FQDN over IP in all configs",
         "min_similarity": 0.30,
         "top_k": 5,
     })

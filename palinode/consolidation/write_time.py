@@ -32,6 +32,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from palinode.core.config import config
+from palinode.consolidation.op_parse import op_kind
 
 logger = logging.getLogger("palinode.write_time")
 # Ensure INFO logs propagate even if the parent logger tree hasn't been
@@ -372,7 +373,7 @@ def _run_check_and_apply(
     actionable = [
         op
         for op in operations
-        if op.get("operation", "").upper() not in ("NOOP", "ADD")
+        if op_kind(op) not in ("NOOP", "ADD")
     ]
 
     applied_stats: dict[str, int] = {}
@@ -420,7 +421,7 @@ def _translate_ops(
     """
     translated = []
     for op in contradiction_ops:
-        operation = op.get("operation", "").upper()
+        operation = op_kind(op)
         target_id = op.get("target_id") or op.get("id")
         if not target_id:
             # Without a target fact ID, we can't apply the op deterministically

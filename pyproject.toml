@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "palinode"
-version = "0.8.13"
+version = "0.8.14"
 description = "The memory substrate for AI agents and developer tools. Git-versioned, file-native, MCP-first."
 authors = [
   {name = "Paul Kyle", email = "paul@phasespace.co"}
@@ -33,12 +33,15 @@ dependencies = [
     "pyyaml>=6.0,<7.0",           # 5.x has multiple RCE/parser CVEs
     "httpx>=0.27",                # older versions had input-validation CVEs
     "python-frontmatter>=1.1",
-    "fastapi>=0.115",             # older versions had CSRF/ReDoS CVEs
+    "fastapi>=0.115,<0.137",      # older: CSRF/ReDoS CVEs. Cap <0.137: 0.137.1 regressed include_router (routes not added to app → routeless API). 0.136.x is the last good line. See #544.
     "uvicorn>=0.32",              # 0.11.x had log-injection / response-splitting CVEs
     "pydantic>=2.7,<3.0",         # 1.x and pre-2.4 had ReDoS / infinity-loop CVEs
     "mcp>=1.10",                  # earlier versions: DNS rebinding / FastMCP DoS / Streamable HTTP DoS CVEs
     "rich>=13.7",
     "click>=8.1",
+    "jinja2>=3.1.5",              # provenance UI templating; 3.1.5 fixes sandbox-escape CVEs
+    "markdown-it-py>=3.0",        # provenance UI: render memory bodies (html disabled)
+    "nh3>=0.2.18",               # provenance UI: HTML sanitizer (ammonia); XSS backstop
 ]
 
 [project.urls]
@@ -60,7 +63,8 @@ palinode-mcp-sse = "palinode.mcp:main_sse"  # deprecated alias for main_http
 [project.optional-dependencies]
 dev = [
     "pytest",
-    "pytest-asyncio"
+    "pytest-asyncio",
+    "pytest-timeout"
 ]
 
 [tool.bandit]
@@ -79,11 +83,14 @@ markers = [
     "slow: marks tests that need Ollama or take >5s",
 ]
 asyncio_mode = "strict"
+timeout = 60
+timeout_method = "thread"
 
 [tool.setuptools]
 packages = [
     "palinode",
     "palinode.api",
+    "palinode.api.ui",
     "palinode.cli",
     "palinode.consolidation",
     "palinode.core",
@@ -95,3 +102,9 @@ packages = [
     "palinode.lint",
     "palinode.migration",
 ]
+
+[tool.setuptools.package-data]
+# Ship the provenance UI's Jinja2 templates and static assets inside the wheel
+# (offline-first — no CDN). Without this, an installed wheel has the UI Python
+# but no templates/CSS and the router 500s at first render.
+"palinode.api.ui" = ["templates/*.html", "static/*.css"]

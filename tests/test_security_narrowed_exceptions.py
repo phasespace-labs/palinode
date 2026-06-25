@@ -22,10 +22,10 @@ from palinode.core.ollama_client import OllamaError, OllamaTimeout, OllamaUnreac
 
 
 def _patch_client(side_effect):
-    """Patch server.get_ollama_client so .generate raises side_effect."""
+    """Patch enrichment.get_ollama_client so .generate raises side_effect."""
     fake = mock.MagicMock(name="OllamaClient")
     fake.generate.side_effect = side_effect
-    return mock.patch("palinode.api.server.get_ollama_client", return_value=fake)
+    return mock.patch("palinode.api.enrichment.get_ollama_client", return_value=fake)
 
 
 # ── _generate_description ────────────────────────────────────────────────

@@ -386,6 +386,14 @@ When you extract a candidate memory, ALWAYS check for existing related memories 
 
 Mark as archived or superseded. The audit trail matters.
 
+`ARCHIVE` (and the old-version side of `SUPERSEDE`) moves the fact out of the
+source file and into a `{base}-history.md` sibling. That history file carries
+`status: archived` frontmatter, which the indexer propagates to its chunks, so
+`config.search.exclude_status` suppresses the archived/superseded content from
+default recall while keeping it indexed and retrievable on demand (the audit
+trail). The fact is never hard-deleted — it is relocated to history and made
+recall-invisible by default, not erased.
+
 ### Merging into existing files
 
 When updating a person or project file, **append or modify sections** — don't rewrite the whole file. The human may have hand-edited parts of it. Respect their edits.

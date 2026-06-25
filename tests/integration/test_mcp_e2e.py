@@ -501,13 +501,14 @@ def test_missing_required_arg_save(dispatch):
 
 from tests.integration._smoke_args import (
     DISPATCH_ERROR_PREFIXES,
+    SKIP_TOOLS,
     TOOL_SMOKE_ARGS,
     registered_tool_names,
 )
 
 
 def test_smoke_args_covers_all_tools():
-    """Drift guard: every tool registered in @server.list_tools() must have a
+    """Drift guard: every full-surface tool in @server.list_tools() must have a
     TOOL_SMOKE_ARGS entry, and the registry must not contain stale tool names.
 
     When a new MCP tool is added to palinode/mcp.py without a smoke-args
@@ -547,7 +548,12 @@ def seeded_env(api_tc, isolated_env):
 
 @pytest.mark.parametrize(
     "tool_name,args,lenient",
-    [(name, args, lenient) for name, (args, lenient) in TOOL_SMOKE_ARGS.items()],
+    [
+        pytest.param(name, args, lenient, marks=pytest.mark.skip(reason=SKIP_TOOLS[name]))
+        if name in SKIP_TOOLS
+        else (name, args, lenient)
+        for name, (args, lenient) in TOOL_SMOKE_ARGS.items()
+    ],
     ids=list(TOOL_SMOKE_ARGS.keys()),
 )
 def test_every_tool_dispatches(dispatch, seeded_env, tool_name, args, lenient):

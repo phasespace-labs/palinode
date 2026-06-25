@@ -13,15 +13,25 @@ import time
 import glob
 import logging
 import shutil
-import subprocess
 from datetime import UTC, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
+
+# The propose→apply seam (#554). The nondeterministic half of consolidation is a
+# single call shaped (system_prompt, user_prompt) -> (response_text, model_used);
+# the deterministic half (parse → executor.apply_operations) runs on its output.
+# Making this callable injectable lets the runner→executor path be driven with
+# canned op-JSON — no live LLM, no wholesale mock of _consolidate_project. The
+# default is the live fallback-chain caller; tests pass a fake that returns
+# deterministic op-JSON. Kept here (not a separate module) so the client-factory
+# patch seam test_fallback relies on — `runner.get_ollama_client` — stays put.
+LlmFn = Callable[[str, str], tuple[str, str]]
 
 import yaml
 
 from palinode.core.config import config
-from palinode.core import store, embedder
+from palinode.core import store, embedder, git_tools
 from palinode.core.ollama_client import OllamaError, OllamaRole, get_ollama_client
+from palinode.consolidation.op_parse import op_kind, op_reason, parse_operations
 
 logger = logging.getLogger("palinode.consolidation")
 
@@ -30,17 +40,49 @@ def _utc_now() -> datetime:
     """Return a timezone-aware UTC timestamp."""
     return datetime.now(UTC)
 
-def _git_commit(message: str) -> None:
+def _git_commit(message: str, files: list[str] | None = None) -> None:
+    """Commit consolidation mutations through the git_tools choke point.
+
+    One-mutation-one-commit: ``files`` is the explicit list of memory files this
+    pass mutated; each gets its own per-file commit so a consolidation touching
+    N files produces N commits, never a repo-wide ``git add *.md`` sweep that
+    would conflate unrelated working-tree edits under one message (#565). The
+    per-file ``message`` is suffixed with the file basename for blameability.
+
+    ``files=None`` is retained only for callers with nothing concrete to stage;
+    it is a no-op (we never sweep the repo). All real consolidation/ttl callers
+    pass an explicit list.
+    """
     if not config.git.auto_commit:
         return
-    try:
-        # Only add markdown files — respect .gitignore, avoid .db-journal etc.
-        subprocess.run(["git", "add", "*.md", "**/*.md"], cwd=config.memory_dir, capture_output=True)
-        subprocess.run(["git", "commit", "-m", message], cwd=config.memory_dir, check=True, capture_output=True)
-        logger.info(f"Git commit: {message}")
-    except subprocess.CalledProcessError as e:
-        if b"nothing to commit" not in e.stdout:
-            logger.error(f"Git commit failed: {e.stderr.decode()}")
+    if not files:
+        return
+    # De-duplicate while preserving order — a project and its history sibling
+    # may be listed more than once across a multi-project pass.
+    seen: set[str] = set()
+    for file_path in files:
+        if file_path in seen or not os.path.exists(file_path):
+            continue
+        seen.add(file_path)
+        base = os.path.basename(file_path)
+        git_tools.commit_memory_file(file_path, f"{message} [{base}]")
+
+
+def _touched_files(target: str) -> list[str]:
+    """Files a single project compaction may have mutated.
+
+    The op target itself plus its ``-history.md`` sibling, which the executor
+    appends to on SUPERSEDE/ARCHIVE/RETRACT. Mirrors the path derivation in
+    ``executor._append_to_history`` so a history append is committed alongside
+    its parent mutation rather than swept up later (#565).
+    """
+    base = re.sub(r"-status\.md$", "", target)
+    base = re.sub(r"\.md$", "", base)
+    history_path = f"{base}-history.md"
+    touched = [target]
+    if os.path.exists(history_path):
+        touched.append(history_path)
+    return touched
 
 def _get_decisions_for_project(project_id: str) -> list[dict]:
     """Fetch active decisions related to a specific project."""
@@ -215,17 +257,26 @@ def _call_llm_with_fallback(system_prompt: str, user_prompt: str) -> tuple[str, 
 
     raise RuntimeError(f"All {len(chain)} models failed. Last error: {last_error}")
 
-def _consolidate_project(project_id: str, notes: list[dict], is_nightly: bool = False) -> tuple[list[dict], str]:
+def _consolidate_project(
+    project_id: str,
+    notes: list[dict],
+    is_nightly: bool = False,
+    llm_fn: LlmFn | None = None,
+) -> tuple[list[dict], str]:
     """Consolidate a project by generating compaction operations.
-    
+
     Reads the compaction prompt, extracts facts from the project file,
     sends both to the LLM, returns structured operations.
-    
+
     Args:
         project_id: Project slug.
         notes: Recent daily notes mentioning this project.
         is_nightly: Use the lightweight nightly prompt.
-        
+        llm_fn: The propose seam (#554). ``(system_prompt, user_prompt) ->
+            (response_text, model_used)``. Defaults to the live fallback-chain
+            caller; tests inject a fake returning deterministic op-JSON so the
+            real fact-extraction + parse + executor path runs without an LLM.
+
     Returns:
         Tuple of (List of operation dicts, model_used).
     """
@@ -282,39 +333,26 @@ def _consolidate_project(project_id: str, notes: list[dict], is_nightly: bool = 
 
 Return the operations JSON array."""
 
-    # Call LLM
+    # Call LLM (via the injectable propose seam; default = live fallback chain).
     try:
-        result_text, model_used = _call_llm_with_fallback(system_prompt, user_prompt)
+        result_text, model_used = (llm_fn or _call_llm_with_fallback)(system_prompt, user_prompt)
     except Exception as e:
         logger.error(f"Failed to call LLM for {project_id}: {e}")
         return [], "failed"
     
-    # Parse JSON
-    json_match = re.search(r'\[[\s\S]*\]', result_text)
-    if json_match:
-        try:
-            return json.loads(json_match.group()), model_used
-        except json.JSONDecodeError:
-            # LLM often outputs malformed JSON — use json_repair
-            try:
-                from json_repair import repair_json
-                repaired = repair_json(json_match.group(), return_objects=True)
-                if isinstance(repaired, list):
-                    # Filter out any non-dict entries (LLM sometimes nests lists)
-                    valid_ops = [op for op in repaired if isinstance(op, dict) and "op" in op]
-                    logger.info(f"Repaired malformed LLM JSON ({len(valid_ops)} valid ops from {len(repaired)} entries)")
-                    return valid_ops, model_used
-            except Exception as repair_err:
-                logger.error(f"json_repair also failed: {repair_err}")
-            logger.error(f"Could not parse LLM JSON for compaction")
-            logger.debug(f"Raw LLM output: {json_match.group()[:500]}")
-            return [], model_used
-    
-    logger.warning(f"Could not parse operations from LLM response for {project_id}")
-    return [], model_used
+    # Parse the operations JSON array — extraction + json_repair recovery +
+    # nested-list/dict filtering all live in op_parse now (#555).
+    return parse_operations(result_text), model_used
 
-def _check_contradictions(new_items: list[dict], project_id: str) -> list[dict]:
-    """Check new items for contradictions against existing knowledge base."""
+def _check_contradictions(
+    new_items: list[dict], project_id: str, llm_fn: LlmFn | None = None
+) -> list[dict]:
+    """Check new items for contradictions against existing knowledge base.
+
+    ``llm_fn`` is the same propose seam (#554) — defaults to the live caller;
+    tests inject a fake returning a canned contradiction op so the embed/search
+    + parse + translate path runs deterministically.
+    """
     update_prompt_path = os.path.join(config.memory_dir, "specs", "prompts", "update.md")
     if not os.path.exists(update_prompt_path):
         return [{"operation": "ADD", "item": item} for item in new_items]
@@ -329,7 +367,12 @@ def _check_contradictions(new_items: list[dict], project_id: str) -> list[dict]:
             operations.append({"operation": "ADD", "item": item})
             continue
 
-        existing = store.search(emb, category=item.get("category"), top_k=5, threshold=0.7)
+        # H1: consolidation dedup is an internal candidate lookup, not human
+        # recall — use search_internal so recall_count / importance are never
+        # bumped regardless of future refactors (ADR-015 H1, #481).
+        existing = store.search_internal(
+            emb, category=item.get("category"), top_k=5, threshold=0.7,
+        )
 
         if not existing:
             operations.append({"operation": "ADD", "item": item})
@@ -344,7 +387,7 @@ def _check_contradictions(new_items: list[dict], project_id: str) -> list[dict]:
 Return the operation as JSON."""
 
         try:
-            result_text, model_used = _call_llm_with_fallback(system_prompt, user_prompt)
+            result_text, model_used = (llm_fn or _call_llm_with_fallback)(system_prompt, user_prompt)
 
             json_match = re.search(r"```json\s*([\s\S]*?)```", result_text)
             if json_match:
@@ -383,8 +426,7 @@ def _write_project_summary(project_id: str, consolidation: dict) -> None:
         # Append consolidation log
         log_entry = f"\n\n## Consolidation Log ({now})\n{bullets_text}\n"
         content += log_entry
-        with open(project_file, "w", encoding="utf-8") as f:
-            f.write(content)
+        git_tools.write_memory_file(project_file, content)
     else:
         # Create new
         metadata = {
@@ -396,8 +438,7 @@ def _write_project_summary(project_id: str, consolidation: dict) -> None:
         }
         yaml_front = yaml.dump(metadata, default_flow_style=False)
         content = f"---\n{yaml_front}---\n\n# {project_id}\n\n## Summary\n{bullets_text}\n"
-        with open(project_file, "w", encoding="utf-8") as f:
-            f.write(content)
+        git_tools.write_memory_file(project_file, content)
 
 def _handle_superseded_decisions(superseded: list[dict]) -> None:
     """Mark superseded decisions in their frontmatter."""
@@ -426,8 +467,7 @@ def _handle_superseded_decisions(superseded: list[dict]) -> None:
                 flags=re.MULTILINE
             )
             
-        with open(decision_path, "w", encoding="utf-8") as f:
-            f.write(new_content)
+        git_tools.write_memory_file(decision_path, new_content)
         logger.info(f"Marked decision {decision['id']} as superseded")
 
 def _extract_insights(all_notes: list[dict]) -> list[dict]:
@@ -510,19 +550,39 @@ def _update_status_summary(file_path: str, new_activity: list[dict]) -> None:
     else:
         updated = existing + f"\n## Consolidation Log\n{new_entry}"
 
-    with open(file_path, 'w') as f:
-        f.write(updated)
+    git_tools.write_memory_file(file_path, updated)
 
     logger.info(f"Updated status summary: {file_path} (+{len(new_activity)} entries)")
 
 
-def run_consolidation(lookback_days: int | None = None) -> dict[str, Any]:
+def _proposed_changes(target: str, operations: list[dict]) -> list[dict[str, str]]:
+    return [
+        {
+            "type": op_kind(op),
+            "file": target,
+            "rationale": op_reason(op),
+        }
+        for op in operations
+        if isinstance(op, dict)
+    ]
+
+
+def run_consolidation(lookback_days: int | None = None, dry_run: bool = False, llm_fn: LlmFn | None = None) -> dict[str, Any]:
     """Orchestrator for the entire memory consolidation process."""
     from palinode.consolidation.executor import apply_operations
     
     lookback = lookback_days or config.consolidation.lookback_days
     notes, yaml_skipped = _collect_daily_notes(lookback)
     if not notes:
+        if dry_run:
+            return {
+                "status": "no notes found",
+                "processed": 0,
+                "processed_notes": 0,
+                "projects_compacted": 0,
+                "dry_run": True,
+                "proposed_changes": [],
+            }
         return {"status": "no notes found", "processed": 0}
 
     if yaml_skipped:
@@ -536,21 +596,29 @@ def run_consolidation(lookback_days: int | None = None) -> dict[str, Any]:
     
     total_stats = {"kept": 0, "updated": 0, "merged": 0, "superseded": 0, "archived": 0}
     projects_processed = 0
-    
+    proposed_changes: list[dict[str, str]] = []
+    mutated_files: list[str] = []
+
     for project_id, pnotes in grouped.items():
         try:
             model_used_current = "primary"
-            operations, model_used_current = _consolidate_project(project_id, pnotes)
+            operations, model_used_current = _consolidate_project(project_id, pnotes, llm_fn=llm_fn)
             if not operations:
                 continue
-            
+
             model_used = model_used_current
-            
+
             # Determine target file
             status_file = os.path.join(config.memory_dir, "projects", f"{project_id}-status.md")
             project_file = os.path.join(config.memory_dir, "projects", f"{project_id}.md")
             target = status_file if os.path.exists(status_file) else project_file
-            
+
+            if dry_run:
+                proposed_changes.extend(_proposed_changes(target, operations))
+                projects_processed += 1
+                logger.info(f"Previewed compaction for {project_id}: {len(operations)} operation(s)")
+                continue
+
             stats = apply_operations(target, operations)
             for k, v in stats.items():
                 total_stats[k] = total_stats.get(k, 0) + v
@@ -558,11 +626,27 @@ def run_consolidation(lookback_days: int | None = None) -> dict[str, Any]:
             # Iteratively append operations to the status file, preserving history
             _update_status_summary(target, operations)
 
+            # Track exactly the files this project's compaction touched so the
+            # commit stages only them (one-mutation-one-commit, #565).
+            mutated_files.extend(_touched_files(target))
+
             projects_processed += 1
             logger.info(f"Compacted {project_id}: {stats}")
-            
+
         except Exception as e:
             logger.error(f"Compaction failed for {project_id}: {e}")
+
+    if dry_run:
+        result = {
+            "status": "success",
+            "processed_notes": len(notes),
+            "projects_compacted": projects_processed,
+            "dry_run": True,
+            "proposed_changes": proposed_changes,
+        }
+        if yaml_skipped:
+            result["yaml_parse_errors"] = yaml_skipped
+        return result
     
     # Extract insights and archive (only if at least one project compacted successfully)
     _extract_insights(notes)
@@ -572,10 +656,13 @@ def run_consolidation(lookback_days: int | None = None) -> dict[str, Any]:
         logger.warning("No projects compacted successfully — skipping daily note archival")
     
     
-    _git_commit(f"palinode: compaction {_utc_now().strftime('%Y-%m-%d')} — "
-                f"{total_stats['updated']}u {total_stats['merged']}m "
-                f"{total_stats['superseded']}s {total_stats['archived']}a"
-                f" (model: {model_used})")
+    _git_commit(
+        f"palinode: compaction {_utc_now().strftime('%Y-%m-%d')} — "
+        f"{total_stats['updated']}u {total_stats['merged']}m "
+        f"{total_stats['superseded']}s {total_stats['archived']}a"
+        f" (model: {model_used})",
+        files=mutated_files,
+    )
     
     result: dict[str, Any] = {
         "status": "success",
@@ -588,7 +675,7 @@ def run_consolidation(lookback_days: int | None = None) -> dict[str, Any]:
     return result
 
 
-def run_nightly(lookback_days: int | None = None) -> dict[str, Any]:
+def run_nightly(lookback_days: int | None = None, dry_run: bool = False, llm_fn: LlmFn | None = None) -> dict[str, Any]:
     """Lightweight nightly consolidation — process today's daily notes only.
 
     Restricted to UPDATE and SUPERSEDE ops. No ARCHIVE or MERGE (those
@@ -599,6 +686,14 @@ def run_nightly(lookback_days: int | None = None) -> dict[str, Any]:
     lookback = lookback_days or config.consolidation.nightly.lookback_days
     notes, yaml_skipped = _collect_daily_notes(lookback)
     if not notes:
+        if dry_run:
+            return {
+                "status": "no_new_notes",
+                "processed_notes": 0,
+                "projects_compacted": 0,
+                "dry_run": True,
+                "proposed_changes": [],
+            }
         return {"status": "no_new_notes", "processed_notes": 0, "projects_compacted": 0}
 
     if yaml_skipped:
@@ -613,44 +708,69 @@ def run_nightly(lookback_days: int | None = None) -> dict[str, Any]:
     total_stats = {"kept": 0, "updated": 0, "merged": 0, "superseded": 0, "archived": 0}
     projects_processed = 0
     model_used = "primary"
-    
+    proposed_changes: list[dict[str, str]] = []
+    mutated_files: list[str] = []
+
     for project_id, pnotes in grouped.items():
         try:
-            operations, model_used_current = _consolidate_project(project_id, pnotes, is_nightly=True)
+            operations, model_used_current = _consolidate_project(project_id, pnotes, is_nightly=True, llm_fn=llm_fn)
             if not operations:
                 continue
-                
+
             model_used = model_used_current
-            
+
             # Enforce allows ops restriction
             allowed_ops = set(config.consolidation.nightly.allowed_ops)
             operations = [op for op in operations if op.get("op", op.get("operation", "")).upper() in allowed_ops]
             if not operations:
                 continue
-            
+
             # Determine target file
             status_file = os.path.join(config.memory_dir, "projects", f"{project_id}-status.md")
             project_file = os.path.join(config.memory_dir, "projects", f"{project_id}.md")
             target = status_file if os.path.exists(status_file) else project_file
-            
+
+            if dry_run:
+                proposed_changes.extend(_proposed_changes(target, operations))
+                projects_processed += 1
+                logger.info(f"Previewed nightly compaction for {project_id}: {len(operations)} operation(s)")
+                continue
+
             stats = apply_operations(target, operations, nightly_policy=True)
             for k, v in stats.items():
                 total_stats[k] = total_stats.get(k, 0) + v
 
             _update_status_summary(target, operations)
 
+            mutated_files.extend(_touched_files(target))
+
             projects_processed += 1
             logger.info(f"Nightly compacted {project_id}: {stats}")
-            
+
         except Exception as e:
             logger.error(f"Nightly compaction failed for {project_id}: {e}")
             
     # Nightly does NOT archive daily notes (left for weekly)
+
+    if dry_run:
+        nightly_result = {
+            "status": "success",
+            "processed_notes": len(notes),
+            "projects_compacted": projects_processed,
+            "dry_run": True,
+            "proposed_changes": proposed_changes,
+        }
+        if yaml_skipped:
+            nightly_result["yaml_parse_errors"] = yaml_skipped
+        return nightly_result
     
     if projects_processed > 0:
-        _git_commit(f"palinode: nightly {_utc_now().strftime('%Y-%m-%d')} — "
-                    f"{total_stats['updated']}u {total_stats['superseded']}s"
-                    f" (model: {model_used})")
+        _git_commit(
+            f"palinode: nightly {_utc_now().strftime('%Y-%m-%d')} — "
+            f"{total_stats['updated']}u {total_stats['superseded']}s"
+            f" (model: {model_used})",
+            files=mutated_files,
+        )
     
     nightly_result: dict[str, Any] = {
         "status": "success",

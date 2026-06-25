@@ -14,6 +14,7 @@ import os
 import re
 import yaml
 from datetime import UTC, datetime
+from palinode.core import git_tools
 from palinode.core.config import config
 
 
@@ -122,8 +123,7 @@ def split_file(file_path: str) -> dict:
     id_content = f"---\n{yaml.dump(id_meta, default_flow_style=False)}---\n\n"
     id_content += "\n\n".join(identity_sections)
     
-    with open(file_path, 'w') as f:
-        f.write(id_content)
+    git_tools.write_memory_file(file_path, id_content)
     results['identity'] = file_path
     
     # Status file (core:true)
@@ -145,8 +145,7 @@ def split_file(file_path: str) -> dict:
         st_content = f"---\n{yaml.dump(st_meta, default_flow_style=False)}---\n\n"
         st_content += "\n\n".join(status_sections)
         
-        with open(status_path, 'w') as f:
-            f.write(st_content)
+        git_tools.write_memory_file(status_path, st_content)
         results['status'] = status_path
     
     # History file (core:false, created empty for now)
@@ -165,8 +164,7 @@ def split_file(file_path: str) -> dict:
         
         h_content = f"---\n{yaml.dump(h_meta, default_flow_style=False)}---\n\n# {name} — History\n\nArchived statuses and superseded facts.\n"
         
-        with open(history_path, 'w') as f:
-            f.write(h_content)
+        git_tools.write_memory_file(history_path, h_content)
         results['history'] = history_path
     
     return results

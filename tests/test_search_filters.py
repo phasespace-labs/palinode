@@ -1,11 +1,10 @@
 """Tests for /search types, since_days, and recency-only mode (#141)."""
 from datetime import UTC, datetime, timedelta
 
-import pytest
-
 from palinode.api.server import (
     SearchRequest,
     _compute_effective_date_after,
+    _filter_min_priority,
     _filter_types,
 )
 
@@ -87,3 +86,28 @@ def test_filter_types_drops_missing_type():
     rows = [_row("Decision"), _row(None), _row("Insight")]
     out = _filter_types(rows, ["Decision", "Insight"])
     assert len(out) == 2  # the None-type row is dropped
+
+
+# ---- _filter_min_priority ------------------------------------------------
+
+
+def _priority_row(priority):
+    meta = {} if priority is None else {"priority": priority}
+    return {"metadata": meta}
+
+
+def test_filter_min_priority_none_is_noop():
+    rows = [_priority_row(5), _priority_row(None)]
+    assert _filter_min_priority(rows, None) == rows
+
+
+def test_filter_min_priority_treats_missing_as_normal():
+    rows = [_priority_row(5), _priority_row(3), _priority_row(None), _priority_row(2)]
+    assert _filter_min_priority(rows, 3) == rows[:3]
+    assert _filter_min_priority(rows, 4) == [rows[0]]
+
+
+def test_filter_min_priority_invalid_frontmatter_is_normal():
+    rows = [_priority_row("not-an-int"), _priority_row(6), _priority_row(4)]
+    assert _filter_min_priority(rows, 3) == rows
+    assert _filter_min_priority(rows, 4) == [rows[2]]

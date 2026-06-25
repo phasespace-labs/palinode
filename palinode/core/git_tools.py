@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import tempfile
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -68,6 +69,104 @@ def _run_git(*args: str, check: bool = False) -> subprocess.CompletedProcess:
         cwd=config.memory_dir,
         check=check,
     )
+
+
+# ── Mutation choke point ─────────────────────────────────────────────────────
+#
+# Every path that mutates a memory file routes its write through
+# :func:`write_memory_file` and its commit through :func:`commit_memory_file` /
+# :func:`commit_memory_files`. Concentrating both here gives the substrate a
+# single observation point for the mutation chain: future extensions hook one
+# function instead of the formerly-scattered ``open(w)`` / ``git add`` sites
+# (save, write-time dedup, consolidation ops, ttl-archive, migration). It also
+# enforces the one-mutation-one-commit invariant: a commit stages an explicit
+# list of files, never a repo-wide ``git add *.md`` sweep that would conflate
+# unrelated working-tree edits under one message.
+
+
+def _fsync_directory(path: str) -> None:
+    """Flush directory metadata so a rename survives a crash."""
+    dir_fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
+
+
+def write_memory_file(file_path: str, content: str) -> None:
+    """Atomically write ``content`` to ``file_path`` (temp + fsync + rename).
+
+    The single write primitive for memory-file mutations. Crash-safe: the
+    target is only replaced once the temp file is durably on disk, so a torn
+    write can never leave a half-written memory file. Preserves the existing
+    file's permission bits when overwriting.
+    """
+    directory = os.path.dirname(file_path) or "."
+    prefix = f".{os.path.basename(file_path)}."
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=prefix, suffix=".tmp")
+    try:
+        if os.path.exists(file_path):
+            os.fchmod(fd, os.stat(file_path).st_mode & 0o777)
+
+        with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
+            fd = -1
+            tmp_file.write(content)
+            tmp_file.flush()
+            os.fsync(tmp_file.fileno())
+
+        os.replace(tmp_path, file_path)
+        _fsync_directory(directory)
+    except Exception:
+        if fd != -1:
+            os.close(fd)
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def commit_memory_files(file_paths: list[str], message: str) -> bool:
+    """Stage an explicit list of files and commit them in one commit.
+
+    The single commit primitive. ``file_paths`` may be absolute or relative to
+    the data repo; each is staged explicitly (never a ``git add *.md`` sweep),
+    so the commit captures exactly the files this mutation touched and nothing
+    else dirty in the working tree.
+
+    No-op (returns False) when ``config.git.auto_commit`` is disabled or no
+    paths are given. Returns True when the commit subprocess was spawned
+    without raising (a "nothing to commit" exit is treated as success — the
+    caller asked to commit and there was nothing new, which is not an error).
+    """
+    if not config.git.auto_commit or not file_paths:
+        return False
+
+    rels = []
+    for p in file_paths:
+        rels.append(os.path.relpath(p, config.memory_dir) if os.path.isabs(p) else p)
+
+    try:
+        _run_git("add", "--", *rels)
+        _run_git("commit", "-m", message)
+        # Mirror the #386 contract: "committed" means the commit subprocess was
+        # spawned without raising. A non-zero exit (e.g. "nothing to commit")
+        # is not an error — the caller asked to commit and there was nothing
+        # new, which is benign. Genuine I/O failures (git missing, timeout)
+        # raise and are caught below.
+        return True
+    except (subprocess.SubprocessError, OSError) as e:
+        logger.error("Git commit failed for %r: %s", rels, e, exc_info=True)
+        return False
+
+
+def commit_memory_file(file_path: str, message: str) -> bool:
+    """Stage and commit a single memory file (one mutation = one commit).
+
+    Thin wrapper over :func:`commit_memory_files` for the common single-file
+    case. See that function for the staging/return contract.
+    """
+    return commit_memory_files([file_path], message)
 
 
 def diff(days: int = 7, paths: list[str] | None = None) -> str:
@@ -328,6 +427,66 @@ def push() -> str:
         return f"Push failed: {result.stderr}"
     
     return f"Pushed to origin/main successfully.\n{result.stderr.strip()}"
+
+
+def recent_commits(
+    days: int = 7,
+    limit: int = 50,
+    message_prefix: str | None = None,
+) -> list[dict[str, Any]]:
+    """List recent commits across the whole memory repo (read-only).
+
+    Repo-wide counterpart to :func:`history` (which is per-file). Backs the
+    UI's recent-changes and compaction views — neither triggers any write; this
+    is a pure ``git log`` read through the module's single ``_run_git``
+    chokepoint.
+
+    Args:
+        days: Look back this many days.
+        limit: Maximum number of commits to return.
+        message_prefix: When set, only commits whose subject starts with this
+            string are returned (e.g. ``"palinode: compaction"`` /
+            ``"palinode: nightly"`` to isolate consolidation commits).
+
+    Returns:
+        List of dicts (newest first) with keys: ``hash``, ``date`` (ISO-8601),
+        ``message``, and ``files`` (the relative paths the commit touched).
+        Empty list on any git error or empty repo.
+    """
+    since = (_utc_now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    # %x00 (NUL) record separator so subjects containing our "|" can't confuse
+    # the parse; name-only file list follows each header line.
+    result = _run_git(
+        "log", f"-{limit}", f"--since={since}",
+        "--name-only", "--format=%x00%h|%aI|%s", "HEAD",
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return []
+
+    commits: list[dict[str, Any]] = []
+    # Records are separated by the NUL we prepended to each header.
+    for record in result.stdout.split("\x00"):
+        record = record.strip("\n")
+        if not record:
+            continue
+        lines = record.split("\n")
+        header = lines[0]
+        parts = header.split("|", 2)
+        if len(parts) != 3:
+            continue
+        hash_short, date, message = parts
+        if message_prefix and not message.startswith(message_prefix):
+            continue
+        files = [ln for ln in lines[1:] if ln.strip()]
+        commits.append(
+            {
+                "hash": hash_short,
+                "date": date,
+                "message": message,
+                "files": files,
+            }
+        )
+    return commits
 
 
 def commit_count(days: int = 7) -> dict[str, Any]:

@@ -233,7 +233,7 @@ def test_token_set_no_auth_header_yields_401(monkeypatch: pytest.MonkeyPatch):
 def test_health_endpoints_skip_auth_even_with_token(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Probes (k8s, systemd, Tailscale Funnel) shouldn't have to know the token."""
+    """Probes (k8s, systemd, external health) shouldn't have to know the token."""
     server = _reload_server(monkeypatch, PALINODE_API_TOKEN="t-secret")
     client = TestClient(server.app, raise_server_exceptions=False)
     r = client.get("/health")

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Palinode · provenance{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('ui_static', path='palinode.css') }}">
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand"><a href="{{ url_for('ui_dashboard') }}">Palinode<span class="dot">.</span></a></div>
+    <div class="tagline">audit-grade memory</div>
+    <nav>
+      <a href="{{ url_for('ui_dashboard') }}"{% if active == 'dashboard' %} class="active"{% endif %}>
+        <span>Dashboard</span><span class="n">—</span></a>
+      <a href="{{ url_for('ui_memory_list') }}"{% if active == 'memory' %} class="active"{% endif %}>
+        <span>Memory</span><span class="n">{{ "{:,}".format(total_memories or 0) }}</span></a>
+      <a href="{{ url_for('ui_diffs') }}"{% if active == 'diffs' %} class="active"{% endif %}>
+        <span>Diffs</span><span class="n">—</span></a>
+      <a href="{{ url_for('ui_compaction') }}"{% if active == 'compaction' %} class="active"{% endif %}>
+        <span>Compaction</span><span class="n">—</span></a>
+      <a href="{{ url_for('ui_quality') }}"{% if active == 'quality' %} class="active"{% endif %}>
+        <span>Quality</span><span class="n">{{ nav_quality_count if nav_quality_count else "—" }}</span></a>
+    </nav>
+    <div class="side-foot">PALINODE_DIR<br><span class="side-path" title="{{ palinode_dir }}">{{ palinode_dir }}</span><br>· · ·<br>localhost:{{ api_port }}</div>
+  </aside>
+
+  <div class="main">
+    <header>
+      <div class="crumb">{% block crumb %}{% endblock %}</div>
+      <div class="health">
+        <span>stale <b>{{ stale_count if stale_count is not none else "—" }}</b></span>
+        <span>orphaned <b>{{ orphaned_count if orphaned_count is not none else "—" }}</b></span>
+        {% block health_pill %}{% endblock %}
+      </div>
+    </header>
+    {% block content %}{% endblock %}
+  </div>
+</div>
+</body>
+</html>

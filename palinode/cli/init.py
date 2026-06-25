@@ -54,8 +54,8 @@ This project uses Palinode for persistent memory via MCP (server name: `palinode
     mid-session checkpoints. (`/ps` is a back-compat alias for `/save`.)
   - `/wrap` → always `palinode_session_end` with summary/decisions/blockers.
     Use before `/clear`.
-  Never dispatch one to the other's tool. See `.claude/commands/save.md` and
-  `.claude/commands/wrap.md` for the exact prompts.
+  Never dispatch one to the other's tool. See the `/save` and `/wrap`
+  command/skill definitions (installed by `palinode init`) for the exact prompts.
 
 ### What NOT to save
 - Raw code (git handles that).
@@ -70,12 +70,13 @@ This project's slug is `{project_slug}`. Pass it as the `project` argument to
 
 # Appended to the CLAUDE.md memory block only when `--wrap-policy heavy` is
 # chosen (#419). This is the inspectable record of which `/wrap` variant the
-# repo runs — the behaviour itself lives in the scaffolded wrap.md body.
+# repo runs — the behaviour itself lives in the installed `/wrap` command/skill
+# body (rendered from WRAP_HEAVY_COMMAND_BODY).
 WRAP_POLICY_HEAVY_NOTE = """
 ### Wrap policy
 `wrap-policy: heavy` — `/wrap` in this repo runs the heavy sequence (merge →
 push → triage dangling items → `palinode_session_end`), halting loudly on any
-failure. See `.claude/commands/wrap.md` for the exact contract.
+failure. See the installed `/wrap` command/skill for the exact contract.
 """
 
 
@@ -94,7 +95,7 @@ set -euo pipefail
 PALINODE_API="${PALINODE_API_URL:-http://localhost:6340}"
 MIN_MESSAGES="${PALINODE_HOOK_MIN_MESSAGES:-3}"
 # Max time (seconds) the curl POST is allowed to run.  Raise with
-# PALINODE_HOOK_TIMEOUT if your host is slow (cold Ollama, WAN Tailscale, NFS).
+# PALINODE_HOOK_TIMEOUT if your host is slow (cold Ollama, WAN private VPN, NFS).
 # The Claude Code hook runner timeout in settings.json must be > this value.
 HOOK_TIMEOUT="${PALINODE_HOOK_TIMEOUT:-30}"
 
@@ -118,6 +119,16 @@ esac
 
 # No transcript → nothing to capture
 if [ -z "$TRANSCRIPT_PATH" ] || [ ! -f "$TRANSCRIPT_PATH" ]; then
+  exit 0
+fi
+
+# Skip-if-/wrap-ran (#378 floor/ceiling): if the human already ran /wrap this
+# session, the transcript holds a `palinode_session_end` tool call. That
+# agent-authored capture (summary + decisions + blockers, each with a why) is
+# strictly richer than this deterministic floor, so writing the floor too just
+# duplicates. Skip. Override with PALINODE_HOOK_FORCE=1 to capture regardless.
+if [ "${PALINODE_HOOK_FORCE:-0}" != "1" ] \\
+   && grep -q 'palinode_session_end' "$TRANSCRIPT_PATH" 2>/dev/null; then
   exit 0
 fi
 
@@ -149,17 +160,35 @@ FIRST_PROMPT=$(jq -r -s 'map(select(.type == "user") | .message.content // empty
 
 SUMMARY="Auto-captured (${SOURCE_REASON}, ${MSG_COUNT} messages). Topic: ${FIRST_PROMPT}"
 
-curl -sS -o /dev/null \\
-  -X POST "${PALINODE_API}/session-end" \\
-  -H "Content-Type: application/json" \\
-  -d "$(jq -n \\
-    --arg summary "$SUMMARY" \\
-    --arg project "$PROJECT" \\
-    --arg source "claude-code-hook" \\
-    '{summary: $summary, project: $project, source: $source, decisions: [], blockers: []}'
-  )" \\
-  --connect-timeout 5 \\
-  --max-time "${HOOK_TIMEOUT}" || true
+PAYLOAD=$(jq -n \\
+  --arg summary "$SUMMARY" \\
+  --arg project "$PROJECT" \\
+  --arg source "claude-code-hook" \\
+  '{summary: $summary, project: $project, source: $source, decisions: [], blockers: []}')
+
+# Dry-run: print what would be POSTed and write nothing. Lets you verify the
+# hook wiring (reasons, triviality gate, payload shape) without touching the
+# API or persisting a memory. PALINODE_HOOK_DRYRUN=1 to enable.
+if [ "${PALINODE_HOOK_DRYRUN:-0}" = "1" ]; then
+  echo "[palinode-session-end DRYRUN] would POST ${PALINODE_API}/session-end"
+  echo "$PAYLOAD"
+  exit 0
+fi
+
+# POST the capture. `-f` makes curl fail on HTTP >=400 too (not just connection
+# errors), so a 5xx also routes to the fallback below. On ANY failure, never
+# lose the capture — append the payload to a local fallback log a later session
+# can replay. Always exit 0: a floor-capture failure must not block session exit.
+if ! curl -sS -o /dev/null -f \\
+    -X POST "${PALINODE_API}/session-end" \\
+    -H "Content-Type: application/json" \\
+    -d "$PAYLOAD" \\
+    --connect-timeout 5 \\
+    --max-time "${HOOK_TIMEOUT}"; then
+  FALLBACK="${CLAUDE_PROJECT_DIR:-$CWD}/.claude/session-floor-fallback.jsonl"
+  mkdir -p "$(dirname "$FALLBACK")" 2>/dev/null || true
+  printf '%s\\n' "$PAYLOAD" >> "$FALLBACK" 2>/dev/null || true
+fi
 
 exit 0
 """
@@ -220,18 +249,20 @@ summary, decisions, and blockers.
 
 WRAP_COMMAND_BODY = """\
 ---
-description: Wrap up this session — push to remote, then structured session_end save before /clear.
+description: Wrap up this session — sync prior work, then a structured session_end that commits AND pushes the note, before /clear.
 ---
 
-**Step 1 — Push to remote (before archiving).**
-Call `palinode_push`. This syncs any local commits to the remote before the
-session is archived. If the push succeeds, continue. If it fails because there
+**Step 1 — Push prior work (before archiving).**
+Call `palinode_push` to sync any commits already on the branch to the remote
+before the session is archived — a session end is a natural sync point; don't
+strand local commits, and prior work stays safe even if the archive step is
+interrupted (#353). If the push succeeds, continue. If it fails because there
 is no remote configured, print: `(no remote configured — skipping push)` and
 continue. If it fails for any other reason (conflict, auth, network), print the
-error and ask Paul whether to proceed or abort.
+error and ask the user whether to proceed or abort.
 
-**Step 2 — Archive the session.**
-Call `palinode_session_end` with:
+**Step 2 — Archive the session AND ship the note (one call).**
+Call `palinode_session_end` with `push: true` and:
 - `summary` — 1-2 sentences on what was accomplished this session
 - `decisions` — array of key decisions made, each with its rationale (the
   *why*, not just the *what*)
@@ -240,19 +271,28 @@ Call `palinode_session_end` with:
 - `project` — the project slug from `.claude/CLAUDE.md` (or the directory
   name if no slug is set)
 
-After both tools return, print exactly: `✓ session saved — safe to /clear now.`
-followed by the daily-note path from the tool result.
+This writes and commits the daily note, the project status line, and an
+individual indexed memory file, then — because of `push: true` — pushes the
+memory repo so the note actually reaches the remote (#378). Without `push: true`
+the note only pushes when `config.git.auto_push` is on (default: off), which is
+how the final session before a gap used to end up stranded. Do not save as a
+ProjectSnapshot first — this command is exclusively for structured wrap-ups.
+The push is repo-wide, so it also ships anything Step 1 didn't.
 
-Do not save as a ProjectSnapshot first — this command is exclusively for
-structured session wrap-ups.
+Read the result's `pushed` field. If `pushed` is true, print exactly:
+`✓ session saved + pushed — safe to /clear now.` If `pushed` is false (no remote,
+or the push failed), print: `✓ session saved — note committed locally but NOT
+pushed; run palinode_push when the remote is reachable.` In both cases follow
+with the daily-note path from the result.
 
-**This command is deterministic.** Step 1: `palinode_push`. Step 2:
-`palinode_session_end`. For a quick mid-session checkpoint, use `/save`
-instead (`/ps` also works as a back-compat alias).
+**This command is deterministic.** `palinode_push` → `palinode_session_end`
+(`push: true`). The note-ship is a property of the session_end call, not a
+forgettable third step. For a quick mid-session checkpoint, use `/save` instead
+(`/ps` also works as a back-compat alias).
 """
 
 
-# Heavy `/wrap` variant (#419). Scaffolded into `.claude/commands/wrap.md`
+# Heavy `/wrap` variant (#419). Installed as the `/wrap` command/skill body
 # only when `palinode init --wrap-policy heavy` is chosen. The light body
 # above stays the default — heavy is opt-in per repo because it takes
 # repo-mutating actions (merge, push) that must never be a surprise.
@@ -268,20 +308,32 @@ four steps **in order**. Any failure **halts the sequence** — print why and
 stop; do not silently skip ahead.
 
 **Step 1 — Merge.**
-Find any open PR on the current branch.
+First check whether this is a GitHub repo. If `gh pr list` errors with
+*"none of the git remotes … point to a known GitHub host"* (a Gitea / GitLab /
+self-hosted remote), there are no GitHub PRs to merge — **skip this step and
+proceed to Step 2.** That is a graceful skip, **not** a halt. (Merging/filing
+on a non-GitHub host uses that host's own CLI/API — e.g. `tea` for Gitea — not
+`gh`.) Only when `gh` *can* enumerate PRs:
 - If exactly one PR is open and its CI is green and review is satisfied:
   squash-merge it with a sensible message (subject line summarising the
   change, body referencing the issue). For `main`-eligible solo-dev repos a
   squash-merge is fine.
 - If multiple PRs are open: **list them and stop** unless the user passed
   `--all` to this command.
-- If the merge cannot proceed (merge conflict, CI not green, review pending):
-  **halt.** Print the blocking reason and do not continue to Step 2. The
-  operator decides what to do.
+- If a *real* merge blocker exists (merge conflict, CI not green, review
+  pending): **halt.** Print the blocking reason and do not continue to Step 2.
+  The operator decides. (A `gh`-can't-see-this-host error is **not** a
+  blocker — it's the skip case above.)
 
 **Step 2 — Push.**
-`git push` any unpushed commits on `main` and any non-merged feature branches
-that still have follow-up work. **Never force-push by default.**
+This step pushes **all** unpushed commits on the branch — commits stack, so it
+is all-or-nothing, not selective. **Assumption: everything already committed is
+ready to push.**
+- First **list** what would push — `git log @{u}..HEAD --oneline` and any
+  non-merged feature branches with follow-up work. If any commit looks
+  not-ready (committed but not meant to ship yet), this is a **stop-and-ask**,
+  not a blind push — surface it and let the operator decide.
+- Otherwise `git push` those commits. **Never force-push by default.**
 - If a push fails (non-fast-forward, branch protection, auth, network):
   **halt.** Print the error and do not continue to Step 3.
 
@@ -296,16 +348,19 @@ the workspace `CLAUDE.md`.
   not guess.**
 - papercut / INBOX items: append to the matching concern doc (honour
   "append before create" — never spawn a new file when an existing doc fits).
-- GH-issue items: draft the body; for solo-dev iteration repos you may
-  auto-file with a sensible label.
+- Issue-tracker items: draft the body; for solo-dev iteration repos you may
+  auto-file with a sensible label. Use the host's own tool — `gh` for GitHub,
+  `tea` / the Gitea API for a Gitea remote (don't assume `gh`).
 - `Decision` / `Insight` items: save directly via `palinode_save`.
 
 **Step 4 — Archive the session (LAST).**
-Call `palinode_session_end` with `summary`, `decisions`, `blockers`, and
-`project` (the slug from `.claude/CLAUDE.md`). Fired last so the record
-captures the post-merge SHAs, the freshly-filed issue numbers, and the
+Call `palinode_session_end` with `push: true` and `summary`, `decisions`,
+`blockers`, and `project` (the slug from `.claude/CLAUDE.md`). Fired last so the
+record captures the post-merge SHAs, the freshly-filed issue numbers, and the
 papercut/INBOX updates — reference *what the wrap did* (merged #X, pushed Y,
-filed #Z, appended N items), not just the work.
+filed #Z, appended N items), not just the work. `push: true` ships the note in
+the same call — the note is committed *after* Step 2's push, so without it the
+session record would sit unpushed despite a "heavy" wrap (#378).
 - If Palinode is unreachable: **continue** — print a warning and emit a stub
   markdown block the operator can save manually later. Ending without a
   Palinode record is acceptable; silently skipping with no warning is not.
@@ -424,6 +479,29 @@ def _write_slash_command(path: Path, body: str, force: bool) -> str:
     if path.exists() and not force:
         return "skipped (exists)"
     path.write_text(body)
+    return "created"
+
+
+def _skill_md(name: str, body: str) -> str:
+    """Render a slash-command body as a Claude Code SKILL.md (#474).
+
+    A skill needs a ``name:`` in its frontmatter; the command bodies open with
+    ``---\\ndescription: …\\n---``. Inject ``name:`` so the same ``*_COMMAND_BODY``
+    constant is the single source for both the legacy command and the skill —
+    they can't drift.
+    """
+    if body.startswith("---\n"):
+        return "---\nname: " + name + "\n" + body[len("---\n"):]
+    return f"---\nname: {name}\ndescription: {name} (Palinode)\n---\n\n{body}"
+
+
+def _write_skill(skills_root: Path, name: str, body: str, force: bool) -> str:
+    """Write ``<skills_root>/<name>/SKILL.md`` (project or personal scope)."""
+    path = skills_root / name / "SKILL.md"
+    _ensure_parent(path)
+    if path.exists() and not force:
+        return "skipped (exists)"
+    path.write_text(_skill_md(name, body))
     return "created"
 
 
@@ -739,6 +817,19 @@ def _merge_mcp_json(path: Path, force: bool) -> str:
     ),
 )
 @click.option(
+    "--skills",
+    type=click.Choice(["none", "project", "personal", "both"]),
+    default="none",
+    help=(
+        "Also install /save /ps /wrap as Claude Code *skills* — the modern "
+        "format (user-scope `.claude/commands/` is no longer searched). "
+        "'personal' → ~/.claude/skills/ so /wrap is typeable in ALL projects "
+        "(not just this one); 'project' → .claude/skills/; 'both'. Bodies come "
+        "from the same source as the slash commands, so they can't drift. "
+        "Default: none. (#474)"
+    ),
+)
+@click.option(
     "--obsidian/--no-obsidian",
     default=False,
     help=(
@@ -774,6 +865,7 @@ def init(
     hook,
     slash,
     wrap_policy,
+    skills,
     obsidian,
     force_obsidian,
     force,
@@ -815,6 +907,20 @@ def init(
     ps_cmd = target / ".claude" / "commands" / "ps.md"
     wrap_cmd = target / ".claude" / "commands" / "wrap.md"
 
+    # #474: optional skill-format install. Same bodies as the slash commands
+    # (single source — no drift); 'personal' scope makes /wrap typeable in every
+    # project, not just this one.
+    skill_specs = [
+        ("save", SAVE_COMMAND_BODY),
+        ("ps", PS_COMMAND_BODY),
+        ("wrap", WRAP_HEAVY_COMMAND_BODY if wrap_policy == "heavy" else WRAP_COMMAND_BODY),
+    ]
+    skill_roots: list[tuple[str, Path]] = []
+    if skills in ("project", "both"):
+        skill_roots.append(("project", target / ".claude" / "skills"))
+    if skills in ("personal", "both"):
+        skill_roots.append(("personal", Path.home() / ".claude" / "skills"))
+
     click.echo(f"Palinode init → {target}")
     click.echo(f"  project slug: {slug}")
     click.echo("")
@@ -832,6 +938,9 @@ def init(
             click.echo(
                 f"  {wrap_cmd.relative_to(target)}  (/wrap slash command — {wrap_policy} policy)"
             )
+        for scope_label, root in skill_roots:
+            for name, _ in skill_specs:
+                click.echo(f"  {root / name / 'SKILL.md'}  (/{name} skill — {scope_label} scope)")
         if mcp:
             click.echo(f"  {mcp_json.relative_to(target)}  (MCP server block)")
         if obsidian:
@@ -857,6 +966,11 @@ def init(
         results.append(
             (f"/wrap command ({wrap_policy})", _write_slash_command(wrap_cmd, wrap_body, force))
         )
+    for scope_label, root in skill_roots:
+        for name, body in skill_specs:
+            results.append(
+                (f"/{name} skill ({scope_label})", _write_skill(root, name, body, force))
+            )
     if mcp:
         results.append((".mcp.json", _merge_mcp_json(mcp_json, force)))
     if obsidian:

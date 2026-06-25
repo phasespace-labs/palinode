@@ -17,16 +17,50 @@ import json
 import os
 import struct
 import hashlib
-from typing import Any, Sequence
+from typing import Any, Collection, Sequence
 from datetime import UTC, datetime, timedelta
 from palinode.core.config import config
 from palinode.core import parser as _parser
+# The hybrid-search scoring pipeline + its pure decay/predicate helpers live in
+# ranker.py (#553). Re-exported here so `store.effective_importance`,
+# `store._is_daily_file`, etc. keep resolving for internal callers and tests.
+from palinode.core.ranker import (  # noqa: F401
+    _is_daily_file,
+    _priority_value,
+    effective_importance,
+    rank_hybrid,
+    score_with_decay,
+)
 
 _store_logger = __import__('logging').getLogger("palinode.store")
 
 # Module-level flag: once we've verified the DB state on first connect, skip
 # the check on subsequent calls (it's expensive — recursive glob of memory_dir).
 _db_checked: bool = False
+
+# ADR-015 §2.3 (#398): machine/monitor writes carry ``metadata.kind: telemetry``
+# in their frontmatter (which flattens to a top-level ``kind`` field — see
+# save_api, where ``req.metadata`` is merged into the top level). Such memories
+# are HARD-EXCLUDED from default semantic recall (§6 Q3) so monitoring churn
+# does not pollute human recall, but remain retrievable when a caller passes an
+# explicit override. The exclusion lives in the shared store layer so all
+# surfaces (API/MCP/CLI/plugin) inherit it (ADR-010 parity), mirroring #371.
+DEFAULT_RECALL_EXCLUDED_KINDS: tuple[str, ...] = ("telemetry",)
+
+
+def _excluded_by_kind(
+    meta: dict[str, Any], kind_exclude_list: Sequence[str] | None
+) -> bool:
+    """Return True if this chunk's ``kind`` is recall-excluded (ADR-015 §2.3).
+
+    ``kind_exclude_list`` is the active exclusion set. ``None`` means "use the
+    default" (``DEFAULT_RECALL_EXCLUDED_KINDS``); an explicit empty sequence
+    means "exclude nothing" — i.e. the caller asked to include telemetry.
+    """
+    excluded = DEFAULT_RECALL_EXCLUDED_KINDS if kind_exclude_list is None else kind_exclude_list
+    if not excluded:
+        return False
+    return meta.get("kind") in excluded
 
 # ── Security Scanning ────────────────────────────────────────────────────────
 # Adapted from NousResearch/hermes-agent (MIT License)
@@ -208,6 +242,21 @@ def init_db() -> None:
     except sqlite3.OperationalError:
         pass  # Columns already exist
 
+    # ADR-007 §3.2: session-deduplicated importance nudge. One row per
+    # (chunk, session) that has already reinforced importance, so a second
+    # explicit hit on the same memory in the same session does NOT re-nudge.
+    # recall_count still increments on every hit (raw frequency); only the
+    # importance nudge is deduplicated. Rows are cheap and never read on the
+    # hot search path beyond the INSERT OR IGNORE membership test.
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS recall_nudges (
+            chunk_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            nudged_at TEXT,
+            PRIMARY KEY (chunk_id, session_id)
+        )
+    """)
+
     db.execute("""
         CREATE TABLE IF NOT EXISTS triggers (
             id TEXT PRIMARY KEY,
@@ -316,12 +365,30 @@ def upsert_chunks(
 
         # Write the canonical chunks row.
         metadata_json = json.dumps(chunk.get("metadata", {}), default=str)
+        # H2: INSERT OR REPLACE deletes + re-inserts the row, reverting the
+        # recall columns (importance, recall_count, last_recalled) — which are
+        # NOT in this column list — to their schema defaults on every re-index
+        # (any content_hash change: consolidation UPDATE/MERGE, manual edit,
+        # sticky-frontmatter rewrite). That silently wiped the ADR-007
+        # reinforcement signal the ranker now reads from these columns (#86).
+        # ON CONFLICT(id) DO UPDATE refreshes only the content columns and
+        # leaves the accumulated recall signal intact; a brand-new row still
+        # gets the schema defaults.
         cursor.execute(
             """
-            INSERT OR REPLACE INTO chunks
+            INSERT INTO chunks
             (id, file_path, section_id, category, content, metadata,
              created_at, last_updated, content_hash)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                file_path = excluded.file_path,
+                section_id = excluded.section_id,
+                category = excluded.category,
+                content = excluded.content,
+                metadata = excluded.metadata,
+                created_at = excluded.created_at,
+                last_updated = excluded.last_updated,
+                content_hash = excluded.content_hash
             """,
             (
                 chunk["id"], chunk["file_path"], chunk["section_id"],
@@ -456,6 +523,35 @@ def delete_file_chunks(file_path: str) -> None:
     db.commit()
     db.close()
 
+def gc_orphaned_chunks(valid_paths: Collection[str]) -> tuple[int, int]:
+    """Delete indexed chunks whose source file is no longer on disk.
+
+    Args:
+        valid_paths: The complete set of valid markdown paths from the current
+            filesystem walk.
+
+    Returns:
+        ``(paths_removed, chunks_removed)``.
+    """
+    valid_path_set = set(valid_paths)
+    db = get_db()
+    try:
+        rows = db.execute(
+            "SELECT file_path, COUNT(*) AS chunk_count FROM chunks GROUP BY file_path"
+        ).fetchall()
+    finally:
+        db.close()
+
+    orphan_rows = [
+        (row["file_path"], row["chunk_count"])
+        for row in rows
+        if row["file_path"] not in valid_path_set
+    ]
+    for file_path, _chunk_count in orphan_rows:
+        delete_file_chunks(file_path)
+
+    return len(orphan_rows), sum(chunk_count for _file_path, chunk_count in orphan_rows)
+
 def rebuild_fts() -> int:
     """Rebuild the FTS5 index from scratch.
 
@@ -484,16 +580,13 @@ def rebuild_fts() -> int:
     return count
 
 
-def _is_daily_file(file_path: str) -> bool:
-    """Check if a file path belongs to the daily/ directory."""
-    return "/daily/" in file_path or file_path.startswith("daily/")
-
-
 def search(query_embedding: list[float], category: str | None = None,
            status_exclude_list: list[str] | None = None, top_k: int = 10, threshold: float = 0.6,
            date_after: str | None = None, date_before: str | None = None,
            context_entities: list[str] | None = None,
-           include_daily: bool = False) -> list[dict[str, Any]]:
+           include_daily: bool = False, record_access: bool = True,
+           kind_exclude_list: Sequence[str] | None = None,
+           mode: str = "explicit", session_id: str | None = None) -> list[dict[str, Any]]:
     """Search the vector index for semantically similar memory chunks.
 
     Performs cosine similarity search via SQLite-vec, filtering by category
@@ -509,9 +602,12 @@ def search(query_embedding: list[float], category: str | None = None,
         context_entities (list[str] | None): Entity refs (e.g. ["project/palinode"])
             for ADR-008 ambient context boost. Matching results get score * config.context.boost.
         include_daily (bool): If True, skip the daily/ penalty (search daily notes at full rank).
+        kind_exclude_list (Sequence[str] | None): ADR-015 §2.3 recall-exclusion.
+            None → exclude DEFAULT_RECALL_EXCLUDED_KINDS (telemetry). Empty
+            sequence → exclude nothing (include telemetry).
 
     Returns:
-        list[dict]: List of dicts with keys: file_path, section_id, content, category, 
+        list[dict]: List of dicts with keys: file_path, section_id, content, category,
             metadata, score. Sorted by score in descending order.
 
     Note:
@@ -522,32 +618,40 @@ def search(query_embedding: list[float], category: str | None = None,
     if status_exclude_list is None:
         status_exclude_list = config.search.exclude_status
 
+    # #483: use try/finally so the connection is closed on all paths (exception
+    # during row processing previously left it open).
     db = get_db()
-    cursor = db.cursor()
-    query_vec_json = json.dumps(query_embedding)
-    
-    sql = """
-        SELECT c.*, v.distance
-        FROM chunks_vec v
-        JOIN chunks c ON v.id = c.id
-        WHERE v.embedding MATCH ? AND k = ?
-    """
-    # Grab slightly more than we need so we can safely filter out exclusions 
-    # without running out of return slots
-    params = [query_vec_json, top_k * 3]
-    if category:
-        sql += " AND c.category = ?"
-        params.append(category)
+    try:
+        cursor = db.cursor()
+        query_vec_json = json.dumps(query_embedding)
 
-    cursor.execute(sql, tuple(params))
-    rows = cursor.fetchall()
-    
+        sql = """
+            SELECT c.*, v.distance
+            FROM chunks_vec v
+            JOIN chunks c ON v.id = c.id
+            WHERE v.embedding MATCH ? AND k = ?
+        """
+        # Grab slightly more than we need so we can safely filter out exclusions
+        # without running out of return slots
+        params = [query_vec_json, top_k * 3]
+        if category:
+            sql += " AND c.category = ?"
+            params.append(category)
+
+        cursor.execute(sql, tuple(params))
+        rows = cursor.fetchall()
+    finally:
+        db.close()
+
     results = []
     for row in rows:
         meta = json.loads(row["metadata"]) if row["metadata"] else {}
         if meta.get("status", "active") in status_exclude_list:
             continue
-            
+        # ADR-015 §2.3: hard-exclude telemetry/machine writes from default recall.
+        if _excluded_by_kind(meta, kind_exclude_list):
+            continue
+
         if date_after or date_before:
             updated = meta.get("last_updated", row["created_at"]) or ""
             if updated:
@@ -565,12 +669,18 @@ def search(query_embedding: list[float], category: str | None = None,
             continue
 
         result_entry: dict[str, Any] = {
+            "id": row["id"] if "id" in row.keys() else None,
             "file_path": row["file_path"],
             "section_id": row["section_id"],
             "content": row["content"],
             "category": row["category"],
             "metadata": meta,
             "content_hash": row["content_hash"] if "content_hash" in row.keys() else None,
+            # ADR-007 §3.4 decay-on-read reads the access-metadata *columns*
+            # (chunks.importance / chunks.last_recalled), not frontmatter.
+            "importance": row["importance"] if "importance" in row.keys() else None,
+            "last_recalled": row["last_recalled"] if "last_recalled" in row.keys() else None,
+            "recall_count": row["recall_count"] if "recall_count" in row.keys() else 0,
             "score": score,
             "raw_score": score,
         }
@@ -580,8 +690,6 @@ def search(query_embedding: list[float], category: str | None = None,
         results.append(result_entry)
         if len(results) >= top_k:
             break
-
-    db.close()
 
     # ADR-008: Ambient context boost (same logic as search_hybrid)
     if context_entities and config.context.enabled and config.context.boost != 1.0:
@@ -606,7 +714,55 @@ def search(query_embedding: list[float], category: str | None = None,
         if needs_resort:
             results.sort(key=lambda r: r.get("score", 0.0), reverse=True)
 
+    # Record retrieval access metadata (ADR-006/007, #371): batched, resilient.
+    # Suppressed when called as the inner vector pass of search_hybrid, which
+    # records recall against its final merged hit set instead (avoids double-
+    # counting intermediate candidates).
+    if record_access and results:
+        record_recall([r.get("id") for r in results], mode=mode, session_id=session_id)
+
     return results
+
+
+def search_internal(
+    query_embedding: list[float],
+    category: str | None = None,
+    status_exclude_list: list[str] | None = None,
+    top_k: int = 10,
+    threshold: float = 0.6,
+    date_after: str | None = None,
+    date_before: str | None = None,
+    context_entities: list[str] | None = None,
+    include_daily: bool = False,
+    kind_exclude_list: "Sequence[str] | None" = None,
+) -> list[dict[str, Any]]:
+    """Vector search for internal / maintenance callers — recall is never recorded.
+
+    Thin wrapper around :func:`search` with ``record_access`` hard-set to
+    ``False``.  Use this for any internal candidate lookup (consolidation dedup,
+    orphan repair, cluster/topic maintenance) so maintenance scans cannot
+    accidentally inflate ``recall_count`` or nudge ``importance`` (ADR-015 H1,
+    #481).
+
+    The ``record_access`` parameter is intentionally absent from this signature:
+    callers cannot override it.  If you need the full ``search()`` API (including
+    ``mode`` / ``session_id`` for user-facing recall), call :func:`search` directly
+    and set ``record_access=True`` explicitly.
+    """
+    return search(
+        query_embedding=query_embedding,
+        category=category,
+        status_exclude_list=status_exclude_list,
+        top_k=top_k,
+        threshold=threshold,
+        date_after=date_after,
+        date_before=date_before,
+        context_entities=context_entities,
+        include_daily=include_daily,
+        kind_exclude_list=kind_exclude_list,
+        record_access=False,  # hard-set; cannot be overridden via this API
+    )
+
 
 def get_stats() -> dict[str, int]:
     """Retrieves basic indexing statistical metrics.
@@ -645,7 +801,8 @@ def sanitize_fts_query(query: str) -> str:
     return query if query.strip() else '*'
 
 
-def search_fts(query: str, category: str | None = None, top_k: int = 10) -> list[dict[str, Any]]:
+def search_fts(query: str, category: str | None = None, top_k: int = 10,
+               kind_exclude_list: Sequence[str] | None = None) -> list[dict[str, Any]]:
     """Search using BM25 full-text search for exact keyword matching.
 
     Complements vector search by catching exact terms (model names, IDs,
@@ -661,36 +818,44 @@ def search_fts(query: str, category: str | None = None, top_k: int = 10) -> list
         category, metadata, score. Score is BM25 rank (lower = better match,
         normalized to 0.0-1.0 range for RRF merging).
     """
+    # #483: use try/finally so the connection is closed on all paths (same
+    # hygiene fix as search()).
     db = get_db()
-    cursor = db.cursor()
+    try:
+        cursor = db.cursor()
 
-    # FTS5 match query — sanitize before passing to MATCH
-    # sanitize_fts_query handles quotes, hyphens, and boolean operators
-    safe_query = sanitize_fts_query(query)
+        # FTS5 match query — sanitize before passing to MATCH
+        # sanitize_fts_query handles quotes, hyphens, and boolean operators
+        safe_query = sanitize_fts_query(query)
 
-    sql = """
-        SELECT c.id, c.file_path, c.section_id, c.content, c.category, c.metadata,
-               rank AS bm25_score
-        FROM chunks_fts fts
-        JOIN chunks c ON c.rowid = fts.rowid
-        WHERE chunks_fts MATCH ?
-    """
-    params: list[Any] = [safe_query]
+        sql = """
+            SELECT c.id, c.file_path, c.section_id, c.content, c.category, c.metadata,
+                   rank AS bm25_score
+            FROM chunks_fts fts
+            JOIN chunks c ON c.rowid = fts.rowid
+            WHERE chunks_fts MATCH ?
+        """
+        params: list[Any] = [safe_query]
 
-    if category:
-        sql += " AND c.category = ?"
-        params.append(category)
+        if category:
+            sql += " AND c.category = ?"
+            params.append(category)
 
-    sql += " ORDER BY rank LIMIT ?"
-    params.append(top_k)
+        sql += " ORDER BY rank LIMIT ?"
+        params.append(top_k)
 
-    cursor.execute(sql, tuple(params))
-    rows = cursor.fetchall()
+        cursor.execute(sql, tuple(params))
+        rows = cursor.fetchall()
+    finally:
+        db.close()
 
     results = []
     for row in rows:
         meta = json.loads(row["metadata"]) if row["metadata"] else {}
         if meta.get("status", "active") in config.search.exclude_status:
+            continue
+        # ADR-015 §2.3: hard-exclude telemetry/machine writes from default recall.
+        if _excluded_by_kind(meta, kind_exclude_list):
             continue
         # BM25 rank is negative (more negative = better match).
         # Normalize to 0.0-1.0 where 1.0 is best.
@@ -698,6 +863,7 @@ def search_fts(query: str, category: str | None = None, top_k: int = 10) -> list
         # Cap at 25 for normalization (typical BM25 scores range 0-25)
         normalized = min(raw_score / 25.0, 1.0)
         results.append({
+            "id": row["id"],
             "file_path": row["file_path"],
             "section_id": row["section_id"],
             "content": row["content"],
@@ -706,7 +872,6 @@ def search_fts(query: str, category: str | None = None, top_k: int = 10) -> list
             "score": normalized,
         })
 
-    db.close()
     return results
 
 def check_freshness(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -775,6 +940,7 @@ def list_recent(
     date_after: str | None = None,
     date_before: str | None = None,
     limit: int = 10,
+    kind_exclude_list: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Return the most recently created/updated chunks (no semantic ranking).
 
@@ -825,6 +991,9 @@ def list_recent(
     for row in rows:
         meta = json.loads(row["metadata"]) if row["metadata"] else {}
         if meta.get("status", "active") in config.search.exclude_status:
+            continue
+        # ADR-015 §2.3: hard-exclude telemetry/machine writes from default recall.
+        if _excluded_by_kind(meta, kind_exclude_list):
             continue
         if date_after or date_before:
             updated = meta.get("last_updated", row["created_at"]) or ""
@@ -952,6 +1121,214 @@ def recent_save_embeddings(
     return out
 
 
+# SQL fragment for the exponential-approach importance nudge (ADR-007 §3.3).
+# `importance ← importance + (cap − importance) · α`, equivalently
+# `importance ← importance·(1−α) + cap·α`. Smooth, self-limiting, cannot
+# overshoot the cap. NULL importance is treated as `base` (0.5) before nudging.
+# All numeric inputs (base, alpha, cap) are bound as parameters (?), never
+# interpolated. The `(1-?)` / `?*?` arithmetic is evaluated by SQLite.
+_IMPORTANCE_NUDGE_SQL = (
+    "importance = COALESCE(importance, ?) "          # base for NULL
+    "+ (? - COALESCE(importance, ?)) * ?"            # + (cap - imp) * alpha
+)
+
+
+def _explicit_nudge_keys(
+    chunk_ids: Sequence[str],
+    session_id: str | None,
+    db: sqlite3.Connection,
+    stamp: str,
+) -> list[str]:
+    """Return the subset of *chunk_ids* whose importance should be nudged now.
+
+    ADR-007 §3.2 session-deduplication: a chunk is nudged at most once per
+    ``(chunk, session_id)``. We record the claim in ``recall_nudges`` with
+    ``INSERT OR IGNORE`` and treat the *newly inserted* rows as the nudge set —
+    rows that already existed (this session already reinforced the chunk) are
+    skipped.
+
+    When ``session_id`` is None (harness gave us no session id) we cannot
+    deduplicate, so we nudge every chunk: the session gate degrades to the
+    pre-ADR-007 behavior rather than silently dropping reinforcement.
+    """
+    if session_id is None:
+        return list(chunk_ids)
+    nudged: list[str] = []
+    for cid in chunk_ids:
+        cur = db.execute(
+            "INSERT OR IGNORE INTO recall_nudges (chunk_id, session_id, nudged_at) "
+            "VALUES (?, ?, ?)",
+            (cid, session_id, stamp),
+        )
+        if cur.rowcount:  # 1 → newly inserted → first demand this session
+            nudged.append(cid)
+    return nudged
+
+
+def _record_recall_by(
+    column: str,
+    keys: Sequence[str],
+    now: str | None,
+    fn_name: str,
+    *,
+    mode: str = "explicit",
+    session_id: str | None = None,
+) -> int:
+    """Batched, resilient access-metadata write keyed by *column* (#371, ADR-007).
+
+    Always increments ``recall_count`` and stamps ``last_recalled`` (tz-aware
+    UTC ISO-8601) for every chunk whose *column* is in *keys* — raw frequency
+    and recency are mode-agnostic.
+
+    The ``importance`` nudge (ADR-007 §3.2/§3.3) is gated:
+      - only when ``mode == "explicit"`` (passive/ambient/session-start demand
+        is *offered*, not *sought*, and must not inflate durability);
+      - at most once per ``(chunk, session_id)`` (session-deduplicated);
+      - by exponential approach toward ``importance_cap`` at rate
+        ``importance_alpha``.
+
+    Resilient by contract: the retrieval path is latency-sensitive, so a write
+    failure must never propagate. Failures are logged and swallowed.
+
+    ``column`` is a fixed internal literal ("id" or "file_path"), never caller
+    input; *keys* are always bound as parameters.
+
+    Returns:
+        Number of chunk rows whose recall_count was updated (0 on no-op or
+        swallowed failure). The importance-nudge subset may be smaller.
+    """
+    vals = [k for k in keys if k]
+    if not vals:
+        return 0
+    stamp = now or _utc_now().isoformat()
+    placeholders = ",".join("?" for _ in vals)
+    db = None
+    try:
+        db = get_db()
+        # Step 1: raw frequency + recency on every hit, mode-agnostic.
+        # B608 rationale — `column` is a fixed internal literal ("id"/"file_path")
+        # and `placeholders` is "?,?,..."; every value is bound below.
+        cur = db.execute(
+            f"UPDATE chunks SET last_recalled = ?, recall_count = recall_count + 1 "  # nosec B608
+            f"WHERE {column} IN ({placeholders})",
+            (stamp, *vals),
+        )
+        rowcount = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
+        # Step 2: importance nudge — explicit-only, session-deduplicated (§3.2).
+        if mode == "explicit":
+            cfg = config.decay
+            if column == "id":
+                nudge_ids = vals
+            else:
+                # file_path keys → resolve to chunk ids so dedup is per-chunk.
+                rows = db.execute(
+                    f"SELECT id FROM chunks WHERE {column} IN ({placeholders})",  # nosec B608
+                    tuple(vals),
+                ).fetchall()
+                nudge_ids = [r["id"] for r in rows]
+            to_nudge = _explicit_nudge_keys(nudge_ids, session_id, db, stamp)
+            if to_nudge:
+                nudge_ph = ",".join("?" for _ in to_nudge)
+                db.execute(
+                    f"UPDATE chunks SET {_IMPORTANCE_NUDGE_SQL} WHERE id IN ({nudge_ph})",  # nosec B608
+                    (cfg.importance_base, cfg.importance_cap, cfg.importance_base,
+                     cfg.importance_alpha, *to_nudge),
+                )
+
+        db.commit()
+        return rowcount
+    except Exception:  # never block retrieval on a stats write
+        _store_logger.warning("%s: failed to persist access metadata", fn_name, exc_info=True)
+        return 0
+    finally:
+        if db is not None:
+            db.close()
+
+
+def record_recall(
+    chunk_ids: Sequence[str],
+    now: str | None = None,
+    *,
+    mode: str = "explicit",
+    session_id: str | None = None,
+) -> int:
+    """Persist access metadata for the given chunk ids (ADR-006/007, #371, ADR-007).
+
+    Used by the search path, where hits are individual chunks. Falsy ids are
+    skipped. ``recall_count``/``last_recalled`` update on every hit; the
+    ``importance`` nudge is gated on ``mode == "explicit"`` and deduplicated per
+    ``(chunk, session_id)`` (§3.2). See :func:`_record_recall_by`.
+
+    Returns:
+        Number of chunk rows updated (0 on no-op or swallowed failure).
+    """
+    return _record_recall_by(
+        "id", chunk_ids, now, "record_recall", mode=mode, session_id=session_id
+    )
+
+
+def record_recall_for_paths(
+    file_paths: Sequence[str],
+    now: str | None = None,
+    *,
+    mode: str = "explicit",
+    session_id: str | None = None,
+) -> int:
+    """Persist access metadata for every chunk of the given file paths (#371, ADR-007).
+
+    Used by the read path (``/read`` / ``palinode_read``), which retrieves whole
+    files, so recall is recorded against all chunks belonging to each path.
+    Importance nudging follows the same explicit-only, session-deduplicated gate
+    as :func:`record_recall`, deduplicated per *chunk* of the file.
+
+    Returns:
+        Number of chunk rows updated (0 on no-op or swallowed failure).
+    """
+    return _record_recall_by(
+        "file_path", file_paths, now, "record_recall_for_paths",
+        mode=mode, session_id=session_id,
+    )
+
+
+def set_status_for_path(file_path: str, status: str) -> int:
+    """Set the stored chunk ``metadata.status`` for every chunk of a file (#482).
+
+    The TTL auto-archive sweep (ADR-015 §2.3) flips an expired memory's
+    frontmatter to ``status: archived``. That is a frontmatter-only change, so
+    it does not move the body content-hash ``index_file`` keys its fast path on —
+    a re-index would leave the indexed chunk metadata (which
+    ``config.search.exclude_status`` reads) stale, and recall would not be
+    suppressed. This updates the stored metadata directly, no body re-embed.
+
+    ``file_path`` must be the absolute path stored in ``chunks.file_path``.
+
+    Returns the number of chunk rows updated (rows already at ``status`` are
+    left untouched).
+    """
+    db = get_db()
+    try:
+        rows = db.execute(
+            "SELECT id, metadata FROM chunks WHERE file_path = ?", (file_path,)
+        ).fetchall()
+        updated = 0
+        for row in rows:
+            meta = json.loads(row["metadata"]) if row["metadata"] else {}
+            if meta.get("status") == status:
+                continue
+            meta["status"] = status
+            db.execute(
+                "UPDATE chunks SET metadata = ? WHERE id = ?",
+                (json.dumps(meta, default=str), row["id"]),
+            )
+            updated += 1
+        if updated:
+            db.commit()
+        return updated
+    finally:
+        db.close()
+
+
 def search_hybrid(
     query_text: str,
     query_embedding: list[float],
@@ -963,6 +1340,9 @@ def search_hybrid(
     date_before: str | None = None,
     context_entities: list[str] | None = None,
     include_daily: bool = False,
+    kind_exclude_list: Sequence[str] | None = None,
+    mode: str = "explicit",
+    session_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Hybrid search combining semantic vectors and BM25 keyword matching.
 
@@ -981,169 +1361,68 @@ def search_hybrid(
     Returns:
         Merged and re-ranked list of result dicts, sorted by combined score.
     """
-    # Get results from both search methods
-    vec_results = search(query_embedding, category=category, top_k=top_k * 2, threshold=0.0)
+    # Get results from both search methods. record_access=False: search_hybrid
+    # records recall on its final merged hit set, not on these candidates (#371).
+    vec_results = search(query_embedding, category=category, top_k=top_k * 2, threshold=0.0,
+                         record_access=False, kind_exclude_list=kind_exclude_list)
     try:
-        fts_results = search_fts(query_text, category=category, top_k=top_k * 2)
+        fts_results = search_fts(query_text, category=category, top_k=top_k * 2,
+                                 kind_exclude_list=kind_exclude_list)
     except Exception:
         # FTS5 corrupted — rebuild and retry once
         import logging
         logging.getLogger("palinode.store").warning("FTS5 corrupted, rebuilding...")
         rebuild_fts()
         try:
-            fts_results = search_fts(query_text, category=category, top_k=top_k * 2)
+            fts_results = search_fts(query_text, category=category, top_k=top_k * 2,
+                                     kind_exclude_list=kind_exclude_list)
         except Exception:
             fts_results = []  # Give up on BM25, return vector-only
 
-    # Reciprocal Rank Fusion (RRF)
-    # Score = sum( 1 / (k + rank) ) for each result across both lists
-    # k=60 is the standard RRF constant (dampens high-rank dominance)
-    K = 60
-    rrf_scores: dict[str, float] = {}
-    result_map: dict[str, dict] = {}
-    # Track raw cosine similarity from vector search before RRF normalization (#94)
-    raw_cosine: dict[str, float] = {}
-
-    # Score vector results
-    vec_weight = 1.0 - hybrid_weight
-    for rank, r in enumerate(vec_results):
-        key = f"{r['file_path']}#{r.get('section_id', 'root')}"
-        rrf_scores[key] = rrf_scores.get(key, 0) + vec_weight * (1.0 / (K + rank + 1))
-        result_map[key] = r
-        raw_cosine[key] = r.get("raw_score") or r.get("score", 0.0)
-
-    # Score BM25 results
-    bm25_weight = hybrid_weight
-    for rank, r in enumerate(fts_results):
-        key = f"{r['file_path']}#{r.get('section_id', 'root')}"
-        rrf_scores[key] = rrf_scores.get(key, 0) + bm25_weight * (1.0 / (K + rank + 1))
-        if key not in result_map:
-            result_map[key] = r
-
-    # Sort by RRF score descending, normalize to 0.0-1.0
-    sorted_keys = sorted(rrf_scores.keys(), key=lambda k: rrf_scores[k], reverse=True)
-    max_score = rrf_scores[sorted_keys[0]] if sorted_keys else 1.0
-
-    if config.decay.enabled:
-        # Apply temporal decay re-ranking if enabled
-        for key in sorted_keys:
-            r = result_map[key]
-            meta = r.get("metadata", {})
-            importance = meta.get("importance", 0.5)
-            last_recalled = meta.get("last_recalled")
-            recall_count = meta.get("recall_count", 0)
-            memory_type = meta.get("memory_type", r.get("category", "general"))
-            
-            # Use un-normalized RRF score for decay calculation base to match expected baseline scale, 
-            # or normalized if you prefer. We'll use normalized here for bounding to 1.0 max.
-            norm_score = rrf_scores[key] / max_score
-            r["score"] = score_with_decay(
-                base_score=norm_score,
-                importance=importance,
-                last_recalled_date=last_recalled,
-                recall_count=recall_count,
-                memory_type=memory_type,
-            )
-        
-        # Re-sort after applying decay
-        sorted_keys = sorted(rrf_scores.keys(), key=lambda k: result_map[k].get("score", 0.0), reverse=True)
-    else:
-        for key in sorted_keys:
-            result_map[key]["score"] = rrf_scores[key] / max_score
-
-    # Ambient context boost (ADR-008): boost results matching caller's project context
+    # Ambient context boost (ADR-008) resolves the caller's project-context files
+    # from the entity index here — the only DB touch in the scoring path; the pure
+    # ranker applies the boost given the resolved set.
+    context_files: set[str] | None = None
     if context_entities and config.context.enabled and config.context.boost != 1.0:
-        context_files: set[str] = set()
+        context_files = set()
         for entity in context_entities:
             for row in get_entity_files(entity):
                 context_files.add(row["file_path"])
-        if context_files:
-            for key in sorted_keys:
-                r = result_map[key]
-                if r["file_path"] in context_files:
-                    r["score"] = r.get("score", 0) * config.context.boost
-            # Re-sort after context boost
-            sorted_keys = sorted(
-                sorted_keys, key=lambda k: result_map[k].get("score", 0.0), reverse=True
-            )
 
-    # Issue #93: Penalize daily/ files to prevent session notes from dominating results
-    penalty = config.search.daily_penalty
-    if not include_daily and penalty != 1.0:
-        needs_resort = False
-        for key in sorted_keys:
-            r = result_map[key]
-            if _is_daily_file(r["file_path"]):
-                r["score"] = r.get("score", 0) * penalty
-                needs_resort = True
-        if needs_resort:
-            sorted_keys = sorted(
-                sorted_keys, key=lambda k: result_map[k].get("score", 0.0), reverse=True
-            )
-
-    # Deduplicate by file: suppress additional chunks that score far below
-    # the file's best chunk (#91). A second chunk from the same file is kept
-    # only if its score is within dedup_score_gap of the file's best.
-    file_best: dict[str, float] = {}
-    deduped_keys: list[str] = []
-    gap = config.search.dedup_score_gap
-    for key in sorted_keys:
-        r = result_map[key]
-        fp = r["file_path"]
-        score = r.get("score", 0.0)
-        if fp not in file_best:
-            file_best[fp] = score
-            deduped_keys.append(key)
-        elif file_best[fp] - score <= gap:
-            deduped_keys.append(key)
-
-    merged = []
-    for key in deduped_keys[:top_k]:
-        result = result_map[key]
-        if result.get("score", 0) >= threshold:
-            # Attach raw cosine similarity from vector search (#94).
-            # BM25-only results (no vector match) get raw_score=None.
-            result["raw_score"] = raw_cosine.get(key)
-            merged.append(result)
-
-    if date_after or date_before:
-        filtered = []
-        for r in merged:
-            meta = r.get("metadata", {})
-            updated = meta.get("last_updated", r.get("created_at", ""))
-            if not updated:
-                filtered.append(r)
-                continue
-            if date_after and updated < date_after:
-                continue
-            if date_before and updated > date_before:
-                continue
-            filtered.append(r)
-        merged = filtered
+    # Fuse + re-rank (RRF → decay → priority → context → daily → dedup → threshold
+    # → date) in the pure ranker (#553). priority_weight is read from this module
+    # so patch.object(store, "_PRIORITY_RANK_WEIGHT", ...) still tunes ordering.
+    merged = rank_hybrid(
+        vec_results,
+        fts_results,
+        top_k=top_k,
+        threshold=threshold,
+        hybrid_weight=hybrid_weight,
+        priority_weight=_PRIORITY_RANK_WEIGHT,
+        context_files=context_files,
+        include_daily=include_daily,
+        date_after=date_after,
+        date_before=date_before,
+    )
 
     if merged:
         merged = check_freshness(merged)
 
-    # Record retrieval for frequency tracking (batch update, non-blocking)
+    # Record retrieval access metadata (ADR-006/007, #371): batched, resilient.
     if merged:
-        now = _utc_now().isoformat()
-        db = get_db()
-        try:
-            for r in merged[:top_k]:
-                chunk_id = r.get("id")  # Using id since chunks table PK is 'id'
-                if chunk_id:
-                    db.execute("""
-                        UPDATE chunks 
-                        SET last_recalled = ?, recall_count = recall_count + 1
-                        WHERE id = ?
-                    """, (now, chunk_id))
-            db.commit()
-        except Exception:
-            pass  # Never block search for stats update
-        finally:
-            db.close()
+        record_recall([r.get("id") for r in merged[:top_k]], mode=mode, session_id=session_id)
 
     return merged
+
+
+# Human-priority ranking nudge weight (#259, tuned in #486). A priority-5 memory
+# gets at most +0.05 (priority-1 at most -0.05) added to its normalized score, so
+# a clear relevance gap always outranks priority while similar-relevance hits are
+# ordered by it. Confirmed at 0.025 against the ranking properties pinned in
+# tests/test_priority_ranking_486.py (which is the tuning rationale — a larger
+# weight lets a max-priority weak match overtake a stronger normal-priority one).
+_PRIORITY_RANK_WEIGHT = 0.025
+
 
 def get_entity_files(entity_ref: str) -> list[dict[str, Any]]:
     """Get all files that reference a specific entity."""
@@ -1449,49 +1728,3 @@ def update_trigger_fired(trigger_id: str) -> None:
     """, (now, trigger_id))
     db.commit()
     db.close()
-
-
-def score_with_decay(
-    base_score: float,
-    importance: float,
-    last_recalled_date: str | None,
-    recall_count: int,
-    memory_type: str = "general",
-) -> float:
-    """Apply temporal decay to a search score.
-    
-    Formula: Score = base × importance × e^(-Δt/τ) × (1 + log(1 + freq))
-    
-    Args:
-        base_score: Original similarity score (0.0-1.0).
-        importance: LLM-rated importance (0.0-1.0, default 0.5).
-        last_recalled_date: ISO date of last retrieval (None = never recalled).
-        recall_count: Number of times this chunk was returned in search.
-        memory_type: Type for selecting τ constant.
-    
-    Returns:
-        Adjusted score after decay (still 0.0-1.0 range).
-    """
-    import math
-    from datetime import datetime
-    
-    cfg = config.decay
-    TAU = {
-        "critical": cfg.tau_critical, "decisions": cfg.tau_decisions, "insights": cfg.tau_insights,
-        "general": cfg.tau_general, "status": cfg.tau_status, "ephemeral": cfg.tau_ephemeral,
-    }
-    tau = TAU.get(memory_type, cfg.tau_general)
-    
-    if last_recalled_date:
-        try:
-            last = datetime.fromisoformat(last_recalled_date[:10])
-            delta_days = (_utc_now() - last).days
-        except Exception:
-            delta_days = 0
-    else:
-        delta_days = 30  # Default decay for never-recalled memories
-    
-    decay = math.exp(-delta_days / tau)
-    frequency_boost = 1 + math.log1p(recall_count)
-    
-    return min(base_score * importance * decay * frequency_boost, 1.0)

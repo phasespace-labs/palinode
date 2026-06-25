@@ -214,7 +214,7 @@ The MCP server needs to be reachable from your IDE. Options:
 
 The Palinode **API server** (port 6340) supports an optional bearer-token
 auth layer — off by default for local dev, required when binding to a
-non-loopback address. If you reach Palinode from another machine (Tailscale,
+non-loopback address. If you reach Palinode from another machine (private VPN,
 VPN, LAN), generate a token and configure both server and client.
 
 On the server:
@@ -245,7 +245,7 @@ In your MCP client config, attach the token via the `headers` block:
 > 6340), which the MCP server proxies to. The **MCP server itself** (port
 > 6341) does not yet enforce auth at the HTTP transport — that's a
 > follow-up. If you expose port 6341 directly to the network, front it
-> with a reverse proxy or restrict access via Tailscale ACLs / a firewall
+> with a reverse proxy or restrict access via VPN/firewall ACLs / a firewall
 > until the MCP-side auth lands.
 
 If you set `PALINODE_API_BIND_INTENT=public` (the explicit public-exposure
@@ -393,9 +393,9 @@ Cursor does not use `CLAUDE.md` — add memory instructions to your `.cursorrule
 
 ---
 
-## Antigravity IDE
+## Generic IDE
 
-Antigravity uses a native 3-dot MCP menu for server registration. No JSON config file editing needed.
+Some IDEs provide a native MCP menu for server registration, so no JSON config file editing is needed.
 
 1. Open the 3-dot MCP menu → **Add Server** → enter `http://your-server:6341/mcp/` as the endpoint URL.
 2. Session skill installs under `.agent/skills/`:
@@ -486,3 +486,27 @@ There are four distinct things that can fail — tool fired, data on disk, retri
 
 **Slow first search:**
 - BGE-M3 is 568MB. Cold start takes 10-30s. Subsequent searches are fast (~100ms).
+
+**`/wrap`, `/save`, or `palinode_push` denied with a "permission" / "auto mode classifier" message:**
+
+If Claude Code runs in **auto permission mode** (`"defaultMode": "auto"` in `settings.json`), tool calls without an explicit `allow` rule are judged by the permission classifier. Palinode's **remote-write** tools — `palinode_push` and `palinode_session_end` (which pushes the session note to your memory git remote) — look like un-allowlisted network-egress actions and can be **denied even when you invoke `/wrap` or `/save` yourself**. The read tools (`palinode_search`, `palinode_read`, `palinode_status`) and the local-only `palinode_save` are generally unaffected.
+
+**Fix — allowlist the Palinode MCP tools.** Add them to the `permissions.allow` list in your settings. Use `~/.claude/settings.json` to apply across **all** projects (Palinode is typically a global memory system), or a project's `.claude/settings.json` to scope it to one repo:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "mcp__palinode__palinode_push",
+      "mcp__palinode__palinode_session_end",
+      "mcp__palinode__palinode_save",
+      "mcp__palinode__palinode_consolidate"
+    ],
+    "defaultMode": "auto"
+  }
+}
+```
+
+The tool-name format is `mcp__<server-name>__<tool-name>`, where `<server-name>` is the key under `mcpServers` in your config (`palinode` in the examples above). After saving, restart Claude Code (or run `/permissions` to confirm the rules loaded). `auto` mode still guards every other action — you're only pre-authorizing these specific memory writes.
+
+> **Note:** Claude Code will **not** let an agent add these rules to `settings.json` on your behalf — modifying the permission allowlist from inside a session is blocked by design (an agent can't widen its own permissions). Make this edit yourself in an editor, or via the `/permissions` command.

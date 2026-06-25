@@ -25,6 +25,7 @@ from datetime import UTC, datetime
 
 import yaml
 
+from palinode.core import git_tools
 from palinode.core.config import config
 
 logger = logging.getLogger("palinode.migration.mem0_generate")
@@ -69,6 +70,7 @@ def generate_files() -> dict:
     logger.info(f"Groups: {len(groups)}")
 
     stats = defaultdict(int)
+    written_files: list[str] = []
 
     for group_slug, mems in groups.items():
         # Determine category from dominant type
@@ -132,22 +134,18 @@ def generate_files() -> dict:
         if os.path.exists(file_path):
             file_path = os.path.join(config.memory_dir, category, f"{group_slug}-mem0.md")
 
-        with open(file_path, "w") as f:
-            f.write(doc)
+        git_tools.write_memory_file(file_path, doc)
+        written_files.append(file_path)
 
         stats[category] += 1
         logger.info(f"  {category}/{group_slug}.md ({len(mems)} memories)")
 
-    # Git commit
-    import subprocess
-    try:
-        subprocess.run(["git", "add", "."], cwd=config.memory_dir, check=False)
-        subprocess.run(
-            ["git", "commit", "-m", f"palinode: Mem0 backfill — {sum(stats.values())} files from {len(active)} memories"],
-            cwd=config.memory_dir, check=False,
-        )
-    except Exception as e:
-        logger.error(f"Git commit failed: {e}")
+    # One created memory = one per-file commit (#566) via the git_tools choke
+    # point — never the old whole-tree `git add .` that swept unrelated dirty
+    # files into the backfill commit.
+    for fp in written_files:
+        base = os.path.basename(fp)
+        git_tools.commit_memory_file(fp, f"palinode: Mem0 backfill — {base}")
 
     return dict(stats)
 

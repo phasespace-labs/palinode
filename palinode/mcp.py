@@ -6,7 +6,7 @@ Runs over stdio — spawned on demand by the client.
 
 All tool implementations are thin HTTP wrappers around the Palinode API server.
 The MCP server itself holds no database connections, embedder state, or git handles.
-Set PALINODE_API_HOST to point at a remote API server (e.g. over Tailscale).
+Set PALINODE_API_HOST to point at a remote API server (e.g. over private VPN).
 
 Tools:
   palinode_search  — semantic search over memory files
@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import Any
 
@@ -39,10 +40,13 @@ import mcp.server.stdio
 import mcp.types as types
 from mcp.server import Server
 
-import os
-
-from palinode.core.config import config
 from palinode.core.audit import AuditLogger
+from palinode.core.config import ToolSurface, config, validate_tool_surface
+from palinode.core.defaults import (
+    SAVE_SOURCE_HEADER as _SOURCE_HEADER,
+    SESSION_END_TIMEOUT_SECONDS as _SESSION_END_TIMEOUT,
+    _SESSION_END_TIMEOUT_SENTINEL as _SENTINEL,
+)
 
 logger = logging.getLogger("palinode.mcp")
 logging.basicConfig(level=logging.WARNING)  # quiet — don't pollute stdio
@@ -113,20 +117,9 @@ def _api_url(path: str) -> str:
     return f"http://{host}:{port}{path}"
 
 
-# ADR-010 / #167: every MCP request carries surface attribution as a
-# header.  The API uses this when the body doesn't explicitly set `source`,
-# giving consistent provenance across the four surfaces without each tool
-# dispatcher having to thread a default through every call site.
-from palinode.core.defaults import (
-    SAVE_SOURCE_HEADER as _SOURCE_HEADER,
-    SESSION_END_TIMEOUT_SECONDS as _SESSION_END_TIMEOUT,
-    _SESSION_END_TIMEOUT_SENTINEL as _SENTINEL,
-)
-import os as _os
-
 # Cross-surface drift guard (#377): assert the constant matches its sentinel
 # unless the operator has set an explicit env-var override.
-assert _SESSION_END_TIMEOUT == _SENTINEL or _os.environ.get(
+assert _SESSION_END_TIMEOUT == _SENTINEL or os.environ.get(
     "PALINODE_SESSION_END_TIMEOUT"
 ), (
     f"SESSION_END_TIMEOUT_SECONDS ({_SESSION_END_TIMEOUT}) differs from sentinel "
@@ -291,8 +284,32 @@ def _resolve_save_type(arg_type: str | None, arg_ps: bool | None) -> str:
 
 # ── Tool definitions ──────────────────────────────────────────────────────────
 
-@server.list_tools()
-async def list_tools() -> list[types.Tool]:
+CORE_TOOL_NAMES = frozenset(
+    {
+        "palinode_save",
+        "palinode_search",
+        "palinode_read",
+        "palinode_session_end",
+        "palinode_status",
+        "palinode_push",
+        "palinode_list",
+        "palinode_entities",
+        "palinode_trigger",
+        "palinode_ingest",
+        "palinode_doctor",
+    }
+)
+
+
+def _resolve_tool_surface() -> ToolSurface:
+    if "PALINODE_MCP_SURFACE" in os.environ:
+        return validate_tool_surface(
+            os.environ["PALINODE_MCP_SURFACE"], "PALINODE_MCP_SURFACE"
+        )
+    return validate_tool_surface(config.tool_surface)
+
+
+def _all_tools() -> list[types.Tool]:
     return [
         types.Tool(
             name="palinode_list",
@@ -387,6 +404,13 @@ async def list_tools() -> list[types.Tool]:
                         "description": "Include daily session notes at full rank (default: false, daily/ files are penalized)",
                         "default": False,
                     },
+                    "include_telemetry": {
+                        "type": "boolean",
+                        # Telemetry stays out of default recall so monitoring
+                        # churn does not pollute human memory search.
+                        "description": "Include machine/monitor telemetry memories.",
+                        "default": False,
+                    },
                     "since_days": {
                         "type": "integer",
                         "description": (
@@ -410,23 +434,21 @@ async def list_tools() -> list[types.Tool]:
                         },
                         "description": "Filter by memory type (matches frontmatter `type`).",
                     },
+                    "min_priority": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 5,
+                        "description": "Only return memories with human-assigned priority at least this value. Missing priority counts as normal (3).",
+                    },
                     "threshold": {
                         "type": "number",
-                        "description": (
-                            "Override similarity threshold (0.0–1.0).  Higher "
-                            "= stricter.  Defaults to MCP-tuned value from "
-                            "config when omitted."
-                        ),
+                        "description": "Override similarity threshold (0.0-1.0); higher is stricter.",
                     },
                     "full": {
                         "type": "boolean",
-                        "description": (
-                            "Return full chunk content instead of bounded "
-                            "snippets (#352). Default false keeps tool "
-                            "results within MCP budget; use sparingly when "
-                            "you genuinely need the whole chunk body. For "
-                            "the complete file, call palinode_read."
-                        ),
+                        # Default snippets keep search results within MCP
+                        # budget; full=True still caps rendered content.
+                        "description": "Return full chunk content instead of snippets.",
                         "default": False,
                     },
                 },
@@ -496,33 +518,51 @@ async def list_tools() -> list[types.Tool]:
                     },
                     "metadata": {
                         "type": "object",
-                        "description": (
-                            "Arbitrary additional frontmatter fields to merge "
-                            "into the saved memory.  Keys override the "
-                            "auto-generated frontmatter; use sparingly."
-                        ),
+                        "description": "Additional frontmatter fields to merge into the saved memory.",
                     },
                     "confidence": {
                         "type": "number",
-                        "description": (
-                            "Caller's confidence in this memory's accuracy "
-                            "(0.0–1.0).  Stored as frontmatter; surfaces in "
-                            "downstream consolidation passes."
-                        ),
+                        "description": "Confidence in this memory's accuracy (0.0-1.0).",
+                    },
+                    "priority": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 5,
+                        "description": "Human-assigned memory priority (1–5). Stored as `priority` frontmatter; missing means normal (3).",
                     },
                     "external_refs": {
                         "type": "object",
                         "additionalProperties": {"type": "string"},
-                        "description": (
-                            "Optional dict of SDLC object references. "
-                            "Recognised keys: gitlab_mr, gitlab_issue, "
-                            "gitlab_pipeline, github_pr, linear_issue, "
-                            "jira_issue. Free-form keys also accepted (#115)."
-                        ),
+                        # External refs preserve SDLC provenance while still
+                        # allowing integration-specific keys.
+                        "description": "SDLC object references such as github_pr or jira_issue.",
                     },
                     "source": {
                         "type": "string",
-                        "description": "Source surface that created this memory (e.g., 'claude-code', 'cursor', 'api'). Auto-detected if omitted.",
+                        "description": "Source surface that created this memory.",
+                    },
+                    "update_policy": {
+                        "type": "string",
+                        "enum": ["append", "replace"],
+                        # append is episodic; replace marks a sticky living
+                        # document protected from history-forking compaction.
+                        "description": "Save behavior: append episodic memory or replace a living document.",
+                    },
+                    "sources": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "ref": {"type": "string", "description": "Path under the memory dir of the cited source."},
+                                "quote": {"type": "string", "description": "The exact passage cited from the source."},
+                                "quote_hash": {"type": "string", "description": "Optional integrity hash; computed on save if omitted."},
+                            },
+                            "required": ["ref", "quote"],
+                        },
+                        # Source-citation anchors (#459): each anchors a memory
+                        # to the exact passage it cites. quote_hash is computed
+                        # server-side when omitted; the verifier reads these back.
+                        "description": "Source-citation anchors: list of {ref, quote, quote_hash} for passages this memory cites.",
                     },
                 },
                 "required": ["content"],
@@ -680,6 +720,29 @@ async def list_tools() -> list[types.Tool]:
             ),
         ),
         types.Tool(
+            name="palinode_archive_expired",
+            description=(
+                "Archive ephemeral memories whose `expires_at` has passed "
+                "(ADR-015 §2.3 TTL regime). Deterministic + idempotent — flips "
+                "expired memories to status: archived so they drop out of default "
+                "recall while staying on disk. Set `dry_run=true` to preview."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "Preview which memories would be archived without writing.",
+                        "default": False,
+                    },
+                },
+            },
+            annotations=types.ToolAnnotations(
+                title="Archive Expired",
+                readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False,
+            ),
+        ),
+        types.Tool(
             name="palinode_diff",
             description=(
                 "Show what memories changed recently. Use to review what was learned, "
@@ -720,10 +783,7 @@ async def list_tools() -> list[types.Tool]:
                     },
                     "file": {
                         "type": "string",
-                        "description": (
-                            "Deprecated alias for `file_path` (ADR-010 / #164). "
-                            "Will be removed in a future release."
-                        ),
+                        "description": "Deprecated alias for `file_path`; use `file_path` instead.",
                     },
                     "search": {
                         "type": "string",
@@ -752,10 +812,7 @@ async def list_tools() -> list[types.Tool]:
                     },
                     "file": {
                         "type": "string",
-                        "description": (
-                            "Deprecated alias for `file_path` (ADR-010 / #164). "
-                            "Will be removed in a future release."
-                        ),
+                        "description": "Deprecated alias for `file_path`; use `file_path` instead.",
                     },
                     "commit": {
                         "type": "string",
@@ -864,6 +921,12 @@ async def list_tools() -> list[types.Tool]:
                     "source": {
                         "type": "string",
                         "description": "Source surface that created this memory (e.g., 'claude-code', 'cursor', 'api'). Auto-detected if omitted.",
+                    },
+                    "push": {
+                        "type": "boolean",
+                        # push=true lets wrap-style callers commit and ship the
+                        # session note in one call; omitted uses server config.
+                        "description": "Push the memory repo after committing the session note.",
                     },
                 },
                 "required": ["summary"],
@@ -1117,6 +1180,14 @@ async def list_tools() -> list[types.Tool]:
     ]
 
 
+@server.list_tools()
+async def list_tools() -> list[types.Tool]:
+    tools = _all_tools()
+    if _resolve_tool_surface() == "core":
+        return [tool for tool in tools if tool.name in CORE_TOOL_NAMES]
+    return tools
+
+
 # ── Tool handlers ─────────────────────────────────────────────────────────────
 
 @server.call_tool()
@@ -1198,10 +1269,14 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
                 body["date_before"] = arguments["date_before"]
             if arguments.get("include_daily"):
                 body["include_daily"] = True
+            if arguments.get("include_telemetry"):
+                body["include_telemetry"] = True
             if arguments.get("since_days") is not None:
                 body["since_days"] = int(arguments["since_days"])
             if arguments.get("types"):
                 body["types"] = _coerce_str_array(arguments["types"])
+            if arguments.get("min_priority") is not None:
+                body["min_priority"] = int(arguments["min_priority"])
             # ADR-010 / #163: caller-supplied threshold wins; otherwise use
             # the MCP-tuned default (typically tighter than the API default
             # to keep auto-context noise low).
@@ -1256,8 +1331,20 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
                 body["metadata"] = arguments["metadata"]
             if arguments.get("confidence") is not None:
                 body["confidence"] = float(arguments["confidence"])
+            if arguments.get("priority") is not None:
+                body["priority"] = int(arguments["priority"])
             if arguments.get("external_refs") is not None:
                 body["external_refs"] = arguments["external_refs"]
+            # ADR-015 §2.1: write-semantics axis. Forwarded verbatim; the API
+            # validates against VALID_UPDATE_POLICIES and 400s on an unknown
+            # value (surfaced below as the standard "Save failed" message).
+            if arguments.get("update_policy") is not None:
+                body["update_policy"] = arguments["update_policy"]
+            # #459: source-citation anchors. Forwarded verbatim; the API
+            # validates each entry and computes/verifies quote_hash, 400ing on a
+            # malformed or inconsistent anchor (surfaced as "Save failed").
+            if arguments.get("sources") is not None:
+                body["sources"] = arguments["sources"]
 
             resp = await _post("/save", json=body)
             if resp.status_code != 200:
@@ -1360,6 +1447,16 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
             resp = await _post("/consolidate", json=body, timeout=300.0)
             if resp.status_code != 200:
                 return _text(f"Consolidation failed: {resp.text}")
+            return _text(json.dumps(resp.json(), indent=2))
+
+        # ── archive-expired ────────────────────────────────────────────────
+        elif name == "palinode_archive_expired":
+            body = {}
+            if arguments.get("dry_run"):
+                body["dry_run"] = True
+            resp = await _post("/archive-expired", json=body, timeout=120.0)
+            if resp.status_code != 200:
+                return _text(f"Archive-expired sweep failed: {resp.text}")
             return _text(json.dumps(resp.json(), indent=2))
 
         # ── status ────────────────────────────────────────────────────────
@@ -1482,13 +1579,21 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
                 body["project"] = arguments["project"]
             if arguments.get("source"):
                 body["source"] = arguments["source"]
+            if arguments.get("push") is not None:
+                body["push"] = bool(arguments["push"])
 
             resp = await _post("/session-end", json=body, timeout=_SESSION_END_TIMEOUT)
             if resp.status_code != 200:
                 return _text(f"Session-end failed: {resp.text}")
             data = resp.json()
             status_msg = f" + status → {data['status_file']}" if data.get("status_file") else ""
-            return _text(f"Session captured → {data['daily_file']}{status_msg}\n\n{data.get('entry', '')}")
+            # Report push outcome so the wrap flow can say "pushed" vs "pending"
+            # without a second tool call (#378).
+            if body.get("push"):
+                push_msg = " + pushed" if data.get("pushed") else " (push pending — commit local, push did not succeed)"
+            else:
+                push_msg = ""
+            return _text(f"Session captured → {data['daily_file']}{status_msg}{push_msg}\n\n{data.get('entry', '')}")
 
         # ── dedup_suggest ─────────────────────────────────────────────────
         elif name == "palinode_dedup_suggest":
@@ -1706,30 +1811,22 @@ def main() -> None:
     asyncio.run(async_main())
 
 
-def main_http() -> None:
-    """Entry point for Streamable HTTP transport — palinode-mcp-http.
+def _build_mcp_http_app(token: str | None):
+    """Build and return the Starlette MCP HTTP application.
 
-    Exposes the MCP server over Streamable HTTP so remote clients (Claude Code,
-    Claude Desktop, Cursor, Zed, etc.) can connect via URL without running a
-    local process.
+    Extracted for testability — ``main_http`` builds the app then hands it
+    to uvicorn; tests drive it directly via ``TestClient``.
 
-    Env vars:
-      PALINODE_MCP_HTTP_HOST  — bind address (default: 0.0.0.0)
-      PALINODE_MCP_HTTP_PORT  — bind port (default: 6341)
-      PALINODE_MCP_LOG_LEVEL  — uvicorn log level (default: info)
-
-    Legacy env var aliases (still honored for existing deployments):
-      PALINODE_MCP_SSE_HOST, PALINODE_MCP_SSE_PORT
-
-    Client config (any IDE):
-      { "url": "http://your-server:6341/mcp/" }
+    Parameters
+    ----------
+    token:
+        Bearer token to protect the server, or ``None`` for no auth.
     """
     import contextlib
-    import os
     from collections.abc import AsyncIterator
 
-    import uvicorn
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+    from palinode.core.auth import BearerAuthMiddleware, MCP_EXEMPT_PATHS
     from starlette.applications import Starlette
     from starlette.responses import JSONResponse
     from starlette.routing import Mount, Route
@@ -1761,6 +1858,58 @@ def main_http() -> None:
             Mount("/mcp", app=session_manager.handle_request),
         ],
     )
+    # Registered before request routing so unauthenticated callers never
+    # reach the MCP session handler. The middleware is a no-op when token
+    # is None. /healthz is exempt so uptime probes don't need the token.
+    starlette_app.add_middleware(
+        BearerAuthMiddleware,
+        token=token,
+        exempt_paths=MCP_EXEMPT_PATHS,
+    )
+    return starlette_app
+
+
+def main_http() -> None:
+    """Entry point for Streamable HTTP transport — palinode-mcp-http.
+
+    Exposes the MCP server over Streamable HTTP so remote clients (Claude Code,
+    Claude Desktop, Cursor, Zed, etc.) can connect via URL without running a
+    local process.
+
+    Env vars:
+      PALINODE_MCP_HTTP_HOST  — bind address (default: 0.0.0.0)
+      PALINODE_MCP_HTTP_PORT  — bind port (default: 6341)
+      PALINODE_MCP_LOG_LEVEL  — uvicorn log level (default: info)
+      PALINODE_MCP_BIND_INTENT — set to ``public`` to confirm intentional
+                                 non-loopback bind; requires PALINODE_API_TOKEN.
+
+    Legacy env var aliases (still honored for existing deployments):
+      PALINODE_MCP_SSE_HOST, PALINODE_MCP_SSE_PORT
+
+    Client config (any IDE):
+      { "url": "http://your-server:6341/mcp/" }
+    """
+    import os
+
+    import uvicorn
+    from palinode.core.auth import load_api_token, validate_auth_config
+
+    # Resolve token and run the public-bind gate INSIDE this entry point,
+    # not at module level. palinode/mcp.py is imported for the stdio
+    # transport too — a module-level gate would fire on every
+    # ``import palinode.mcp``, killing stdio sessions when
+    # PALINODE_MCP_BIND_INTENT=public is set.
+    token = load_api_token()
+    mcp_bind_intent_public = (
+        os.environ.get("PALINODE_MCP_BIND_INTENT", "").lower() == "public"
+    )
+    validate_auth_config(
+        mcp_bind_intent_public,
+        token,
+        bind_intent_var="PALINODE_MCP_BIND_INTENT",
+    )
+
+    starlette_app = _build_mcp_http_app(token)
 
     # B104 rationale - opt-in MCP HTTP server fallback; deployers must set
     # PALINODE_MCP_HTTP_HOST for a restricted bind (e.g., 127.0.0.1).
@@ -1778,6 +1927,10 @@ def main_http() -> None:
     print(f"Palinode MCP (Streamable HTTP) listening on http://{host}:{port}/mcp/")
     print(f"  Health check: http://{host}:{port}/healthz")
     print(f"  API backend:  {_api_url('')}")
+    if token:
+        print("  Bearer auth: enabled (PALINODE_API_TOKEN)")
+    else:
+        print("  Bearer auth: disabled (no PALINODE_API_TOKEN)")
     uvicorn.run(starlette_app, host=host, port=port, log_level=log_level)
 
 

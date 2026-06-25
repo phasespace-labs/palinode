@@ -16,9 +16,12 @@ from palinode.cli._format import print_result, get_default_format, OutputFormat
 @click.option("--trigger", help="What triggered this save (manual, wrap-slash, hook, …) — #145")
 @click.option("--session-id", "session_id", help="Opaque session id from the harness — #145")
 @click.option("--duration-seconds", "duration_seconds", type=int, help="Session duration in seconds — #145")
+@click.option("--push/--no-push", "push", default=None,
+              help="Push the memory repo after committing the note (#378). "
+                   "Default: server's auto_push setting. /wrap passes --push.")
 @click.option("--format", "fmt", type=click.Choice(["text", "json"]), default=None, help="Output format")
 def session_end(summary, decision, blocker, project, source, harness, cwd, model,
-                trigger, session_id, duration_seconds, fmt):
+                trigger, session_id, duration_seconds, push, fmt):
     """Capture session outcomes to daily notes and project status.
 
     Call at the end of a coding or chat session to persist what was accomplished.
@@ -45,6 +48,7 @@ def session_end(summary, decision, blocker, project, source, harness, cwd, model
             trigger=trigger,
             session_id=session_id,
             duration_seconds=duration_seconds,
+            push=push,
         )
     except HTTPStatusError as e:
         raise click.ClickException(f"Session-end failed: {e.response.text}") from e
@@ -65,6 +69,7 @@ def session_end(summary, decision, blocker, project, source, harness, cwd, model
     status_file = result.get("status_file")
     individual_file = result.get("individual_file")
     entry = result.get("entry", "")
+    pushed = result.get("pushed", False)
 
     effective_fmt = OutputFormat(fmt) if fmt else get_default_format()
     if effective_fmt == OutputFormat.JSON:
@@ -78,8 +83,15 @@ def session_end(summary, decision, blocker, project, source, harness, cwd, model
             "summary": summary,
             "decisions": decisions,
             "blockers": blockers,
+            "pushed": pushed,
         }
         print_result(out, OutputFormat.JSON)
     else:
         status_msg = f" + status → {status_file.split('/')[-1]}" if status_file else ""
-        click.echo(f"Session captured → {daily_file}{status_msg}\n\n{entry}")
+        # Only annotate push state when a push was requested (#378); on the
+        # auto_push default we say nothing to keep the legacy output stable.
+        if push:
+            push_msg = " + pushed" if pushed else " (push pending — commit local)"
+        else:
+            push_msg = ""
+        click.echo(f"Session captured → {daily_file}{status_msg}{push_msg}\n\n{entry}")

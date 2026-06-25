@@ -193,3 +193,87 @@ class TestNoArgument:
     def test_no_arg_no_list_exits_nonzero(self, runner):
         result = runner.invoke(main, ["mcp-smoke"])
         assert result.exit_code != 0
+
+
+# ---------------------------------------------------------------------------
+# #373 — Claude Desktop running-process detection + warning
+# ---------------------------------------------------------------------------
+
+class TestClaudeDesktopRunning:
+    """The detector itself: pgrep/tasklist returncode → bool|None mapping."""
+
+    def test_pgrep_match_returns_true(self, monkeypatch):
+        import importlib
+        m = importlib.import_module("palinode.cli.mcp_smoke")
+        monkeypatch.setattr(m.platform, "system", lambda: "Darwin")
+        fake = type("P", (), {"returncode": 0, "stdout": "123\n"})()
+        monkeypatch.setattr(m.subprocess, "run", lambda *a, **k: fake)
+        assert m.claude_desktop_running() is True
+
+    def test_pgrep_no_match_returns_false(self, monkeypatch):
+        import importlib
+        m = importlib.import_module("palinode.cli.mcp_smoke")
+        monkeypatch.setattr(m.platform, "system", lambda: "Darwin")
+        fake = type("P", (), {"returncode": 1, "stdout": ""})()
+        monkeypatch.setattr(m.subprocess, "run", lambda *a, **k: fake)
+        assert m.claude_desktop_running() is False
+
+    def test_probe_error_returns_none(self, monkeypatch):
+        import importlib
+        m = importlib.import_module("palinode.cli.mcp_smoke")
+        monkeypatch.setattr(m.platform, "system", lambda: "Darwin")
+
+        def _boom(*a, **k):
+            raise FileNotFoundError("pgrep missing")
+
+        monkeypatch.setattr(m.subprocess, "run", _boom)
+        assert m.claude_desktop_running() is None
+
+    def test_unknown_platform_returns_none(self, monkeypatch):
+        import importlib
+        m = importlib.import_module("palinode.cli.mcp_smoke")
+        monkeypatch.setattr(m.platform, "system", lambda: "Plan9")
+        assert m.claude_desktop_running() is None
+
+    def test_windows_imagename_present(self, monkeypatch):
+        import importlib
+        m = importlib.import_module("palinode.cli.mcp_smoke")
+        monkeypatch.setattr(m.platform, "system", lambda: "Windows")
+        fake = type("P", (), {"returncode": 0, "stdout": "Claude.exe   1234 ..."})()
+        monkeypatch.setattr(m.subprocess, "run", lambda *a, **k: fake)
+        assert m.claude_desktop_running() is True
+
+
+class TestClaudeDesktopWarning:
+    """The runbook warning fires only for claude-desktop when running is True."""
+
+    def test_warns_when_running(self, runner, monkeypatch):
+        import importlib
+        m = importlib.import_module("palinode.cli.mcp_smoke")
+        monkeypatch.setattr(m, "claude_desktop_running", lambda: True)
+        result = runner.invoke(main, ["mcp-smoke", "claude-desktop"])
+        assert result.exit_code == 0
+        assert "Claude Desktop appears to be running" in result.output
+        assert "quit" in result.output.lower()
+
+    def test_silent_when_not_running(self, runner, monkeypatch):
+        import importlib
+        m = importlib.import_module("palinode.cli.mcp_smoke")
+        monkeypatch.setattr(m, "claude_desktop_running", lambda: False)
+        result = runner.invoke(main, ["mcp-smoke", "claude-desktop"])
+        assert "appears to be running" not in result.output
+
+    def test_silent_when_undetermined(self, runner, monkeypatch):
+        import importlib
+        m = importlib.import_module("palinode.cli.mcp_smoke")
+        monkeypatch.setattr(m, "claude_desktop_running", lambda: None)
+        result = runner.invoke(main, ["mcp-smoke", "claude-desktop"])
+        assert "appears to be running" not in result.output
+
+    def test_no_warning_for_other_harness(self, runner, monkeypatch):
+        import importlib
+        m = importlib.import_module("palinode.cli.mcp_smoke")
+        # Even if a desktop were running, a non-claude-desktop runbook is silent.
+        monkeypatch.setattr(m, "claude_desktop_running", lambda: True)
+        result = runner.invoke(main, ["mcp-smoke", "cursor"])
+        assert "appears to be running" not in result.output

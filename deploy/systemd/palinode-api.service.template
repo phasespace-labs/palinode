@@ -10,7 +10,7 @@ Environment="PALINODE_DIR=${PALINODE_DATA_DIR}"
 Environment="OLLAMA_URL=${OLLAMA_URL}"
 Environment="EMBEDDING_MODEL=${EMBEDDING_MODEL}"
 # Suppress the 0.0.0.0 binding warning for intentional network-exposed deployments.
-# This template binds to 0.0.0.0 so the API is reachable over Tailscale (or any
+# This template binds to 0.0.0.0 so the API is reachable over private VPN (or any
 # other network interface). PALINODE_API_BIND_INTENT=public makes that intent
 # explicit and prevents misleading startup warnings. See docs/MCP-SETUP.md.
 Environment="PALINODE_API_BIND_INTENT=public"

@@ -74,7 +74,7 @@ def test_template_install_wantedby(template_path: Path) -> None:
 
 @pytest.mark.parametrize("template_path", TEMPLATES, ids=[t.name for t in TEMPLATES])
 def test_template_no_hardcoded_ips(template_path: Path) -> None:
-    """Templates must not contain site-specific IPs (private ranges, Tailscale, etc.).
+    """Templates must not contain site-specific IPs (private ranges, private VPN, etc.).
 
     Bind addresses like 0.0.0.0 and loopback 127.0.0.1 are intentional and allowed.
     The test targets routable addresses that would be infrastructure leaks.

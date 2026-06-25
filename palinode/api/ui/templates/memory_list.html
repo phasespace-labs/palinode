@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Palinode · memory{% endblock %}
+{% block crumb %}<b>memory</b>{% endblock %}
+{% block content %}
+<div class="dash">
+  <h1>Memory</h1>
+  <p class="lede">Every browsable memory on disk — filter, or search the index.</p>
+
+  <form class="searchbar" method="get" action="{{ url_for('ui_memory_list') }}">
+    <input type="search" name="q" value="{{ search.query }}" placeholder="Search memory…" autofocus>
+    {# preserve active filters across a search #}
+    {% if listing.filters.type %}<input type="hidden" name="type" value="{{ listing.filters.type }}">{% endif %}
+    {% if listing.filters.core %}<input type="hidden" name="core" value="true">{% endif %}
+    {% if listing.filters.freshness %}<input type="hidden" name="freshness" value="{{ listing.filters.freshness }}">{% endif %}
+    <button type="submit">Search</button>
+  </form>
+
+  {% if search.query %}
+  <h2 class="section-h">Search results · "{{ search.query }}"</h2>
+  {% if search.error %}
+  <div class="notice">{{ search.error }}</div>
+  {% elif search.results %}
+  <ul class="flist">
+    {% for r in search.results %}
+    <li><a href="{{ url_for('ui_memory', file_path=r.id) }}">{{ r.path }}
+      {% if r.type %}<span class="meta">· {{ r.type }}</span>{% endif %}
+      <span class="meta">· {{ r.score }}</span>
+      {% if r.snippet %}<div class="snippet">{{ r.snippet }}</div>{% endif %}</a></li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="empty">No matches.</p>
+  {% endif %}
+  <p class="lede" style="margin-top:18px"><a class="vlink" href="{{ url_for('ui_memory_list') }}">← back to all memory</a></p>
+
+  {% else %}
+
+  <div class="filters">
+    <a href="{{ url_for('ui_memory_list') }}"
+       class="fchip{% if not listing.filters.type and not listing.filters.core and not listing.filters.freshness %} on{% endif %}">all</a>
+    <a href="{{ url_for('ui_memory_list') }}?core=true"
+       class="fchip{% if listing.filters.core %} on{% endif %}">core</a>
+    {% for f in ['fresh', 'aging', 'stale'] %}
+    <a href="{{ url_for('ui_memory_list') }}?freshness={{ f }}"
+       class="fchip{% if listing.filters.freshness == f %} on{% endif %}">{{ f }}</a>
+    {% endfor %}
+    {% for t in listing.types %}
+    <a href="{{ url_for('ui_memory_list') }}?type={{ t }}"
+       class="fchip{% if listing.filters.type == t %} on{% endif %}">{{ t }}</a>
+    {% endfor %}
+  </div>
+
+  <h2 class="section-h">{{ "{:,}".format(listing.total) }}
+    {% if listing.filters.type or listing.filters.core or listing.filters.freshness %}matching{% endif %} memories</h2>
+  {% if listing.rows %}
+  <ul class="flist">
+    {% for m in listing.rows %}
+    <li><a href="{{ url_for('ui_memory', file_path=m.id) }}">{{ m.path }}
+      {% if m.type %}<span class="meta">· {{ m.type }}</span>{% endif %}
+      {% if m.core %}<span class="meta">· core</span>{% endif %}
+      <span class="meta fresh-{{ m.freshness }}">· {{ m.freshness }}</span></a></li>
+    {% endfor %}
+  </ul>
+  {% elif unindexed and not listing.filters.type and not listing.filters.core and not listing.filters.freshness %}
+  <p class="empty">No memories on disk yet.</p>
+  {% else %}
+  <p class="empty">No memories match this filter.</p>
+  {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

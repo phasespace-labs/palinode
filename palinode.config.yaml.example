@@ -164,8 +164,36 @@ auto_summary:
   max_chars: 120
   # Minimum content length to trigger summary generation
   min_content_chars: 200
-  # Ollama URL for summary generation (uses embeddings.primary.url if not set)
+  # Wire protocol for the CHAT *primary* (model @ ollama_url):
+  #   "ollama" (default) — Ollama-native /api/generate.
+  #   "openai"           — an OpenAI-compatible /v1/chat/completions endpoint
+  #                        (LM Studio, vLLM, a shim). Use when the primary is e.g.
+  #                        an MLX model served by LM Studio. With "openai", ANY
+  #                        primary failure cascades to llm_fallbacks (a remote
+  #                        primary's connect drop is what backups exist for).
+  # api: "openai"
+  # Ollama URL for summary generation (uses embeddings.primary.url if not set).
+  # When api: "openai" this is the OpenAI-compat base URL of the primary.
   # ollama_url: "http://localhost:11434"
+  # OpenAI-compat fallback chain for the CHAT role (auto-description/-summary),
+  # walked in order on primary failure. Only fires on the watcher-driven
+  # /generate-summaries backfill — never the /save hot path — so enrichment still
+  # lands during a primary outage without egressing on every save. Empty (the
+  # default) = no fallback. Each entry is an OpenAI-compat /v1/chat/completions
+  # endpoint. Example ladder (LM Studio MLX primary → local vLLM → Sonnet shim):
+  # api: "openai"
+  # model: "qwen3-coder-30b-a3b-instruct-dwq"
+  # ollama_url: "http://lmstudio-host:1234"     # LM Studio (e.g. a Mac Studio)
+  # llm_fallbacks:
+  #   - model: "qwen-coder"                     # local vLLM (fast, on-LAN)
+  #     url: "http://vllm-host:8000"
+  #   - model: "claude-sonnet-4-6"              # label only; shim sets SHIM_MODEL
+  #     url: "http://127.0.0.1:4010"            # local Sonnet shim (last resort)
+  # Per-/generate-summaries-run cap on how many deferred files may escalate to the
+  # fallback chain, bounding egress (esp. to the Sonnet link) when the primary is
+  # down and one backfill spans a large backlog. 0 = unlimited. Only applies with
+  # llm_fallbacks.
+  # llm_fallback_max_per_run: 10
 
 # -----------------------------------------------------------------------------
 # Search Defaults

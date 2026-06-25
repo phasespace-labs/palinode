@@ -6,13 +6,13 @@ from palinode.core.ollama_client import OllamaUnreachable
 
 
 def _patch_client(*, side_effect=None, response: str | None = None):
-    """Patch server.get_ollama_client; generate raises side_effect or returns response."""
+    """Patch enrichment.get_ollama_client; generate raises side_effect or returns response."""
     fake = mock.MagicMock(name="OllamaClient")
     if side_effect is not None:
         fake.generate.side_effect = side_effect
     else:
         fake.generate.return_value = {"response": response}
-    return mock.patch("palinode.api.server.get_ollama_client", return_value=fake)
+    return mock.patch("palinode.api.enrichment.get_ollama_client", return_value=fake)
 
 
 def test_extract_first_line_basic():

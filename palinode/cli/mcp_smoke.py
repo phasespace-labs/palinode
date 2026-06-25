@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import os
+import platform
+import subprocess  # nosec B404 - argv-form process probe, no shell
 import sys
 from datetime import date
 from pathlib import Path
@@ -27,7 +29,7 @@ from palinode.core.config import config
 _HARNESSES: list[tuple[str, str, int]] = [
     ("claude-code",     "Claude Code",     1),
     ("codex",           "Codex CLI",       1),
-    ("antigravity",     "Antigravity",     1),
+    ("generic-ide",     "Generic IDE",     1),
     ("cursor",          "Cursor",          2),
     ("claude-desktop",  "Claude Desktop",  2),
     ("cline",           "Cline",           2),
@@ -79,6 +81,61 @@ _SMOKE_CALLS: list[dict[str, str]] = [
 
 def _is_tty() -> bool:
     return sys.stdout.isatty()
+
+
+def claude_desktop_running() -> bool | None:
+    """Best-effort detection of a live Claude Desktop process (#373).
+
+    Claude Desktop holds ``claude_desktop_config.json`` in memory and rewrites
+    it on quit, silently clobbering any edit made while it runs (and stripping
+    ``url``-form MCP entries). So a config edit must be done with the app
+    *quit* — this lets callers warn before they walk someone into the
+    edit-gets-overwritten trap.
+
+    Matches the platform-specific *application* (the macOS ``Claude.app``
+    bundle, the Windows ``Claude.exe`` image) rather than a bare ``claude``
+    token, so it never false-positives on the Claude **Code** CLI (this very
+    process) or a ``claude`` shell alias.
+
+    Returns:
+        True if a Claude Desktop process is detected, False if confidently not,
+        and ``None`` when detection isn't possible (unknown platform, the probe
+        tool is missing, or it errored) — callers should treat ``None`` as
+        "couldn't tell," not "safe."
+    """
+    system = platform.system()
+    try:
+        if system in ("Darwin", "Linux"):
+            # macOS app: /Applications/Claude.app/Contents/MacOS/Claude
+            # Linux app: an Electron binary under a .../claude-desktop/ path.
+            # Match the bundle/app path via -f so the bare `claude` CLI (no
+            # ".app"/"claude-desktop" path segment) can't match.
+            pattern = "Claude.app" if system == "Darwin" else "claude-desktop"
+            proc = subprocess.run(  # nosec B603,B607 - argv form, no shell
+                ["pgrep", "-f", pattern],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            # pgrep: 0 = match, 1 = no match, >1 = error.
+            if proc.returncode == 0:
+                return True
+            if proc.returncode == 1:
+                return False
+            return None
+        if system == "Windows":
+            proc = subprocess.run(  # nosec B603,B607 - argv form, no shell
+                ["tasklist", "/FI", "IMAGENAME eq Claude.exe", "/NH"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if proc.returncode != 0:
+                return None
+            return "Claude.exe" in proc.stdout
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        return None
+    return None
 
 
 def _smoke_log_path() -> Path:
@@ -266,6 +323,22 @@ def mcp_smoke(
     if output_json:
         click.echo(json.dumps(_json_payload(harness), indent=2))
         return
+
+    # #373: Claude Desktop rewrites its config on quit, clobbering live edits.
+    # Warn loudly (to stderr, so it doesn't pollute a piped runbook) when the
+    # app is detected running before the user follows a runbook that has them
+    # touch the config. Detection is best-effort: a None ("couldn't tell")
+    # stays silent rather than crying wolf.
+    if harness == "claude-desktop" and claude_desktop_running() is True:
+        click.echo(
+            "WARNING: Claude Desktop appears to be running.\n"
+            "  Quit it (cmd+Q / fully exit) BEFORE editing "
+            "claude_desktop_config.json — the app rewrites that file on quit "
+            "and will silently overwrite your edit (and strip url-form MCP "
+            "entries). Recovery order: quit → edit → relaunch.\n"
+            "  See docs/MCP-CONFIG-HOMES.md.",
+            err=True,
+        )
 
     # Default: print the runbook
     click.echo(_runbook_text(harness))

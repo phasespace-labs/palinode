@@ -308,4 +308,103 @@ class TestHealthAutoSummary:
         # /health/auto-summary must not require bearer auth — monitor agents
         # should be able to probe without managing a token.
         from palinode.api import server as srv
-        assert "/health/auto-summary" in srv._BearerAuthMiddleware._AUTH_EXEMPT_PATHS
+        assert "/health/auto-summary" in srv._API_EXEMPT_PATHS
+
+
+# ---------------------------------------------------------------------------
+# #472 — description eligibility: structural / non-memory files are excluded
+# from both the pending_descriptions count and the /generate-summaries worklist
+# so the backfill drains to a stable floor instead of regenerating throwaway
+# descriptions forever.
+# ---------------------------------------------------------------------------
+
+
+class TestDescriptionEligibility:
+    # Structural / non-memory locations that must never count or be backfilled.
+    # (relpath under PALINODE_DIR, written without a `description:` field.)
+    _STRUCTURAL = [
+        ("daily", "2026-06-07.md"),
+        ("archive", "old-note.md"),
+        ("specs", "spec.md"),
+        ("specs/prompts", "consolidation.md"),  # the live #472 offender
+    ]
+
+    def _write(self, tmp_path, relparts, name):
+        d = tmp_path
+        for p in str(relparts).split("/"):
+            d = d / p
+        d.mkdir(parents=True, exist_ok=True)
+        fp = d / name
+        # Has frontmatter but no `description:` — the shape that pinned the count.
+        fp.write_text("---\nid: struct\ntype: Insight\n---\nBody content.\n")
+        return fp
+
+    def test_predicate_excludes_structural_and_toplevel(self):
+        # Unit-level guard on the shared predicate itself.
+        is_eligible = _server_mod._is_description_eligible
+        assert is_eligible("insights/foo.md") is True
+        assert is_eligible("decisions/bar.md") is True
+        assert is_eligible("inbox/baz.md") is True
+        assert is_eligible("daily/2026-06-07.md") is False
+        assert is_eligible("archive/old.md") is False
+        assert is_eligible("specs/spec.md") is False
+        assert is_eligible("specs/prompts/consolidation.md") is False
+        assert is_eligible("README.md") is False   # top-level doc
+        assert is_eligible("PROGRAM.md") is False
+
+    def test_structural_files_not_selected_by_backfill(self, client, tmp_path):
+        for relparts, name in self._STRUCTURAL:
+            self._write(tmp_path, relparts, name)
+        # A top-level doc too.
+        (tmp_path / "README.md").write_text(
+            "---\nid: readme\n---\nProject readme.\n"
+        )
+        with patch("palinode.api.server._generate_description") as mock_desc:
+            res = client.post("/generate-summaries")
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["descriptions_generated"] == 0, body
+        assert body["description_errors"] == 0, body
+        # The generator must never even be invoked for ineligible files —
+        # that's the GPU burn #472 fixes.
+        mock_desc.assert_not_called()
+
+    def test_structural_files_not_counted_in_pending(self, client, tmp_path, monkeypatch):
+        for relparts, name in self._STRUCTURAL:
+            self._write(tmp_path, relparts, name)
+        (tmp_path / "README.md").write_text(
+            "---\nid: readme\n---\nProject readme.\n"
+        )
+        monkeypatch.setattr(config.auto_summary, "enabled", True)
+        fake = MagicMock(name="OllamaClient")
+        fake.ping.return_value = True
+        with patch("palinode.api.server.get_ollama_client", return_value=fake):
+            res = client.get("/health/auto-summary")
+        assert res.status_code == 200, res.text
+        # A tree of only structural files missing `description` → count is 0.
+        assert res.json()["pending_descriptions"] == 0, res.json()
+
+    def test_eligible_memory_file_still_counted_and_backfilled(self, client, tmp_path, monkeypatch):
+        # Regression guard: the eligibility gate must not suppress real work.
+        sub = tmp_path / "insights"
+        sub.mkdir()
+        (sub / "real-memory.md").write_text(
+            "---\nid: real-memory\ntype: Insight\n---\nA genuine memory.\n"
+        )
+        # Mixed in with structural noise that must be ignored.
+        self._write(tmp_path, "daily", "2026-06-07.md")
+
+        monkeypatch.setattr(config.auto_summary, "enabled", True)
+        fake = MagicMock(name="OllamaClient")
+        fake.ping.return_value = True
+        with patch("palinode.api.server.get_ollama_client", return_value=fake):
+            res = client.get("/health/auto-summary")
+        assert res.json()["pending_descriptions"] == 1, res.json()
+
+        with patch("palinode.api.server._generate_description",
+                   return_value="A real description."):
+            res = client.post("/generate-summaries")
+        body = res.json()
+        assert body["descriptions_generated"] == 1, body
+        text = (sub / "real-memory.md").read_text()
+        assert 'description: "A real description."' in text

@@ -16,13 +16,13 @@ import hashlib
 import logging
 import os
 import re
-import subprocess
 from datetime import UTC, datetime
 from collections.abc import Callable
 from typing import Any
 
 import yaml
 
+from palinode.core import git_tools
 from palinode.core.config import config
 from palinode.core.parser import slugify as _base_slugify
 
@@ -180,27 +180,26 @@ def _build_file_content(
 
 
 def _git_commit(memory_dir: str, staged_files: list[str], log_file: str | None) -> None:
-    """Stage and commit migrated files in the memory repo."""
-    files_to_add = [f for f in staged_files + ([log_file] if log_file else []) if f]
-    if not files_to_add:
-        return
-    subprocess.run(
-        ["git", "add", "--"] + files_to_add,
-        cwd=memory_dir,
-        check=False,
-        capture_output=True,
-    )
+    """Commit each migrated file in its own per-file commit (#566).
+
+    Each imported section is a genesis mutation, so each created memory gets its
+    own commit via the git_tools choke point — never a batched ``git add --``
+    over the whole import. The migration log is committed last, on its own, as
+    the import-summary record.
+    """
     date_str = datetime.now(UTC).strftime("%Y-%m-%d")
-    msg = (
-        f"palinode migrate openclaw: import {len(staged_files)} sections "
-        f"from MEMORY.md ({date_str})"
-    )
-    subprocess.run(
-        ["git", "commit", "-m", msg],
-        cwd=memory_dir,
-        check=False,
-        capture_output=True,
-    )
+    for fp in staged_files:
+        if not fp:
+            continue
+        base = os.path.basename(fp)
+        git_tools.commit_memory_file(
+            fp, f"palinode migrate openclaw: import {base} from MEMORY.md ({date_str})"
+        )
+    if log_file:
+        git_tools.commit_memory_file(
+            log_file,
+            f"palinode migrate openclaw: import log ({date_str})",
+        )
 
 
 def run_migration(
@@ -260,8 +259,7 @@ def run_migration(
 
         abs_path = os.path.join(memory_dir, rel_path)
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-        with open(abs_path, "w", encoding="utf-8") as f:
-            f.write(content)
+        git_tools.write_memory_file(abs_path, content)
 
         existing_hashes.add(content_hash)
         files_created.append(rel_path)
@@ -296,8 +294,7 @@ def run_migration(
                 log_lines.append(f"- `{fp}`")
         log_lines.append("")
 
-        with open(log_abs, "w", encoding="utf-8") as f:
-            f.write("\n".join(log_lines))
+        git_tools.write_memory_file(log_abs, "\n".join(log_lines))
 
     if not dry_run and written_abs:
         _git_commit(memory_dir, written_abs, log_abs)

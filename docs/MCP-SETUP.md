@@ -153,7 +153,7 @@ If your IDE only supports stdio and you need remote access, pipe over SSH:
 
 Requires passwordless SSH (`ssh-copy-id youruser@your-server`). HTTP transport is preferred when available.
 
-The three `ServerAlive*` / `TCPKeepAlive` options keep the SSH session alive across NAT/relay idle timeouts (especially common when piping through a VPN like Tailscale). Without them, the MCP connection silently dies after a few minutes of inactivity and you'll see `Connection reset by peer` in the IDE's MCP logs. The keepalives also let SSH detect a dead connection within ~90s after laptop sleep / WiFi change, so the IDE's reconnect logic kicks in faster.
+The three `ServerAlive*` / `TCPKeepAlive` options keep the SSH session alive across NAT/relay idle timeouts (especially common when piping through a VPN like private VPN). Without them, the MCP connection silently dies after a few minutes of inactivity and you'll see `Connection reset by peer` in the IDE's MCP logs. The keepalives also let SSH detect a dead connection within ~90s after laptop sleep / WiFi change, so the IDE's reconnect logic kicks in faster.
 
 ---
 
@@ -166,8 +166,9 @@ The three `ServerAlive*` / `TCPKeepAlive` options keep the SSH session alive acr
 | `PALINODE_API_PORT` | `6340` | API server port |
 | `PALINODE_MCP_SSE_HOST` | `0.0.0.0` | Bind address for HTTP MCP server |
 | `PALINODE_MCP_SSE_PORT` | `6341` | Port for HTTP MCP server |
+| `PALINODE_MCP_SURFACE` | `full` | MCP tool advertisement surface: `full` advertises every tool; `core` advertises the hot-path subset while keeping dispatch capability unchanged |
 | `PALINODE_PROJECT` | _(auto-detect from CWD)_ | Project context for ambient search |
-| `PALINODE_API_BIND_INTENT` | _(unset)_ | Set to `public` to suppress the 0.0.0.0 binding warning for intentional network-exposed deployments (e.g., Tailscale). The warning still fires when this is unset and the API binds to `0.0.0.0`. |
+| `PALINODE_API_BIND_INTENT` | _(unset)_ | Set to `public` to suppress the 0.0.0.0 binding warning for intentional network-exposed deployments (e.g., private VPN). The warning still fires when this is unset and the API binds to `0.0.0.0`. |
 
 ---
 
@@ -192,6 +193,7 @@ The three `ServerAlive*` / `TCPKeepAlive` options keep the SSH session alive acr
 | `palinode_trigger` | Register prospective memory triggers |
 | `palinode_prompt` | Manage versioned LLM prompt files |
 | `palinode_consolidate` | Run memory consolidation |
+| `palinode_archive_expired` | Archive ephemeral memories whose TTL has expired |
 | `palinode_session_end` | Capture session outcomes to daily notes |
 | `palinode_dedup_suggest` | Pre-write check: existing files semantically near a draft (Obsidian wiki contract) |
 | `palinode_orphan_repair` | Given a broken `[[wikilink]]`, return semantically near candidate targets |

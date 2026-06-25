@@ -64,7 +64,7 @@ in
       default = "127.0.0.1";
       description = ''
         Host address for the palinode API server.
-        Set to "0.0.0.0" for network-accessible deployments (e.g. Tailscale).
+        Set to "0.0.0.0" for network-accessible deployments (e.g. private VPN).
         When set to anything other than "127.0.0.1", a startup warning is emitted
         unless bindIntent is set to "public".
       '';
@@ -93,7 +93,7 @@ in
       default = null;
       description = ''
         Set to "public" to suppress the 0.0.0.0-binding startup warning for
-        intentional network-exposed deployments (e.g. behind Tailscale).
+        intentional network-exposed deployments (e.g. behind private VPN).
         Leave null to keep the warning when apiHost is "0.0.0.0".
       '';
     };
