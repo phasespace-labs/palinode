@@ -1,7 +1,8 @@
 [Unit]
 Description=Palinode API Server (FastAPI / uvicorn)
 Documentation=https://github.com/phasespace-labs/palinode
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -9,11 +10,14 @@ WorkingDirectory=${PALINODE_HOME}
 Environment="PALINODE_DIR=${PALINODE_DATA_DIR}"
 Environment="OLLAMA_URL=${OLLAMA_URL}"
 Environment="EMBEDDING_MODEL=${EMBEDDING_MODEL}"
-# Suppress the 0.0.0.0 binding warning for intentional network-exposed deployments.
-# This template binds to 0.0.0.0 so the API is reachable over private VPN (or any
-# other network interface). PALINODE_API_BIND_INTENT=public makes that intent
-# explicit and prevents misleading startup warnings. See docs/MCP-SETUP.md.
-Environment="PALINODE_API_BIND_INTENT=public"
+# Bind intent. The API binds 0.0.0.0 so it is reachable over Tailscale (or any
+# other interface). Setting PALINODE_API_BIND_INTENT=public suppresses the
+# 0.0.0.0 startup warning — but the app then REQUIRES PALINODE_API_TOKEN and
+# refuses to start without one. Leave this empty (the installer default) for a
+# token-less, network-isolated deployment: the API starts and only logs the
+# warning. Set it to "public" only when you also provide a token. See
+# docs/MCP-SETUP.md. (Empty is treated as "not public" — a value-based check.)
+Environment="PALINODE_API_BIND_INTENT=${PALINODE_API_BIND_INTENT}"
 ExecStart=${PALINODE_HOME}/venv/bin/uvicorn palinode.api.server:app --host 0.0.0.0 --port ${API_PORT}
 Restart=always
 RestartSec=5
@@ -24,4 +28,4 @@ StandardError=journal
 SyslogIdentifier=palinode-api
 
 [Install]
-WantedBy=default.target
+WantedBy=${SYSTEMD_WANTED_BY}

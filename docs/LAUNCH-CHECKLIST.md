@@ -13,7 +13,7 @@ CLI subcommand prints the runbook and records results.
 
 - [ ] Claude Code (Tier 1) -- `palinode mcp-smoke claude-code --record --operator <name>` on YYYY-MM-DD; logged to `.palinode/harness-smoke-runs.jsonl`
 - [ ] Codex (Tier 1) -- `palinode mcp-smoke codex --record --operator <name>` on YYYY-MM-DD; logged to `.palinode/harness-smoke-runs.jsonl`
-- [ ] Generic IDE (Tier 1) -- `palinode mcp-smoke generic-ide --record --operator <name>` on YYYY-MM-DD; logged to `.palinode/harness-smoke-runs.jsonl`
+- [ ] Antigravity (Tier 1) -- `palinode mcp-smoke antigravity --record --operator <name>` on YYYY-MM-DD; logged to `.palinode/harness-smoke-runs.jsonl`
 
 **Tier 2 — required every release:**
 
@@ -72,5 +72,5 @@ is checked AND `mcp-tool-coverage` CI is green on the release SHA.**
 ## Platform parity
 - [ ] All 25 MCP tools verified working on Claude Code, Claude Desktop, Cursor
 - [ ] Codex CLI MCP config documented and smoke-tested
-- [ ] Generic IDE MCP config documented
+- [ ] Antigravity IDE MCP config documented
 - [ ] `palinode mcp-config --diagnose` covers all supported client paths

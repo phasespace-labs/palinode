@@ -487,6 +487,23 @@ const palinodePlugin = {
           priority: Type.Optional(
             Type.Number({ description: "Memory priority (1–5). Higher values surface in priority-filtered recall." }),
           ),
+          epistemic: Type.Optional(
+            Type.Union(
+              [
+                Type.Literal("fact"),
+                Type.Literal("inference"),
+                Type.Literal("open_question"),
+              ],
+              {
+                description:
+                  "Epistemic marker (ADR-018): the KIND of claim this memory makes. " +
+                  "'fact' (observed/verified), 'inference' (derived, lower trust), or " +
+                  "'open_question' (unresolved). Omit to leave the memory " +
+                  "unmarked (no claim — not treated as fact); persisted as " +
+                  "frontmatter only when set.",
+              },
+            ),
+          ),
           update_policy: Type.Optional(
             Type.Union(
               [Type.Literal("append"), Type.Literal("replace")],
@@ -515,6 +532,21 @@ const palinodePlugin = {
                   "computed server-side when omitted; the verifier reads these back.",
               },
             ),
+          ),
+          contradicts: Type.Optional(
+            Type.Array(Type.String(), {
+              description:
+                "Typed conflict links (#533): refs (category/slug) this memory " +
+                "conflicts with. Records the conflict WITHOUT picking a winner " +
+                "(that is supersession's job); surfaced by `palinode lint`.",
+            }),
+          ),
+          backed_by: Type.Optional(
+            Type.Array(Type.String(), {
+              description:
+                "Typed evidence links (#533): refs (category/slug) that " +
+                "support/back this memory.",
+            }),
           ),
         }),
         async execute(_toolCallId: string, params: any) {

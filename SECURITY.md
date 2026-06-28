@@ -37,7 +37,7 @@ free and **required** when binding the API to a non-loopback address.
 | Deployment | Recommended setting | Notes |
 |------------|---------------------|-------|
 | Local dev (single user, loopback) | No token | Default. The middleware is a no-op when `PALINODE_API_TOKEN` is unset. |
-| Multi-user / homelab / private VPN | Set `PALINODE_API_TOKEN` | Every request must carry `Authorization: Bearer <token>` except `/health` and `/health/watcher`. |
+| Multi-user / homelab / Tailscale | Set `PALINODE_API_TOKEN` | Every request must carry `Authorization: Bearer <token>` except `/health` and `/health/watcher`. |
 | Public exposure (`PALINODE_API_BIND_INTENT=public`) | **Token required** | The server refuses to start without `PALINODE_API_TOKEN` (or `PALINODE_API_TOKEN_FILE`). |
 
 ### Generating a token
@@ -81,7 +81,7 @@ Unauthorized` and clients reconnect with the new token.
   transport semantics (SSE/Streamable HTTP) than the REST API. If you need
   to expose the MCP endpoint beyond loopback today, front it with a reverse
   proxy that enforces auth, or restrict access at the network layer (VPN,
-  VPN/firewall ACLs, firewall).
+  Tailscale ACLs, firewall).
 
 The token comparison is constant-time (`hmac.compare_digest`) and the
 expected header is pre-encoded at startup, so the hot path is a single

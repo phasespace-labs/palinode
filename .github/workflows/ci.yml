@@ -3,7 +3,7 @@
 # Jobs:
 #   1. unit-tests          — fast feedback on core logic (no external services)
 #   2. integration         — tests/integration/ (may need Ollama; continue-on-error)
-#   3. mcp-tool-coverage   — release-blocking MCP tool gate (#346)
+#   3. mcp-tool-coverage   — release-blocking MCP tool gate
 #   4. security-scan       — bandit (code) + pip-audit (dependencies)
 
 name: CI
@@ -68,7 +68,7 @@ jobs:
   # Run the full suite locally against a host with Ollama for full coverage.
   # ---------------------------------------------------------------------------
   integration-tests:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
 
     env:
       PALINODE_DIR: /tmp/palinode-ci-test
@@ -94,7 +94,7 @@ jobs:
         continue-on-error: true
 
   # ---------------------------------------------------------------------------
-  # MCP tool coverage — release-blocking gate (#346, parent #342).
+  # MCP tool coverage — release-blocking gate.
   #
   # Runs the in-process (Phase 1) and stdio (Phase 2) MCP tool-coverage
   # tests WITHOUT continue-on-error.  A failure here blocks the PR.
@@ -102,7 +102,7 @@ jobs:
   # without smoke-args coverage.
   # ---------------------------------------------------------------------------
   mcp-tool-coverage:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
 
     env:
       PALINODE_DIR: /tmp/palinode-ci-mcp

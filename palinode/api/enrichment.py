@@ -385,6 +385,12 @@ def _inject_summary(file_path: str, summary: str) -> None:
     pattern = re.compile(r'^(---\n.*?\n)(---\n)', re.DOTALL)
     m = pattern.match(text)
     if not m:
+        # A summary was computed then silently dropped — DEBUG so the no-op is
+        # traceable when a file unexpectedly never gets its summary (#337).
+        logger.debug(
+            "summary injection skipped: no frontmatter op=inject_summary file_path=%s",
+            file_path,
+        )
         return  # no frontmatter detected, skip injection natively
 
     fm_body = m.group(1)
@@ -416,6 +422,11 @@ def _inject_description(file_path: str, description: str) -> None:
     pattern = re.compile(r'^(---\n.*?\n)(---\n)', re.DOTALL)
     m = pattern.match(text)
     if not m:
+        # Same as _inject_summary: a computed description dropped silently (#337).
+        logger.debug(
+            "description injection skipped: no frontmatter op=inject_description file_path=%s",
+            file_path,
+        )
         return  # no frontmatter detected, skip injection
 
     fm_body = m.group(1)

@@ -102,9 +102,12 @@ def check_model_context(
     except (OllamaError, OSError, ValueError, KeyError) as e:
         # Preflight is best-effort; never block embed on it. OllamaError covers
         # connect/timeout/HTTP/circuit-open from the centralized client.
-        logger.debug(
-            "embed preflight: /api/show check skipped for model=%s: %s",
-            model, e,
+        # INFO not DEBUG (#337, docs/logging.md): a preflight that can't run at
+        # all is worth one operator-visible line — it means the ctx guard is
+        # silently inactive for this process.
+        logger.info(
+            "embed preflight: /api/show check skipped op=preflight model=%s error=%r",
+            model, str(e),
         )
 
 
@@ -191,9 +194,12 @@ def _embed_local(text: str) -> list[float]:
         # Connect/timeout/HTTP/circuit-open/unexpected-shape — degrade to an
         # empty vector (the contract the indexer relies on to skip + retry).
         # text_len, not raw text, so logs never carry user content.
+        # Structured key=value per docs/logging.md (#337) — greppable on
+        # op/outcome alongside the ollama_client per-call event line.
         logger.warning(
-            "embed failed — model=%s text_len=%d: %s; returning empty vector",
-            model, len(text), e,
+            "embed failed; returning empty vector "
+            "op=embed model=%s text_len=%d outcome=error error=%r",
+            model, len(text), str(e),
         )
         return []
 
@@ -213,17 +219,35 @@ def _embed_gemini(text: str, dimension: int = 768, task_type: str = "RETRIEVAL_D
     model = config.embeddings.research.model
     gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:embedContent"
 
-    response = httpx.post(
-        f"{gemini_url}?key={gemini_key}",
-        json={
-            "model": f"models/{model}",
-            "content": {"parts": [{"text": text}]},
-            "taskType": task_type,
-            "outputDimensionality": dimension,
-        },
-        timeout=get_gemini_timeout(),
-    )
-    response.raise_for_status()
+    try:
+        response = httpx.post(
+            f"{gemini_url}?key={gemini_key}",
+            json={
+                "model": f"models/{model}",
+                "content": {"parts": [{"text": text}]},
+                "taskType": task_type,
+                "outputDimensionality": dimension,
+            },
+            timeout=get_gemini_timeout(),
+        )
+        response.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        # Gemini rejected the request (auth, quota, bad model). Previously this
+        # raised unlogged; surface a WARNING with the failing endpoint + status
+        # so an operator can tell embed degradation from a model outage (#337).
+        # Endpoint is logged without the key query-string (no secret leak).
+        logger.warning(
+            "gemini embed failed op=embed model=%s endpoint=%s outcome=http_%d",
+            model, gemini_url, e.response.status_code,
+        )
+        raise
+    except httpx.HTTPError as e:
+        # Connect/timeout/transport error reaching Gemini.
+        logger.warning(
+            "gemini embed failed op=embed model=%s endpoint=%s outcome=unreachable error=%r",
+            model, gemini_url, str(e),
+        )
+        raise
     data = response.json()
     return data.get("embedding", {}).get("values", [])
 

@@ -1,8 +1,8 @@
 [Unit]
 Description=Palinode File Watcher & Indexer Daemon
 Documentation=https://github.com/phasespace-labs/palinode
-After=network.target palinode-api.service
-Wants=palinode-api.service
+After=network-online.target palinode-api.service
+Wants=network-online.target palinode-api.service
 
 [Service]
 Type=simple
@@ -20,4 +20,4 @@ StandardError=journal
 SyslogIdentifier=palinode-watcher
 
 [Install]
-WantedBy=default.target
+WantedBy=${SYSTEMD_WANTED_BY}

@@ -157,15 +157,15 @@ PALINODE_API_HOST = "127.0.0.1"
 PALINODE_API_PORT = "6340"
 ```
 
-### Generic IDE
+### Antigravity (Google)
 
-Some IDEs store MCP config in a JSON file under a hidden config
+Antigravity stores MCP config in a JSON file under the `.gemini`
 directory. The path is consistent across platforms:
 
 | Platform | Path |
 |----------|------|
-| macOS / Linux | `~/.gemini/generic-ide/mcp_config.json` |
-| Windows | `%USERPROFILE%\.gemini\generic-ide\mcp_config.json` |
+| macOS / Linux | `~/.gemini/antigravity/mcp_config.json` |
+| Windows | `%USERPROFILE%\.gemini\antigravity\mcp_config.json` |
 
 JSON shape: `{ "mcpServers": { "palinode": { ... } } }` — same as
 Claude Desktop.
@@ -173,8 +173,8 @@ Claude Desktop.
 Access from the IDE: three-dot menu in chat > MCP Servers > Manage MCP
 Servers > View raw config.
 
-> **Note:** IDE MCP config path structures may
-> evolve. If the documented MCP config file does not exist,
+> **Note:** Antigravity is new (2026) and the config path structure may
+> evolve. If `~/.gemini/antigravity/mcp_config.json` does not exist,
 > check `~/.gemini/settings/mcp_config.json` as a fallback. See
 > issue #345 for updates.
 
@@ -185,6 +185,97 @@ Servers > View raw config.
 | Cursor | `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (project) |
 | Windsurf | `~/.codeium/windsurf/mcp_config.json` |
 | VS Code (Continue) | `~/.continue/config.yaml` |
+
+---
+
+## Transport: stdio vs streamable-HTTP
+
+A `palinode` entry can use one of two transports. The config *file* you edit is
+the same (see the tables above) — only the entry shape changes.
+
+### stdio (local install)
+
+The client launches a `palinode-mcp` process per session over stdio:
+
+```json
+{
+  "mcpServers": {
+    "palinode": {
+      "command": "palinode-mcp",
+      "env": {}
+    }
+  }
+}
+```
+
+Use this when palinode is installed on the **same machine** as the client. Each
+session pays a Python process cold-start, and a remote server needs an SSH pipe
+(see [MCP-SETUP.md](MCP-SETUP.md#remote-setup-via-ssh-stdio-fallback)).
+
+### Streamable-HTTP (remote server — recommended)
+
+The client connects to an already-running `palinode-mcp` HTTP service:
+
+```json
+{
+  "mcpServers": {
+    "palinode": {
+      "type": "http",
+      "url": "http://<palinode-host>:6341/mcp/"
+    }
+  }
+}
+```
+
+Replace `<palinode-host>` with the host running palinode (port `6341`, default
+MCP HTTP port). The trailing slash on `/mcp/` is required.
+
+**Why migrate from SSH-stdio to streamable-HTTP:**
+
+- **Warm model.** The HTTP endpoint is a long-running service, so it reuses the
+  already-loaded BGE-M3 embedding model — no per-session model warm-up.
+- **No Python cold-start.** stdio spawns a fresh `palinode-mcp` interpreter for
+  every session; HTTP talks to a process that is already up.
+- **No persistent SSH tunnel.** The old remote pattern piped stdio over SSH
+  (`ssh … palinode-mcp`); HTTP drops that connection entirely and survives
+  client disconnects/reconnects.
+
+> **Auth (forward-compat):** the HTTP endpoint is currently token-less and is
+> protected by network isolation (e.g. a private/Tailscale network). When bearer
+> auth lands, add it as an `Authorization` header:
+>
+> ```json
+> { "type": "http", "url": "http://<palinode-host>:6341/mcp/",
+>   "headers": { "Authorization": "Bearer <token>" } }
+> ```
+>
+> `palinode mcp-config --http --bearer <token>` emits exactly this shape.
+
+> **Claude Desktop note:** Claude Desktop only accepts stdio (`command`+`args`)
+> entries — a `"url"`-form entry is silently stripped on quit (see the warning in
+> the Claude Desktop section above). Use the **stdio** form for Claude Desktop;
+> use **streamable-HTTP** for Claude Code, Cursor, Cline, Zed, and other clients
+> that support remote MCP over HTTP.
+
+### Emit a ready-to-paste block
+
+`palinode mcp-config` can print either transport's config block — paste it into
+whichever file the diagnostic (below) tells you your client reads:
+
+```bash
+# Streamable-HTTP (remote). Substitute your host:
+palinode mcp-config --http --host <palinode-host>
+
+# …or pass a full URL:
+palinode mcp-config --http --url http://<palinode-host>:6341/mcp/
+
+# stdio (local):
+palinode mcp-config --stdio
+```
+
+When piped, the command emits only the raw JSON block (so you can redirect it);
+when run interactively it adds guidance and a `claude mcp add` one-liner. It is
+read-only — it never writes to any config file.
 
 ---
 

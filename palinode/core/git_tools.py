@@ -76,7 +76,7 @@ def _run_git(*args: str, check: bool = False) -> subprocess.CompletedProcess:
 # Every path that mutates a memory file routes its write through
 # :func:`write_memory_file` and its commit through :func:`commit_memory_file` /
 # :func:`commit_memory_files`. Concentrating both here gives the substrate a
-# single observation point for the mutation chain: future extensions hook one
+# single observation point for the mutation chain — a future signer hooks one
 # function instead of the formerly-scattered ``open(w)`` / ``git add`` sites
 # (save, write-time dedup, consolidation ops, ttl-archive, migration). It also
 # enforces the one-mutation-one-commit invariant: a commit stages an explicit
@@ -265,12 +265,21 @@ def blame(file_path: str, search: str | None = None) -> str:
                 if match:
                     source = match.group(1)
     except Exception:
+        # Frontmatter provenance is enrichment only — blame works without it,
+        # so a parse/read failure here is provably inert (docs/logging.md
+        # silent-except carve-out).
         pass
 
     # Get git blame
     result = _run_git("blame", "--date=short", "-w", file_path)
 
     if result.returncode != 0:
+        # Surface to the log, not just the returned string (#337) — git
+        # failures returned as strings otherwise never reach journalctl.
+        logger.warning(
+            "git blame failed op=blame file_path=%s returncode=%d stderr=%r",
+            file_path, result.returncode, result.stderr.strip(),
+        )
         return f"Git blame failed: {result.stderr}"
 
     # Build header with provenance context
@@ -397,13 +406,30 @@ def rollback(file_path: str, commit: str | None = None, dry_run: bool = False) -
     # Perform the rollback
     checkout = _run_git("checkout", target, "--", file_path)
     if checkout.returncode != 0:
+        # A failed rollback is operator-critical and was previously only a
+        # return value — log at ERROR (#337).
+        logger.error(
+            "rollback checkout failed op=rollback file_path=%s target=%s "
+            "returncode=%d stderr=%r",
+            file_path, target, checkout.returncode, checkout.stderr.strip(),
+        )
         return f"Rollback failed: {checkout.stderr}"
 
     # Commit the revert
     message = f"palinode: rollback {file_path} to {target}"
     _run_git("add", file_path)
-    _run_git("commit", "-m", message)
-    
+    commit = _run_git("commit", "-m", message)
+    if commit.returncode != 0:
+        # The checkout landed but the commit did not — the working tree is now
+        # dirty (rolled-back content uncommitted). Surface it so the operator
+        # knows the rollback is half-applied (#337). "nothing to commit" also
+        # lands here but is benign; stderr distinguishes the two.
+        logger.warning(
+            "rollback commit failed op=commit file_path=%s target=%s "
+            "returncode=%d stderr=%r",
+            file_path, target, commit.returncode, commit.stderr.strip(),
+        )
+
     return f"Rolled back {file_path} to {target}. Committed as: {message}"
 
 
@@ -420,10 +446,27 @@ def push() -> str:
     if status.stdout.strip():
         # Auto-commit any uncommitted changes first (only markdown, not journals)
         _run_git("add", "*.md", "**/*.md")
-        _run_git("commit", "-m", f"palinode: auto-commit before push ({_utc_now().strftime('%Y-%m-%d %H:%M')})")
-    
+        pre_commit = _run_git(
+            "commit", "-m",
+            f"palinode: auto-commit before push ({_utc_now().strftime('%Y-%m-%d %H:%M')})",
+        )
+        if pre_commit.returncode != 0:
+            # A failed pre-push commit silently proceeds to push stale state —
+            # surface it (#337). "nothing to commit" also lands here but is
+            # benign; stderr distinguishes a real failure.
+            logger.warning(
+                "auto-commit before push failed op=commit returncode=%d stderr=%r",
+                pre_commit.returncode, pre_commit.stderr.strip(),
+            )
+
     result = _run_git("push", "origin", "main")
     if result.returncode != 0:
+        # Push failures (no remote, auth, not-a-repo) were returned as a string
+        # only — log so backup-sync drift is visible in journalctl (#337).
+        logger.warning(
+            "git push failed op=push returncode=%d stderr=%r",
+            result.returncode, result.stderr.strip(),
+        )
         return f"Push failed: {result.stderr}"
     
     return f"Pushed to origin/main successfully.\n{result.stderr.strip()}"

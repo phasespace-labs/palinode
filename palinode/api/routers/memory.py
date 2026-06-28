@@ -78,6 +78,21 @@ def _normalize_sources(raw: list[dict[str, Any]]) -> list[dict[str, str]]:
     return normalized
 
 
+def _normalize_link_refs(raw: Any, field: str) -> list[str]:
+    """Validate a typed-link ref list (#533), raising HTTP 400 on malformed input.
+
+    Thin wrapper over :func:`palinode.core.typed_links.normalize_link_refs` that
+    maps the core ``TypedLinkError`` to ``HTTPException(400)`` — mirroring how
+    ``_normalize_sources`` rejects malformed anchors at the save boundary.
+    """
+    from palinode.core.typed_links import TypedLinkError, normalize_link_refs
+
+    try:
+        return normalize_link_refs(raw, field)
+    except TypedLinkError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.get("/read")
 def read_api(file_path: str, meta: bool = False) -> dict[str, Any]:
     from palinode.core import parser
@@ -182,6 +197,22 @@ class SaveRequest(BaseModel):
     #: Any-value so Pydantic doesn't reject malformed input before our
     #: normalizer can return a clean 400.
     sources: list[dict[str, Any]] | None = None
+    #: #72 (ADR-018): epistemic marker — the KIND of claim this memory makes
+    #: (``fact`` / ``inference`` / ``open_question``), orthogonal to ``type``.
+    #: Validated against ``VALID_EPISTEMICS``. When omitted the memory is
+    #: ``unmarked`` (``DEFAULT_EPISTEMIC``) — no epistemic claim, NOT a fact — and
+    #: no frontmatter is written, so existing memories are byte-for-byte
+    #: unaffected. Like ``status``, it may also arrive via the ``metadata`` dict;
+    #: the explicit param wins.
+    epistemic: str | None = None
+    #: #533 (G4): typed relationship links, orthogonal to supersession.
+    #: ``contradicts`` records a conflict with no winner picked (surfaced by
+    #: ``lint`` as a health signal); ``backed_by`` records an evidence/support
+    #: edge to a source or fact. Both are plaintext frontmatter lists of
+    #: ``category/slug`` refs. Typed as Any so Pydantic doesn't reject malformed
+    #: input before ``_normalize_link_refs`` can return a clean 400.
+    contradicts: Any | None = None
+    backed_by: Any | None = None
 
 
 @router.get("/list")
@@ -297,6 +328,7 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
     # policy ("repalce") must not quietly fall back to append and leave a
     # living document mis-declared.
     from palinode.core.parser import (
+        VALID_EPISTEMICS as _VALID_EPISTEMICS,
         VALID_STATUSES as _VALID_STATUSES,
         VALID_UPDATE_POLICIES as _VALID_UPDATE_POLICIES,
     )
@@ -339,6 +371,29 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
             detail=(
                 f"Invalid status {_req_status!r}; "
                 f"expected one of {list(_VALID_STATUSES)}"
+            ),
+        )
+
+    # #72 (ADR-018): validate the epistemic marker. Like update_policy/status it
+    # may arrive via the first-class param OR the `metadata` dict (merged verbatim
+    # into frontmatter below) — resolve the effective value from both (the param
+    # wins) and validate that, so a metadata-supplied typo ("inferrence") can't
+    # land unvalidated. The effective value is written from this single var below.
+    _meta_epistemic = None
+    if req.metadata and isinstance(req.metadata, dict):
+        _meta_epistemic = req.metadata.get("epistemic")
+    _effective_epistemic = (
+        req.epistemic if req.epistemic is not None else _meta_epistemic
+    )
+    if (
+        _effective_epistemic is not None
+        and _effective_epistemic not in _VALID_EPISTEMICS
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid epistemic {_effective_epistemic!r}; "
+                f"expected one of {list(_VALID_EPISTEMICS)}"
             ),
         )
 
@@ -400,6 +455,17 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
                 _prior_policy = _existing_meta.get("update_policy")
                 if _prior_policy in _VALID_UPDATE_POLICIES:
                     update_policy = str(_prior_policy)
+            # #72 (ADR-018): epistemic is sticky for the same reason — re-saving
+            # the same (category, slug) is the same logical memory, and a save
+            # that omits the marker must NOT silently downgrade a deliberate
+            # `open_question`/`inference` back to the `fact` default. Inherit the
+            # file's existing marker when the caller didn't supply one (param or
+            # metadata). The prior value was validated at its own save; the
+            # membership guard makes re-validation unnecessary.
+            if _effective_epistemic is None:
+                _prior_epistemic = _existing_meta.get("epistemic")
+                if _prior_epistemic in _VALID_EPISTEMICS:
+                    _effective_epistemic = str(_prior_epistemic)
         except (OSError, ValueError) as exc:
             # Unreadable/unparseable existing file: fail open to today's
             # behaviour (stamp now) rather than block the save. The overwrite
@@ -428,11 +494,14 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
         "last_updated": _now_iso,
     }
     if req.metadata:
-        # H4: don't let a raw, unvalidated `update_policy` from the metadata
-        # dict land in frontmatter — it is resolved + validated above and
-        # written from the single `update_policy` var below.
+        # H4: don't let raw, unvalidated fields from the metadata dict land in
+        # frontmatter — `update_policy` (#431), `epistemic` (#72), and the typed
+        # link fields `contradicts`/`backed_by` (#533) are each resolved +
+        # validated above/below and written from their own normalized values, so a
+        # malformed value tunneled through metadata still gets a clean 400.
+        _verbatim_excluded = {"update_policy", "epistemic", "contradicts", "backed_by"}
         frontmatter_dict.update(
-            {k: v for k, v in req.metadata.items() if k != "update_policy"}
+            {k: v for k, v in req.metadata.items() if k not in _verbatim_excluded}
         )
     # ADR-015 §2.3 (#482): ephemeral TTL. A metadata-supplied `ttl` (duration)
     # resolves to an absolute `expires_at`; an explicit `expires_at` is
@@ -449,6 +518,16 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
         frontmatter_dict["confidence"] = req.confidence
     if req.priority is not None:
         frontmatter_dict["priority"] = req.priority
+    # #72 (ADR-018): persist the epistemic marker only when one is in effect —
+    # supplied now (param or metadata) OR inherited from the file's prior save
+    # (sticky carry-forward above). A memory that was NEVER marked keeps clean
+    # frontmatter and reads as `unmarked` (no claim — NOT fact), so files
+    # predating this field are byte-for-byte unaffected; but once a marker is set
+    # it survives re-saves that omit it, so a `fact`/`inference`/`open_question`
+    # is never silently dropped back to unmarked. The value written here was
+    # validated (caller-supplied) or membership-checked (inherited) above.
+    if _effective_epistemic is not None:
+        frontmatter_dict["epistemic"] = _effective_epistemic
     # ADR-015 §2.1: persist the resolved write-semantics axis as sticky
     # frontmatter so the file declares its own regime. Only written when the
     # caller declared a policy (now or on a prior save that was carried
@@ -483,6 +562,25 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
     # the file is written.
     if req.sources is not None:
         frontmatter_dict["sources"] = _normalize_sources(req.sources)
+
+    # #533 (G4): typed relationship links. Resolve each from param-or-metadata
+    # (the explicit param wins — mirrors update_policy's H4 handling), validate,
+    # and write the normalized list only when non-empty so frontmatter stays
+    # clean otherwise. `_resolved_contradicts` is reused for the reciprocal
+    # back-link after the file is written.
+    _meta_dict = req.metadata if isinstance(req.metadata, dict) else {}
+    _contradicts_in = (
+        req.contradicts if req.contradicts is not None else _meta_dict.get("contradicts")
+    )
+    _backed_by_in = (
+        req.backed_by if req.backed_by is not None else _meta_dict.get("backed_by")
+    )
+    _resolved_contradicts = _normalize_link_refs(_contradicts_in, "contradicts")
+    _resolved_backed_by = _normalize_link_refs(_backed_by_in, "backed_by")
+    if _resolved_contradicts:
+        frontmatter_dict["contradicts"] = _resolved_contradicts
+    if _resolved_backed_by:
+        frontmatter_dict["backed_by"] = _resolved_backed_by
 
     # ADR-010 / #167: explicit body field > X-Palinode-Source header > env > "api".
     frontmatter_dict["source"] = _resolve_source(req.source, request)
@@ -540,11 +638,43 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
             logger.error("Git auto-commit did not complete for %r", file_path)
         elif config.git.auto_push:
             try:
-                subprocess.run(["git", "push"], cwd=config.palinode_dir, check=False)
+                push = subprocess.run(
+                    ["git", "push"], cwd=config.palinode_dir, check=False,
+                    capture_output=True, text=True,
+                )
+                if push.returncode != 0:
+                    # check=False meant a failed push (no remote, auth, rejected)
+                    # was previously invisible — surface it (#337).
+                    logger.warning(
+                        "git auto-push failed op=push file_path=%r returncode=%d stderr=%r",
+                        file_path, push.returncode, (push.stderr or "").strip(),
+                    )
             except (subprocess.SubprocessError, OSError) as e:
                 logger.error("Git push failed for %r: %s", file_path, e, exc_info=True)
 
-    logger.info(f"Saved memory to {file_path}")
+    # #533 (G4): best-effort reciprocal back-link for `contradicts`. Because the
+    # relationship is symmetric (A⇄B), add this memory's ref into each target's
+    # `contradicts` list so the conflict surfaces from both sides in `lint`.
+    # Never raises and never blocks the save — a missing/unreadable target is
+    # logged and skipped. Forward-only is acceptable per the issue if this gets
+    # risky; the helper keeps it clean (idempotent, choke-point writes).
+    if _resolved_contradicts:
+        try:
+            from palinode.core.typed_links import add_reciprocal_contradicts
+            source_ref = f"{category}/{slug}"
+            add_reciprocal_contradicts(
+                config.palinode_dir,
+                source_ref,
+                _resolved_contradicts,
+                commit=config.git.auto_commit,
+            )
+        except Exception as exc:  # noqa: BLE001 — defensive: never fail the save
+            logger.warning("reciprocal contradicts back-link skipped: %s", exc)
+
+    logger.info(
+        "Saved memory op=save file_path=%s id=%s category=%s git_committed=%s",
+        file_path, frontmatter_dict["id"], category, git_committed,
+    )
 
     # #251: embed inline so that POST /save only returns once vector + FTS
     # entries actually exist. Previously the watcher embedded out-of-band,
@@ -566,8 +696,13 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
         indexed_fts = bool(outcome.get("indexed_fts", True))
         index_error = outcome.get("error")
     except Exception as e:
-        # File is on disk; the watcher will pick it up later.
-        logger.warning(f"Inline index failed for {file_path} (non-fatal): {e}")
+        # File is on disk; the watcher will pick it up later. exc_info so the
+        # non-fatal index failure carries a stack trace, structured fields for
+        # grep (#337).
+        logger.warning(
+            "Inline index failed (non-fatal) op=inline_index file_path=%s error=%r",
+            file_path, str(e), exc_info=True,
+        )
         index_error = str(e)
         indexed_vec = False
         indexed_fts = False
@@ -623,8 +758,13 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
             if sync and check_result is not None:
                 result["write_time_check"] = check_result
         except Exception as e:
-            # Load-bearing: save must never fail because of tier 2a
-            logger.error(f"write-time schedule failed (non-fatal): {e}")
+            # Load-bearing: save must never fail because of tier 2a. This is a
+            # non-fatal opt-in feature degrading — WARNING, not ERROR, with a
+            # stack trace for diagnosis (#337, docs/logging.md DEMOTE).
+            logger.warning(
+                "write-time schedule failed (non-fatal) op=write_time_check file_path=%s error=%r",
+                file_path, str(e), exc_info=True,
+            )
 
     return result
 

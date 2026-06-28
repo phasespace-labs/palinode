@@ -67,7 +67,9 @@ def doctor(
         _exit_for(results, to_stderr=True)
         return
 
+    from palinode import __version__
     console.print("Palinode Diagnostics", style="bold underline")
+    console.print(f"Version: {__version__}", style="dim")
     console.print()
     console.print(format_text(results, verbose=verbose))
     console.print()

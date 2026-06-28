@@ -201,6 +201,21 @@ def lint_api() -> dict[str, Any]:
     return run_lint_pass()
 
 
+class ReviewRequest(BaseModel):
+    #: Project slug (``"palinode"``) or typed ref (``"project/palinode"``).
+    #: When omitted, the whole store is reviewed.
+    project: str | None = None
+
+
+@router.post("/review")
+def review_api(req: ReviewRequest) -> dict[str, Any]:
+    """Advisory project-memory review: composes the deterministic lint
+    signals scoped to a project and proposes corrective ops. Read-only — applies
+    nothing."""
+    from palinode.core.review import run_review
+    return run_review(project=req.project)
+
+
 class MigrateOpenClawRequest(BaseModel):
     path: str
     dry_run: bool = False

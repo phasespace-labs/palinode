@@ -1,5 +1,5 @@
-# Rationale: post-merge sweep for main.
-# Option A (require branch-up-to-date before merge) is enforced
+# Rationale: this post-merge sweep catches regressions after main updates.
+# Branch-up-to-date before merge is enforced
 # in GitHub repo settings → Branches → main branch protection.
 # This file is the backstop if that check is bypassed (admin merge, etc.).
 #
@@ -18,7 +18,7 @@ on:
 jobs:
   # ---------------------------------------------------------------------------
   # Unit tests — mirrors ci.yml; catches interaction bugs that slip through
-  # independent-PR CI (the failure mode documented in #198).
+  # independent-PR CI.
   # ---------------------------------------------------------------------------
   unit-tests:
     runs-on: ubuntu-latest
@@ -59,7 +59,7 @@ jobs:
   # continue-on-error: true because Ollama is not available in CI runners.
   # ---------------------------------------------------------------------------
   integration-tests:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
 
     env:
       PALINODE_DIR: /tmp/palinode-ci-test
@@ -83,10 +83,10 @@ jobs:
         continue-on-error: true
 
   # ---------------------------------------------------------------------------
-  # MCP tool coverage — mirrors ci.yml; release-blocking on main (#346).
+  # MCP tool coverage — mirrors ci.yml; release-blocking on main.
   # ---------------------------------------------------------------------------
   mcp-tool-coverage:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
 
     env:
       PALINODE_DIR: /tmp/palinode-ci-mcp

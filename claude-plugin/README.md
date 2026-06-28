@@ -4,7 +4,7 @@ Persistent memory for AI agents. Your agent's memory is a folder of plain markdo
 
 - **Files are the source of truth.** Not a database, not a cloud service, not a vector store. Markdown files you can read, diff, grep, and version.
 - **Hybrid search.** SQLite-vec for semantic similarity + FTS5 for BM25 keyword matching, fused via reciprocal rank fusion.
-- **Deterministic compaction.** An LLM proposes typed operations (keep, update, merge, supersede, archive) and a Python executor applies them. Every operation is a git commit. You can `git blame` every line in your agent's brain.
+- **Deterministic compaction.** Palinode validates structured compaction changes before applying them. Every operation is a git commit. You can `git blame` every line in your agent's brain.
 - **Local-first.** Runs entirely on your machine. BGE-M3 embeddings via local Ollama. No data leaves your machine unless you configure it to.
 
 ## Prerequisites
@@ -163,7 +163,7 @@ Run `palinode_status` and check `total_files` and `fts_chunks`. If both are 0, t
 - [Main repository](https://github.com/phasespace-labs/palinode)
 - [CHANGELOG](https://github.com/phasespace-labs/palinode/blob/main/docs/CHANGELOG.md) for what's in v0.6.1
 - [Compaction demo](https://github.com/phasespace-labs/palinode/tree/main/examples/compaction-demo) — walkthrough of a memory file across three consolidation passes with blame + diff output
-- [ADR-001: Tools Over Pipeline](https://github.com/phasespace-labs/palinode/blob/main/ADR-001-tools-over-pipeline.md) — why the executor is deterministic
+- [Program notes](https://github.com/phasespace-labs/palinode/blob/main/PROGRAM.md) — design goals and operating model
 
 ## License
 

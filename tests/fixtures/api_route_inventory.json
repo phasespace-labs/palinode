@@ -226,6 +226,12 @@
     ]
   ],
   [
+    "/review",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/rollback",
     [
       "POST"

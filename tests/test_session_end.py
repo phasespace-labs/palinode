@@ -271,3 +271,45 @@ def test_session_end_push_failure_reported_honestly(tmp_path, monkeypatch):
     assert mpush.called
     assert result["pushed"] is False
     assert result["committed"] is True
+
+
+def test_session_end_date_is_wallclock_not_existing_files(tmp_path, monkeypatch):
+    """Regression guard (#577): the daily filename and the `## Session End —` stamp
+    must come from wall-clock now() at call time — never from the latest existing
+    daily file or any cached/persisted date. (#577 reported a stale stamp that
+    predated the server's own start; current code is wall-clock-correct and this
+    pins it so a future refactor can't reintroduce file/state-derived dating.)"""
+    from datetime import datetime, timezone
+
+    memory_dir = str(tmp_path)
+    monkeypatch.setattr(config, "memory_dir", memory_dir)
+    monkeypatch.setattr(config.git, "auto_commit", False)
+
+    # A pre-existing STALE daily note. A "latest-existing-file" bug would append
+    # here and stamp the old date; wall-clock logic must ignore it entirely.
+    daily_dir = os.path.join(memory_dir, "daily")
+    os.makedirs(daily_dir, exist_ok=True)
+    stale_path = os.path.join(daily_dir, "2020-01-01.md")
+    stale_original = "## Session End — 2020-01-01T00:00:00Z\nold entry\n"
+    with open(stale_path, "w") as f:
+        f.write(stale_original)
+
+    # Freeze wall-clock to a fixed instant, distinct from both today and the stale file.
+    frozen = datetime(2030, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+    import palinode.api.routers.session as session_mod
+    monkeypatch.setattr(session_mod, "_utc_now", lambda: frozen)
+
+    # The daily write (the thing under test) happens before dedup/individual-save;
+    # mock those two so the test is hermetic (no Ollama embed / network).
+    with mock.patch("palinode.api.routers.session._check_session_end_dedup", return_value=(None, None)), \
+         mock.patch("palinode.api.routers.session.save_api", return_value={"file_path": None}):
+        from palinode.api.server import SessionEndRequest, session_end_api
+
+        result = session_end_api(SessionEndRequest(summary="wall-clock check", source="test"))
+
+    # Date derives strictly from now(), not the stale file or any cache.
+    assert result["daily_file"] == "daily/2030-06-15.md"
+    assert os.path.exists(os.path.join(memory_dir, "daily", "2030-06-15.md"))
+    assert "## Session End — 2030-06-15T12:00:00Z" in result["entry"]
+    # The pre-existing stale file must be untouched (never appended to).
+    assert open(stale_path).read() == stale_original

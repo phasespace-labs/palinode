@@ -497,7 +497,7 @@ app.add_middleware(_BodySizeLimitMiddleware, max_bytes=_MAX_REQUEST_BYTES)
 
 # Startup warning for unsafe binding.
 # Set PALINODE_API_BIND_INTENT=public to suppress the warning for intentional
-# network-exposed deployments (e.g., private VPN). Without the env var, the
+# network-exposed deployments (e.g., Tailscale). Without the env var, the
 # warning fires on every 0.0.0.0 start. Fixes #253.
 # (_api_host and _bind_intent_public are resolved earlier so the bearer-auth
 # startup gate can reference them; this block reuses the same values.)
@@ -509,7 +509,7 @@ if _api_host == "0.0.0.0" and not _bind_intent_public:  # nosec B104
             "API binding to 0.0.0.0 — accessible from any network. "
             "No authentication is configured. Set PALINODE_API_HOST=127.0.0.1 for local-only access. "
             "Set PALINODE_API_BIND_INTENT=public to suppress this warning for intentional "
-            "network-exposed deployments (e.g., private VPN)."
+            "network-exposed deployments (e.g., Tailscale)."
         )
     else:
         logger.info(

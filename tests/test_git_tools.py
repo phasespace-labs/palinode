@@ -73,3 +73,69 @@ def test_git_operations_on_non_git_fail_gracefully():
             res = git_tools.blame("some/file.md")
             assert "Git blame failed" in res
             assert "fatal: not a git repository" in res
+
+
+# ---- #337: git-persistence failures must reach the log, not just the return ----
+
+
+def test_blame_failure_logs_warning(caplog):
+    """A failed git blame logs a WARNING (#337) — not only a returned string."""
+    import logging as _logging
+    with patch("palinode.core.git_tools._run_git") as mock_run:
+        mock_res = MagicMock()
+        mock_res.returncode = 128
+        mock_res.stderr = "fatal: not a git repository"
+        mock_run.return_value = mock_res
+        with patch("os.path.exists", return_value=True):
+            with caplog.at_level(_logging.WARNING, logger="palinode.git_tools"):
+                git_tools.blame("some/file.md")
+    assert any(
+        r.levelno == _logging.WARNING and "git blame failed" in r.message
+        for r in caplog.records
+    )
+
+
+def test_rollback_checkout_failure_logs_error(caplog):
+    """A failed rollback checkout is operator-critical → ERROR (#337)."""
+    import logging as _logging
+    with patch("palinode.core.git_tools._run_git") as mock_run:
+        mock_res = MagicMock()
+        mock_res.returncode = 1
+        mock_res.stderr = "error: pathspec did not match"
+        mock_run.return_value = mock_res
+        with patch("os.path.exists", return_value=True):
+            with caplog.at_level(_logging.ERROR, logger="palinode.git_tools"):
+                res = git_tools.rollback("some/file.md", commit="HEAD~1", dry_run=False)
+    assert "Rollback failed" in res
+    assert any(
+        r.levelno == _logging.ERROR and "rollback checkout failed" in r.message
+        for r in caplog.records
+    )
+
+
+def test_push_failure_logs_warning(caplog):
+    """A failed push logs a WARNING with the returncode/stderr (#337)."""
+    import logging as _logging
+
+    def fake_run(*args, **kwargs):
+        res = MagicMock()
+        if args and args[0] == "status":
+            res.stdout = ""  # nothing to auto-commit
+            res.returncode = 0
+        elif args and args[0] == "push":
+            res.returncode = 1
+            res.stderr = "fatal: No configured push destination."
+        else:
+            res.returncode = 0
+            res.stdout = ""
+            res.stderr = ""
+        return res
+
+    with patch("palinode.core.git_tools._run_git", side_effect=fake_run):
+        with caplog.at_level(_logging.WARNING, logger="palinode.git_tools"):
+            res = git_tools.push()
+    assert "Push failed" in res
+    assert any(
+        r.levelno == _logging.WARNING and "git push failed" in r.message
+        for r in caplog.records
+    )

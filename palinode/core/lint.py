@@ -102,6 +102,11 @@ def run_lint_pass() -> dict[str, Any]:
     missing_priority: list[str] = []
     wiki_drift: list[dict[str, Any]] = []
     source_anchor_issues: list[dict[str, Any]] = []
+    # #72 (ADR-018): an `epistemic: open_question` that has gone unresolved for a
+    # long time is a staleness signal — it wants resolution into fact/inference
+    # or supersession. Reuses the stale threshold (90 days).
+    stale_open_questions: list[dict[str, Any]] = []
+    open_contradictions: list[dict[str, Any]] = []  # #533 (G4)
     core_count = 0
 
     now = datetime.now(timezone.utc)
@@ -208,6 +213,26 @@ def run_lint_pass() -> dict[str, Any]:
                 except Exception:
                     pass
 
+        # 6b. Stale open questions (#72) — an unresolved open_question that's
+        # months old wants attention. Independent of `status` (an open question
+        # is about epistemic state, not lifecycle), so checked separately from
+        # the status==active stale check above.
+        if meta.get("epistemic") == "open_question":
+            oq_updated = meta.get("last_updated") or meta.get("created_at")
+            if oq_updated:
+                try:
+                    if isinstance(oq_updated, str):
+                        oq_dt = datetime.fromisoformat(oq_updated.replace('Z', '+00:00'))
+                    else:
+                        oq_dt = oq_updated
+                        if oq_dt.tzinfo is None:
+                            oq_dt = oq_dt.replace(tzinfo=timezone.utc)
+                    oq_age = (now - oq_dt).days
+                    if oq_age > 90:
+                        stale_open_questions.append({"file": path, "days_old": oq_age})
+                except Exception:
+                    pass
+
         # 7. Wiki drift — frontmatter entities vs. body wikilinks
         body = f.get("body", "")
         drift_warnings = check_wiki_drift(meta, body)
@@ -231,7 +256,16 @@ def run_lint_pass() -> dict[str, Any]:
             ]
             if bad:
                 source_anchor_issues.append({"file": path, "anchors": bad})
-                    
+
+        # 9. Open contradictions (#533, G4) — a non-empty `contradicts` link is
+        # an UNRESOLVED disagreement (supersession resolves; a contradicts link
+        # deliberately does not pick a winner). Surface every file that still
+        # carries one as a health signal so reviewers can adjudicate.
+        from palinode.core.typed_links import parse_link_refs
+        _contradicts = parse_link_refs(meta, "contradicts")
+        if _contradicts:
+            open_contradictions.append({"file": path, "contradicts": _contradicts})
+
     # 4. Contradictions heuristics
     # Simple check: Any entity that has multiple active files
     file_statuses = {}
@@ -275,5 +309,7 @@ def run_lint_pass() -> dict[str, Any]:
         "missing_priority": missing_priority,
         "wiki_drift": wiki_drift,
         "source_anchor_issues": source_anchor_issues,
+        "stale_open_questions": stale_open_questions,
+        "open_contradictions": open_contradictions,
         "core_count": core_count,
     }

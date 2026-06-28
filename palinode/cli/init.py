@@ -95,7 +95,7 @@ set -euo pipefail
 PALINODE_API="${PALINODE_API_URL:-http://localhost:6340}"
 MIN_MESSAGES="${PALINODE_HOOK_MIN_MESSAGES:-3}"
 # Max time (seconds) the curl POST is allowed to run.  Raise with
-# PALINODE_HOOK_TIMEOUT if your host is slow (cold Ollama, WAN private VPN, NFS).
+# PALINODE_HOOK_TIMEOUT if your host is slow (cold Ollama, WAN Tailscale, NFS).
 # The Claude Code hook runner timeout in settings.json must be > this value.
 HOOK_TIMEOUT="${PALINODE_HOOK_TIMEOUT:-30}"
 

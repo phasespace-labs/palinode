@@ -283,6 +283,28 @@ VALID_INCIDENT_STATUSES: tuple[str, ...] = ("open", "monitoring", "resolved")
 # can't silently slip past exclusion logic.
 VALID_STATUSES: tuple[str, ...] = VALID_LIFECYCLES + VALID_INCIDENT_STATUSES
 
+# #72 (ADR-018): epistemic markers — a per-memory declaration of what KIND of
+# claim the memory makes, orthogonal to `type` and `status`. These are the
+# SETTABLE values (what the save surfaces accept and validate):
+#   fact          — directly observed / verified (an explicit, earned claim).
+#   inference     — derived or extrapolated from other facts (lower trust;
+#                   should ideally carry a `backed_by` once #533 lands).
+#   open_question — unresolved; an explicit marker that this is NOT yet settled.
+#                   `lint` flags long-lived open questions as a staleness signal.
+VALID_EPISTEMICS: tuple[str, ...] = ("fact", "inference", "open_question")
+
+# The ABSENCE of the field is its own state — `unmarked`: no epistemic claim was
+# made. Crucially this is NOT equated with `fact`; for an audit-grade store,
+# "nobody declared this" must not silently inherit the authority of "verified".
+# `unmarked` is trust-NEUTRAL — it is neither flagged as a problem (no lint
+# noise) nor asserted as verified (downstream consumers like #533/#366 treat it
+# as "no claim", not as fact). It is not a settable value (you reach it only by
+# omitting the field), so it is intentionally NOT in VALID_EPISTEMICS; the save
+# surface rejects an explicit `unmarked`. Every memory written before this field
+# existed is `unmarked` and is byte-for-byte unaffected. To assert fact-hood a
+# writer sets `epistemic: fact` explicitly.
+DEFAULT_EPISTEMIC: str = "unmarked"
+
 
 def parse_ku_fields(metadata: dict[str, Any]) -> dict[str, Any]:
     """Extract IETF Knowledge Unit frontmatter fields from parsed metadata.

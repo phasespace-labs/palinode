@@ -48,7 +48,14 @@ def _index_entries_present(db: Any, chunk_id: str) -> bool:
         vec_row = db.execute(
             "SELECT 1 FROM chunks_vec WHERE id = ?", (chunk_id,)
         ).fetchone()
-    except Exception:
+    except Exception as e:
+        # A DB error here is treated as "entry absent", which forces a needless
+        # re-embed. That degradation is silent without this line — surface it at
+        # DEBUG so a re-embed storm can be traced back to vec0 read errors (#337).
+        logger.debug(
+            "index presence check failed; treating as absent op=index chunk_id=%s error=%r",
+            chunk_id, str(e),
+        )
         vec_row = None
     return bool(vec_row)
 
@@ -98,6 +105,12 @@ def index_file(filepath: str, *, content: str | None = None) -> dict[str, Any]:
             with open(filepath, "r") as f:
                 content = f.read()
         except Exception as e:
+            # Unreadable source file is operator-facing — previously the reason
+            # only reached the caller's result dict, never the log (#337).
+            logger.warning(
+                "index read failed op=index file_path=%s error=%r",
+                filepath, str(e),
+            )
             result["error"] = f"read failed: {e}"
             return result
 
@@ -107,6 +120,7 @@ def index_file(filepath: str, *, content: str | None = None) -> dict[str, Any]:
     chunks: list[dict[str, Any]] = []
     valid_chunk_ids: list[str] = []
     embed_failure = False
+    sections_failed = 0
 
     for sec in sections:
         chunk_id = stable_md5_hexdigest(f"{filepath}#{sec['section_id']}")
@@ -132,7 +146,14 @@ def index_file(filepath: str, *, content: str | None = None) -> dict[str, Any]:
             # Hard embedder failure (Ollama down, timeout, misconfig).
             # Fall through — the file is on disk, the watcher / a later
             # call can retry. Don't insert a half-baked row.
+            # Previously this swallowed the miss into a bare flag: the indexer
+            # never said which section failed. Per-section WARNING (#337/#335).
             embed_failure = True
+            sections_failed += 1
+            logger.warning(
+                "section embed returned empty; skipping op=index file_path=%s section_id=%s",
+                filepath, sec["section_id"],
+            )
             continue
 
         if existing and existing["content_hash"] == content_hash and not index_ok:
@@ -167,13 +188,23 @@ def index_file(filepath: str, *, content: str | None = None) -> dict[str, Any]:
                     (cid,),
                 )
             except Exception:
+                # Best-effort: chunks_fts is an external-content FTS5 index that
+                # the periodic rebuild recovers, so a failed prune-delete here is
+                # provably inert (docs/logging.md silent-except carve-out).
                 pass
         # B608 rationale - placeholders is "?,?,..." built from len(to_delete); values bound via to_delete
         cursor.execute(f"DELETE FROM chunks WHERE id IN ({placeholders})", to_delete)  # nosec B608
         try:
             cursor.execute(f"DELETE FROM chunks_vec WHERE id IN ({placeholders})", to_delete)  # nosec B608
-        except Exception:
-            pass
+        except Exception as e:
+            # Unlike chunks_fts, a failed vec0 prune leaves orphan vectors that
+            # no periodic rebuild reclaims — emit DEBUG so the orphan source is
+            # traceable (#337).
+            logger.debug(
+                "chunks_vec prune failed; vectors may be orphaned "
+                "op=vector file_path=%s ids_count=%d error=%r",
+                filepath, len(to_delete), str(e),
+            )
         db.commit()
         result["chunks_deleted"] = len(to_delete)
     db.close()
@@ -196,6 +227,13 @@ def index_file(filepath: str, *, content: str | None = None) -> dict[str, Any]:
         result["embedded"] = False
         if result["error"] is None:
             result["error"] = "embedder unreachable"
+        # One summary WARNING naming the file + count of failed sections, so a
+        # partial index is visible without grepping per-section lines (#337/#335).
+        logger.warning(
+            "file partially indexed; some sections did not embed "
+            "op=index file_path=%s sections_failed=%d",
+            filepath, sections_failed,
+        )
     else:
         result["embedded"] = True
 

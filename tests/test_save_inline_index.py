@@ -367,3 +367,61 @@ class TestFrontmatterLastUpdatedOnInitialSave:
         assert str(meta["created_at"]) == str(meta["last_updated"]), (
             f"created_at ({meta['created_at']!r}) != last_updated ({meta['last_updated']!r})"
         )
+
+
+class TestIndexFileLogsSilentEmbedSwallow:
+    """#337 — a per-section embed miss must be observable, not a bare flag.
+
+    Before #337, ``index_file`` set ``embed_failure = True`` and ``continue``d
+    with no log line, so the indexer never said which section/file failed. Now
+    each failed section emits a WARNING and the file emits one summary WARNING
+    naming the count of failed sections.
+    """
+
+    def _write_file(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+        monkeypatch.setattr(config, "db_path", str(tmp_path / ".palinode.db"))
+        store.init_db()
+        insights_dir = tmp_path / "insights"
+        insights_dir.mkdir()
+        file_path = insights_dir / "embed-miss.md"
+        file_path.write_text(
+            "---\n"
+            "id: insights-embed-miss\n"
+            "category: insights\n"
+            "type: Insight\n"
+            "created_at: '2026-06-10T00:00:00+00:00'\n"
+            "---\n\n"
+            "Section body that will fail to embed.\n"
+        )
+        return file_path
+
+    def test_section_embed_failure_logs_warning(self, tmp_path, monkeypatch, caplog):
+        import logging as _logging
+
+        file_path = self._write_file(tmp_path, monkeypatch)
+        with _patch_embed_fail():
+            with caplog.at_level(_logging.WARNING, logger="palinode.indexer"):
+                outcome = index_file(str(file_path))
+
+        assert outcome["embedded"] is False
+        msgs = [r.getMessage() for r in caplog.records if r.levelno == _logging.WARNING]
+        # Per-section line names the failing section + file.
+        assert any("section embed returned empty" in m for m in msgs), msgs
+        # One summary line names the file + failed-section count.
+        assert any(
+            "file partially indexed" in m and "sections_failed=1" in m for m in msgs
+        ), msgs
+
+    def test_successful_index_logs_no_failure_warning(self, tmp_path, monkeypatch, caplog):
+        import logging as _logging
+
+        file_path = self._write_file(tmp_path, monkeypatch)
+        with _patch_embed_ok():
+            with caplog.at_level(_logging.WARNING, logger="palinode.indexer"):
+                outcome = index_file(str(file_path))
+
+        assert outcome["embedded"] is True
+        msgs = [r.getMessage() for r in caplog.records if r.levelno == _logging.WARNING]
+        assert not any("section embed returned empty" in m for m in msgs), msgs
+        assert not any("file partially indexed" in m for m in msgs), msgs

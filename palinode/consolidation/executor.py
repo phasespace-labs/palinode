@@ -119,8 +119,8 @@ def _atomic_write_text(file_path: str, content: str) -> None:
     """Write text atomically via the git_tools mutation choke point.
 
     All memory-file writes route through :func:`git_tools.write_memory_file`
-    (the single atomic write primitive) so mutation-time behavior is
-    centralized in one place. Retained as a thin local alias because the
+    (the single atomic write primitive) so a future signer can observe content
+    at mutation time in one place. Retained as a thin local alias because the
     executor calls it from two sites (op write-back + history append).
     """
     git_tools.write_memory_file(file_path, content)
@@ -139,7 +139,7 @@ def apply_operations(file_path: str, operations: list[dict], *, nightly_policy: 
 
     Returns:
         Stats dict: {kept, updated, merged, superseded, archived, retracted,
-                     merge_rejected, protected_rejected}.
+                     merge_rejected, protected_rejected, contradicts_proposed}.
     """
     with open(file_path) as f:
         content = f.read()
@@ -155,7 +155,7 @@ def apply_operations(file_path: str, operations: list[dict], *, nightly_policy: 
     # consolidation entirely.
     is_replace_doc = _is_replace_policy(content)
 
-    stats = {"kept": 0, "updated": 0, "merged": 0, "superseded": 0, "archived": 0, "retracted": 0, "merge_rejected": 0, "protected_rejected": 0}
+    stats = {"kept": 0, "updated": 0, "merged": 0, "superseded": 0, "archived": 0, "retracted": 0, "merge_rejected": 0, "protected_rejected": 0, "contradicts_proposed": 0}
 
     for op in operations:
         if not isinstance(op, dict):
@@ -239,6 +239,35 @@ def apply_operations(file_path: str, operations: list[dict], *, nightly_policy: 
                 if retracted_content != content:
                     content = retracted_content
                     stats["retracted"] += 1
+
+        elif op_type == "PROPOSE_CONTRADICTS":
+            # #533 (G4): the executor may PROPOSE a typed contradiction link but
+            # must NEVER auto-resolve a conflict. SUPERSEDE stays the only
+            # winner-picking op. This op is non-destructive: it records the
+            # `contradicts` link in frontmatter (idempotently) and picks no
+            # winner. It is intentionally NOT subject to the replace-guard above
+            # — recording a conflict forks nothing into history.
+            refs = op.get("contradicts", op.get("refs", op.get("ids")))
+            try:
+                from palinode.core.typed_links import (
+                    TypedLinkError,
+                    merge_link_refs_into_content,
+                    normalize_link_refs,
+                )
+                norm = normalize_link_refs(refs, "contradicts")
+            except TypedLinkError as exc:
+                logger.warning(
+                    "PROPOSE_CONTRADICTS rejected (malformed refs) on %s: %s",
+                    file_path, exc,
+                )
+                norm = []
+            if norm:
+                proposed_content = merge_link_refs_into_content(
+                    content, "contradicts", norm
+                )
+                if proposed_content != content:
+                    content = proposed_content
+                    stats["contradicts_proposed"] += 1
 
     # Write back
     _atomic_write_text(file_path, content)

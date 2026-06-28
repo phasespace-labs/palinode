@@ -6,7 +6,7 @@ Runs over stdio — spawned on demand by the client.
 
 All tool implementations are thin HTTP wrappers around the Palinode API server.
 The MCP server itself holds no database connections, embedder state, or git handles.
-Set PALINODE_API_HOST to point at a remote API server (e.g. over private VPN).
+Set PALINODE_API_HOST to point at a remote API server (e.g. over Tailscale).
 
 Tools:
   palinode_search  — semantic search over memory files
@@ -232,6 +232,14 @@ def _format_results(results: list[dict[str, Any]], full: bool = False) -> str:
             ]
             refs_label = " [" + ", ".join(ref_parts) + "]"
 
+        # ADR-018 / #72: surface a non-default epistemic marker so a reader sees
+        # at a glance that a hit is an inference or an open question rather than a
+        # verified fact. `fact` (the default) is left unlabelled to avoid noise.
+        epi = meta.get("epistemic")
+        epi_label = ""
+        if epi in ("inference", "open_question"):
+            epi_label = " [inference]" if epi == "inference" else " [open question?]"
+
         # #352: pick body — snippet (default) or capped content (full=True).
         if full:
             body = (r.get("content") or "")[:_FULL_CONTENT_HARD_CAP]
@@ -248,7 +256,7 @@ def _format_results(results: list[dict[str, Any]], full: bool = False) -> str:
                 any_truncated = True
 
         parts.append(
-            f"[{rel}] ({score_pct}% match){fresh_label}{refs_label}\n{(body or '').strip()}"
+            f"[{rel}] ({score_pct}% match){fresh_label}{epi_label}{refs_label}\n{(body or '').strip()}"
         )
 
     rendered = "\n\n---\n\n".join(parts)
@@ -530,6 +538,14 @@ def _all_tools() -> list[types.Tool]:
                         "maximum": 5,
                         "description": "Human-assigned memory priority (1–5). Stored as `priority` frontmatter; missing means normal (3).",
                     },
+                    "epistemic": {
+                        "type": "string",
+                        "enum": ["fact", "inference", "open_question"],
+                        # ADR-018 / #72: the KIND of claim this memory makes.
+                        # Omitting it leaves the memory `unmarked` (no claim —
+                        # NOT fact); no frontmatter is written.
+                        "description": "Epistemic marker: 'fact' (observed/verified), 'inference' (derived, lower trust), or 'open_question' (unresolved). Omit to leave the memory unmarked (no claim is made — not treated as fact).",
+                    },
                     "external_refs": {
                         "type": "object",
                         "additionalProperties": {"type": "string"},
@@ -563,6 +579,21 @@ def _all_tools() -> list[types.Tool]:
                         # to the exact passage it cites. quote_hash is computed
                         # server-side when omitted; the verifier reads these back.
                         "description": "Source-citation anchors: list of {ref, quote, quote_hash} for passages this memory cites.",
+                    },
+                    "contradicts": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        # #533 (G4): typed conflict link. Records that this memory
+                        # conflicts with the listed refs WITHOUT picking a winner
+                        # (that's supersession's job). Surfaced by `palinode lint`.
+                        "description": "Refs (category/slug) this memory conflicts with; neither wins — surfaced for review.",
+                    },
+                    "backed_by": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        # #533 (G4): typed evidence link — this memory is supported
+                        # by the listed source/fact refs.
+                        "description": "Refs (category/slug) that support/back this memory (evidence links).",
                     },
                 },
                 "required": ["content"],
@@ -952,6 +983,29 @@ def _all_tools() -> list[types.Tool]:
             ),
         ),
         types.Tool(
+            name="palinode_review",
+            description=(
+                "Advisory project-memory review. Composes the deterministic health "
+                "signals (stale files, long-unresolved open questions, open contradictions, "
+                "orphans, missing descriptions, wiki drift) scoped to a project, and proposes "
+                "corrective ops (PROPOSE_ARCHIVE/UPDATE/SUPERSEDE). Read-only — proposes, never "
+                "applies. Omit `project` to review the whole store."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Project slug (e.g. 'palinode') or typed ref ('project/palinode'). Omit to review the whole store.",
+                    },
+                },
+            },
+            annotations=types.ToolAnnotations(
+                title="Review Project Memory",
+                readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False,
+            ),
+        ),
+        types.Tool(
             name="palinode_dedup_suggest",
             description=(
                 "Given draft memory content the LLM is about to save, return the top-K existing "
@@ -1333,6 +1387,11 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
                 body["confidence"] = float(arguments["confidence"])
             if arguments.get("priority") is not None:
                 body["priority"] = int(arguments["priority"])
+            # ADR-018 / #72: epistemic marker. Forwarded verbatim; the API
+            # validates against VALID_EPISTEMICS and 400s on an unknown value
+            # (surfaced below as the standard "Save failed" message).
+            if arguments.get("epistemic") is not None:
+                body["epistemic"] = arguments["epistemic"]
             if arguments.get("external_refs") is not None:
                 body["external_refs"] = arguments["external_refs"]
             # ADR-015 §2.1: write-semantics axis. Forwarded verbatim; the API
@@ -1345,6 +1404,13 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
             # malformed or inconsistent anchor (surfaced as "Save failed").
             if arguments.get("sources") is not None:
                 body["sources"] = arguments["sources"]
+            # #533 (G4): typed relationship links. Forwarded verbatim; the API
+            # validates each ref and 400s on a malformed one (surfaced below as
+            # the standard "Save failed" message).
+            if arguments.get("contradicts") is not None:
+                body["contradicts"] = arguments["contradicts"]
+            if arguments.get("backed_by") is not None:
+                body["backed_by"] = arguments["backed_by"]
 
             resp = await _post("/save", json=body)
             if resp.status_code != 200:
@@ -1467,6 +1533,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
             s = resp.json()
             lines = [
                 "Palinode Status",
+                f"  Version:        {s.get('version', '?')}",
                 f"  Files indexed:  {s.get('total_files', '?')}",
                 f"  Chunks indexed: {s.get('total_chunks', '?')}",
                 f"  Hybrid search:  {'✅ enabled' if s.get('hybrid_search') else '❌ disabled'}",
@@ -1700,6 +1767,16 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
             resp = await _post("/lint", timeout=120.0)
             if resp.status_code != 200:
                 return _text(f"Lint failed: {resp.text}")
+            return _text(json.dumps(resp.json(), indent=2))
+
+        # ── review (#366) ───────────────────────────────────────────────────
+        elif name == "palinode_review":
+            body: dict[str, Any] = {}
+            if arguments.get("project"):
+                body["project"] = arguments["project"]
+            resp = await _post("/review", json=body, timeout=120.0)
+            if resp.status_code != 200:
+                return _text(f"Review failed: {resp.text}")
             return _text(json.dumps(resp.json(), indent=2))
 
         # ── prompt ────────────────────────────────────────────────────────

@@ -17,6 +17,7 @@ from typing import Any
 
 from fastapi import APIRouter
 
+from palinode import __version__
 from palinode.core import store, git_tools
 from palinode.core.config import config
 from palinode.core.ollama_client import OllamaRole
@@ -36,6 +37,12 @@ def status_api() -> dict[str, Any]:
     # name). Deferred import avoids the server↔routers cycle at module load.
     import palinode.api.server as _srv
     stats: dict[str, Any] = dict(store.get_stats())
+
+    # Deployed package version (#579) — single source of truth is
+    # palinode.__version__ (importlib.metadata), the same value CLI --version
+    # surfaces. Lets an operator confirm which release is actually running
+    # (motivated by the v0.8.14/v0.8.15 confusion).
+    stats["version"] = __version__
 
     git_stats = git_tools.commit_count(7)
     stats["git_commits_7d"] = git_stats["total_commits"]
@@ -141,7 +148,9 @@ def health_api() -> dict[str, Any]:
     status="degraded" with a db_error key if the database cannot be reached.
     """
     import palinode.api.server as _srv  # late lookup — see status_api
-    result: dict[str, Any] = {"status": "ok"}
+    # version (#579) surfaced here too so the lightweight liveness probe can
+    # report the running release without a /status round-trip.
+    result: dict[str, Any] = {"status": "ok", "version": __version__}
 
     # DB accessible + basic stats — delegate to store.get_stats() for chunk
     # count so the code path is identical to /status and cannot diverge (#187).
@@ -401,6 +410,7 @@ def doctor_api(canary: bool = False, fast: bool = False) -> dict[str, Any]:
     result_dicts = _json.loads(format_json(results))
 
     return {
+        "version": __version__,  # #579: deployed release, for operator triage
         "results": result_dicts,
         "summary": {
             "total": len(results),

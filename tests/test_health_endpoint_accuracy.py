@@ -138,6 +138,34 @@ def test_health_reports_zero_on_empty_db(client):
     assert body["entities"] == 0, f"expected entities=0, got {body['entities']}"
 
 
+def test_status_health_doctor_report_version(client):
+    """/status, /health, and /doctor all surface the deployed package version (#579).
+
+    Single source of truth is palinode.__version__; the field must be present
+    and equal to that value so an operator can confirm which release is running.
+    """
+    from palinode import __version__
+
+    with (
+        mock.patch("httpx.get"),
+        mock.patch(
+            "palinode.core.git_tools.commit_count",
+            return_value={"total_commits": 0, "summary": ""},
+        ),
+        mock.patch("subprocess.run") as mock_run,
+    ):
+        mock_run.return_value = mock.Mock(stdout="0\n", returncode=0)
+        status_resp = client.get("/status")
+        health_resp = client.get("/health")
+        doctor_resp = client.get("/doctor", params={"fast": "true"})
+
+    for resp in (status_resp, health_resp, doctor_resp):
+        assert resp.status_code == 200, resp.text
+        assert resp.json().get("version") == __version__, (
+            f"missing/incorrect version in {resp.json()}"
+        )
+
+
 def test_health_counts_match_status_counts(client):
     """/health and /status report the same chunk count after inserts.
 

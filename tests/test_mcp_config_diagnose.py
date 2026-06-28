@@ -14,11 +14,17 @@ from click.testing import CliRunner
 
 from palinode.cli import main
 from palinode.cli.mcp_config import (
+    DEFAULT_HTTP_HOST,
+    DEFAULT_HTTP_PORT,
+    _build_http_entry,
+    _build_stdio_entry,
     _candidate_paths,
     _check_divergence,
     _extract_palinode_entry,
+    _http_url,
     _read_config,
     _render_entry,
+    _wrap_block,
     ConfigResult,
 )
 
@@ -510,3 +516,114 @@ class TestInitMcpJsonBlock:
         data = json.loads(mcp_json.read_text())
         assert "_warning" in data
         assert "mcp-config" in data["_warning"]
+
+
+# ---------------------------------------------------------------------------
+# Emit-mode builders (--http / --stdio) — #217 HTTP transport migration
+# ---------------------------------------------------------------------------
+
+
+class TestEmitBuilders:
+    def test_http_url_defaults(self):
+        assert _http_url(None, DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT) == (
+            "http://<palinode-host>:6341/mcp/"
+        )
+
+    def test_http_url_explicit_url_wins(self):
+        assert _http_url("http://x:9/mcp/", "ignored", 1) == "http://x:9/mcp/"
+
+    def test_http_url_host_and_port(self):
+        assert _http_url(None, "pali.example.net", 6341) == (
+            "http://pali.example.net:6341/mcp/"
+        )
+
+    def test_build_http_entry_shape(self):
+        entry = _build_http_entry("http://h:6341/mcp/")
+        assert entry["type"] == "http"
+        assert entry["url"] == "http://h:6341/mcp/"
+        assert "headers" not in entry
+
+    def test_build_http_entry_with_bearer(self):
+        entry = _build_http_entry("http://h:6341/mcp/", bearer="TOK")
+        assert entry["headers"]["Authorization"] == "Bearer TOK"
+
+    def test_build_stdio_entry_shape(self):
+        entry = _build_stdio_entry()
+        assert entry["command"] == "palinode-mcp"
+        assert entry["env"] == {}
+
+    def test_wrap_block(self):
+        block = _wrap_block({"type": "http", "url": "u"})
+        assert block == {"mcpServers": {"palinode": {"type": "http", "url": "u"}}}
+
+
+# ---------------------------------------------------------------------------
+# Emit-mode CLI output (--http / --stdio)
+# ---------------------------------------------------------------------------
+
+
+class TestEmitCommand:
+    def _block(self, output: str) -> dict:
+        """Parse the JSON block out of (possibly decorated) command output."""
+        start = output.index("{")
+        return json.loads(output[start:])
+
+    def test_http_json_emits_http_block(self, fake_home):
+        runner = CliRunner()
+        result = runner.invoke(main, ["mcp-config", "--http", "--json"])
+        assert result.exit_code == 0, result.output
+        assert '"type": "http"' in result.output
+        block = self._block(result.output)
+        entry = block["mcpServers"]["palinode"]
+        assert entry["type"] == "http"
+        assert entry["url"] == "http://<palinode-host>:6341/mcp/"
+
+    def test_http_respects_host_and_port(self, fake_home):
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["mcp-config", "--http", "--host", "pali.example.net", "--port", "7000", "--json"],
+        )
+        assert result.exit_code == 0, result.output
+        entry = self._block(result.output)["mcpServers"]["palinode"]
+        assert entry["url"] == "http://pali.example.net:7000/mcp/"
+
+    def test_http_url_override(self, fake_home):
+        runner = CliRunner()
+        result = runner.invoke(
+            main, ["mcp-config", "--http", "--url", "http://x:6341/mcp/", "--json"]
+        )
+        assert result.exit_code == 0, result.output
+        entry = self._block(result.output)["mcpServers"]["palinode"]
+        assert entry["url"] == "http://x:6341/mcp/"
+
+    def test_http_with_bearer(self, fake_home):
+        runner = CliRunner()
+        result = runner.invoke(
+            main, ["mcp-config", "--http", "--bearer", "SECRET", "--json"]
+        )
+        assert result.exit_code == 0, result.output
+        entry = self._block(result.output)["mcpServers"]["palinode"]
+        assert entry["headers"]["Authorization"] == "Bearer SECRET"
+
+    def test_stdio_json_emits_stdio_block(self, fake_home):
+        runner = CliRunner()
+        result = runner.invoke(main, ["mcp-config", "--stdio", "--json"])
+        assert result.exit_code == 0, result.output
+        entry = self._block(result.output)["mcpServers"]["palinode"]
+        assert entry["command"] == "palinode-mcp"
+        assert "type" not in entry
+
+    def test_http_and_stdio_together_is_error(self, fake_home):
+        runner = CliRunner()
+        result = runner.invoke(main, ["mcp-config", "--http", "--stdio"])
+        assert result.exit_code != 0
+        assert "only one" in result.output.lower()
+
+    def test_emit_block_is_valid_json(self, fake_home):
+        """The emitted block round-trips and is a paste-ready mcpServers shape."""
+        runner = CliRunner()
+        result = runner.invoke(main, ["mcp-config", "--http", "--json"])
+        block = self._block(result.output)
+        assert set(block.keys()) == {"mcpServers"}
+        assert "palinode" in block["mcpServers"]

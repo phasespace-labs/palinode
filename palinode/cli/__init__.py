@@ -20,6 +20,7 @@ from palinode.cli.session_end import session_end
 from palinode.cli.read import read
 from palinode.cli.list_cmd import list_cmd
 from palinode.cli.lint import lint
+from palinode.cli.review import review
 from palinode.cli.ingest import ingest
 from palinode.cli.prompt import prompt
 from palinode.cli.migrate import migrate
@@ -93,6 +94,7 @@ main.add_command(entities)
 main.add_command(read)
 main.add_command(list_cmd, name="list")
 main.add_command(lint)
+main.add_command(review)
 main.add_command(ingest)
 main.add_command(migrate)
 

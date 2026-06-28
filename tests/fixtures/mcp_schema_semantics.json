@@ -176,6 +176,13 @@
       "file_path"
     ]
   },
+  "palinode_review": {
+    "description": "Advisory project-memory review. Composes the deterministic health signals (stale files, long-unresolved open questions, open contradictions, orphans, missing descriptions, wiki drift) scoped to a project, and proposes corrective ops (PROPOSE_ARCHIVE/UPDATE/SUPERSEDE). Read-only \u2014 proposes, never applies. Omit `project` to review the whole store.",
+    "params": {
+      "project": {}
+    },
+    "required": []
+  },
   "palinode_rollback": {
     "description": "Revert a memory file to a previous version. Safe: creates a new commit preserving the old version in history. Defaults to dry run.",
     "params": {
@@ -189,10 +196,19 @@
   "palinode_save": {
     "description": "Save a memory to Palinode. Use for important facts, decisions, insights, or project updates worth remembering across sessions. Provide either `type` (one of the enum values) or `ps=true` for the ProjectSnapshot shortcut \u2014 exactly one is required. If this call times out, the save may still have committed server-side: call `palinode_search` with a distinctive phrase from your content to confirm before retrying, so you don't create a duplicate entry.",
     "params": {
+      "backed_by": {},
       "confidence": {},
       "content": {},
+      "contradicts": {},
       "core": {},
       "entities": {},
+      "epistemic": {
+        "enum": [
+          "fact",
+          "inference",
+          "open_question"
+        ]
+      },
       "external_refs": {},
       "metadata": {},
       "priority": {},

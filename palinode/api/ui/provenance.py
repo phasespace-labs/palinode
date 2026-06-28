@@ -110,6 +110,47 @@ def build_provenance(
         )
     )
 
+    # ── Claim type (real: frontmatter ``epistemic``, #72/ADR-018) ──────────────
+    # The KIND of claim this memory makes. A MISSING field is ``unmarked`` — no
+    # epistemic claim was made — and is rendered trust-neutral, deliberately NOT
+    # as a fact (an audit tool must not present "nobody said" as "verified").
+    # ``open_question`` gets warn styling because an unresolved question is a
+    # quality signal; ``fact`` is shown as an asserted claim only when explicit.
+    epistemic = frontmatter.get("epistemic")
+    if epistemic == "open_question":
+        rows.append(
+            ProvenanceRow(
+                kicker="Claim type",
+                value="open question — unresolved",
+                state="warn",
+            )
+        )
+    elif epistemic == "inference":
+        rows.append(
+            ProvenanceRow(
+                kicker="Claim type",
+                value="inference — derived, lower trust",
+                state="ok",
+            )
+        )
+    elif epistemic == "fact":
+        rows.append(
+            ProvenanceRow(
+                kicker="Claim type",
+                value="fact — observed/verified",
+                state="ok",
+            )
+        )
+    else:
+        # Absent (or an unrecognised value): unmarked — no claim made.
+        rows.append(
+            ProvenanceRow(
+                kicker="Claim type",
+                value="unmarked — no epistemic claim",
+                state="",
+            )
+        )
+
     # ── Extracted (attestation-gated G2: extraction model + prompt policy) ─────
     rows.append(
         ProvenanceRow(

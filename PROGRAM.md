@@ -358,6 +358,27 @@ The following MCP/CLI tools exist to make this contract cheap to follow. Reach f
 
 These tools are forward references for some surfaces — they ship in the M4 Obsidian integration MVP. If a tool is not yet exposed, fall back to `palinode_search` with the same query and apply judgment.
 
+### Mechanical `cross_refs` (machine-generated — do not hand-edit)
+
+There is a third surface, but it is **not yours to maintain**: the `cross_refs:`
+frontmatter list (#73). During indexing the watcher scans a memory's body for
+deterministic mentions of other memory files (by their `category/slug` ref,
+distinctive slug, or distinctive title) and records the matches in `cross_refs`.
+
+`cross_refs` is the *mechanical, untyped* complement to the human/LLM
+`entities:` ↔ `[[wikilinks]]` pair above:
+
+- **`entities:` / `[[wikilinks]]`** — authored, typed (`kind/slug`), load-bearing,
+  the surfaces you keep consistent by the contract above.
+- **`cross_refs:`** — auto-generated, untyped ("this memory mentions that one"),
+  regenerated on every index. It says nothing about *how* two memories relate —
+  typed relations (`contradicts` / `backed_by`) are a separate axis (#533).
+
+Treat `cross_refs` as derived output: don't hand-edit it (the indexer overwrites
+it), and don't rely on it as the authoritative link set — `entities:` remains the
+authoritative, typed surface. `cross_refs` is additive recall signal, always safe
+because it only ever reflects what the body literally mentions.
+
 ### What NOT to do
 
 - **Don't auto-generate dozens of wikilinks for incidental references.** A link is load-bearing when the linked entity has its own continuity (a person you'll meet again, a project that has a status). One-off mentions — a tool you used once, a city Alice flew through — should stay as plain text. Over-linking poisons the graph view and inflates the entity set without adding signal.

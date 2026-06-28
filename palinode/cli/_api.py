@@ -98,6 +98,9 @@ class PalinodeAPI:
         external_refs: dict | None = None,
         update_policy: str | None = None,
         sources: list[dict] | None = None,
+        epistemic: str | None = None,
+        contradicts: list[str] | None = None,
+        backed_by: list[str] | None = None,
     ):
         payload: dict = {
             "content": content,
@@ -130,6 +133,12 @@ class PalinodeAPI:
             payload["update_policy"] = update_policy
         if sources is not None:
             payload["sources"] = sources
+        if epistemic is not None:
+            payload["epistemic"] = epistemic
+        if contradicts:
+            payload["contradicts"] = contradicts
+        if backed_by:
+            payload["backed_by"] = backed_by
         params = {"sync": "true"} if sync else None
         response = self.client.post("/save", json=payload, params=params)
         response.raise_for_status()
@@ -171,6 +180,19 @@ class PalinodeAPI:
         this to fall back to a local in-process lint pass.
         """
         response = self.client.post("/lint", timeout=30.0)
+        response.raise_for_status()
+        return response.json()
+
+    def review(self, project: str | None = None):
+        """Run the advisory project-memory review via the API (#366).
+
+        Raises ``RequestError`` if the API is unreachable; the CLI catches
+        this to fall back to a local in-process review pass.
+        """
+        body: dict = {}
+        if project:
+            body["project"] = project
+        response = self.client.post("/review", json=body, timeout=30.0)
         response.raise_for_status()
         return response.json()
 

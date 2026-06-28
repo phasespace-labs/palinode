@@ -71,7 +71,7 @@ class BearerAuthMiddleware:
     No-op pass-through when ``token`` is ``None`` so local-first development
     keeps working without ceremony. Configured ``exempt_paths`` are always
     allowed so uptime probes (k8s readiness/liveness, systemd
-    ``ExecStartPost`` checks, external health monitors) don't need the token.
+    ``ExecStartPost`` checks, Tailscale Funnel monitors) don't need the token.
 
     The comparison uses ``hmac.compare_digest`` to remove the timing
     side-channel that a naive ``==`` would expose. The expected header is

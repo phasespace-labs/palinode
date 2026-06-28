@@ -114,11 +114,35 @@ The test additionally enforces:
 - `test_default_keys_resolve` — every `default_key` reference in the registry exists in `palinode/core/defaults.py`.
 - `test_known_drift_references_a_canonical_param` — `known_drift` keys must reference real canonical param names (catches dangling drift entries after a refactor).
 
+## Inventory completeness — the surface→registry direction
+
+The param checks above walk `REGISTRY` and verify each surface (registry→surface). That direction is blind to the opposite failure: a **new capability shipped on a surface but never registered**. The param test only iterates operations it already knows about, so an unregistered tool/route/command stays invisible to the contract.
+
+`test_no_unregistered_capabilities` closes the gap. It enumerates the **live** capabilities of each surface — MCP `list_tools()`, the FastAPI `app.routes`, the Click command tree — and asserts every one is accounted for by exactly one of:
+
+1. **`REGISTRY`** — a parity-bound memory operation (mapped via its `mcp_tool` / `api_endpoint` / `cli_command`).
+2. **`INVENTORY_INFRA`** (`palinode/core/parity.py`) — framework/admin/observability surface that is *not* a memory operation: Swagger/Redoc/OpenAPI, the HTML inspector under `/ui`, liveness probes, and the DB-maintenance + importer endpoints (the surface-identifier form of `ADMIN_EXEMPT_OPERATIONS`).
+3. **`INVENTORY_BACKLOG`** (`palinode/core/parity.py`) — a memory-semantic operation that already ships on the surface but has **not yet** been promoted into `REGISTRY` with canonical params. Each entry maps to a tracked backlog item. These are acknowledged, not silently ignored.
+
+A live capability in none of the three buckets **fails the guard** — that is an operation that skipped the contract. Stale buckets also fail (`test_inventory_accounting_is_not_stale`): an entry whose capability was renamed or removed must be cleaned up, mirroring the `known_drift` hygiene rule. `test_inventory_buckets_are_disjoint` keeps each capability classified exactly once.
+
+**Promoting a backlog op into the registry:** add its `Operation` (with canonical params) to `REGISTRY` and remove its `INVENTORY_BACKLOG` entry. The disjoint check fails if you register it without removing the backlog row — that is the test telling you the move is complete.
+
+Identifier form per surface: MCP = tool name (`palinode_search`); API = `METHOD /path` (`POST /search`); CLI = command path (`trigger add`).
+
+### Registration Backlog — Memory Ops Not Yet In The Registry
+
+These memory-semantic operations ship on all of MCP/API/CLI today but are not yet promoted into `REGISTRY` with canonical params. Admin/framework surface is in `INVENTORY_INFRA`, not here:
+
+`dedup_suggest`, `diff`, `entities`, `history`, `ingest`/`ingest-url`, `lint`, `orphan_repair`, `prompt` (list/show/activate), `push`, `session_end`, `timeline`, and the trigger `list`/`remove` + `check-triggers` + `search-associative` API endpoints. `depends/_unblocked` is tracked under #97.
+
+Promoting each (registry `Operation` + canonical params + removing its backlog entry) is the per-op work the issue tracks; this contract makes the gap explicit and prevents *new* unregistered ops from slipping in alongside them.
+
 ## httpx monopoly — the bypass linter
 
 CLI commands and the plugin go through one HTTP layer each: `palinode/cli/_api.py` and `palinode/mcp.py`. Direct `httpx` calls from elsewhere skip rate limiting, audit logging, source headers, and any future API-side fixes. The pre-commit linter at `scripts/check-httpx-monopoly.sh` greps for offenders and fails CI.
 
-Today's bypass-vector files (cleanup tracked in #168 and #170 lower-tier):
+Today's bypass-vector files:
 
 - `palinode/cli/read.py` — reads disk directly, never calls API
 - `palinode/cli/list.py` — uses raw `httpx.get`
@@ -162,4 +186,4 @@ When an issue closes:
 - `palinode/core/parity.py` — the registry (source of truth).
 - `palinode/core/defaults.py` — shared defaults.
 - `tests/test_surface_parity.py` — the forcing function.
-- Issue #170 — implementation tracking.
+- Implementation tracking for the registration backlog.

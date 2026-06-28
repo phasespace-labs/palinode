@@ -29,7 +29,7 @@ from palinode.core.config import config
 _HARNESSES: list[tuple[str, str, int]] = [
     ("claude-code",     "Claude Code",     1),
     ("codex",           "Codex CLI",       1),
-    ("generic-ide",     "Generic IDE",     1),
+    ("antigravity",     "Antigravity",     1),
     ("cursor",          "Cursor",          2),
     ("claude-desktop",  "Claude Desktop",  2),
     ("cline",           "Cline",           2),

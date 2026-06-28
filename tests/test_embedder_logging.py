@@ -100,3 +100,55 @@ def test_warning_includes_text_len_not_raw_text(caplog):
     assert any("text_len" in r.getMessage() for r in caplog.records), (
         "text_len context missing from all log records"
     )
+
+
+# ---------------------------------------------------------------------------
+# #337 — the Gemini embed path was unwrapped; HTTP errors must now log + raise
+# ---------------------------------------------------------------------------
+
+
+def test_gemini_embed_http_status_error_logs_warning(caplog, monkeypatch):
+    import httpx
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+    request = httpx.Request("POST", "https://example.invalid/embed")
+    response = httpx.Response(401, request=request)
+
+    def _raise(*args, **kwargs):
+        return response
+
+    with caplog.at_level(logging.WARNING, logger="palinode.core.embedder"):
+        with patch("palinode.core.embedder.httpx.post", return_value=response):
+            with patch.object(
+                httpx.Response, "raise_for_status",
+                side_effect=httpx.HTTPStatusError("401", request=request, response=response),
+            ):
+                with pytest.raises(httpx.HTTPStatusError):
+                    embedder._embed_gemini("some text")
+
+    assert any(
+        r.levelno == logging.WARNING and "gemini embed failed" in r.getMessage()
+        for r in caplog.records
+    ), "gemini HTTP error must emit a WARNING before re-raising"
+
+
+def test_gemini_embed_transport_error_logs_warning(caplog, monkeypatch):
+    import httpx
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+    with caplog.at_level(logging.WARNING, logger="palinode.core.embedder"):
+        with patch(
+            "palinode.core.embedder.httpx.post",
+            side_effect=httpx.ConnectError("unreachable"),
+        ):
+            with pytest.raises(httpx.HTTPError):
+                embedder._embed_gemini("some text")
+
+    assert any(
+        r.levelno == logging.WARNING
+        and "gemini embed failed" in r.getMessage()
+        and "outcome=unreachable" in r.getMessage()
+        for r in caplog.records
+    ), "gemini transport error must emit a WARNING before re-raising"

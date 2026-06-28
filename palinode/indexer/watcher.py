@@ -17,7 +17,7 @@ from watchdog.events import FileSystemEventHandler, FileModifiedEvent, FileCreat
 import threading
 import urllib.request
 
-from palinode.core import store, parser, embedder  # noqa: F401  (embedder re-exported for test patches)
+from palinode.core import store, parser, embedder, cross_refs  # noqa: F401  (embedder re-exported for test patches)
 from palinode.core.config import config
 from palinode.indexer.index_file import index_file
 import json
@@ -200,6 +200,25 @@ class PalinodeHandler(FileSystemEventHandler):
             logger.warning(
                 "Index pass for %s reported: %s", filepath, outcome["error"]
             )
+
+        # #73: mechanical untyped cross-linking. Post-index hook — scans the
+        # file's body for mentions of other memories and records them in a
+        # `cross_refs` frontmatter list. Idempotent: only rewrites/commits when
+        # the refs actually change, so the watcher re-processing its own write
+        # terminates after one pass. A failure here is non-fatal to indexing.
+        if config.capture.cross_refs.enabled:
+            try:
+                xref = cross_refs.update_file_cross_refs(filepath, content=content)
+                if xref.get("changed"):
+                    logger.info(
+                        "cross_refs updated %s (%d refs)", filepath, len(xref["refs"])
+                    )
+                elif xref.get("error"):
+                    logger.warning(
+                        "cross_refs pass for %s reported: %s", filepath, xref["error"]
+                    )
+            except Exception as e:
+                logger.warning("cross_refs pass failed for %s: %r", filepath, e)
 
         # Re-parse for metadata so we can decide whether to schedule summary
         # generation. (Cheap — no embedder call.)

@@ -19,6 +19,7 @@ def status(fmt):
             table.add_column("Key", style="cyan")
             table.add_column("Value")
             
+            table.add_row("Version:", data.get("version", "Unknown"))
             table.add_row("Memory dir:", data.get("memory_dir", "Unknown"))
             table.add_row("Files:", str(data.get("files", 0)))
             table.add_row("Chunks:", str(data.get("chunks", 0)))

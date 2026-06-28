@@ -80,6 +80,27 @@ from palinode.cli._format import console, print_result, get_default_format, Outp
     ),
 )
 @click.option(
+    "--contradicts",
+    "contradicts",
+    multiple=True,
+    metavar="REF",
+    help=(
+        "Typed conflict link: a memory ref (category/slug) this memory "
+        "conflicts with. Repeatable. Records the conflict WITHOUT picking a "
+        "winner — surfaced by `palinode lint`. e.g. --contradicts decisions/old-choice"
+    ),
+)
+@click.option(
+    "--backed-by",
+    "backed_by",
+    multiple=True,
+    metavar="REF",
+    help=(
+        "Typed evidence link: a source/fact ref (category/slug) that "
+        "supports this memory. Repeatable. e.g. --backed-by research/paper"
+    ),
+)
+@click.option(
     "--update-policy",
     "update_policy",
     type=click.Choice(["append", "replace"]),
@@ -89,6 +110,18 @@ from palinode.cli._format import console, print_result, get_default_format, Outp
         "'replace' marks a living/current-state document — re-saving the same "
         "slug updates it in place and consolidation never supersedes/archives "
         "it. Persisted as sticky frontmatter."
+    ),
+)
+@click.option(
+    "--epistemic",
+    "epistemic",
+    type=click.Choice(["fact", "inference", "open_question"]),
+    default=None,
+    help=(
+        "Epistemic marker (ADR-018): the KIND of claim this memory makes — "
+        "'fact' (observed/verified), 'inference' (derived, lower trust), or "
+        "'open_question' (unresolved). Omit to leave the memory unmarked (no "
+        "claim — not treated as fact); persisted as frontmatter only when set."
     ),
 )
 @click.option(
@@ -117,7 +150,10 @@ def save(
     external_ref_pairs,
     source,
     sources,
+    contradicts,
+    backed_by,
     update_policy,
+    epistemic,
     sync,
     fmt,
 ):
@@ -222,6 +258,9 @@ def save(
             external_refs=external_refs,
             update_policy=update_policy,
             sources=source_anchors,
+            epistemic=epistemic,
+            contradicts=list(contradicts) or None,
+            backed_by=list(backed_by) or None,
         )
 
         output_fmt = OutputFormat(fmt) if fmt else get_default_format()

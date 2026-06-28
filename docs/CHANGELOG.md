@@ -4,6 +4,49 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ## Unreleased
 
+## [0.9.0] — 2026-06-28
+
+The memory-quality release. Palinode now has first-class plaintext markers for
+claim type, typed memory relationships, mechanical cross-references, a project
+review command, and ready-to-paste MCP HTTP transport config. This release does
+not include a signed-attestation layer.
+
+### Added
+
+- **Epistemic markers.** Memories can declare whether a claim is a `fact`, an
+  `inference`, or an `open_question`. Omitted markers remain trust-neutral
+  rather than being treated as verified facts.
+- **Typed relationship links.** Saves can record `contradicts` and `backed_by`
+  references in plaintext frontmatter. Contradictions are surfaced for review
+  without automatically choosing a winner.
+- **Mechanical `cross_refs`.** The watcher can add deterministic, untyped
+  references when one memory clearly mentions another memory file.
+- **Project memory review.** `palinode review [project]` audits stale questions,
+  unresolved contradictions, missing descriptions, orphaned files, and related
+  quality signals, then returns proposed corrective operations without applying
+  them.
+- **MCP HTTP config emission.** `palinode mcp-config --http` and `--stdio`
+  print copy-pasteable client blocks, with optional bearer-token headers for
+  deployments that need them.
+- **Version surfacing.** `/status`, `/health`, `/doctor`, MCP status/doctor,
+  and the CLI now expose the installed Palinode version.
+
+### Changed
+
+- **Wheel smoke testing.** CI now builds the wheel and smoke-installs it on
+  Python 3.11 and 3.12 before release.
+- **Parity coverage.** Surface inventory checks now catch new API, CLI, or MCP
+  capabilities that have not been classified in the parity registry.
+- **Logging hardening.** Embed, save, git-persistence, and config-discovery
+  failure paths now emit structured diagnostics instead of failing silently.
+
+### Fixed
+
+- **Systemd installation.** `deploy/systemd/install.sh --system` now writes
+  system-scope units and can reconcile renamed watcher units.
+- **Bind-intent defaults.** The systemd API template no longer forces
+  `PALINODE_API_BIND_INTENT=public`; public bind intent remains opt-in.
+
 ## [0.8.15] — 2026-06-24
 
 ### Fixed
@@ -101,7 +144,7 @@ The memory-architecture release. Two themes land together. **The provenance wedg
 
 - **`consolidate` dry-run is now a true preview (#487).** `dry_run=true` returns proposed consolidation operations without applying file changes, status summaries, daily-note archival, or git commits.
 - **`reindex` now garbage-collects index rows for files removed from disk; FTS/chunk/vec stay in lockstep (#308).**
-- **Shipping path scan no longer false-positives on dev PRs adding dev-only paths (#443).** `check-shipping-paths.sh --context dev-pr` now treats newly added dev-only paths as expected private-repo state while the default and `--context public-sync` modes remain fail-closed for public audit.
+- **Shipping path scan no longer false-positives on private-maintenance PRs.** The internal public-sync guard now distinguishes normal private-repo maintenance from the final public payload audit.
 
 - **`pending_descriptions` no longer counts (or reprocesses) structural files — the backfill drains instead of looping forever (#472).** The `/generate-summaries` description backfill and the `pending_descriptions` count (surfaced via `/status` and `/health/auto-summary`) both counted *every* `.md` file missing a `description` field — including `daily/` journals, `archive/`, `specs/` (incl. `specs/prompts/`), and top-level docs like `README.md` / `PROGRAM.md`. The description write-back (`_inject_description`) is a no-op for those non-memory files, so the count never reached zero and each nightly sweep burned a full GPU enrichment pass regenerating ~95 descriptions that were immediately thrown away (live on `.85`: `specs/prompts/consolidation.md` re-described every ~12 s, `description_errors: 0`, never persisted). Fix: one shared eligibility predicate `_is_description_eligible(relpath)` — derived from the same `_TYPE_TO_CATEGORY` map `save_api` writes through (hoisted to module scope so the writer, the count, and the worklist can't drift; the #341 single-source lesson) — gates both call sites. A file is eligible iff it lives directly under a memory-category directory (`people`/`decisions`/`projects`/`insights`/`research`/`inbox`); structural and top-level files are excluded. On a tree of only structural files, `pending_descriptions` is now `0`. New `TestDescriptionEligibility` in `tests/test_auto_summary_async.py` (real files + `tmp_path`) covers the predicate, count-exclusion, worklist-exclusion (generator never invoked), and an eligible-file regression guard. No write-back behavior changed.
 - **`/read` recall-recording now uses the resolved absolute path (#479).** `store.record_recall_for_paths` matched on the caller-supplied relative path (`"insights/foo.md"`), but `index_file` stores chunks with the absolute path (`/var/lib/palinode/insights/foo.md`). The WHERE clause never matched any rows, so every `/read` call silently left `recall_count=0` and `last_recalled=NULL` — the exact integration seam #371's store-level tests passed green over. Fix: pass `resolved` (the absolute path already computed by `_resolve_memory_path`) instead of the relative `file_path` to `record_recall_for_paths`. New `tests/test_read_recall_e2e.py` covers the full save → index → `/read` → DB-assert pipeline end-to-end.
@@ -510,7 +553,7 @@ First tagged release. Persistent memory for AI agents with git-versioned markdow
 - File watcher daemon with debounced reindex and fault isolation
 
 **Consolidation and compaction**
-- Deterministic executor applying `KEEP` / `UPDATE` / `MERGE` / `SUPERSEDE` / `ARCHIVE` operations proposed by an LLM (LLM proposes structured operations, deterministic Python applies them — keeps every edit reviewable in git)
+- Deterministic compaction applies validated structured operations and keeps every edit reviewable in git.
 - Weekly full-corpus consolidation with configurable LLM backend
 - Nightly lightweight consolidation pass (`--nightly` flag) bounded to `UPDATE`/`SUPERSEDE` for safer incremental updates
 - Model fallback chains — primary → fallback → fallback on timeout or HTTP error

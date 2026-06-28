@@ -21,6 +21,52 @@ from palinode.cli._format import console
 
 
 # ---------------------------------------------------------------------------
+# Emit-mode constants
+# ---------------------------------------------------------------------------
+
+# Generic placeholder — NEVER bake a real internal host/IP into shipping output.
+# The user substitutes their own palinode host (the machine running palinode-mcp).
+DEFAULT_HTTP_HOST = "<palinode-host>"
+DEFAULT_HTTP_PORT = 6341
+DEFAULT_STDIO_COMMAND = "palinode-mcp"
+
+
+# ---------------------------------------------------------------------------
+# Config-block builders (emit mode)
+# ---------------------------------------------------------------------------
+
+def _http_url(url: str | None, host: str, port: int) -> str:
+    """Resolve the streamable-HTTP MCP URL.
+
+    An explicit ``--url`` wins; otherwise build ``http://{host}:{port}/mcp/``.
+    The trailing slash on ``/mcp/`` is required by the streamable-HTTP transport.
+    """
+    if url:
+        return url
+    return f"http://{host}:{port}/mcp/"
+
+
+def _build_http_entry(url: str, bearer: str | None = None) -> dict[str, Any]:
+    """Build the ``palinode`` server entry for streamable-HTTP transport."""
+    entry: dict[str, Any] = {"type": "http", "url": url}
+    if bearer:
+        # Forward-compat for MCP bearer auth. Isolated
+        # endpoint is token-less today; pass --bearer once auth lands there.
+        entry["headers"] = {"Authorization": f"Bearer {bearer}"}
+    return entry
+
+
+def _build_stdio_entry() -> dict[str, Any]:
+    """Build the ``palinode`` server entry for local stdio transport."""
+    return {"command": DEFAULT_STDIO_COMMAND, "env": {}}
+
+
+def _wrap_block(entry: dict[str, Any]) -> dict[str, Any]:
+    """Wrap a server entry in the canonical ``mcpServers`` block."""
+    return {"mcpServers": {"palinode": entry}}
+
+
+# ---------------------------------------------------------------------------
 # Canonical config locations
 # ---------------------------------------------------------------------------
 
@@ -268,6 +314,82 @@ def _check_divergence(results: list[ConfigResult]) -> list[tuple[ConfigResult, C
 
 
 # ---------------------------------------------------------------------------
+# Emit mode
+# ---------------------------------------------------------------------------
+
+def _emit_config(
+    *,
+    emit_http: bool,
+    url: str | None,
+    host: str,
+    port: int,
+    bearer: str | None,
+    output_json: bool,
+) -> None:
+    """Print a ready-to-paste MCP config block for the chosen transport.
+
+    TTY-aware: when piped (or --json), prints only the JSON block so the
+    output can be redirected straight into a config file; when interactive,
+    wraps it with guidance.
+    """
+    if emit_http:
+        resolved_url = _http_url(url, host, port)
+        entry = _build_http_entry(resolved_url, bearer=bearer)
+    else:
+        entry = _build_stdio_entry()
+    block = _wrap_block(entry)
+    block_json = json.dumps(block, indent=2)
+
+    # Piped / --json: emit the raw block only (no decoration).
+    if output_json or not sys.stdout.isatty():
+        click.echo(block_json)
+        return
+
+    # Interactive: wrap with human guidance.
+    console.print()
+    if emit_http:
+        console.print("[bold]Palinode MCP — streamable-HTTP config[/bold]")
+    else:
+        console.print("[bold]Palinode MCP — stdio config[/bold]")
+    console.print()
+    console.print(
+        "Paste the [cyan]palinode[/cyan] entry into the config your client reads\n"
+        "(run [cyan]palinode mcp-config[/cyan] with no flags to find which file that is):"
+    )
+    console.print()
+    for line in block_json.splitlines():
+        console.print(f"  {line}")
+    console.print()
+
+    if emit_http:
+        console.print(
+            "[bold]Claude Code one-liner:[/bold]\n"
+            f"  [cyan]claude mcp add palinode --transport http --url {entry['url']}[/cyan]"
+        )
+        console.print()
+        if host == DEFAULT_HTTP_HOST and not url:
+            console.print(
+                f"[yellow]Replace [cyan]{DEFAULT_HTTP_HOST}[/cyan] with your palinode host[/yellow] "
+                "(the machine running palinode-mcp),\n"
+                "or re-run with [cyan]--host <name>[/cyan] / [cyan]--url <full-url>[/cyan]."
+            )
+            console.print()
+        console.print(
+            "Streamable-HTTP reuses the warm BGE-M3 model behind the running service —\n"
+            "no per-session Python cold-start and no persistent SSH tunnel.\n"
+            "[yellow]Note:[/yellow] Claude Desktop only accepts stdio entries — use [cyan]--stdio[/cyan] there."
+        )
+    else:
+        console.print(
+            "stdio runs a local [cyan]palinode-mcp[/cyan] process per session.\n"
+            "For a remote server, prefer [cyan]--http[/cyan] (warm model, no SSH/cold-start)."
+        )
+    console.print()
+    console.print("See [cyan]docs/MCP-CONFIG-HOMES.md[/cyan] for the full reference.")
+    console.print()
+
+
+# ---------------------------------------------------------------------------
 # CLI command
 # ---------------------------------------------------------------------------
 
@@ -281,24 +403,89 @@ def _check_divergence(results: list[ConfigResult]) -> list[tuple[ConfigResult, C
     help="(default) Scan all known MCP config locations and report palinode entries.",
 )
 @click.option(
+    "--http",
+    "emit_http",
+    is_flag=True,
+    default=False,
+    help="Emit a ready-to-paste streamable-HTTP config block (remote, warm-model).",
+)
+@click.option(
+    "--stdio",
+    "emit_stdio",
+    is_flag=True,
+    default=False,
+    help="Emit a ready-to-paste stdio config block (local install).",
+)
+@click.option(
+    "--url",
+    "url",
+    default=None,
+    help="Full MCP URL for --http (overrides --host/--port). E.g. http://host:6341/mcp/",
+)
+@click.option(
+    "--host",
+    "host",
+    default=DEFAULT_HTTP_HOST,
+    show_default=True,
+    help="Palinode host for --http (the machine running palinode-mcp).",
+)
+@click.option(
+    "--port",
+    "port",
+    type=int,
+    default=DEFAULT_HTTP_PORT,
+    show_default=True,
+    help="Streamable-HTTP MCP port for --http.",
+)
+@click.option(
+    "--bearer",
+    "bearer",
+    default=None,
+    help="Optional bearer token for --http.",
+)
+@click.option(
     "--json", "output_json",
     is_flag=True,
     default=False,
     help="Emit results as JSON (useful for scripting or piped output).",
 )
-def mcp_config(output_json: bool) -> None:
-    """Surface all MCP config-file homes and warn when they diverge.
+def mcp_config(
+    emit_http: bool,
+    emit_stdio: bool,
+    url: str | None,
+    host: str,
+    port: int,
+    bearer: str | None,
+    output_json: bool,
+) -> None:
+    """Surface all MCP config-file homes, or emit a ready-to-paste config block.
 
-    Walks every location a running MCP client might read, parses the JSON,
-    and reports what it finds for the 'palinode' server entry.
+    Default (no flags) walks every location a running MCP client might read,
+    parses the JSON, and reports what it finds for the 'palinode' server entry —
+    useful when you edited one file and changes didn't take effect.
+
+    With --http or --stdio, instead emit a copy-pasteable config block for the
+    chosen transport. --http is the streamable-HTTP form (remote server, reuses
+    the warm BGE-M3 model behind the running service, no SSH/cold-start).
 
     Read-only: we never write to any user config file.
 
-    Useful when you edited one file and changes didn't take effect — this
-    tells you which file your running client actually reads.
-
     See docs/MCP-CONFIG-HOMES.md for the full canonical-location reference.
     """
+    # ---- Emit mode (--http / --stdio) -------------------------------------
+    if emit_http or emit_stdio:
+        if emit_http and emit_stdio:
+            raise click.UsageError("Pass only one of --http / --stdio.")
+        _emit_config(
+            emit_http=emit_http,
+            url=url,
+            host=host,
+            port=port,
+            bearer=bearer,
+            output_json=output_json,
+        )
+        return
+
     candidates = _candidate_paths()
     results: list[ConfigResult] = []
 

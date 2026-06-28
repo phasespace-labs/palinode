@@ -41,6 +41,7 @@ ZERO_STATS = {
     "retracted": 0,
     "merge_rejected": 0,
     "protected_rejected": 0,
+    "contradicts_proposed": 0,
 }
 
 # The seed facts, as their plain *active* bullet lines. Asserting one of these is

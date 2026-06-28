@@ -361,7 +361,7 @@ def dedup_suggest_api(req: DedupSuggestRequest) -> list[dict[str, Any]]:
 def orphan_repair_api(req: OrphanRepairRequest) -> list[dict[str, Any]]:
     """Return existing files semantically near a broken `[[wikilink]]` target.
 
-    The LLM proposes a redirect (rename the link to point at one of the
+    The model proposes a redirect (rename the link to point at one of the
     returned files) or creates the missing target with informed context
     (knowing what existing pages are nearby in semantic space).
 

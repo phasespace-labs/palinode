@@ -1,6 +1,6 @@
-# Palinode — systemd user units
+# Palinode — systemd units
 
-Version-controlled, templated systemd user-unit files for the three palinode production services.
+Version-controlled, templated systemd unit files for the three palinode production services. Installable in **user scope** (default, no root) or **system scope** (`--system`, root) — see [User scope vs system scope](#user-scope-vs-system-scope).
 
 **Linux only.** These are systemd units. macOS users need launchd (not yet provided — file a follow-up if you need it).
 
@@ -77,8 +77,51 @@ Expected response from `/health`:
 | `EMBEDDING_MODEL` | `bge-m3` | Model name passed to Ollama |
 | `API_PORT` | `6340` | Port for `palinode-api` (uvicorn) |
 | `MCP_PORT` | `6341` | Port for `palinode-mcp-sse` (streamable-HTTP transport, configure clients with `"type": "http"` and `"url": "http://host:6341/mcp/"`) |
+| `WATCHER_UNIT_NAME` | `palinode-watcher` | Installed name of the watcher/indexer unit. Override when an existing deployment named the watcher unit differently (e.g. `palinode-indexer`) so re-running the installer is idempotent against the live unit instead of writing a second, duplicate unit. The watcher's `ExecStart` (`python -m palinode.indexer.watcher`) is unchanged — only the installed `.service` filename. |
+| `PALINODE_API_BIND_INTENT` | *(empty)* | Bind-intent for the API's `0.0.0.0` bind. **Empty (default)** → the API starts and only logs the 0.0.0.0 warning; **no token is required** — the right choice for a token-less, network-isolated host (e.g. Tailscale-only). Set to `public` to suppress the warning, **but** the app then *requires* `PALINODE_API_TOKEN` and refuses to start without one, so only set `public` alongside a token. The check is value-based, so empty is treated as "not public". |
 
 All variables must be set or exported before running `install.sh`; the script exports defaults for any that are unset.
+
+> `SYSTEMD_WANTED_BY` is set automatically by `install.sh` from the chosen scope (`default.target` for `--user`, `multi-user.target` for `--system`) and rendered into each unit's `[Install]` section — you do not set it by hand.
+
+---
+
+## User scope vs system scope
+
+| | `--user` (default) | `--system` |
+|---|---|---|
+| Unit dir | `~/.config/systemd/user/` | `/etc/systemd/system/` |
+| Root | not required | **required** (`sudo -E`) |
+| `[Install] WantedBy` | `default.target` | `multi-user.target` |
+| Managed with | `systemctl --user …` | `systemctl …` |
+| Starts at boot | only with `loginctl enable-linger $USER` | yes (no linger needed) |
+
+User scope is right for a single-user dev box. **System scope** is for a dedicated host where the services run as root under `multi-user.target` and must come up at boot without a logged-in session — this is how the production palinode host is deployed (`/opt/palinode` code, `/var/lib/palinode` data).
+
+### Reconciling a system-scope production host
+
+When the live units are system units that were hand-edited before these templates existed, render the tracked templates over them with the host's real values. Pass `sudo -E` so the exported variables survive into the root environment:
+
+```bash
+sudo -E PALINODE_HOME=/opt/palinode \
+        PALINODE_DATA_DIR=/var/lib/palinode \
+        OLLAMA_URL=http://your-ollama-host:11434 \
+        EMBEDDING_MODEL=bge-m3 \
+        WATCHER_UNIT_NAME=palinode-indexer \
+        bash deploy/systemd/install.sh --system --enable
+```
+
+Capture the live units first (`systemctl cat palinode-api palinode-mcp palinode-indexer`) so you can diff before/after and confirm the only changes are the intended ones (journald logging, `WantedBy=multi-user.target`, ordering on `network-online.target`).
+
+### Reconciling an existing deployment whose watcher unit is named differently
+
+A deployment that was hand-installed before these templates existed may have its watcher unit named `palinode-indexer` rather than `palinode-watcher`. Point the installer at the live name so it overwrites the existing unit instead of creating a duplicate:
+
+```bash
+WATCHER_UNIT_NAME=palinode-indexer bash deploy/systemd/install.sh
+```
+
+Without this, `install.sh` would write a fresh `palinode-watcher.service` alongside the running `palinode-indexer.service`, leaving two watcher units.
 
 ---
 

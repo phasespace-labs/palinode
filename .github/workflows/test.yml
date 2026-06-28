@@ -68,7 +68,7 @@ jobs:
   # BGE-M3 embeddings. That setup is deferred until the test suite exists.
   # ---------------------------------------------------------------------------
   integration-tests:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
 
     steps:
       - uses: actions/checkout@v4

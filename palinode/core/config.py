@@ -103,12 +103,25 @@ class QuickCaptureConfig:
     long_text_threshold: int = 500
 
 @dataclass
+class CrossRefsConfig:
+    """#73: mechanical, untyped cross-linking during indexing.
+
+    When enabled, the watcher scans an indexed memory's body for mentions of
+    other memory files and records them in a ``cross_refs`` frontmatter list.
+    ``min_token_len`` is the floor below which a bare slug/title token is NOT
+    matched in prose, to avoid false-positive substring hits on short names.
+    """
+    enabled: bool = True
+    min_token_len: int = 6
+
+@dataclass
 class CaptureConfig:
     """General extraction capability configuration map."""
     enabled: bool = True
     extraction: ExtractionCaptureConfig = field(default_factory=ExtractionCaptureConfig)
     daily: DailyCaptureConfig = field(default_factory=DailyCaptureConfig)
     quick_capture: QuickCaptureConfig = field(default_factory=QuickCaptureConfig)
+    cross_refs: CrossRefsConfig = field(default_factory=CrossRefsConfig)
 
 @dataclass
 class TranscriptorConfig:
@@ -582,14 +595,24 @@ def load_config() -> Config:
                     _deep_merge(raw_config, file_conf)
                 loaded_path = cpath
             except Exception as e:
-                print(f"Warning: Failed to load config from {cpath}: {e}")
+                # A corrupt/unreadable config that silently falls back to
+                # built-in defaults is the #273 failure class. Route through the
+                # logger (not print→stderr, which bypasses log capture) so the
+                # fallback is greppable on the host (#337).
+                _logger.warning(
+                    "failed to load config; continuing with remaining sources/defaults "
+                    "op=config_load path=%s error=%r",
+                    cpath, str(e),
+                )
 
     # Initialize dataclass with Pydantic validation
     try:
         adapter = TypeAdapter(Config)
         cfg = adapter.validate_python(raw_config)
     except ValidationError as e:
-        print(f"Failed to validate configuration:\n{e}")
+        # Validation failure aborts startup — make sure it hits the log before
+        # the raise propagates, not only stderr (#337).
+        _logger.error("failed to validate configuration op=config_validate error=%r", str(e))
         raise
 
     # 4. Environment variable overrides
@@ -628,7 +651,13 @@ def load_config() -> Config:
         try:
             cfg.services.api.port = int(os.environ["PALINODE_API_PORT"])
         except ValueError:
-            pass
+            # A malformed port silently ignored leaves the operator on the
+            # default port wondering why their override didn't take (#337).
+            _logger.warning(
+                "ignoring malformed env override; keeping configured value "
+                "var=PALINODE_API_PORT value=%r",
+                os.environ["PALINODE_API_PORT"],
+            )
     if "PALINODE_MCP_SURFACE" in os.environ:
         cfg.tool_surface = validate_tool_surface(
             os.environ["PALINODE_MCP_SURFACE"], "PALINODE_MCP_SURFACE"
@@ -647,7 +676,13 @@ def load_config() -> Config:
                 os.environ["PALINODE_DESCRIBE_TIMEOUT_SECONDS"]
             )
         except ValueError:
-            pass
+            # Malformed timeout silently ignored keeps the default describe
+            # timeout, masking a tuning attempt (#337/#336).
+            _logger.warning(
+                "ignoring malformed env override; keeping configured value "
+                "var=PALINODE_DESCRIBE_TIMEOUT_SECONDS value=%r",
+                os.environ["PALINODE_DESCRIBE_TIMEOUT_SECONDS"],
+            )
 
     # Warn if PALINODE_DIR is set but db_path was not updated to match
     if "PALINODE_DIR" in os.environ:

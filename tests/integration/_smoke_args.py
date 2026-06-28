@@ -29,6 +29,7 @@ TOOL_SMOKE_ARGS: dict[str, tuple[dict, bool]] = {
     "palinode_diff":              ({"days": 7}, False),
     "palinode_doctor":            ({}, False),
     "palinode_lint":              ({}, False),
+    "palinode_review":            ({}, False),
     "palinode_trigger":           ({"action": "list"}, False),
     "palinode_prompt":            ({"action": "list"}, False),
     "palinode_depends":           ({"unblocked": True}, False),

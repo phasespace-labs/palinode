@@ -1,0 +1,74 @@
+# Wheel build + smoke-install gate.
+#
+# Root-cause guard for the v0.8.14 incident: CI tested the editable / source
+# tree, so a broken *wheel* shipped — `[tool.setuptools] packages` omitted
+# `palinode.api.routers`, so an installed `palinode` console command crashed
+# importing `palinode.api.server`. An editable install can NEVER catch that:
+# it adds the whole working tree to sys.path, so every package directory is
+# importable regardless of what the build metadata declares. Only building the
+# wheel and installing it into a clean venv exercises the package list that
+# actually ships.
+#
+# This job builds sdist+wheel, installs ONLY the wheel into a fresh venv
+# (no source tree on the path), and smokes the console entry points + the
+# exact import chain that crashed in the incident.
+
+name: Wheel Smoke
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  pull_request:
+  push:
+    branches:
+      - "feat/**"
+      - "bugfix/**"
+
+jobs:
+  wheel-smoke:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - name: Install the wheel into a clean venv
+        # A fresh venv with NO checkout on the path: the only way palinode is
+        # importable is via the installed wheel's declared packages. If a
+        # subpackage is missing from [tool.setuptools] packages, the import
+        # smoke below fails here where the editable-install jobs cannot.
+        run: |
+          python -m venv /tmp/wheel-venv
+          /tmp/wheel-venv/bin/python -m pip install --upgrade pip
+          /tmp/wheel-venv/bin/python -m pip install dist/*.whl
+
+      - name: Smoke the console entry points
+        # Run from /tmp so the repo's ./palinode source tree can never shadow
+        # the installed package on an accidental sys.path[0] insertion.
+        working-directory: /tmp
+        run: |
+          /tmp/wheel-venv/bin/palinode --version
+          /tmp/wheel-venv/bin/palinode --help
+
+      - name: Smoke the incident import chain
+        # `import palinode.api.server` is the exact import that crashed in the
+        # v0.8.14 wheel (it imports palinode.api.routers). Importing the MCP
+        # and CLI entry modules covers the other two console scripts.
+        working-directory: /tmp
+        run: |
+          /tmp/wheel-venv/bin/python -c "import palinode.api.server; import palinode.mcp; import palinode.cli"

@@ -250,6 +250,13 @@ REGISTRY: tuple[Operation, ...] = (
             # The CLI surfaces this as the repeatable ``--cite REF::QUOTE`` flag
             # (dest ``sources``); MCP/API/plugin take the structured list.
             CanonicalParam(name="sources", type="array"),
+            # #533 (G4): typed relationship links. ``contradicts`` records a
+            # conflict with no winner picked; ``backed_by`` records an
+            # evidence/support edge. First-class plaintext lists on all surfaces
+            # so callers don't tunnel them through metadata. CLI surfaces them as
+            # the repeatable ``--contradicts``/``--backed-by`` flags.
+            CanonicalParam(name="contradicts", type="array"),
+            CanonicalParam(name="backed_by", type="array"),
         ),
         cli_command="save",
         mcp_tool="palinode_save",
@@ -364,6 +371,21 @@ REGISTRY: tuple[Operation, ...] = (
         exempt_surfaces=frozenset({"plugin"}),
         known_drift={},
     ),
+    # ── review (#366) ────────────────────────────────────────────────────────
+    # Advisory project-memory review. Composes the deterministic lint signals
+    # scoped to a project and proposes corrective ops (read-only). Plugin-exempt
+    # like the other quality/maintenance ops (lint/topic_coverage/consolidate).
+    Operation(
+        name="review",
+        canonical_params=(
+            CanonicalParam(name="project", type="string"),
+        ),
+        cli_command="review",
+        mcp_tool="palinode_review",
+        api_endpoint=("POST", "/review"),
+        exempt_surfaces=frozenset({"plugin"}),
+        known_drift={},
+    ),
     # ── depends (#97) ────────────────────────────────────────────────────────
     # The `unblocked` mode is exposed as a separate REST endpoint
     # (GET /depends/_unblocked) rather than a query param on
@@ -388,8 +410,200 @@ REGISTRY: tuple[Operation, ...] = (
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Inventory accounting — the surface→registry direction (#170)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# ``REGISTRY`` drives the param-level parity test (registry→surface).  That
+# direction cannot catch a *new* capability shipped on a surface but never
+# registered: the test only walks operations it already knows about.  The
+# inventory guard closes the reverse direction — it enumerates the live
+# capabilities of every surface and asserts each one is accounted for by
+# exactly one of:
+#
+#   1. ``REGISTRY``                — a parity-bound memory operation (mapped via
+#      that operation's ``mcp_tool`` / ``api_endpoint`` / ``cli_command``);
+#   2. ``INVENTORY_INFRA``         — framework / admin / observability surface
+#      that is *not* a memory operation (docs UI, OpenAPI schema, the HTML
+#      inspector, liveness probes, DB-maintenance and importer endpoints).
+#      The surface-identifier form of ``ADMIN_EXEMPT_OPERATIONS`` plus the
+#      framework routes;
+#   3. ``INVENTORY_BACKLOG``       — a *memory-semantic* operation that already
+#      ships on the surface but has not yet been promoted into ``REGISTRY``
+#      with canonical params.  These are the ADR-010 implementation backlog
+#      (issue #170); they are acknowledged, not silently ignored.
+#
+# A live capability that is in none of the three buckets fails the guard:
+# that is a brand-new operation that skipped the contract.  A bucket entry
+# that is no longer live also fails: the capability was renamed/removed and
+# the accounting is stale.  Both mirror the ``known_drift`` hygiene rule.
+#
+# Identifier form per surface:
+#   - mcp: the tool name           (e.g. ``"palinode_search"``)
+#   - api: ``"METHOD /path"``      (e.g. ``"POST /search"``)
+#   - cli: the command path        (e.g. ``"trigger add"``)
+
+
+#: Framework / admin / observability surface capabilities that are *not*
+#: memory operations and are exempt from the inventory guard by nature.
+#: This is ``ADMIN_EXEMPT_OPERATIONS`` expressed in per-surface identifier
+#: form, plus the framework-provided routes (Swagger/Redoc/OpenAPI, the HTML
+#: inspector UI under ``/ui``, liveness probes).
+INVENTORY_INFRA: dict[Surface, frozenset[str]] = {
+    "mcp": frozenset(
+        {
+            "palinode_doctor",  # diagnostics (admin: doctor)
+            "palinode_doctor_deep",  # deep diagnostics (admin: doctor)
+        }
+    ),
+    "api": frozenset(
+        {
+            # FastAPI framework routes
+            "GET /docs",
+            "GET /docs/oauth2-redirect",
+            "GET /openapi.json",
+            "GET /redoc",
+            # HTML inspector UI
+            "GET /ui",
+            "GET /ui/",
+            "GET /ui/compaction",
+            "GET /ui/diffs",
+            "GET /ui/history/{file_path:path}",
+            "GET /ui/memory",
+            "GET /ui/memory/{file_path:path}",
+            "GET /ui/quality",
+            # Observability internals (ADMIN_EXEMPT: health, git-stats,
+            # generate-summaries) + diagnostics
+            "GET /doctor",
+            "GET /git-stats",
+            "GET /health",
+            "GET /health/auto-summary",
+            "GET /health/watcher",
+            "POST /generate-summaries",
+            # Full-database operations (ADMIN_EXEMPT)
+            "POST /reindex",
+            "POST /rebuild-fts",
+            "POST /split-layers",
+            "POST /bootstrap-fact-ids",
+            # One-off importers (ADMIN_EXEMPT)
+            "POST /migrate/mem0",
+            "POST /migrate/openclaw",
+        }
+    ),
+    "cli": frozenset(
+        {
+            # Local / operational (ADMIN_EXEMPT)
+            "banner",
+            "config edit",
+            "config view",
+            "doctor",
+            "start",
+            "stop",
+            # Full-database operations (ADMIN_EXEMPT)
+            "bootstrap-ids",
+            "rebuild-fts",
+            "reindex",
+            "split-layers",
+            # One-off importers (ADMIN_EXEMPT) + local sync/scaffolding helpers
+            "import from-vault",
+            "init",
+            "mcp-config",
+            "mcp-smoke",
+            "migrate openclaw",
+            "migrate-mem0",
+            "obsidian-sync",
+            "retrieval-stats",
+        }
+    ),
+}
+
+
+#: Memory-semantic operations that already ship on a surface but have **not**
+#: yet been promoted into ``REGISTRY`` with canonical params.  This is the
+#: ADR-010 implementation backlog — each entry maps to the GitHub issue that
+#: tracks adding it to the registry.  The guard acknowledges these so the
+#: suite stays green, but FAILS the moment a *new* capability appears that is
+#: neither registered, infra, nor backlog.  Promoting one of these into
+#: ``REGISTRY`` means removing its entry here (the guard fails on the overlap,
+#: telling you the move is done).
+INVENTORY_BACKLOG: dict[Surface, dict[str, int]] = {
+    "mcp": {
+        "palinode_dedup_suggest": 170,
+        "palinode_diff": 170,
+        "palinode_entities": 170,
+        "palinode_history": 170,
+        "palinode_ingest": 170,
+        "palinode_lint": 170,
+        "palinode_orphan_repair": 170,
+        "palinode_prompt": 170,
+        "palinode_push": 170,
+        "palinode_session_end": 170,
+        "palinode_timeline": 170,
+    },
+    "api": {
+        "DELETE /triggers/{trigger_id}": 170,
+        "GET /triggers": 170,
+        "GET /depends/_unblocked": 97,
+        "GET /diff": 170,
+        "GET /entities": 170,
+        "GET /entities/{entity_ref:path}": 170,
+        "GET /history/{file_path:path}": 170,
+        "GET /prompts": 170,
+        "GET /prompts/{name}": 170,
+        "GET /timeline/{file_path:path}": 170,
+        "POST /check-triggers": 170,
+        "POST /dedup-suggest": 170,
+        "POST /ingest": 170,
+        "POST /ingest-url": 170,
+        "POST /lint": 170,
+        "POST /orphan-repair": 170,
+        "POST /prompts/{name}/activate": 170,
+        "POST /push": 170,
+        "POST /search-associative": 170,
+        "POST /session-end": 170,
+    },
+    "cli": {
+        "dedup-suggest": 170,
+        "diff": 170,
+        "entities": 170,
+        "history": 170,
+        "ingest": 170,
+        "lint": 170,
+        "orphan-repair": 170,
+        "prompt activate": 170,
+        "prompt list": 170,
+        "prompt show": 170,
+        "push": 170,
+        "session-end": 170,
+        "timeline": 170,
+        "trigger list": 170,
+        "trigger remove": 170,
+    },
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+def registered_capabilities(surface: Surface) -> frozenset[str]:
+    """Return the surface-identifier form of every ``REGISTRY`` operation
+    that maps to ``surface``.
+
+    The identifier matches the live-introspection form used by the inventory
+    guard: the MCP tool name, ``"METHOD /path"`` for the API, the Click
+    command path for the CLI.
+    """
+    ids: set[str] = set()
+    for op in REGISTRY:
+        if surface == "mcp" and op.mcp_tool is not None:
+            ids.add(op.mcp_tool)
+        elif surface == "api" and op.api_endpoint is not None:
+            method, path = op.api_endpoint
+            ids.add(f"{method} {path}")
+        elif surface == "cli" and op.cli_command is not None:
+            ids.add(op.cli_command)
+    return frozenset(ids)
 
 
 def by_name(op_name: str) -> Operation:
@@ -410,6 +624,8 @@ __all__ = [
     "ADMIN_EXEMPT_OPERATIONS",
     "CATEGORIES",
     "CanonicalParam",
+    "INVENTORY_BACKLOG",
+    "INVENTORY_INFRA",
     "MEMORY_TYPES",
     "Operation",
     "PROMPT_TASKS",
@@ -417,5 +633,6 @@ __all__ = [
     "REGISTRY",
     "Surface",
     "by_name",
+    "registered_capabilities",
     "required_surfaces",
 ]

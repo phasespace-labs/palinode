@@ -127,6 +127,28 @@ def lint(fmt, deep_contradictions, max_llm_calls, similarity_threshold):
 
     console.print("")
 
+    # #72: long-lived unresolved open questions (epistemic: open_question).
+    stale_oq = data.get("stale_open_questions", [])
+    if stale_oq:
+        console.print(f"[bold yellow]Stale Open Questions ({len(stale_oq)})[/bold yellow]")
+        for oq in stale_oq:
+            console.print(f"  - {oq['file']} ({oq['days_old']} days old)")
+    else:
+        console.print("[green]✓ No stale open questions (>90 days)[/green]")
+    # #533 (G4): unresolved typed contradiction links (neither side won yet).
+    open_contradictions = data.get("open_contradictions", [])
+    if open_contradictions:
+        console.print(
+            f"[bold yellow]Open Contradictions ({len(open_contradictions)})[/bold yellow]"
+        )
+        for oc in open_contradictions:
+            refs = ", ".join(oc.get("contradicts", []))
+            console.print(f"  - {oc['file']} contradicts: {refs}")
+    else:
+        console.print("[green]✓ No open contradictions[/green]")
+
+    console.print("")
+
     core_count = data.get("core_count", 0)
     if core_count > 10:
         console.print(f"[bold red]Core Files: {core_count}[/bold red] (recommended: ≤10 — prune with `palinode list --core-only`)")

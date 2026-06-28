@@ -68,6 +68,16 @@ async def test_save_schema_declares_update_policy():
 
 
 @pytest.mark.asyncio
+async def test_save_schema_declares_epistemic():
+    tools = {t.name: t for t in await list_tools()}
+    props = tools["palinode_save"].inputSchema["properties"]
+    assert "epistemic" in props, "palinode_save schema dropped epistemic"
+    assert set(props["epistemic"].get("enum", [])) >= {
+        "fact", "inference", "open_question"
+    }, "epistemic enum must offer fact + inference + open_question"
+
+
+@pytest.mark.asyncio
 async def test_search_schema_declares_include_telemetry():
     tools = {t.name: t for t in await list_tools()}
     props = tools["palinode_search"].inputSchema["properties"]
@@ -96,6 +106,26 @@ async def test_save_omits_update_policy_when_absent(captured_post):
         "type": "Insight",
     })
     assert "update_policy" not in captured_post["body"]
+
+
+@pytest.mark.asyncio
+async def test_save_forwards_epistemic_to_api(captured_post):
+    await _dispatch_tool("palinode_save", {
+        "content": "derived guess",
+        "type": "Insight",
+        "epistemic": "inference",
+    })
+    assert captured_post["path"] == "/save"
+    assert captured_post["body"].get("epistemic") == "inference"
+
+
+@pytest.mark.asyncio
+async def test_save_omits_epistemic_when_absent(captured_post):
+    await _dispatch_tool("palinode_save", {
+        "content": "plain note",
+        "type": "Insight",
+    })
+    assert "epistemic" not in captured_post["body"]
 
 
 @pytest.mark.asyncio

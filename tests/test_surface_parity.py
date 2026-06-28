@@ -32,10 +32,13 @@ from pydantic import BaseModel
 
 from palinode.cli import main as cli_root
 from palinode.core.parity import (
+    INVENTORY_BACKLOG,
+    INVENTORY_INFRA,
     REGISTRY,
     CanonicalParam,
     Operation,
     Surface,
+    registered_capabilities,
     required_surfaces,
 )
 
@@ -309,4 +312,123 @@ def test_known_drift_references_a_canonical_param() -> None:
     assert not bad, (
         "known_drift entries reference unknown params:\n  "
         + "\n  ".join(bad)
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Inventory completeness — the surface→registry direction (#170)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The param test above walks the registry and checks each surface.  It cannot
+# catch a *new* capability shipped on a surface but never registered.  These
+# tests enumerate the live capabilities of each surface and assert every one is
+# accounted for by exactly one bucket: REGISTRY, INVENTORY_INFRA, or
+# INVENTORY_BACKLOG (see ``palinode/core/parity.py``).  A capability in none of
+# the three fails — that is a contract-skipping operation.
+
+
+def _live_mcp_capabilities() -> set[str]:
+    return set(_mcp_tools().keys())
+
+
+def _live_api_capabilities() -> set[str]:
+    """``{"METHOD /path"}`` for every non-introspection API route."""
+    from palinode.api.server import app  # lazy
+
+    caps: set[str] = set()
+    for route in app.routes:
+        path = getattr(route, "path", None)
+        if path is None:
+            continue
+        methods = getattr(route, "methods", set()) or set()
+        for method in methods:
+            if method in {"HEAD", "OPTIONS"}:
+                continue
+            caps.add(f"{method} {path}")
+    return caps
+
+
+def _live_cli_capabilities() -> set[str]:
+    """Space-separated command paths for every leaf Click command."""
+
+    def walk(group: click.Group, prefix: str = "") -> list[str]:
+        out: list[str] = []
+        for name, cmd in group.commands.items():
+            full = f"{prefix} {name}".strip()
+            if isinstance(cmd, click.Group):
+                out.extend(walk(cmd, full))
+            else:
+                out.append(full)
+        return out
+
+    return set(walk(cli_root))
+
+
+_LIVE_CAPABILITIES = {
+    "mcp": _live_mcp_capabilities,
+    "api": _live_api_capabilities,
+    "cli": _live_cli_capabilities,
+}
+
+
+@pytest.mark.parametrize("surface", ["mcp", "api", "cli"])
+def test_no_unregistered_capabilities(surface: Surface) -> None:
+    """Every live capability is registered, infra, or tracked backlog.
+
+    Closes the reverse direction of the param test: a capability shipped on a
+    surface but absent from the registry (and not classified as infra or
+    backlog) fails here.  Add it to ``REGISTRY`` (with canonical params), to
+    ``INVENTORY_INFRA`` (framework/admin), or to ``INVENTORY_BACKLOG`` (a
+    memory op pending registration, with its tracking issue).
+    """
+    live = _LIVE_CAPABILITIES[surface]()
+    accounted = (
+        registered_capabilities(surface)
+        | INVENTORY_INFRA[surface]
+        | set(INVENTORY_BACKLOG[surface])
+    )
+    unaccounted = live - accounted
+    assert not unaccounted, (
+        f"{surface}: capabilities present on the surface but absent from the "
+        f"parity contract: {sorted(unaccounted)}. Add each to REGISTRY (with "
+        "canonical params), INVENTORY_INFRA (framework/admin), or "
+        "INVENTORY_BACKLOG (memory op pending registration, with its issue) "
+        "in palinode/core/parity.py."
+    )
+
+
+@pytest.mark.parametrize("surface", ["mcp", "api", "cli"])
+def test_inventory_accounting_is_not_stale(surface: Surface) -> None:
+    """Infra/backlog entries must reference capabilities that are still live.
+
+    A stale entry means a capability was renamed or removed; clean up the
+    accounting so it keeps tracking reality (mirrors the ``known_drift``
+    hygiene rule).
+    """
+    live = _LIVE_CAPABILITIES[surface]()
+    stale = (INVENTORY_INFRA[surface] | set(INVENTORY_BACKLOG[surface])) - live
+    assert not stale, (
+        f"{surface}: inventory-accounting entries no longer present on the "
+        f"surface: {sorted(stale)}. Remove them from INVENTORY_INFRA / "
+        "INVENTORY_BACKLOG in palinode/core/parity.py."
+    )
+
+
+@pytest.mark.parametrize("surface", ["mcp", "api", "cli"])
+def test_inventory_buckets_are_disjoint(surface: Surface) -> None:
+    """A capability is classified once: infra XOR backlog XOR registered."""
+    infra = INVENTORY_INFRA[surface]
+    backlog = set(INVENTORY_BACKLOG[surface])
+    registered = registered_capabilities(surface)
+    assert not (infra & backlog), (
+        f"{surface}: in both INVENTORY_INFRA and INVENTORY_BACKLOG: "
+        f"{sorted(infra & backlog)}"
+    )
+    assert not (registered & backlog), (
+        f"{surface}: a backlog entry is already registered (promote it by "
+        f"removing the INVENTORY_BACKLOG entry): {sorted(registered & backlog)}"
+    )
+    assert not (registered & infra), (
+        f"{surface}: a registered operation is also marked infra: "
+        f"{sorted(registered & infra)}"
     )

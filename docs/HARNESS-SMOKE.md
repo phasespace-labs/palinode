@@ -66,19 +66,19 @@ palinode mcp-smoke <harness> --record
 
 ---
 
-### Generic IDE
+### Antigravity
 
 - **Tier:** 1
-- **Install recipe:** [MCP-INSTALL-RECIPES.md](MCP-INSTALL-RECIPES.md) (Generic IDE section — TBD)
-- **Config path:** `~/.gemini/generic-ide/mcp_config.json` (cross-platform; see MCP-CONFIG-HOMES.md)
+- **Install recipe:** [MCP-INSTALL-RECIPES.md](MCP-INSTALL-RECIPES.md) (Antigravity section — TBD)
+- **Config path:** `~/.gemini/antigravity/mcp_config.json` (cross-platform; see MCP-CONFIG-HOMES.md)
 
 **Smoke sequence:**
 
 1. `palinode_status` — expect `Palinode Status` block with file/chunk counts.
 2. `palinode_search` with `query: "hello"` — expect text response.
-3. `palinode_save` with `content: "Smoke test generic-ide <date>", type: "Insight", slug: "smoke-generic-ide"` — expect saved confirmation.
-4. `palinode_list` — expect `smoke-generic-ide` in output.
-5. `palinode_read` with `file_path: "insights/smoke-generic-ide.md"` — expect body containing `Smoke test`.
+3. `palinode_save` with `content: "Smoke test antigravity <date>", type: "Insight", slug: "smoke-antigravity"` — expect saved confirmation.
+4. `palinode_list` — expect `smoke-antigravity` in output.
+5. `palinode_read` with `file_path: "insights/smoke-antigravity.md"` — expect body containing `Smoke test`.
 
 **Troubleshooting:** If tools do not appear, open MCP Servers panel (three-dot menu in chat) and verify palinode is listed and connected.
 

@@ -242,6 +242,51 @@ async def test_palinode_doctor_deep_api_error_returns_error_text(monkeypatch) ->
 
 
 # ---------------------------------------------------------------------------
+# Version surfacing (#579)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_palinode_status_surfaces_version(monkeypatch) -> None:
+    """palinode_status must render the deployed version from /status (#579)."""
+    payload = {"total_files": 1, "total_chunks": 2, "version": "9.9.9-test"}
+
+    async def fake_get(path, params=None, timeout=30.0):
+        resp = mock.MagicMock(spec=httpx.Response)
+        resp.status_code = 200
+        resp.json.return_value = payload
+        resp.text = json.dumps(payload)
+        return resp
+
+    monkeypatch.setattr(mcp_module, "_get", fake_get)
+    text = await _run_tool("palinode_status")
+
+    assert "9.9.9-test" in text, f"version not surfaced in status output: {text}"
+
+
+@pytest.mark.asyncio
+async def test_palinode_doctor_surfaces_version(monkeypatch) -> None:
+    """palinode_doctor passes through the version field from /doctor (#579)."""
+    async def fake_get(path, params=None, timeout=30.0):
+        payload = {
+            "version": "9.9.9-test",
+            "results": [],
+            "summary": {"total": 0, "passed": 0, "failed": 0},
+            "params": {"fast": True, "canary": False},
+        }
+        resp = mock.MagicMock(spec=httpx.Response)
+        resp.status_code = 200
+        resp.json.return_value = payload
+        resp.text = json.dumps(payload)
+        return resp
+
+    monkeypatch.setattr(mcp_module, "_get", fake_get)
+    text = await _run_tool("palinode_doctor")
+
+    assert json.loads(text)["version"] == "9.9.9-test"
+
+
+# ---------------------------------------------------------------------------
 # Timeout values
 # ---------------------------------------------------------------------------
 
