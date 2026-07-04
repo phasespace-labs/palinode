@@ -251,13 +251,13 @@ def parse_markdown(content: str) -> tuple[dict[str, Any], list[dict[str, str]]]:
     return metadata, sections
 
 
-# ── IETF KU frontmatter parsing (issue #106) ─────────────────────────────────
+# ── IETF KU frontmatter parsing (issue) ─────────────────────────────────
 
 # Allowed values for the KU `lifecycle` field (mirrors `status` vocabulary).
 VALID_LIFECYCLES: tuple[str, ...] = ("active", "archived", "deprecated")
 DEFAULT_LIFECYCLE: str = "active"
 
-# ADR-015 §2.1 (#431, #430): write-semantics axis, orthogonal to `type`.
+# ADR-015 §2.1: write-semantics axis, orthogonal to `type`.
 #   append  — current behaviour; every save is an episodic file (the default).
 #   replace — re-saving the same (folder, slug) updates the one file in place;
 #             the file is a living/current-state document. Consolidation must
@@ -267,7 +267,7 @@ DEFAULT_LIFECYCLE: str = "active"
 VALID_UPDATE_POLICIES: tuple[str, ...] = ("append", "replace")
 DEFAULT_UPDATE_POLICY: str = "append"
 
-# ADR-015 §2.2 (#398): incident lifecycle lives in the `status` field on a
+# ADR-015 §2.2: incident lifecycle lives in the `status` field on a
 # *fixed* type — no new memory types. These values are deliberately DISJOINT
 # from VALID_LIFECYCLES (active/archived/deprecated) and from the default
 # search-exclusion set (`config.search.exclude_status` == ["archived"]), so an
@@ -283,12 +283,12 @@ VALID_INCIDENT_STATUSES: tuple[str, ...] = ("open", "monitoring", "resolved")
 # can't silently slip past exclusion logic.
 VALID_STATUSES: tuple[str, ...] = VALID_LIFECYCLES + VALID_INCIDENT_STATUSES
 
-# #72 (ADR-018): epistemic markers — a per-memory declaration of what KIND of
+# (ADR-018): epistemic markers — a per-memory declaration of what KIND of
 # claim the memory makes, orthogonal to `type` and `status`. These are the
 # SETTABLE values (what the save surfaces accept and validate):
 #   fact          — directly observed / verified (an explicit, earned claim).
 #   inference     — derived or extrapolated from other facts (lower trust;
-#                   should ideally carry a `backed_by` once #533 lands).
+#                   should ideally carry a `backed_by` link).
 #   open_question — unresolved; an explicit marker that this is NOT yet settled.
 #                   `lint` flags long-lived open questions as a staleness signal.
 VALID_EPISTEMICS: tuple[str, ...] = ("fact", "inference", "open_question")
@@ -297,7 +297,7 @@ VALID_EPISTEMICS: tuple[str, ...] = ("fact", "inference", "open_question")
 # made. Crucially this is NOT equated with `fact`; for an audit-grade store,
 # "nobody declared this" must not silently inherit the authority of "verified".
 # `unmarked` is trust-NEUTRAL — it is neither flagged as a problem (no lint
-# noise) nor asserted as verified (downstream consumers like #533/#366 treat it
+# noise) nor asserted as verified (downstream consumers like treat it
 # as "no claim", not as fact). It is not a settable value (you reach it only by
 # omitting the field), so it is intentionally NOT in VALID_EPISTEMICS; the save
 # surface rejects an explicit `unmarked`. Every memory written before this field

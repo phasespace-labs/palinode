@@ -58,7 +58,7 @@ def test_session_end_creates_daily_and_individual(tmp_path, monkeypatch):
     # Individual file should have frontmatter with entities
     ind_content = open(individual_file).read()
     assert "project/palinode" in ind_content
-    # #405: the auto-description is no longer written inline on save — it is
+    # the auto-description is no longer written inline on save — it is
     # deferred to the watcher-driven /generate-summaries backfill, so the file
     # is born without a description field (the mock above is never invoked on
     # the save hot path now). The description lands later, out of band.
@@ -89,7 +89,7 @@ def test_session_end_no_project(tmp_path, monkeypatch):
     assert "category: insights" in ind_content
 
 
-# ---- #145: structured session-end metadata ------------------------------
+# structured session-end metadata ------------------------------
 
 
 def test_project_from_cwd_helper():
@@ -203,7 +203,7 @@ def test_session_end_auto_derives_project_from_cwd(tmp_path, monkeypatch):
     assert "my-project" in os.path.basename(ind_path)
 
 
-# ---- #378: session_end push parameter (ship the note in one call) -----------
+# session_end push parameter (ship the note in one call) -----------
 
 
 def _run_session_end_with_push(tmp_path, monkeypatch, *, push, auto_push,

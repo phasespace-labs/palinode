@@ -242,7 +242,7 @@ async def test_palinode_doctor_deep_api_error_returns_error_text(monkeypatch) ->
 
 
 # ---------------------------------------------------------------------------
-# Version surfacing (#579)
+# Version surfacing
 # ---------------------------------------------------------------------------
 
 

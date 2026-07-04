@@ -16,7 +16,7 @@ import shutil
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any, Callable
 
-# The propose→apply seam (#554). The nondeterministic half of consolidation is a
+# The propose→apply seam. The nondeterministic half of consolidation is a
 # single call shaped (system_prompt, user_prompt) -> (response_text, model_used);
 # the deterministic half (parse → executor.apply_operations) runs on its output.
 # Making this callable injectable lets the runner→executor path be driven with
@@ -107,7 +107,7 @@ def _get_decisions_for_project(project_id: str) -> list[dict]:
                         })
                 except Exception as _parse_exc:
                     # Silent skip was hiding corrupt frontmatter — log so
-                    # operators can find and fix bad files (#387).
+                    # operators can find and fix bad files.
                     # Recovery: run `palinode lint` to surface all parse errors.
                     logger.warning(
                         "palinode.consolidation: YAML parse failed in %r — "
@@ -156,7 +156,7 @@ def _collect_daily_notes(lookback_days: int) -> tuple[list[dict], int]:
                     content = parts[2].strip()
                 except Exception as _parse_exc:
                     # Silent pass was hiding corrupt frontmatter — log so
-                    # operators can find and fix bad files (#387).
+                    # operators can find and fix bad files.
                     # Recovery: run `palinode lint` to surface all parse errors.
                     logger.warning(
                         "palinode.consolidation: YAML parse failed in %r — "
@@ -233,7 +233,7 @@ def _call_llm_with_fallback(system_prompt: str, user_prompt: str) -> tuple[str, 
     last_error = None
     for i, endpoint in enumerate(chain):
         try:
-            # #338 Phase 4: route through the centralized client (CONSOLIDATION
+            # Phase 4: route through the centralized client (CONSOLIDATION
             # role). retries=0 — the fallback chain itself is the retry strategy,
             # so the client shouldn't re-hammer each (slow, 600 s) host.
             result = client.chat_completions(
@@ -341,7 +341,7 @@ Return the operations JSON array."""
         return [], "failed"
     
     # Parse the operations JSON array — extraction + json_repair recovery +
-    # nested-list/dict filtering all live in op_parse now (#555).
+    # nested-list/dict filtering all live in op_parse now.
     return parse_operations(result_text), model_used
 
 def _check_contradictions(
@@ -369,7 +369,7 @@ def _check_contradictions(
 
         # H1: consolidation dedup is an internal candidate lookup, not human
         # recall — use search_internal so recall_count / importance are never
-        # bumped regardless of future refactors (ADR-015 H1, #481).
+        # bumped regardless of future refactors (ADR-015 H1).
         existing = store.search_internal(
             emb, category=item.get("category"), top_k=5, threshold=0.7,
         )
@@ -411,7 +411,7 @@ def _write_project_summary(project_id: str, consolidation: dict) -> None:
     
     # Simple write, but realistically we'd merge with existing body/frontmatter.
     # We will log the new summary block or replace the content.
-    # #193: human-readable UTC log heading. Previously used a literal ``Z``
+    # human-readable UTC log heading. Previously used a literal ``Z``
     # suffix which trips the project-wide ``strftime("...Z")`` audit; ``UTC``
     # is unambiguous and keeps the log scannable.
     now = _utc_now().strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -627,7 +627,7 @@ def run_consolidation(lookback_days: int | None = None, dry_run: bool = False, l
             _update_status_summary(target, operations)
 
             # Track exactly the files this project's compaction touched so the
-            # commit stages only them (one-mutation-one-commit, #565).
+            # commit stages only them (one-mutation-one-commit).
             mutated_files.extend(_touched_files(target))
 
             projects_processed += 1

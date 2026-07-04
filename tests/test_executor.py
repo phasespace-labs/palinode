@@ -84,7 +84,7 @@ def test_archive_operation(temp_memory_file):
     with open(history_file) as f:
         hist = f.read()
     assert "Archived" in hist
-    # #485: the history file must carry `status: archived` so the relocated
+    # the history file must carry `status: archived` so the relocated
     # fact is suppressed from default recall (exclude_status) rather than
     # leaking back in as active content.
     assert "status: archived" in hist
@@ -380,7 +380,7 @@ def test_retract_missing_id_is_skipped(temp_memory_file):
 
 
 # ---------------------------------------------------------------------------
-# Nightly MERGE policy tests (#202)
+# Nightly MERGE policy tests
 # ---------------------------------------------------------------------------
 
 @pytest.fixture

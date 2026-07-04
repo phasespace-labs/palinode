@@ -171,7 +171,7 @@ class AutoSummaryConfig:
     max_chars: int = 120
     min_content_chars: int = 200
     ollama_url: str | None = None
-    # #464: wire protocol for the CHAT *primary* (model @ ollama_url). "ollama" =
+    # wire protocol for the CHAT *primary* (model @ ollama_url). "ollama" =
     # Ollama-native /api/generate (the default; back-compat). "openai" = an
     # OpenAI-compatible /v1/chat/completions endpoint (LM Studio, vLLM, the
     # Sonnet shim, etc.) — set this when the primary is e.g. an MLX model served
@@ -180,11 +180,11 @@ class AutoSummaryConfig:
     # brownout) cascades to the fallback chain, since an OpenAI primary is
     # typically a remote host with configured backups.
     api: str = "ollama"
-    # #336: hard timeout for the /api/generate call inside _generate_description.
+    # hard timeout for the /api/generate call inside _generate_description.
     # Default 5s so a cold Ollama model (15+ s latency) doesn't block /save.
     # Override via PALINODE_DESCRIBE_TIMEOUT_SECONDS env var.
     describe_timeout_seconds: float = 5.0
-    # #464: OpenAI-compat fallback chain for the CHAT role (auto-description /
+    # OpenAI-compat fallback chain for the CHAT role (auto-description /
     # auto-summary), walked in order on primary failure. Mirrors
     # ConsolidationConfig.llm_fallbacks — each entry is {model, url} pointing at
     # an OpenAI-compatible /v1/chat/completions endpoint (a second qwen host, the
@@ -192,10 +192,10 @@ class AutoSummaryConfig:
     # primary browns out (OllamaTimeout / OllamaCircuitOpen); with api="openai"
     # it fires on any primary failure. Empty default = today's behavior, zero
     # change. Reached only from the watcher-driven /generate-summaries backfill
-    # (the /save hot path doesn't enrich inline post-#405), so configured
+    # (the /save hot path doesn't enrich inline post-), so configured
     # fallbacks never egress on the save path.
     llm_fallbacks: list[dict] = field(default_factory=list)
-    # #464: per-/generate-summaries-run cap on files that may escalate to a CHAT
+    # per-/generate-summaries-run cap on files that may escalate to a CHAT
     # fallback. Bounds Anthropic egress when the local chat host is chronically
     # down and one backfill walk spans a large deferred backlog. 0 = unlimited
     # (explicit opt-out). Only applies when llm_fallbacks is non-empty.
@@ -212,7 +212,7 @@ class SearchConfig:
     hybrid_enabled: bool = True
     dedup_score_gap: float = 0.2
     daily_penalty: float = 0.3  # Multiplier for daily/ files (0.3 = 30% of original score)
-    # #352: cap per-result body returned by /search via the `snippet` field.
+    # cap per-result body returned by /search via the `snippet` field.
     # MCP renders snippet by default; full chunk content remains available
     # through `content` (API/CLI) or the `full=true` flag on palinode_search.
     snippet_max_chars: int = 400
@@ -287,7 +287,7 @@ class DecayConfig:
     # 0.76). Superseded by the exponential-approach reinforcement below
     # (`importance_alpha`). Kept only for backward-compatible config loading.
     importance_nudge: float = 0.01
-    # Recall-feedback loop (ADR-006/007, #371) — demand-decay importance (ADR-007).
+    # Recall-feedback loop (ADR-006/007) — demand-decay importance (ADR-007).
     # Access metadata (recall_count / last_recalled) is always written on
     # retrieval, independent of the decay ranker `enabled` flag (which only gates
     # the legacy score_with_decay re-rank term). The *importance* nudge is gated
@@ -296,7 +296,7 @@ class DecayConfig:
     #     importance ← importance + (cap − importance) · importance_alpha
     # NULL importance is treated as `importance_base` (0.5) before nudging.
     importance_base: float = 0.5          # neutral prior (NULL ⇒ base); decay floor
-    importance_cap: float = 0.95          # leaves headroom for #259 human max (1.0)
+    importance_cap: float = 0.95          # leaves headroom for human max (1.0)
     importance_alpha: float = 0.08        # reinforcement rate per distinct-session demand
     importance_tau_days: float = 14.0     # demand-decay time constant (decay-on-read)
 
@@ -596,9 +596,9 @@ def load_config() -> Config:
                 loaded_path = cpath
             except Exception as e:
                 # A corrupt/unreadable config that silently falls back to
-                # built-in defaults is the #273 failure class. Route through the
+                # built-in defaults is the failure class. Route through the
                 # logger (not print→stderr, which bypasses log capture) so the
-                # fallback is greppable on the host (#337).
+                # fallback is greppable on the host.
                 _logger.warning(
                     "failed to load config; continuing with remaining sources/defaults "
                     "op=config_load path=%s error=%r",
@@ -611,7 +611,7 @@ def load_config() -> Config:
         cfg = adapter.validate_python(raw_config)
     except ValidationError as e:
         # Validation failure aborts startup — make sure it hits the log before
-        # the raise propagates, not only stderr (#337).
+        # the raise propagates, not only stderr.
         _logger.error("failed to validate configuration op=config_validate error=%r", str(e))
         raise
 
@@ -627,7 +627,7 @@ def load_config() -> Config:
 
     # 5. Resolve sentinel db_path. Always tracks the final memory_dir, so
     #    `PALINODE_DIR=/tmp/foo` (with no YAML db_path) lands the DB at
-    #    /tmp/foo/.palinode.db rather than the install-dir default. Fixes #248.
+    #    /tmp/foo/.palinode.db rather than the install-dir default.
     if cfg.db_path is None:
         cfg.db_path = os.path.join(cfg.memory_dir, ".palinode.db")
 
@@ -635,7 +635,7 @@ def load_config() -> Config:
     #    under memory_dir so every fresh install gets a consistent absolute
     #    path. Explicit absolute paths in user config are left untouched.
     #    Explicit *relative* paths set by the user still warn (the doctor
-    #    check detects relative paths regardless of origin). Fixes #254.
+    #    check detects relative paths regardless of origin).
     _AUDIT_LOG_DEFAULT = ".audit/mcp-calls.jsonl"
     if cfg.audit.log_path == _AUDIT_LOG_DEFAULT:
         cfg.audit.log_path = os.path.join(cfg.memory_dir, ".audit", "mcp-calls.jsonl")
@@ -652,7 +652,7 @@ def load_config() -> Config:
             cfg.services.api.port = int(os.environ["PALINODE_API_PORT"])
         except ValueError:
             # A malformed port silently ignored leaves the operator on the
-            # default port wondering why their override didn't take (#337).
+            # default port wondering why their override didn't take.
             _logger.warning(
                 "ignoring malformed env override; keeping configured value "
                 "var=PALINODE_API_PORT value=%r",
@@ -677,7 +677,7 @@ def load_config() -> Config:
             )
         except ValueError:
             # Malformed timeout silently ignored keeps the default describe
-            # timeout, masking a tuning attempt (#337/#336).
+            # timeout, masking a tuning attempt.
             _logger.warning(
                 "ignoring malformed env override; keeping configured value "
                 "var=PALINODE_DESCRIBE_TIMEOUT_SECONDS value=%r",
@@ -706,7 +706,7 @@ def load_config() -> Config:
     except (OSError, ValueError):
         num_files = 0
 
-    # #273: when defaults are loaded, surface the fact LOUDLY — a dim "defaults"
+    # when defaults are loaded, surface the fact LOUDLY — a dim "defaults"
     # label is easy to miss when systemd wires PALINODE_DIR but an interactive
     # ssh session doesn't. Production deployments hit this when humans invoke
     # `palinode lint`, ad-hoc cron, or `claude --mcp` outside the systemd unit

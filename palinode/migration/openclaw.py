@@ -234,9 +234,9 @@ def run_migration(
     if review_callback is not None:
         sections = review_callback(sections)
 
-    # #193: timezone-aware UTC ISO-8601 (``+00:00``). The previous
+    # timezone-aware UTC ISO-8601 (``+00:00``). The previous
     # ``strftime("...Z")`` form emitted UTC stamped as ``Z`` and dropped
-    # sub-second precision — switch to the project standard set by #192.
+    # sub-second precision — switch to the project timestamp standard.
     now_iso = datetime.now(UTC).isoformat()
 
     existing_hashes: set[str] = set() if dry_run else _existing_hashes(memory_dir)

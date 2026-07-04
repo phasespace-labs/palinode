@@ -196,7 +196,7 @@ class TestNoArgument:
 
 
 # ---------------------------------------------------------------------------
-# #373 — Claude Desktop running-process detection + warning
+# Claude Desktop running-process detection + warning
 # ---------------------------------------------------------------------------
 
 class TestClaudeDesktopRunning:

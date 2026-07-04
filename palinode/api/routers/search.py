@@ -33,30 +33,30 @@ class SearchRequest(BaseModel):
     date_after: str | None = None
     date_before: str | None = None
     context: list[str] | None = None  # Entity refs for ambient context boost (ADR-008)
-    include_daily: bool | None = False  # Skip daily/ penalty when True (#93)
+    include_daily: bool | None = False  # Skip daily/ penalty when True
     # ADR-015 §2.3: None → default hard-exclude of telemetry; [] → include
     # telemetry when the caller passes the explicit override.
     include_telemetry: bool | None = False
-    # #141: filter by memory `type` frontmatter (one of PersonMemory, Decision,
+    # filter by memory `type` frontmatter (one of PersonMemory, Decision,
     # ProjectSnapshot, Insight, ResearchRef, ActionItem). Independent of `category`
     # which filters by directory. Applied as a post-fetch filter; pass multiple
     # types to OR them.
     types: list[str] | None = None
-    # #391: deny-list complement to `types`. Results whose `type` is in this list
+    # deny-list complement to `types`. Results whose `type` is in this list
     # are excluded after fetch. Takes precedence: a result present in both `types`
     # and `type_deny` is dropped.
     type_deny: list[str] | None = None
     min_priority: int | None = Field(default=None, ge=1, le=5)
-    # #141: relative recency window. If set, derives an effective `date_after`
+    # relative recency window. If set, derives an effective `date_after`
     # of `now - since_days` days. Combined with explicit `date_after` by taking
     # the later (more restrictive) of the two.
     since_days: int | None = None
-    # #391: per-request snippet cap override. When set (positive int), overrides
+    # per-request snippet cap override. When set (positive int), overrides
     # config.search.snippet_max_chars for this request only. Clamped to [1, 8000].
     max_chars: int | None = None
     # ADR-007 §3.2: demand classification. "explicit" (default) = the agent
     # issued this search because it needed the memory → nudges importance.
-    # "passive" = ambient/auto-inject/session-start priming (ADR-008/#358) → the
+    # "passive" = ambient/auto-inject/session-start priming (ADR-008) → the
     # memory was *offered*, not *sought*; recall_count/last_recalled still update
     # but importance is NOT nudged. The explicit-only gate (load-bearing once an
     # ambient caller sets mode="passive") flows down to store.record_recall.
@@ -170,7 +170,7 @@ def search_api(req: SearchRequest, request: Request = None) -> list[dict[str, An
         # telemetry when the caller passes the explicit override.
         kind_exclude_list = [] if req.include_telemetry else None
 
-        # #141: empty query → recency-only mode. Skip embedding, query chunks
+        # empty query → recency-only mode. Skip embedding, query chunks
         # directly ordered by created_at desc, apply types/date_after filter.
         if not req.query.strip():
             recent_limit = limit * 5 if req.min_priority else limit
@@ -182,12 +182,12 @@ def search_api(req: SearchRequest, request: Request = None) -> list[dict[str, An
                 limit=recent_limit,
                 kind_exclude_list=kind_exclude_list,
             )
-            # #391: apply type_deny post-fetch (list_recent does allow-filter via
+            # apply type_deny post-fetch (list_recent does allow-filter
             # types, but has no deny param — mirror the same pattern as below).
             recent = _filter_type_deny(recent, req.type_deny)
             recent = _filter_min_priority(recent, req.min_priority)
             recent = recent[:limit]
-            # #352: enrich with snippet so MCP callers stay within budget.
+            # enrich with snippet so MCP callers stay within budget.
             _enrich_with_snippets(recent, "", _resolve_snippet_max_chars(req.max_chars))
             return recent
 
@@ -212,7 +212,7 @@ def search_api(req: SearchRequest, request: Request = None) -> list[dict[str, An
         recall_mode = "passive" if req.mode == "passive" else "explicit"
 
         # Over-fetch when types filter is in play so we still have a chance of
-        # returning `limit` results after the post-fetch type filter (#141/#391).
+        # returning `limit` results after the post-fetch type filter.
         store_limit = limit * 5 if (req.types or req.type_deny or req.min_priority) else limit
 
         if use_hybrid:
@@ -246,7 +246,7 @@ def search_api(req: SearchRequest, request: Request = None) -> list[dict[str, An
                 session_id=req.session_id,
             )
 
-        # Apply type filters post-fetch (#141/#391), then trim to caller's limit.
+        # Apply type filters post-fetch, then trim to caller's limit.
         # type_deny takes precedence: applied after allow-list so a type in both
         # lists is excluded.
         results = _filter_types(results, req.types)
@@ -254,13 +254,13 @@ def search_api(req: SearchRequest, request: Request = None) -> list[dict[str, An
         results = _filter_min_priority(results, req.min_priority)
         final = results[:limit]
 
-        # #352/#391: per-result snippet enrichment so MCP callers (and any other
+        # per-result snippet enrichment so MCP callers (and any other
         # budget-constrained consumer) can avoid pulling full chunk bodies.
         # `content` is preserved untouched for CLI/API consumers.
         # Per-request max_chars overrides config default when supplied.
         _enrich_with_snippets(final, req.query, _resolve_snippet_max_chars(req.max_chars))
 
-        # Issue #256: emit retrieval events (explicit — came in via /search API).
+        # Issue emit retrieval events (explicit — came in via /search API).
         # Source attribution: the X-Palinode-Source header tells us the surface
         # (mcp → "palinode_search", cli → "cli_search", api → "api_search").
         _search_source = "api_search"
@@ -297,10 +297,10 @@ def search_associative_api(req: SearchAssociativeRequest) -> list[dict[str, Any]
             top_k=req.limit or 5
         )
 
-        # #392: per-result snippet enrichment so MCP callers (and any other
+        # per-result snippet enrichment so MCP callers (and any other
         # budget-constrained consumer) can avoid pulling full chunk bodies.
         # `content` is preserved untouched for CLI/API consumers. Mirrors the
-        # /search treatment shipped in #359 — the associative path was
+        # /search treatment shipped in the associative path was
         # overlooked there and still returned un-truncated content fields.
         _enrich_with_snippets(results, req.query, config.search.snippet_max_chars)
 
@@ -361,7 +361,7 @@ def dedup_suggest_api(req: DedupSuggestRequest) -> list[dict[str, Any]]:
 def orphan_repair_api(req: OrphanRepairRequest) -> list[dict[str, Any]]:
     """Return existing files semantically near a broken `[[wikilink]]` target.
 
-    The model proposes a redirect (rename the link to point at one of the
+    The LLM proposes a redirect (rename the link to point at one of the
     returned files) or creates the missing target with informed context
     (knowing what existing pages are nearby in semantic space).
 

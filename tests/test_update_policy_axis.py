@@ -197,12 +197,12 @@ def test_incident_status_not_excluded_from_search(client):
     for st in ("open", "monitoring", "resolved"):
         _save(
             client,
-            content=f"Monitor probe incident {st} state on hostalpha.",
+            content=f"stabilityprobe incident {st} state on hostalpha.",
             slug=f"incident-{st}",
             metadata={"status": st},
         )
 
-    results = store.search_fts("monitor probe", top_k=20)
+    results = store.search_fts("stabilityprobe", top_k=20)
     slugs = {r.get("file_path", "") for r in results}
     # All three incident states surface (none excluded).
     for st in ("open", "monitoring", "resolved"):

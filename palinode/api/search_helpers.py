@@ -185,7 +185,7 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / (math.sqrt(na) * math.sqrt(nb))
 
 
-# Back-compat alias (#556): ``_cosine_similarity`` and ``_cosine`` were two
+# Back-compat alias: ``_cosine_similarity`` and ``_cosine`` were two
 # byte-identical implementations in the old _shared.py. Collapsed to one;
 # the alias keeps the historical name importable for any caller/re-export.
 _cosine_similarity = _cosine
@@ -231,7 +231,7 @@ def _embedding_candidates(
     # H1: this over-fetched candidate slate feeds dedup_suggest / orphan_repair
     # / cluster_neighbors / topic_coverage — internal maintenance, not human
     # recall. search_internal hard-sets record_access=False so future refactors
-    # cannot accidentally re-introduce pollution (ADR-015 H1, #481).
+    # cannot accidentally re-introduce pollution (ADR-015 H1).
     return store.search_internal(
         query_embedding=query_embedding,
         top_k=top_k * over_fetch,

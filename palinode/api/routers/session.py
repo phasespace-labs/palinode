@@ -39,14 +39,14 @@ class SessionEndRequest(BaseModel):
     blockers: list[str] | None = None
     project: str | None = None
     source: str | None = None
-    # Push the memory repo after committing the note (#378). None → fall back to
+    # Push the memory repo after committing the note. None → fall back to
     # config.git.auto_push (legacy behavior). True → push regardless, so the wrap
     # flow ships the note in one call instead of needing a second palinode_push.
     # False → never push, even if auto_push is on. Because `git push` is
     # repo-wide, push=True also ships any earlier same-session /save commits,
-    # which supersedes the old pre-push-first dance (#353).
+    # which supersedes the old pre-push-first dance.
     push: bool | None = None
-    # Structured metadata (#145). All optional; existing callers keep working.
+    # Structured metadata. All optional; existing callers keep working.
     harness: str | None = None  # e.g. "claude-code", "claude-desktop", "cowork", "openclaw", "cursor", "zed", "vscode", "cli", "api", "hook", "other"
     cwd: str | None = None  # fully-qualified path the session ran in
     model: str | None = None  # e.g. "claude-opus-4-7"
@@ -60,10 +60,10 @@ def session_end_api(req: SessionEndRequest, request: Request = None) -> dict[str
     """Capture session outcomes to daily notes and project status files."""
     today = _utc_now().strftime("%Y-%m-%d")
     now_iso = _utc_now().isoformat().replace("+00:00", "Z")
-    # ADR-010 / #167: same precedence as save_api — explicit > header > env > default.
+    # ADR-010: same precedence as save_api — explicit > header > env > default.
     source = _resolve_source(req.source, request)
 
-    # Auto-derive project from cwd if caller didn't pass one (#145).
+    # Auto-derive project from cwd if caller didn't pass one.
     project = req.project or _project_from_cwd(req.cwd)
 
     # Build session entry
@@ -81,7 +81,7 @@ def session_end_api(req: SessionEndRequest, request: Request = None) -> dict[str
             parts.append(f"- {b}")
         parts.append("")
 
-    # Structured metadata footer (#145). Only emit lines that are populated so
+    # Structured metadata footer. Only emit lines that are populated so
     # the daily note stays uncluttered for callers that don't supply metadata.
     meta_lines: list[str] = []
     if req.harness:
@@ -119,7 +119,7 @@ def session_end_api(req: SessionEndRequest, request: Request = None) -> dict[str
                 f.write(f"\n- [{today}] {one_liner}\n")
             status_file = f"projects/{project}-status.md"
 
-    # Semantic dedup against recent saves (#126). The daily note + project
+    # Semantic dedup against recent saves. The daily note + project
     # status file are append-only logs we always write — only the indexed
     # individual file is suppressed when a near-duplicate already exists,
     # because that file's value is the standalone embedding/searchable record
@@ -139,7 +139,7 @@ def session_end_api(req: SessionEndRequest, request: Request = None) -> dict[str
         try:
             short_hash = hashlib.sha256(req.summary.encode()).hexdigest()[:8]
             # Pass structured metadata through to the indexed file's frontmatter so
-            # it's queryable later (#145). Only include fields the caller set.
+            # it's queryable later. Only include fields the caller set.
             extra_meta: dict[str, Any] = {}
             if req.harness:
                 extra_meta["harness"] = req.harness
@@ -177,7 +177,7 @@ def session_end_api(req: SessionEndRequest, request: Request = None) -> dict[str
         commit_msg = f"{config.git.commit_prefix} session-end: {today}"
         committed = git_tools.commit_memory_files(files_to_add, commit_msg)
 
-    # Push (#378). An explicit req.push overrides config.git.auto_push so the
+    # Push. An explicit req.push overrides config.git.auto_push so the
     # wrap flow ships the just-committed note without a second palinode_push;
     # push=None preserves the legacy auto_push default. git_tools.push() targets
     # origin/main and is repo-wide, so this also ships any earlier same-session
@@ -347,7 +347,7 @@ def activate_prompt_api(name: str) -> dict[str, Any]:
     _set_active(target_path, True)
 
     # One activation toggle = a per-file commit for each prompt actually changed
-    # (#565): stage only the prompts this toggle rewrote, never a repo-wide
+    # stage only the prompts this toggle rewrote, never a repo-wide
     # `git add prompts/*.md` sweep.
     if config.git.auto_commit:
         for fp in changed_files:

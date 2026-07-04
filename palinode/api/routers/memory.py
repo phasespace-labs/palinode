@@ -134,14 +134,14 @@ def read_api(file_path: str, meta: bool = False) -> dict[str, Any]:
             metadata, _ = parser.parse_markdown(content)
             result["frontmatter"] = metadata
 
-        # Issue #256: emit retrieval event (explicit — direct /read call).
+        # Issue emit retrieval event (explicit — direct /read call).
         _retrieval_logger.record_file_read(
             file_path,
             source="palinode_read",
             mode="explicit",
         )
 
-        # ADR-006/007 (#371): persist access metadata for the read file's chunks.
+        # ADR-006/007: persist access metadata for the read file's chunks.
         # Resilient by contract — record_recall_for_paths never raises.
         # Use the resolved (absolute) path: index_file stores absolute paths in
         # chunks.file_path, so a relative-path lookup silently matches nothing.
@@ -167,20 +167,20 @@ class SaveRequest(BaseModel):
     confidence: float | None = None
     priority: int | None = Field(default=None, ge=1, le=5)
     #: Optional human-readable title.  When set, it's stored in frontmatter
-    #: and used for display in lists/search results.  ADR-010 / #166.
+    #: and used for display in lists/search results. ADR-010.
     title: str | None = None
     #: Sugar: ``project="foo"`` is equivalent to appending ``"project/foo"``
-    #: to ``entities``.  ADR-010 / #159.  If both are given and there's a
+    #: to ``entities``. ADR-010. If both are given and there's a
     #: mismatch, both values land — same as supplying ``entities=["project/a",
     #: "project/b"]`` directly.
     project: str | None = None
     #: Optional dict of SDLC object references (GitLab MR/issue/pipeline,
     #: GitHub PR, Linear, Jira, etc.).  Free-form key/value pairs — recognised
-    #: keys get pretty rendering; others pass through unchanged (#115).
+    #: keys get pretty rendering; others pass through unchanged.
     #: Typed as Any-value so Pydantic doesn't reject nested values before
     #: our parser helper can soft-warn and drop them.
     external_refs: dict[str, Any] | None = None
-    #: ADR-015 §2.1 (#431, #430): write-semantics axis, orthogonal to ``type``.
+    #: ADR-015 §2.1: write-semantics axis, orthogonal to ``type``.
     #: ``append`` (default) keeps today's episodic behaviour; ``replace`` marks
     #: the memory as a living/current-state document (consolidation must never
     #: SUPERSEDE/ARCHIVE-into-history it). Persisted as sticky frontmatter so the
@@ -188,7 +188,7 @@ class SaveRequest(BaseModel):
     #: in this PR — a same-slug save still overwrites in place (§2.6 guard
     #: deferred). Validated against ``VALID_UPDATE_POLICIES``.
     update_policy: str | None = None
-    #: Source-citation anchors (#459). A list of ``{ref, quote, quote_hash}``
+    #: Source-citation anchors. A list of ``{ref, quote, quote_hash}``
     #: dicts: ``ref`` is a path under the memory dir, ``quote`` is the exact
     #: cited passage, and ``quote_hash`` (optional) is the integrity hash of the
     #: quote. When omitted the hash is computed on save; when present it is
@@ -197,7 +197,7 @@ class SaveRequest(BaseModel):
     #: Any-value so Pydantic doesn't reject malformed input before our
     #: normalizer can return a clean 400.
     sources: list[dict[str, Any]] | None = None
-    #: #72 (ADR-018): epistemic marker — the KIND of claim this memory makes
+    #: (ADR-018): epistemic marker — the KIND of claim this memory makes
     #: (``fact`` / ``inference`` / ``open_question``), orthogonal to ``type``.
     #: Validated against ``VALID_EPISTEMICS``. When omitted the memory is
     #: ``unmarked`` (``DEFAULT_EPISTEMIC``) — no epistemic claim, NOT a fact — and
@@ -205,7 +205,7 @@ class SaveRequest(BaseModel):
     #: unaffected. Like ``status``, it may also arrive via the ``metadata`` dict;
     #: the explicit param wins.
     epistemic: str | None = None
-    #: #533 (G4): typed relationship links, orthogonal to supersession.
+    #: (G4): typed relationship links, orthogonal to supersession.
     #: ``contradicts`` records a conflict with no winner picked (surfaced by
     #: ``lint`` as a health signal); ``backed_by`` records an evidence/support
     #: edge to a source or fact. Both are plaintext frontmatter lists of
@@ -319,11 +319,11 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
         if not slug:
             slug = str(int(time.time()))
 
-    # #472: module-level map (shared with the description-eligibility predicate
+    # module-level map (shared with the description-eligibility predicate
     # so the writer and the count/worklist derive from one literal).
     category = _TYPE_TO_CATEGORY.get(req.type, "inbox")
 
-    # ADR-015 §2.1 (#431): validate the write-semantics axis. Reject an
+    # ADR-015 §2.1: validate the write-semantics axis. Reject an
     # unknown update_policy outright rather than silently coercing — a typo'd
     # policy ("repalce") must not quietly fall back to append and leave a
     # living document mis-declared.
@@ -356,7 +356,7 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
             ),
         )
 
-    # ADR-015 §2.2 (#398): validate a writer-supplied `status` against the
+    # ADR-015 §2.2: validate a writer-supplied `status` against the
     # combined lifecycle + incident allow-set. `status` is shared with the
     # store's search-exclusion (`config.search.exclude_status`), so a typo'd
     # status that landed in frontmatter could silently mis-classify a memory
@@ -374,7 +374,7 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
             ),
         )
 
-    # #72 (ADR-018): validate the epistemic marker. Like update_policy/status it
+    # (ADR-018): validate the epistemic marker. Like update_policy/status it
     # may arrive via the first-class param OR the `metadata` dict (merged verbatim
     # into frontmatter below) — resolve the effective value from both (the param
     # wins) and validate that, so a metadata-supplied typo ("inferrence") can't
@@ -410,7 +410,7 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
     # Normalize entity refs: bare strings get a category prefix.
     # e.g. "palinode" → "project/palinode", "alice" → "person/alice"
     raw_entities = list(req.entities or [])
-    # ADR-010 / #159: ``project`` is sugar for the ``project/<slug>`` entity.
+    # ADR-010: ``project`` is sugar for the ``project/<slug>`` entity.
     if req.project:
         project_ref = req.project if "/" in req.project else f"project/{req.project}"
         if project_ref not in raw_entities:
@@ -418,9 +418,9 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
     normalized_entities = _normalize_entities(raw_entities, category)
 
     # Capture a single UTC timestamp for both created_at and last_updated so
-    # that they are identical on first write (#177: file must not be born stale).
+    # that they are identical on first write (file must not be born stale).
     _now_iso = _utc_now().isoformat()
-    # ADR-015 §2.4 (#430): preserve first-seen on existing-slug overwrite. Today
+    # ADR-015 §2.4: preserve first-seen on existing-slug overwrite. Today
     # every save re-stamps both created_at and last_updated to now, destroying
     # first-seen for any re-saved fact and turning a living document born-again
     # on each update. When the target path already exists, carry its existing
@@ -455,7 +455,7 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
                 _prior_policy = _existing_meta.get("update_policy")
                 if _prior_policy in _VALID_UPDATE_POLICIES:
                     update_policy = str(_prior_policy)
-            # #72 (ADR-018): epistemic is sticky for the same reason — re-saving
+            # (ADR-018): epistemic is sticky for the same reason — re-saving
             # the same (category, slug) is the same logical memory, and a save
             # that omits the marker must NOT silently downgrade a deliberate
             # `open_question`/`inference` back to the `fact` default. Inherit the
@@ -481,13 +481,13 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
         "type": req.type,
         "entities": normalized_entities,
         "content_hash": content_hash,
-        # #191: write proper timezone-aware UTC ISO-8601 (`+00:00` suffix).
+        # write proper timezone-aware UTC ISO-8601 (`+00:00` suffix).
         # Previously used ``time.strftime("...%Z")`` which emitted local time
         # with a ``Z`` (UTC) marker — a mismatch that made `chunks.created_at`
         # unreliable as a recency signal.
         # ADR-015 §2.4: created_at is preserved across overwrites (see above).
         "created_at": created_at,
-        # #177: populate last_updated on initial write so the file isn't born
+        # populate last_updated on initial write so the file isn't born
         # stale.  The freshness checker treats a missing last_updated as stale;
         # setting it equal to created_at on first save avoids that false positive.
         # On re-saves the indexer re-reads frontmatter and this value is refreshed.
@@ -495,15 +495,15 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
     }
     if req.metadata:
         # H4: don't let raw, unvalidated fields from the metadata dict land in
-        # frontmatter — `update_policy` (#431), `epistemic` (#72), and the typed
-        # link fields `contradicts`/`backed_by` (#533) are each resolved +
+        # frontmatter — `update_policy`, `epistemic`, and the typed
+        # link fields `contradicts`/`backed_by` are each resolved +
         # validated above/below and written from their own normalized values, so a
         # malformed value tunneled through metadata still gets a clean 400.
         _verbatim_excluded = {"update_policy", "epistemic", "contradicts", "backed_by"}
         frontmatter_dict.update(
             {k: v for k, v in req.metadata.items() if k not in _verbatim_excluded}
         )
-    # ADR-015 §2.3 (#482): ephemeral TTL. A metadata-supplied `ttl` (duration)
+    # ADR-015 §2.3: ephemeral TTL. A metadata-supplied `ttl` (duration)
     # resolves to an absolute `expires_at`; an explicit `expires_at` is
     # validated. Both arrive via the free-form `metadata` dict (merged above),
     # so this single normalization is inherited by every interface. The
@@ -518,7 +518,7 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
         frontmatter_dict["confidence"] = req.confidence
     if req.priority is not None:
         frontmatter_dict["priority"] = req.priority
-    # #72 (ADR-018): persist the epistemic marker only when one is in effect —
+    # (ADR-018): persist the epistemic marker only when one is in effect —
     # supplied now (param or metadata) OR inherited from the file's prior save
     # (sticky carry-forward above). A memory that was NEVER marked keeps clean
     # frontmatter and reads as `unmarked` (no claim — NOT fact), so files
@@ -538,7 +538,7 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
     # surface validated.
     if update_policy is not None:
         frontmatter_dict["update_policy"] = update_policy
-    # #106: IETF KU frontmatter alignment — auto-populate KU fields when
+    # IETF KU frontmatter alignment — auto-populate KU fields when
     # ku_compat is enabled, or when the caller explicitly provides them.
     if config.ku_compat.enabled:
         if "ku_version" not in frontmatter_dict:
@@ -547,23 +547,23 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
             raw_status = frontmatter_dict.get("status") or (req.metadata or {}).get("status", "active")
             from palinode.core.parser import VALID_LIFECYCLES
             frontmatter_dict["lifecycle"] = raw_status if raw_status in VALID_LIFECYCLES else "active"
-    # #115: external SDLC object references (free-form dict[str, str]).
+    # external SDLC object references (free-form dict[str, str]).
     if req.external_refs is not None:
         from palinode.core.parser import parse_external_refs as _parse_ext_refs
         validated = _parse_ext_refs({"external_refs": req.external_refs})
         if validated is not None:
             frontmatter_dict["external_refs"] = validated
-    # ADR-010 / #166: explicit ``title`` overrides metadata-supplied title.
+    # ADR-010: explicit ``title`` overrides metadata-supplied title.
     if req.title:
         frontmatter_dict["title"] = req.title
-    # #459: source-citation anchors. Only written when provided so frontmatter
+    # source-citation anchors. Only written when provided so frontmatter
     # stays clean otherwise. Validation (computes/verifies quote_hash, rejects
     # malformed entries with 400) happens here so a bad anchor is caught before
     # the file is written.
     if req.sources is not None:
         frontmatter_dict["sources"] = _normalize_sources(req.sources)
 
-    # #533 (G4): typed relationship links. Resolve each from param-or-metadata
+    # (G4): typed relationship links. Resolve each from param-or-metadata
     # (the explicit param wins — mirrors update_policy's H4 handling), validate,
     # and write the normalized list only when non-empty so frontmatter stays
     # clean otherwise. `_resolved_contradicts` is reused for the reciprocal
@@ -582,13 +582,13 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
     if _resolved_backed_by:
         frontmatter_dict["backed_by"] = _resolved_backed_by
 
-    # ADR-010 / #167: explicit body field > X-Palinode-Source header > env > "api".
+    # ADR-010: explicit body field > X-Palinode-Source header > env > "api".
     frontmatter_dict["source"] = _resolve_source(req.source, request)
 
-    # #405: auto-description is no longer generated inline. Like auto_summary
-    # (#403), the LLM description is deferred to the watcher-driven
+    # auto-description is no longer generated inline. Like auto_summary
+    # the LLM description is deferred to the watcher-driven
     # /generate-summaries backfill so /save returns in embed+write time
-    # regardless of model latency (the #336 timeout/circuit-breaker still left
+    # regardless of model latency (the timeout/circuit-breaker still left
     # /save blocked for up to describe_timeout_seconds on a warm-but-slow model).
     # config.auto_summary.enabled is the master switch for all LLM enrichment:
     # when disabled, no description is generated and /save is fast unconditionally.
@@ -601,7 +601,7 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
         # Leave description absent in frontmatter; watcher detects the missing
         # field and triggers /generate-summaries, which fills it.
 
-    # Layer 2 wiki contract (#210): auto-append See also footer for any entities
+    # Layer 2 wiki contract: auto-append See also footer for any entities
     # not already referenced as [[wikilinks]] in the body.
     body_content = _apply_wiki_footer(req.content, normalized_entities)
 
@@ -609,14 +609,14 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
 
     git_tools.write_memory_file(file_path, doc)
 
-    # #403: auto_summary is no longer generated inline. The watcher detects
+    # auto_summary is no longer generated inline. The watcher detects
     # files matching (core=true, no summary) and schedules /generate-summaries
     # on a debounce — see palinode/indexer/watcher.py::_schedule_summary_generation.
     # Inline generation was blocking /save for the full LLM first-token cost
     # against a cold or contended local model, surfacing as "palinode write
     # timeouts" on REST clients. The response carries summary_pending=True so
     # callers can distinguish "summary still missing" from "this file is not
-    # eligible." Mirror the description_pending pattern from #336.
+    # eligible." Mirror the description_pending pattern
     summary_pending = False
     if config.auto_summary.enabled:
         is_core = bool(frontmatter_dict.get("core", False))
@@ -633,7 +633,7 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
         git_committed = git_tools.commit_memory_file(file_path, commit_msg)
         if not git_committed:
             # exc_info-free: the choke point already logged the I/O failure with
-            # a stack trace. Surface a save-path signal so the #386 git_committed
+            # a stack trace. Surface a save-path signal so the git_committed
             # contract has an operator-visible breadcrumb on this logger too.
             logger.error("Git auto-commit did not complete for %r", file_path)
         elif config.git.auto_push:
@@ -644,7 +644,7 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
                 )
                 if push.returncode != 0:
                     # check=False meant a failed push (no remote, auth, rejected)
-                    # was previously invisible — surface it (#337).
+                    # was previously invisible — surface it.
                     logger.warning(
                         "git auto-push failed op=push file_path=%r returncode=%d stderr=%r",
                         file_path, push.returncode, (push.stderr or "").strip(),
@@ -652,7 +652,7 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
             except (subprocess.SubprocessError, OSError) as e:
                 logger.error("Git push failed for %r: %s", file_path, e, exc_info=True)
 
-    # #533 (G4): best-effort reciprocal back-link for `contradicts`. Because the
+    # (G4): best-effort reciprocal back-link for `contradicts`. Because the
     # relationship is symmetric (A⇄B), add this memory's ref into each target's
     # `contradicts` list so the conflict surfaces from both sides in `lint`.
     # Never raises and never blocks the save — a missing/unreadable target is
@@ -676,7 +676,7 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
         file_path, frontmatter_dict["id"], category, git_committed,
     )
 
-    # #251: embed inline so that POST /save only returns once vector + FTS
+    # embed inline so that POST /save only returns once vector + FTS
     # entries actually exist. Previously the watcher embedded out-of-band,
     # leaving a race window where /search immediately after /save returned
     # zero results. The watcher remains the indexer for filesystem-direct
@@ -690,7 +690,7 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
         outcome = index_file(file_path)
         indexed = bool(outcome.get("embedded"))
         # Surface per-index health so callers can detect silent vec0/FTS5
-        # failures (#385). Defaults to True so a missing key (old index_file
+        # failures. Defaults to True so a missing key (old index_file
         # version) does not falsely signal failure.
         indexed_vec = bool(outcome.get("indexed_vec", True))
         indexed_fts = bool(outcome.get("indexed_fts", True))
@@ -698,7 +698,7 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
     except Exception as e:
         # File is on disk; the watcher will pick it up later. exc_info so the
         # non-fatal index failure carries a stack trace, structured fields for
-        # grep (#337).
+        # grep.
         logger.warning(
             "Inline index failed (non-fatal) op=inline_index file_path=%s error=%r",
             file_path, str(e), exc_info=True,
@@ -718,22 +718,22 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
         "id": frontmatter_dict["id"],
         "indexed": indexed,
         "embedded": indexed,
-        # Per-index health flags (#385, #386). vec/FTS failures are non-fatal
+        # Per-index health flags. vec/FTS failures are non-fatal
         # but silent — surface them so callers (MCP, CLI) can warn the user.
         "indexed_vec": indexed_vec,
         "indexed_fts": indexed_fts,
         # git_committed is True only when auto_commit is enabled AND the commit
-        # subprocess succeeded. False when disabled or when git errors (#386).
+        # subprocess succeeded. False when disabled or when git errors.
         "git_committed": git_committed,
     }
     if index_error and not indexed:
         result["index_error"] = index_error
-    # #405: surface deferred description so callers know the description is not
+    # surface deferred description so callers know the description is not
     # yet set and the watcher will fill it in via /generate-summaries on the
-    # next file event. Mirrors summary_pending (#403).
+    # next file event. Mirrors summary_pending.
     if description_pending:
         result["description_pending"] = True
-    # #403: surface deferred auto_summary so callers know the summary is not
+    # surface deferred auto_summary so callers know the summary is not
     # yet set and the watcher will trigger /generate-summaries on the next
     # file event. Mirrors the description_pending pattern.
     if summary_pending:
@@ -760,7 +760,7 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
         except Exception as e:
             # Load-bearing: save must never fail because of tier 2a. This is a
             # non-fatal opt-in feature degrading — WARNING, not ERROR, with a
-            # stack trace for diagnosis (#337, docs/logging.md DEMOTE).
+            # stack trace for diagnosis (docs/logging.md DEMOTE).
             logger.warning(
                 "write-time schedule failed (non-fatal) op=write_time_check file_path=%s error=%r",
                 file_path, str(e), exc_info=True,
@@ -808,7 +808,7 @@ def generate_summaries_api() -> dict[str, Any]:
     desc_errors = 0
     last_error: str | None = None
     describe_enabled = config.auto_summary.enabled
-    # #464: reset the CHAT-fallback budget for this backfill run. Bounds how many
+    # reset the CHAT-fallback budget for this backfill run. Bounds how many
     # deferred files may escalate to the OpenAI-compat shim in a single walk so a
     # chronically-down local chat host can't fan the whole backlog out to
     # Anthropic. No-op unless auto_summary.llm_fallbacks is configured.
@@ -824,9 +824,9 @@ def generate_summaries_api() -> dict[str, Any]:
                 content = f.read()
             metadata, _ = parser.parse_markdown(content)
 
-            # #405: backfill the deferred auto-description. Not core-gated —
+            # backfill the deferred auto-description. Not core-gated —
             # every *eligible* memory file gets a description, matching the
-            # inline behavior #405 moved async. #472: gate on
+            # inline behavior moved async. gate on
             # _is_description_eligible so structural / non-memory files
             # (daily/, archive/, specs/, top-level docs) — whose write-back is a
             # no-op — aren't reprocessed every run forever. _generate_description

@@ -24,7 +24,7 @@ from palinode.core.quote_verify import quote_hash, verify_memory_sources, QuoteS
 client = TestClient(app)
 
 # A fixed unit-norm-ish vector matching the configured embedding dim so the real
-# indexer (SQLite-vec + FTS5) runs without reaching a live Ollama (#251 path).
+# indexer (SQLite-vec + FTS5) runs without reaching a live Ollama (path).
 _FAKE_VECTOR = [0.1] * 1024
 
 

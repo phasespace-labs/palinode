@@ -27,11 +27,11 @@ logger = logging.getLogger(__name__)
 # palinode.core.ollama_client (so the client can raise the error from inside the
 # embed path without a circular import) and are re-exported here for backward
 # compatibility — existing `from palinode.core.embedder import
-# EmbeddingContextError` imports keep working (#338 Phase 3).
+# EmbeddingContextError` imports keep working (Phase 3).
 __all__ = ["EmbeddingContextError", "embed", "embed_query", "check_model_context"]
 
 # --------------------------------------------------------------------------
-# Context-window preflight check — #335
+# Context-window preflight check
 # --------------------------------------------------------------------------
 
 # Minimum expected num_ctx for the embed model. bge-m3 supports 8192;
@@ -64,7 +64,7 @@ def check_model_context(
         model = config.embeddings.primary.model
 
     try:
-        # #338 Phase 3: route /api/show through the centralized client (EMBED
+        # Phase 3: route /api/show through the centralized client (EMBED
         # role). retries=0 — preflight is best-effort and must not amplify load.
         data = get_ollama_client().show(model, role=OllamaRole.EMBED, retries=0)
         # Ollama /api/show returns model_info with key "llama.context_length"
@@ -102,7 +102,7 @@ def check_model_context(
     except (OllamaError, OSError, ValueError, KeyError) as e:
         # Preflight is best-effort; never block embed on it. OllamaError covers
         # connect/timeout/HTTP/circuit-open from the centralized client.
-        # INFO not DEBUG (#337, docs/logging.md): a preflight that can't run at
+        # INFO not DEBUG (docs/logging.md): a preflight that can't run at
         # all is worth one operator-visible line — it means the ctx guard is
         # silently inactive for this process.
         logger.info(
@@ -175,12 +175,12 @@ def _embed_local(text: str) -> list[float]:
             error. See EmbeddingContextError for recovery guidance.
     """
     # Lazy preflight: check num_ctx once per process so operators get an early
-    # warning about misconfigured modelfiles (#335).
+    # warning about misconfigured modelfiles.
     _run_preflight_once()
 
     model = config.embeddings.primary.model
 
-    # #338 Phase 3: route through the centralized client. It owns the
+    # Phase 3: route through the centralized client. It owns the
     # /api/embed → /api/embeddings fallback, retry/backoff, circuit breaking,
     # and the structured per-call JSON logging (palinode.ollama.events). This
     # wrapper preserves the public contract: returns [] on connectivity/timeout
@@ -188,13 +188,13 @@ def _embed_local(text: str) -> list[float]:
     try:
         return get_ollama_client().embed(text)
     except EmbeddingContextError:
-        # Typed signal — propagate so callers can truncate / split (#335).
+        # Typed signal — propagate so callers can truncate / split.
         raise
     except OllamaError as e:
         # Connect/timeout/HTTP/circuit-open/unexpected-shape — degrade to an
         # empty vector (the contract the indexer relies on to skip + retry).
         # text_len, not raw text, so logs never carry user content.
-        # Structured key=value per docs/logging.md (#337) — greppable on
+        # Structured key=value per docs/logging.md — greppable on
         # op/outcome alongside the ollama_client per-call event line.
         logger.warning(
             "embed failed; returning empty vector "
@@ -234,7 +234,7 @@ def _embed_gemini(text: str, dimension: int = 768, task_type: str = "RETRIEVAL_D
     except httpx.HTTPStatusError as e:
         # Gemini rejected the request (auth, quota, bad model). Previously this
         # raised unlogged; surface a WARNING with the failing endpoint + status
-        # so an operator can tell embed degradation from a model outage (#337).
+        # so an operator can tell embed degradation from a model outage.
         # Endpoint is logged without the key query-string (no secret leak).
         logger.warning(
             "gemini embed failed op=embed model=%s endpoint=%s outcome=http_%d",

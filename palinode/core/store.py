@@ -22,7 +22,7 @@ from datetime import UTC, datetime, timedelta
 from palinode.core.config import config
 from palinode.core import parser as _parser
 # The hybrid-search scoring pipeline + its pure decay/predicate helpers live in
-# ranker.py (#553). Re-exported here so `store.effective_importance`,
+# ranker.py. Re-exported here so `store.effective_importance`,
 # `store._is_daily_file`, etc. keep resolving for internal callers and tests.
 from palinode.core.ranker import (  # noqa: F401
     _is_daily_file,
@@ -38,13 +38,13 @@ _store_logger = __import__('logging').getLogger("palinode.store")
 # the check on subsequent calls (it's expensive — recursive glob of memory_dir).
 _db_checked: bool = False
 
-# ADR-015 §2.3 (#398): machine/monitor writes carry ``metadata.kind: telemetry``
+# ADR-015 §2.3: machine/monitor writes carry ``metadata.kind: telemetry``
 # in their frontmatter (which flattens to a top-level ``kind`` field — see
 # save_api, where ``req.metadata`` is merged into the top level). Such memories
 # are HARD-EXCLUDED from default semantic recall (§6 Q3) so monitoring churn
 # does not pollute human recall, but remain retrievable when a caller passes an
 # explicit override. The exclusion lives in the shared store layer so all
-# surfaces (API/MCP/CLI/plugin) inherit it (ADR-010 parity), mirroring #371.
+# surfaces (API/MCP/CLI/plugin) inherit it (ADR-010 parity), mirroring.
 DEFAULT_RECALL_EXCLUDED_KINDS: tuple[str, ...] = ("telemetry",)
 
 
@@ -323,6 +323,40 @@ def init_db() -> None:
     db.commit()
     db.close()
 
+
+def fts5_delete_chunk(cursor: sqlite3.Cursor, chunk_id: str) -> None:
+    """Remove a chunk's row from the external-content FTS5 index ``chunks_fts``.
+
+    ``chunks_fts`` is declared ``content=chunks`` (an *external-content* FTS5
+    table). Such a table cannot reliably drop its inverted-index tokens via a
+    bare per-rowid ``DELETE`` — FTS5 has to re-derive the row's tokens from its
+    column values to remove them, and a plain delete can leave those tokens
+    orphaned (``count(chunks_fts) > count(chunks)`` until the next
+    ``rebuild_fts()``, which silently corrupts BM25 keyword recall). The
+    sanctioned removal is the special ``'delete'`` command, fed the column
+    values exactly as they were indexed (#439).
+
+    MUST be called while the source ``chunks`` row still exists: the values are
+    read from it. Best-effort — a missing source row or FTS mismatch is a no-op
+    rather than an error (the periodic rebuild is the backstop).
+    """
+    row = cursor.execute(
+        "SELECT rowid, content, file_path, category FROM chunks WHERE id = ?",
+        (chunk_id,),
+    ).fetchone()
+    if row is None:
+        return
+    # Column order here must match the FTS5 column declaration
+    # (content, file_path, category) — see the chunks_fts CREATE above.
+    cursor.execute(
+        """
+        INSERT INTO chunks_fts(chunks_fts, rowid, content, file_path, category)
+        VALUES ('delete', ?, ?, ?, ?)
+        """,
+        (row[0], row[1], row[2], row[3]),
+    )
+
+
 def upsert_chunks(
     chunks_data: list[dict[str, Any]], skip_unchanged: bool = True
 ) -> dict[str, Any]:
@@ -370,7 +404,7 @@ def upsert_chunks(
         # NOT in this column list — to their schema defaults on every re-index
         # (any content_hash change: consolidation UPDATE/MERGE, manual edit,
         # sticky-frontmatter rewrite). That silently wiped the ADR-007
-        # reinforcement signal the ranker now reads from these columns (#86).
+        # reinforcement signal the ranker now reads from these columns.
         # ON CONFLICT(id) DO UPDATE refreshes only the content columns and
         # leaves the accumulated recall signal intact; a brand-new row still
         # gets the schema defaults.
@@ -412,7 +446,7 @@ def upsert_chunks(
         # Primary INSERT.  On UNIQUE collision (DELETE silently failed above),
         # fall back to a forced DELETE + retry.  Log at error on total failure
         # because a missing vec0 row means this chunk is invisible to vector
-        # search (#385).
+        # search.
         try:
             cursor.execute(
                 "INSERT INTO chunks_vec (id, embedding) VALUES (?, ?)",
@@ -463,15 +497,11 @@ def upsert_chunks(
             )
         except Exception as _fts_exc:
             # UNIQUE: a physical FTS5 row already exists — delete and retry.
+            # We only reach here after the INSERT collided, so the row provably
+            # exists — the "never DELETE-first on an empty FTS5 table" guard
+            # (see the comment above) is preserved.
             try:
-                chunk_rowid_row = cursor.execute(
-                    "SELECT rowid FROM chunks WHERE id = ?", (chunk["id"],)
-                ).fetchone()
-                if chunk_rowid_row:
-                    cursor.execute(
-                        "DELETE FROM chunks_fts WHERE rowid = ?",
-                        (chunk_rowid_row[0],),
-                    )
+                fts5_delete_chunk(cursor, chunk["id"])
                 cursor.execute(
                     """
                     INSERT INTO chunks_fts(rowid, content, file_path, category)
@@ -507,10 +537,12 @@ def delete_file_chunks(file_path: str) -> None:
     cursor.execute("SELECT id FROM chunks WHERE file_path = ?", (file_path,))
     ids = [row["id"] for row in cursor.fetchall()]
     if ids:
-        # Clean FTS5 index before deleting the source rows (best-effort)
+        # Clean FTS5 index before deleting the source rows (best-effort).
+        # Must run first: the sanctioned 'delete' reads column values off the
+        # still-present chunks row to re-derive the tokens to remove.
         for chunk_id in ids:
             try:
-                cursor.execute("DELETE FROM chunks_fts WHERE rowid = (SELECT rowid FROM chunks WHERE id = ?)", (chunk_id,))
+                fts5_delete_chunk(cursor, chunk_id)
             except Exception:
                 pass  # FTS5 may be out of sync — periodic rebuild handles this
         
@@ -618,7 +650,7 @@ def search(query_embedding: list[float], category: str | None = None,
     if status_exclude_list is None:
         status_exclude_list = config.search.exclude_status
 
-    # #483: use try/finally so the connection is closed on all paths (exception
+    # use try/finally so the connection is closed on all paths (exception
     # during row processing previously left it open).
     db = get_db()
     try:
@@ -684,7 +716,7 @@ def search(query_embedding: list[float], category: str | None = None,
             "score": score,
             "raw_score": score,
         }
-        # #106: surface confidence as top-level key when present in frontmatter.
+        # surface confidence as top-level key when present in frontmatter.
         if "confidence" in meta:
             result_entry["confidence"] = meta["confidence"]
         results.append(result_entry)
@@ -703,7 +735,7 @@ def search(query_embedding: list[float], category: str | None = None,
                     r["score"] = r.get("score", 0) * config.context.boost
             results.sort(key=lambda r: r.get("score", 0.0), reverse=True)
 
-    # Issue #93: Penalize daily/ files to prevent session notes from dominating results
+    # Issue Penalize daily/ files to prevent session notes from dominating results
     penalty = config.search.daily_penalty
     if not include_daily and penalty != 1.0:
         needs_resort = False
@@ -714,7 +746,7 @@ def search(query_embedding: list[float], category: str | None = None,
         if needs_resort:
             results.sort(key=lambda r: r.get("score", 0.0), reverse=True)
 
-    # Record retrieval access metadata (ADR-006/007, #371): batched, resilient.
+    # Record retrieval access metadata (ADR-006/007): batched, resilient.
     # Suppressed when called as the inner vector pass of search_hybrid, which
     # records recall against its final merged hit set instead (avoids double-
     # counting intermediate candidates).
@@ -818,7 +850,7 @@ def search_fts(query: str, category: str | None = None, top_k: int = 10,
         category, metadata, score. Score is BM25 rank (lower = better match,
         normalized to 0.0-1.0 range for RRF merging).
     """
-    # #483: use try/finally so the connection is closed on all paths (same
+    # use try/finally so the connection is closed on all paths (same
     # hygiene fix as search()).
     db = get_db()
     try:
@@ -923,7 +955,7 @@ def check_freshness(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 result["freshness"] = "stale"
                 continue
 
-            # Hash the section content exactly as the indexer does (#203 fix).
+            # Hash the section content exactly as the indexer does (fix).
             full_hash = hashlib.sha256(matching["content"].encode()).hexdigest()
             # Support both full (64-char) and legacy truncated (16-char) hashes.
             current_hash = full_hash if len(stored_hash) > 16 else full_hash[:16]
@@ -1011,7 +1043,7 @@ def list_recent(
             "content_hash": row["content_hash"] if "content_hash" in row.keys() else None,
             "score": 1.0,
         }
-        # #106: surface confidence as top-level key when present in frontmatter.
+        # surface confidence as top-level key when present in frontmatter.
         if "confidence" in meta:
             list_entry["confidence"] = meta["confidence"]
         results.append(list_entry)
@@ -1083,7 +1115,7 @@ def recent_save_embeddings(
         db.close()
     except sqlite3.Error as _rse_exc:
         # Dedup silently disabled when the DB is unavailable. Log so operators
-        # can correlate missing dedup signals with DB health events (#384).
+        # can correlate missing dedup signals with DB health events.
         _store_logger.warning(
             "palinode.store: recent_save_embeddings DB open failed — "
             "dedup disabled for this call (db_path=%r): %s",
@@ -1362,7 +1394,7 @@ def search_hybrid(
         Merged and re-ranked list of result dicts, sorted by combined score.
     """
     # Get results from both search methods. record_access=False: search_hybrid
-    # records recall on its final merged hit set, not on these candidates (#371).
+    # records recall on its final merged hit set, not on these candidates.
     vec_results = search(query_embedding, category=category, top_k=top_k * 2, threshold=0.0,
                          record_access=False, kind_exclude_list=kind_exclude_list)
     try:
@@ -1390,7 +1422,7 @@ def search_hybrid(
                 context_files.add(row["file_path"])
 
     # Fuse + re-rank (RRF → decay → priority → context → daily → dedup → threshold
-    # → date) in the pure ranker (#553). priority_weight is read from this module
+    # → date) in the pure ranker. priority_weight is read from this module
     # so patch.object(store, "_PRIORITY_RANK_WEIGHT", ...) still tunes ordering.
     merged = rank_hybrid(
         vec_results,
@@ -1408,14 +1440,14 @@ def search_hybrid(
     if merged:
         merged = check_freshness(merged)
 
-    # Record retrieval access metadata (ADR-006/007, #371): batched, resilient.
+    # Record retrieval access metadata (ADR-006/007): batched, resilient.
     if merged:
         record_recall([r.get("id") for r in merged[:top_k]], mode=mode, session_id=session_id)
 
     return merged
 
 
-# Human-priority ranking nudge weight (#259, tuned in #486). A priority-5 memory
+# Human-priority ranking nudge weight (tuned in). A priority-5 memory
 # gets at most +0.05 (priority-1 at most -0.05) added to its normalized score, so
 # a clear relevance gap always outranks priority while similar-relevance hits are
 # ordered by it. Confirmed at 0.025 against the ranking properties pinned in

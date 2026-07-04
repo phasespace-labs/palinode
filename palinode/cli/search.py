@@ -125,7 +125,7 @@ def search(
             for res in results:
                 score_str = f"[{res['score']:.2f}] " if score else ""
                 title = res.get("file", "Untitled")
-                # #352: prefer the API-provided snippet — already match-windowed
+                # prefer the API-provided snippet — already match-windowed
                 # and bounded. Fall back to the legacy blind-truncation path
                 # when talking to an older API server that doesn't populate it.
                 snippet = res.get("snippet")

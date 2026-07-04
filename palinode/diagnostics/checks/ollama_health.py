@@ -17,7 +17,7 @@ from palinode.diagnostics.registry import register
 from palinode.diagnostics.types import CheckResult, DoctorContext
 
 # p95 (ms) above which a reachable host is flagged "degraded" — matches the
-# #338 acceptance criterion ("Ollama degraded when p95 > 5s").
+# acceptance criterion ("Ollama degraded when p95 > 5s").
 _DEGRADED_P95_MS = 5000.0
 
 

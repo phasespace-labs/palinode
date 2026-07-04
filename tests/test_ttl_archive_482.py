@@ -163,8 +163,8 @@ def test_set_status_for_path_updates_chunk_metadata(isolated_store):
 def test_archive_expired_suppresses_from_recall_but_retains(isolated_store):
     from palinode.core import store
 
-    # Non-telemetry on purpose: telemetry is hard-excluded from recall by #398
-    # regardless of status, so this isolates the status-archive axis #482 adds.
+    # Non-telemetry on purpose: telemetry is hard-excluded from recall by
+    # regardless of status, so this isolates the status-archive axis adds.
     marker = "ephemeral probe incident XYZ"
     _write_and_index(
         isolated_store, "inbox/probe-incident.md", marker,

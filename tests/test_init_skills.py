@@ -45,7 +45,7 @@ def test_single_source_body_matches_command(tmp_path):
 
     _run(["--dir", str(tmp_path), *_BASE, "--skills", "project"])
     wrap_skill = (tmp_path / ".claude" / "skills" / "wrap" / "SKILL.md").read_text()
-    # Push-twice ordering (#465) and the description carry through from the body.
+    # Push-twice ordering and the description carry through from the body.
     assert wrap_skill.count("palinode_push") == WRAP_COMMAND_BODY.count("palinode_push")
     assert "name: wrap" in wrap_skill
 

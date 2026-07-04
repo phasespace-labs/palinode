@@ -166,7 +166,7 @@ class TestGenerateSummariesState:
 
 
 # ---------------------------------------------------------------------------
-# /generate-summaries also backfills descriptions (#405)
+# /generate-summaries also backfills descriptions
 # ---------------------------------------------------------------------------
 
 
@@ -279,7 +279,7 @@ class TestHealthAutoSummary:
 
     def test_down_when_ollama_unreachable(self, client, monkeypatch):
         monkeypatch.setattr(config.auto_summary, "enabled", True)
-        # #338 Phase 5: liveness now goes through OllamaClient.ping(), not httpx.get.
+        # Phase 5: liveness now goes through OllamaClient.ping, not httpx.get.
         fake = MagicMock(name="OllamaClient")
         fake.ping.return_value = False
         with patch("palinode.api.server.get_ollama_client", return_value=fake):
@@ -300,7 +300,7 @@ class TestHealthAutoSummary:
         assert body["status"] == "ok", body
         assert body["ollama_reachable"] is True
         assert body["pending_count"] == 0
-        # #405: description backlog surfaced alongside the summary backlog.
+        # description backlog surfaced alongside the summary backlog.
         assert body["pending_descriptions"] == 0
         assert "last_run_descriptions" in body
 
@@ -312,7 +312,7 @@ class TestHealthAutoSummary:
 
 
 # ---------------------------------------------------------------------------
-# #472 — description eligibility: structural / non-memory files are excluded
+# description eligibility: structural / non-memory files are excluded
 # from both the pending_descriptions count and the /generate-summaries worklist
 # so the backfill drains to a stable floor instead of regenerating throwaway
 # descriptions forever.
@@ -326,7 +326,7 @@ class TestDescriptionEligibility:
         ("daily", "2026-06-07.md"),
         ("archive", "old-note.md"),
         ("specs", "spec.md"),
-        ("specs/prompts", "consolidation.md"),  # the live #472 offender
+        ("specs/prompts", "consolidation.md"),  # the live offender
     ]
 
     def _write(self, tmp_path, relparts, name):
@@ -366,7 +366,7 @@ class TestDescriptionEligibility:
         assert body["descriptions_generated"] == 0, body
         assert body["description_errors"] == 0, body
         # The generator must never even be invoked for ineligible files —
-        # that's the GPU burn #472 fixes.
+        # that's the GPU burn
         mock_desc.assert_not_called()
 
     def test_structural_files_not_counted_in_pending(self, client, tmp_path, monkeypatch):

@@ -224,7 +224,7 @@ def save(
             key, _, value = pair.partition("=")
             external_refs[key.strip()] = value
 
-    # Parse --cite REF::QUOTE pairs into source-citation anchors (#459).
+    # Parse --cite REF::QUOTE pairs into source-citation anchors.
     # Split on the FIRST '::' so quotes may themselves contain '::'.
     source_anchors: list[dict] | None = None
     if sources:
@@ -239,7 +239,7 @@ def save(
             source_anchors.append({"ref": ref.strip(), "quote": quote})
 
     try:
-        # ADR-010 / #167: do not default source here.  The HTTP client sets
+        # ADR-010: do not default source here. The HTTP client sets
         # X-Palinode-Source: cli on every request; only forward `source` in
         # the body when the user explicitly passed --source.
         result = api_client.save(

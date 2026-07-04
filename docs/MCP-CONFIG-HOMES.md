@@ -242,7 +242,7 @@ MCP HTTP port). The trailing slash on `/mcp/` is required.
 
 > **Auth (forward-compat):** the HTTP endpoint is currently token-less and is
 > protected by network isolation (e.g. a private/Tailscale network). When bearer
-> auth lands, add it as an `Authorization` header:
+> auth lands (#289), add it as an `Authorization` header:
 >
 > ```json
 > { "type": "http", "url": "http://<palinode-host>:6341/mcp/",

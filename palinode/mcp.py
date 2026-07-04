@@ -117,7 +117,7 @@ def _api_url(path: str) -> str:
     return f"http://{host}:{port}{path}"
 
 
-# Cross-surface drift guard (#377): assert the constant matches its sentinel
+# Cross-surface drift guard: assert the constant matches its sentinel
 # unless the operator has set an explicit env-var override.
 assert _SESSION_END_TIMEOUT == _SENTINEL or os.environ.get(
     "PALINODE_SESSION_END_TIMEOUT"
@@ -159,7 +159,7 @@ def _text(content: str) -> list[types.TextContent]:
     return [types.TextContent(type="text", text=content)]
 
 
-# #416: write-path tools can commit server-side even when the client's request
+# write-path tools can commit server-side even when the client's request
 # times out. A slow LLM-derived field (auto_summary, embedding refresh) can
 # outlast the HTTP timeout *after* the durable write has already landed, so the
 # generic "Request ... timed out" message led operators to retry blindly and
@@ -186,7 +186,7 @@ def _timeout_message(tool: str) -> str:
     return f"Error: Request to {_api_url('')} timed out."
 
 
-_FULL_CONTENT_HARD_CAP = 4000  # Politeness ceiling for full=True (#352).
+_FULL_CONTENT_HARD_CAP = 4000  # Politeness ceiling for full=True.
 
 
 def _format_results(results: list[dict[str, Any]], full: bool = False) -> str:
@@ -214,7 +214,7 @@ def _format_results(results: list[dict[str, Any]], full: bool = False) -> str:
         score_pct = int(r.get("score", 0) * 100)
         freshness = r.get("freshness")
         fresh_label = f" ✓ {freshness}" if freshness == "valid" else (f" ⚠ {freshness}" if freshness == "stale" else "")
-        # Render external_refs when present in result metadata (#115).
+        # Render external_refs when present in result metadata.
         meta = r.get("metadata") or {}
         ext_refs = meta.get("external_refs")
         refs_label = ""
@@ -232,7 +232,7 @@ def _format_results(results: list[dict[str, Any]], full: bool = False) -> str:
             ]
             refs_label = " [" + ", ".join(ref_parts) + "]"
 
-        # ADR-018 / #72: surface a non-default epistemic marker so a reader sees
+        # ADR-018: surface a non-default epistemic marker so a reader sees
         # at a glance that a hit is an inference or an open question rather than a
         # verified fact. `fact` (the default) is left unlabelled to avoid noise.
         epi = meta.get("epistemic")
@@ -240,7 +240,7 @@ def _format_results(results: list[dict[str, Any]], full: bool = False) -> str:
         if epi in ("inference", "open_question"):
             epi_label = " [inference]" if epi == "inference" else " [open question?]"
 
-        # #352: pick body — snippet (default) or capped content (full=True).
+        # pick body — snippet (default) or capped content (full=True).
         if full:
             body = (r.get("content") or "")[:_FULL_CONTENT_HARD_CAP]
             if r.get("content") and len(r["content"]) > _FULL_CONTENT_HARD_CAP:
@@ -541,7 +541,7 @@ def _all_tools() -> list[types.Tool]:
                     "epistemic": {
                         "type": "string",
                         "enum": ["fact", "inference", "open_question"],
-                        # ADR-018 / #72: the KIND of claim this memory makes.
+                        # ADR-018: the KIND of claim this memory makes.
                         # Omitting it leaves the memory `unmarked` (no claim —
                         # NOT fact); no frontmatter is written.
                         "description": "Epistemic marker: 'fact' (observed/verified), 'inference' (derived, lower trust), or 'open_question' (unresolved). Omit to leave the memory unmarked (no claim is made — not treated as fact).",
@@ -575,7 +575,7 @@ def _all_tools() -> list[types.Tool]:
                             },
                             "required": ["ref", "quote"],
                         },
-                        # Source-citation anchors (#459): each anchors a memory
+                        # Source-citation anchors: each anchors a memory
                         # to the exact passage it cites. quote_hash is computed
                         # server-side when omitted; the verifier reads these back.
                         "description": "Source-citation anchors: list of {ref, quote, quote_hash} for passages this memory cites.",
@@ -583,7 +583,7 @@ def _all_tools() -> list[types.Tool]:
                     "contradicts": {
                         "type": "array",
                         "items": {"type": "string"},
-                        # #533 (G4): typed conflict link. Records that this memory
+                        # (G4): typed conflict link. Records that this memory
                         # conflicts with the listed refs WITHOUT picking a winner
                         # (that's supersession's job). Surfaced by `palinode lint`.
                         "description": "Refs (category/slug) this memory conflicts with; neither wins — surfaced for review.",
@@ -591,7 +591,7 @@ def _all_tools() -> list[types.Tool]:
                     "backed_by": {
                         "type": "array",
                         "items": {"type": "string"},
-                        # #533 (G4): typed evidence link — this memory is supported
+                        # (G4): typed evidence link — this memory is supported
                         # by the listed source/fact refs.
                         "description": "Refs (category/slug) that support/back this memory (evidence links).",
                     },
@@ -1289,7 +1289,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
 
         # ── read ──────────────────────────────────────────────────────────
         elif name == "palinode_read":
-            # ADR-010 / #168: honor caller's `meta` request.  We always fetch
+            # ADR-010: honor caller's `meta` request. We always fetch
             # with meta=true (cheap; parser already runs) but only render
             # frontmatter when the caller asked for it.
             include_meta = bool(arguments.get("meta", False))
@@ -1331,7 +1331,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
                 body["types"] = _coerce_str_array(arguments["types"])
             if arguments.get("min_priority") is not None:
                 body["min_priority"] = int(arguments["min_priority"])
-            # ADR-010 / #163: caller-supplied threshold wins; otherwise use
+            # ADR-010: caller-supplied threshold wins; otherwise use
             # the MCP-tuned default (typically tighter than the API default
             # to keep auto-context noise low).
             if arguments.get("threshold") is not None:
@@ -1346,7 +1346,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
             resp = await _post("/search", json=body, timeout=60.0)
             if resp.status_code != 200:
                 return _text(f"Search failed: {resp.text}")
-            # #352: `full` is purely a rendering choice — the API always
+            # `full` is purely a rendering choice — the API always
             # populates `snippet` and preserves `content`, so the MCP picks
             # which to render without an extra round-trip.
             return _text(_format_results(resp.json(), full=bool(arguments.get("full"))))
@@ -1354,7 +1354,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
         # ── save ──────────────────────────────────────────────────────────
         elif name == "palinode_save":
             # Resolve memory type from either explicit `type` or `ps=true`
-            # shortcut (parity with CLI `palinode save --ps`, #136).
+            # shortcut (parity with CLI `palinode save --ps`).
             try:
                 resolved_type = _resolve_save_type(
                     arguments.get("type"), arguments.get("ps")
@@ -1366,7 +1366,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
                 "content": arguments["content"],
                 "type": resolved_type,
             }
-            # ADR-010 / #167: only set body source when caller explicitly
+            # ADR-010: only set body source when caller explicitly
             # supplied one.  Otherwise the X-Palinode-Source header (set on
             # every MCP request) carries attribution to the API.
             if arguments.get("source"):
@@ -1387,7 +1387,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
                 body["confidence"] = float(arguments["confidence"])
             if arguments.get("priority") is not None:
                 body["priority"] = int(arguments["priority"])
-            # ADR-018 / #72: epistemic marker. Forwarded verbatim; the API
+            # ADR-018: epistemic marker. Forwarded verbatim; the API
             # validates against VALID_EPISTEMICS and 400s on an unknown value
             # (surfaced below as the standard "Save failed" message).
             if arguments.get("epistemic") is not None:
@@ -1399,12 +1399,12 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
             # value (surfaced below as the standard "Save failed" message).
             if arguments.get("update_policy") is not None:
                 body["update_policy"] = arguments["update_policy"]
-            # #459: source-citation anchors. Forwarded verbatim; the API
+            # source-citation anchors. Forwarded verbatim; the API
             # validates each entry and computes/verifies quote_hash, 400ing on a
             # malformed or inconsistent anchor (surfaced as "Save failed").
             if arguments.get("sources") is not None:
                 body["sources"] = arguments["sources"]
-            # #533 (G4): typed relationship links. Forwarded verbatim; the API
+            # (G4): typed relationship links. Forwarded verbatim; the API
             # validates each ref and 400s on a malformed one (surfaced below as
             # the standard "Save failed" message).
             if arguments.get("contradicts") is not None:
@@ -1419,7 +1419,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
             file_path = data.get("file_path", "")
             # Show relative path
             rel = file_path.rsplit("/palinode/", 1)[-1] if "/palinode/" in file_path else file_path
-            # Surface per-index health signals from #385 if either index
+            # Surface per-index health signals from if either index
             # write failed — these are warnings, not save failures.
             warnings: list[str] = []
             if not data.get("indexed_vec", True):
@@ -1560,7 +1560,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
 
         # ── blame ─────────────────────────────────────────────────────────
         elif name == "palinode_blame":
-            # ADR-010 / #164: prefer canonical `file_path`; accept legacy
+            # ADR-010: prefer canonical `file_path`; accept legacy
             # `file` for one release.
             file_path = arguments.get("file_path") or arguments.get("file")
             if not file_path:
@@ -1575,7 +1575,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
 
         # ── rollback ──────────────────────────────────────────────────────
         elif name == "palinode_rollback":
-            # ADR-010 / #164: prefer canonical `file_path`; accept legacy
+            # ADR-010: prefer canonical `file_path`; accept legacy
             # `file` for one release.
             file_path = arguments.get("file_path") or arguments.get("file")
             if not file_path:
@@ -1655,7 +1655,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
             data = resp.json()
             status_msg = f" + status → {data['status_file']}" if data.get("status_file") else ""
             # Report push outcome so the wrap flow can say "pushed" vs "pending"
-            # without a second tool call (#378).
+            # without a second tool call.
             if body.get("push"):
                 push_msg = " + pushed" if data.get("pushed") else " (push pending — commit local, push did not succeed)"
             else:
@@ -1769,7 +1769,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
                 return _text(f"Lint failed: {resp.text}")
             return _text(json.dumps(resp.json(), indent=2))
 
-        # ── review (#366) ───────────────────────────────────────────────────
+        # ── review ───────────────────────────────────────────────────
         elif name == "palinode_review":
             body: dict[str, Any] = {}
             if arguments.get("project"):
@@ -2001,6 +2001,32 @@ def main_http() -> None:
         or "6341"
     )
     log_level = os.environ.get("PALINODE_MCP_LOG_LEVEL", "info")
+
+    # Parity with the API server's 0.0.0.0 exposure warning: the MCP
+    # HTTP transport defaults to binding 0.0.0.0, which serves the full tool
+    # surface (save/search/read/...) on every interface. The hard refusal —
+    # PALINODE_MCP_BIND_INTENT=public with no token — already fired in
+    # validate_auth_config above. The remaining silent-exposure case is the
+    # DEFAULT bind: 0.0.0.0, no token, no explicit public intent. Warn loudly
+    # so an unauthenticated network bind is never silent (unlike the API
+    # server, the MCP startup banner previously only said "Bearer auth:
+    # disabled" without naming the exposure).
+    if host == "0.0.0.0" and not mcp_bind_intent_public:  # nosec B104
+        if token is None:
+            logger.warning(
+                "MCP HTTP binding to 0.0.0.0 — accessible from any network. "
+                "No authentication is configured. Set "
+                "PALINODE_MCP_HTTP_HOST=127.0.0.1 for local-only access. Set "
+                "PALINODE_MCP_BIND_INTENT=public (with PALINODE_API_TOKEN) to "
+                "suppress this warning for intentional network-exposed "
+                "deployments (e.g., Tailscale)."
+            )
+        else:
+            logger.info(
+                "MCP HTTP binding to 0.0.0.0 with PALINODE_API_TOKEN configured "
+                "— bearer auth required."
+            )
+
     print(f"Palinode MCP (Streamable HTTP) listening on http://{host}:{port}/mcp/")
     print(f"  Health check: http://{host}:{port}/healthz")
     print(f"  API backend:  {_api_url('')}")

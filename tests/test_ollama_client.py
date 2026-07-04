@@ -223,7 +223,7 @@ def test_retries_zero_is_single_shot():
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Circuit breaker (the headline #338 behaviour)
+# Circuit breaker (the headline behaviour)
 # ──────────────────────────────────────────────────────────────────────────
 
 
@@ -310,7 +310,7 @@ def test_circuit_half_open_failure_reopens():
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Structured logging (#337 field convention)
+# Structured logging (field convention)
 # ──────────────────────────────────────────────────────────────────────────
 
 
@@ -422,7 +422,7 @@ def test_get_ollama_client_is_singleton():
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# embed() — full contract: dual-endpoint, parsing, ctx-overflow (#338 Phase 3)
+# embed — full contract: dual-endpoint, parsing, ctx-overflow (Phase 3)
 # ──────────────────────────────────────────────────────────────────────────
 
 
@@ -498,7 +498,7 @@ def test_embed_unexpected_shape_exhausts_both_then_raises():
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# chat_completions() — OpenAI-compatible (consolidation + lint) (#338 Phase 4)
+# chat_completions — OpenAI-compatible (consolidation + lint) (Phase 4)
 # ──────────────────────────────────────────────────────────────────────────
 
 
@@ -541,7 +541,7 @@ def test_chat_completions_timeout_raises_typed():
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# ping() — liveness probe, bypasses the circuit breaker (#338 Phase 5)
+# ping — liveness probe, bypasses the circuit breaker (Phase 5)
 # ──────────────────────────────────────────────────────────────────────────
 
 

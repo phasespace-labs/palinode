@@ -43,7 +43,7 @@ def fallbacks_on(monkeypatch):
     """Configure a single shim fallback with a generous per-run budget."""
     monkeypatch.setattr(config.auto_summary, "llm_fallbacks", list(_FALLBACK))
     monkeypatch.setattr(config.auto_summary, "llm_fallback_max_per_run", 10)
-    monkeypatch.setattr(config.auto_summary, "model", "local-chat:e4b")
+    monkeypatch.setattr(config.auto_summary, "model", "local-chat-model:e4b")
     # Outside a /generate-summaries run, prime the budget directly.
     srv._fallback_state["remaining"] = 10
     yield
@@ -176,7 +176,7 @@ def test_generate_summaries_api_resets_budget(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# api="openai" primary (#464) — Mac Studio / vLLM OpenAI-compat primary
+# api="openai" primary — Mac Studio / vLLM OpenAI-compat primary
 # ---------------------------------------------------------------------------
 
 

@@ -104,7 +104,7 @@ class TestUpsertChunksVecFailure:
         with caplog.at_level(logging.ERROR, logger="palinode.store"):
             result = store.upsert_chunks([chunk], skip_unchanged=False)
 
-        # Return contract (#385)
+        # Return contract
         assert result["vec_ok"] is False, (
             "vec_ok must be False when chunks_vec write fails (#385)"
         )

@@ -180,7 +180,7 @@ def archive_expired(now: datetime | None = None, dry_run: bool = False) -> dict:
                 # fast path would leave the stored status stale and recall
                 # un-suppressed. set_status_for_path updates it without re-embed.
                 store.set_status_for_path(path, "archived")
-                # One archive = one per-file commit (#565): each expired memory
+                # One archive = one per-file commit: each expired memory
                 # is its own mutation, committed via the git_tools choke point —
                 # never a repo-wide sweep batching all expired files together.
                 rel = os.path.relpath(path, root)

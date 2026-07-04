@@ -50,7 +50,7 @@ def _build_http_entry(url: str, bearer: str | None = None) -> dict[str, Any]:
     """Build the ``palinode`` server entry for streamable-HTTP transport."""
     entry: dict[str, Any] = {"type": "http", "url": url}
     if bearer:
-        # Forward-compat for MCP bearer auth. Isolated
+        # Forward-compat for (MCP bearer-auth parity). The Tailscale-isolated
         # endpoint is token-less today; pass --bearer once auth lands there.
         entry["headers"] = {"Authorization": f"Bearer {bearer}"}
     return entry
@@ -441,7 +441,7 @@ def _emit_config(
     "--bearer",
     "bearer",
     default=None,
-    help="Optional bearer token for --http.",
+    help="Optional bearer token for --http (forward-compat for bearer-auth parity).",
 )
 @click.option(
     "--json", "output_json",
@@ -643,6 +643,23 @@ def mcp_config(
             "  Edits made while it is running are overwritten on quit.\n"
             "  Claude Desktop also only accepts stdio (command+args) entries — url-form entries are silently stripped."
         )
+
+    # Live check: the warning above always prints, but if Claude Desktop is
+    # actually running right now, say so loudly — an edit made while it is live
+    # is silently discarded on the app's next quit. Best-effort: a None verdict
+    # ("couldn't tell") stays quiet rather than crying wolf. Lazy import keeps
+    # the process probe off the module-load path.
+    from palinode.cli.mcp_smoke import claude_desktop_running
+
+    if claude_desktop_running() is True:
+        console.print()
+        console.print(
+            "[bold red]⚠ Claude Desktop appears to be RUNNING right now.[/bold red]\n"
+            "  Quit it (cmd+Q / fully exit) BEFORE editing claude_desktop_config.json —\n"
+            "  an edit made while it is live is discarded on the next quit.\n"
+            "  Recovery order: quit → edit → relaunch."
+        )
+
     console.print()
     console.print("See [cyan]docs/MCP-CONFIG-HOMES.md[/cyan] for the full reference.")
     console.print()

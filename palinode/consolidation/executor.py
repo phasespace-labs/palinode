@@ -61,7 +61,7 @@ def _is_replace_policy(content: str) -> bool:
 
     protected = metadata.get("update_policy") == "replace"
 
-    # Cheap post-parse corruption check (#483): the parser returns {} on
+    # Cheap post-parse corruption check: the parser returns {} on
     # garbled frontmatter — if the raw text contains the policy declaration
     # but the parsed metadata does not, the frontmatter silently failed and
     # the protection is lost. Warn so operators can detect this without
@@ -144,7 +144,7 @@ def apply_operations(file_path: str, operations: list[dict], *, nightly_policy: 
     with open(file_path) as f:
         content = f.read()
 
-    # ADR-015 §2.2 / #431 §3: a memory declaring `update_policy: replace` is a
+    # ADR-015 §2.2 §3: a memory declaring `update_policy: replace` is a
     # living/current-state document. Consolidation may UPDATE it in place but
     # must NEVER SUPERSEDE it (strikethrough + spawn a "supersedes-" sibling)
     # or ARCHIVE-into-history it — either would fork the single current fact
@@ -241,7 +241,7 @@ def apply_operations(file_path: str, operations: list[dict], *, nightly_policy: 
                     stats["retracted"] += 1
 
         elif op_type == "PROPOSE_CONTRADICTS":
-            # #533 (G4): the executor may PROPOSE a typed contradiction link but
+            # (G4): the executor may PROPOSE a typed contradiction link but
             # must NEVER auto-resolve a conflict. SUPERSEDE stays the only
             # winner-picking op. This op is non-destructive: it records the
             # `contradicts` link in frontmatter (idempotently) and picks no

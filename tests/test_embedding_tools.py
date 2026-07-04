@@ -521,7 +521,7 @@ def test_orphan_repair_min_similarity_kwarg_is_honored(client, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# API tests — cluster_neighbors (#235)
+# API tests — cluster_neighbors
 # ---------------------------------------------------------------------------
 
 
@@ -681,7 +681,7 @@ def test_cluster_neighbors_respects_min_similarity(client, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# API tests — topic_coverage (#235)
+# API tests — topic_coverage
 # ---------------------------------------------------------------------------
 
 

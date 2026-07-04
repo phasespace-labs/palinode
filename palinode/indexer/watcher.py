@@ -186,7 +186,7 @@ class PalinodeHandler(FileSystemEventHandler):
         # Delegate to the shared indexer helper. Note that the helper now
         # also re-embeds rows whose ``content_hash`` matches but whose FTS
         # / vec0 entries are missing — defense-in-depth against silent
-        # index loss (#251).
+        # index loss.
         outcome = index_file(filepath, content=content)
         logger.info(
             "Indexed %d new, %d re-embedded (missing index), %d unchanged, %d deleted (%s)",
@@ -201,7 +201,7 @@ class PalinodeHandler(FileSystemEventHandler):
                 "Index pass for %s reported: %s", filepath, outcome["error"]
             )
 
-        # #73: mechanical untyped cross-linking. Post-index hook — scans the
+        # mechanical untyped cross-linking. Post-index hook — scans the
         # file's body for mentions of other memories and records them in a
         # `cross_refs` frontmatter list. Idempotent: only rewrites/commits when
         # the refs actually change, so the watcher re-processing its own write
@@ -229,9 +229,9 @@ class PalinodeHandler(FileSystemEventHandler):
             logger.info(f"File {filepath} has core:true but lacks summary. Scheduling generation...")
             self._schedule_summary_generation()
 
-        # #405: trigger description fill for files missing a description. The
-        # auto-description is now always deferred off the /save hot path (#405,
-        # extending the #336 timeout path), so the watcher is the normal route
+        # trigger description fill for files missing a description. The
+        # auto-description is now always deferred off the /save hot path (
+        # extending the timeout path), so the watcher is the normal route
         # for descriptions to land, not just the timeout-retry route. Gated on
         # auto_summary.enabled — the master switch for all LLM enrichment — so
         # disabling it stops description scheduling too.

@@ -19,7 +19,7 @@ def _wrap_body() -> str:
     return WRAP_COMMAND_BODY
 
 
-# ── #353: push prior work BEFORE archiving ───────────────────────────────────
+# ── push prior work BEFORE archiving ───────────────────────────────────
 
 
 def test_wrap_body_calls_palinode_push_before_session_end():
@@ -58,7 +58,7 @@ def test_wrap_body_surfaces_non_remote_push_failures():
     )
 
 
-# ── #378: session_end ships its own note (push: true) ────────────────────────
+# ── session_end ships its own note (push: true) ────────────────────────
 
 
 def test_wrap_session_end_pushes_its_own_note():

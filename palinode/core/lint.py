@@ -102,11 +102,11 @@ def run_lint_pass() -> dict[str, Any]:
     missing_priority: list[str] = []
     wiki_drift: list[dict[str, Any]] = []
     source_anchor_issues: list[dict[str, Any]] = []
-    # #72 (ADR-018): an `epistemic: open_question` that has gone unresolved for a
+    # (ADR-018): an `epistemic: open_question` that has gone unresolved for a
     # long time is a staleness signal — it wants resolution into fact/inference
     # or supersession. Reuses the stale threshold (90 days).
     stale_open_questions: list[dict[str, Any]] = []
-    open_contradictions: list[dict[str, Any]] = []  # #533 (G4)
+    open_contradictions: list[dict[str, Any]] = []  # (G4)
     core_count = 0
 
     now = datetime.now(timezone.utc)
@@ -213,7 +213,7 @@ def run_lint_pass() -> dict[str, Any]:
                 except Exception:
                     pass
 
-        # 6b. Stale open questions (#72) — an unresolved open_question that's
+        # 6b. Stale open questions — an unresolved open_question that's
         # months old wants attention. Independent of `status` (an open question
         # is about epistemic state, not lifecycle), so checked separately from
         # the status==active stale check above.
@@ -239,7 +239,7 @@ def run_lint_pass() -> dict[str, Any]:
         if drift_warnings:
             wiki_drift.append({"file": path, "warnings": drift_warnings})
 
-        # 8. Source-citation anchors (#459) — verify each ``sources:`` anchor's
+        # 8. Source-citation anchors — verify each ``sources:`` anchor's
         # integrity hash and that the cited quote still appears in its source.
         # Clean no-op for files with no anchors (verify returns []). Only
         # non-OK results are reported as health findings.
@@ -257,7 +257,7 @@ def run_lint_pass() -> dict[str, Any]:
             if bad:
                 source_anchor_issues.append({"file": path, "anchors": bad})
 
-        # 9. Open contradictions (#533, G4) — a non-empty `contradicts` link is
+        # 9. Open contradictions (G4) — a non-empty `contradicts` link is
         # an UNRESOLVED disagreement (supersession resolves; a contradicts link
         # deliberately does not pick a winner). Surface every file that still
         # carries one as a health signal so reviewers can adjudicate.

@@ -29,7 +29,7 @@ def _patch_client(side_effect):
 
 
 # ── _generate_description ────────────────────────────────────────────────
-# As of #338 Phase 2 these route through the centralized Ollama client, which
+# As of Phase 2 these route through the centralized Ollama client, which
 # raises typed OllamaError subclasses; programming bugs (TypeError/...) still
 # propagate uncaught.
 

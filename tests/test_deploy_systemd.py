@@ -236,7 +236,7 @@ def test_install_sh_help_exits_zero() -> None:
     assert "--enable" in output, "install.sh --help should mention --enable flag"
 
 
-# ── 6. watcher unit name is reconcilable (#252) ──────────────────────────────
+# ── 6. watcher unit name is reconcilable ──────────────────────────────
 
 def test_install_sh_documents_watcher_unit_name() -> None:
     """install.sh --help must document WATCHER_UNIT_NAME so an existing deploy
@@ -273,7 +273,7 @@ def test_readme_documents_watcher_unit_name() -> None:
     )
 
 
-# ── 7. system scope (#252) ────────────────────────────────────────────────────
+# ── 7. system scope ────────────────────────────────────────────────────
 
 def test_install_sh_documents_system_flag() -> None:
     """install.sh --help must document the --system flag (#252). Production hosts
@@ -356,7 +356,7 @@ def test_system_scope_renders_multi_user_target(template_path: Path) -> None:
     assert not _extract_variables(result.stdout), "no tokens should remain after substitution"
 
 
-# ── 8. bind-intent is opt-in, not hardcoded public (#252) ─────────────────────
+# ── 8. bind-intent is opt-in, not hardcoded public ─────────────────────
 
 API_TEMPLATE = DEPLOY_DIR / "palinode-api.service.template"
 

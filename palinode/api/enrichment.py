@@ -72,7 +72,7 @@ def _wrap_user_content_for_llm(content: str) -> str:
 _DESCRIPTION_DEFERRED = object()  # identity sentinel — never a string
 
 
-# #464: per-/generate-summaries-run budget for CHAT fallback escalations.
+# per-/generate-summaries-run budget for CHAT fallback escalations.
 # generate_summaries_api() resets ``remaining`` to
 # config.auto_summary.llm_fallback_max_per_run at the top of each run; the
 # fallback helper decrements it once per file that escalates to the shim, so a
@@ -216,24 +216,24 @@ def _generate_description(content: str) -> "str | object":
     )
     timeout_s = config.auto_summary.describe_timeout_seconds
     try:
-        # #338 Phase 2: route through the centralized client (CHAT role → the
+        # Phase 2: route through the centralized client (CHAT role → the
         # configured chat host). retries=0 keeps this a single-shot, latency-sensitive
-        # call — one 5 s budget, not three (#336). Protocol (native vs OpenAI-compat)
-        # is chosen by auto_summary.api (#464).
+        # call — one 5 s budget, not three. Protocol (native vs OpenAI-compat)
+        # is chosen by auto_summary.api.
         cleaned = _chat_primary_oneliner(prompt, MAX_CHARS, timeout_s)
         if cleaned:
             return cleaned
-        # #464: primary answered but produced nothing usable (empty/garbage) —
+        # primary answered but produced nothing usable (empty/garbage) —
         # try the fallback chain before degrading to first-line extraction.
         fb = _chat_fallback_oneliner(prompt, MAX_CHARS)
         if fb:
             return fb
     except (OllamaTimeout, OllamaCircuitOpen):
-        # #336: don't block /save. A hard timeout OR a known-bad host (circuit
+        # don't block /save. A hard timeout OR a known-bad host (circuit
         # open) both defer — the watcher retries once Ollama recovers. Routing
         # through the breaker means a chat-host brownout fast-fails here instead of
         # spending the full 5 s budget on every save.
-        # #464: before deferring, try the OpenAI-compat CHAT fallback chain (a
+        # before deferring, try the OpenAI-compat CHAT fallback chain (a
         # second qwen host, the Sonnet shim, ...). No-op unless
         # auto_summary.llm_fallbacks is configured; only reachable from the
         # watcher backfill, so /save is never affected.
@@ -350,20 +350,20 @@ def _generate_summary(content: str) -> str:
         + _wrap_user_content_for_llm(content[:2000])
     )
     try:
-        # #338 Phase 2: route through the centralized client (CHAT role). This
+        # Phase 2: route through the centralized client (CHAT role). This
         # runs on the watcher's async path, so retries=0 — a failure leaves the
         # file eligible and the next watcher pass retries it (no inline blocking).
-        # Protocol (native vs OpenAI-compat) is chosen by auto_summary.api (#464).
+        # Protocol (native vs OpenAI-compat) is chosen by auto_summary.api.
         summary = _chat_primary_oneliner(prompt, max_chars, timeout=30.0)
         if summary:
             return summary
-        # #464: primary produced nothing usable — try the fallback chain.
+        # primary produced nothing usable — try the fallback chain.
         return _chat_fallback_oneliner(prompt, max_chars) or ""
     except (OllamaError, OSError, json.JSONDecodeError, ValueError) as e:
         # Timeout, circuit-open, connect/HTTP error, or bad body — all non-fatal
         # for summarization; return "" and let the watcher retry next pass.
         logger.warning(f"CHAT summary call failed: {e}")
-        # #464: try the CHAT fallback chain before giving up. Unlike the original
+        # try the CHAT fallback chain before giving up. Unlike the original
         # brownout-only gate, any primary failure cascades — with a remote
         # OpenAI-compat primary (api="openai") a connect/HTTP error is exactly the
         # case the configured backups exist to cover. No-op unless
@@ -386,7 +386,7 @@ def _inject_summary(file_path: str, summary: str) -> None:
     m = pattern.match(text)
     if not m:
         # A summary was computed then silently dropped — DEBUG so the no-op is
-        # traceable when a file unexpectedly never gets its summary (#337).
+        # traceable when a file unexpectedly never gets its summary.
         logger.debug(
             "summary injection skipped: no frontmatter op=inject_summary file_path=%s",
             file_path,
@@ -422,7 +422,7 @@ def _inject_description(file_path: str, description: str) -> None:
     pattern = re.compile(r'^(---\n.*?\n)(---\n)', re.DOTALL)
     m = pattern.match(text)
     if not m:
-        # Same as _inject_summary: a computed description dropped silently (#337).
+        # Same as _inject_summary: a computed description dropped silently.
         logger.debug(
             "description injection skipped: no frontmatter op=inject_description file_path=%s",
             file_path,

@@ -335,7 +335,7 @@ class TestIndexFileVerifiesIndexPresence:
 
 
 # ---------------------------------------------------------------------------
-# Issue #177: save-side frontmatter must include last_updated on initial write
+# Issue save-side frontmatter must include last_updated on initial write
 # ---------------------------------------------------------------------------
 
 

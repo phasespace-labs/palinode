@@ -134,7 +134,7 @@ class TestSaveGitCommittedFailurePath:
         assert res.status_code == 200, res.text
         body = res.json()
 
-        # Return contract (#386)
+        # Return contract
         assert body.get("git_committed") is False, (
             "git_committed must be False when git subprocess raises (#386)"
         )

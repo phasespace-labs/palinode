@@ -1,4 +1,4 @@
-# Issue #345 (parent #342) — Phase 3: per-harness smoke checklist + CLI helper.
+# Issue (parent) — Phase 3: per-harness smoke checklist + CLI helper.
 """palinode mcp-smoke — harness smoke checklist runbook and recorder.
 
 Lists supported MCP harnesses with tier info, prints the smoke runbook
@@ -227,7 +227,7 @@ def mcp_smoke(
     run_date: str | None,
     operator: str | None,
 ) -> None:
-    """Harness smoke checklist runbook and recorder (#345).
+    """Harness smoke checklist runbook and recorder.
 
     List supported MCP harnesses, print a copy-paste smoke checklist for
     a given harness, or record a completed smoke run for the launch gate.
@@ -324,7 +324,7 @@ def mcp_smoke(
         click.echo(json.dumps(_json_payload(harness), indent=2))
         return
 
-    # #373: Claude Desktop rewrites its config on quit, clobbering live edits.
+    # Claude Desktop rewrites its config on quit, clobbering live edits.
     # Warn loudly (to stderr, so it doesn't pollute a piped runbook) when the
     # app is detected running before the user follows a runbook that has them
     # touch the config. Detection is best-effort: a None ("couldn't tell")

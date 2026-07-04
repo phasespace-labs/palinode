@@ -84,7 +84,7 @@ def test_ps_and_wrap_are_different():
     assert PS_COMMAND_BODY != WRAP_COMMAND_BODY
 
 
-# ---- Hook script slurp-based extraction (#151, #267, mirrors #257) -------
+# Hook script slurp-based extraction (mirrors) -------
 
 
 def test_hook_script_uses_slurp_extraction():
@@ -175,7 +175,7 @@ def test_hook_script_first_prompt_extracts_correctly(tmp_path):
     assert "result=first message — must surface" in proc.stdout
 
 
-# ---- Hook script reason filter (#149) -----------------------------------
+# Hook script reason filter -----------------------------------
 
 
 def test_hook_script_has_reason_case_guard():
@@ -204,7 +204,7 @@ def test_hook_script_default_reason_allowlist_is_broad():
     assert "bypass_permissions_disabled}" not in HOOK_SCRIPT
 
 
-# ---- Hook script floor gates (#378: dedup / dry-run / fallback) ----------
+# Hook script floor gates (dedup / dry-run / fallback) ----------
 
 
 def _run_hook(tmp_path, transcript_text, *, env=None, reason="clear",
@@ -333,6 +333,47 @@ def test_init_creates_all_files(tmp_path: Path):
     assert (tmp_path / ".claude" / "commands" / "ps.md").exists()
     assert (tmp_path / ".claude" / "commands" / "wrap.md").exists()
     assert (tmp_path / ".mcp.json").exists()
+
+
+def test_init_settings_include_worktree_allow_rules(tmp_path: Path):
+    """Scaffolded settings.json pre-approves the git-worktree cleanup commands so
+    agents don't hit the auto-mode permission classifier reclaiming stale
+    worktrees (#448)."""
+    from palinode.cli.init import WORKTREE_ALLOW_RULES
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["init", "--dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+
+    settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+    allow = settings.get("permissions", {}).get("allow", [])
+    for rule in WORKTREE_ALLOW_RULES:
+        assert rule in allow, f"missing worktree allow-rule: {rule}"
+
+
+def test_init_merge_adds_allow_rules_without_duplicating(tmp_path: Path):
+    """Re-running init merges the allow-rules into an existing settings.json
+    exactly once (idempotent), and preserves unrelated existing content."""
+    from palinode.cli.init import WORKTREE_ALLOW_RULES
+
+    settings_path = tmp_path / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(json.dumps({
+        "permissions": {"allow": ["Bash(ls:*)", WORKTREE_ALLOW_RULES[0]]},
+        "env": {"FOO": "bar"},
+    }))
+
+    runner = CliRunner()
+    runner.invoke(main, ["init", "--dir", str(tmp_path)])
+    runner.invoke(main, ["init", "--dir", str(tmp_path)])  # twice — must stay idempotent
+
+    settings = json.loads(settings_path.read_text())
+    allow = settings["permissions"]["allow"]
+    assert allow.count(WORKTREE_ALLOW_RULES[0]) == 1, "allow-rule must not duplicate"
+    for rule in WORKTREE_ALLOW_RULES:
+        assert rule in allow
+    assert "Bash(ls:*)" in allow, "existing allow-rules preserved"
+    assert settings["env"] == {"FOO": "bar"}, "unrelated settings preserved"
 
 
 def test_init_uses_directory_name_as_slug(tmp_path: Path):

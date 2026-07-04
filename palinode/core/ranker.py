@@ -168,7 +168,7 @@ def rank_hybrid(
     K = 60
     rrf_scores: dict[str, float] = {}
     result_map: dict[str, dict] = {}
-    # Track raw cosine similarity from vector search before RRF normalization (#94)
+    # Track raw cosine similarity from vector search before RRF normalization
     raw_cosine: dict[str, float] = {}
 
     # Score vector results
@@ -241,7 +241,7 @@ def rank_hybrid(
             sorted_keys, key=lambda k: result_map[k].get("score", 0.0), reverse=True
         )
 
-    # Issue #93: Penalize daily/ files to prevent session notes from dominating results
+    # Issue Penalize daily/ files to prevent session notes from dominating results
     penalty = config.search.daily_penalty
     if not include_daily and penalty != 1.0:
         needs_resort = False
@@ -256,7 +256,7 @@ def rank_hybrid(
             )
 
     # Deduplicate by file: suppress additional chunks that score far below
-    # the file's best chunk (#91). A second chunk from the same file is kept
+    # the file's best chunk. A second chunk from the same file is kept
     # only if its score is within dedup_score_gap of the file's best.
     file_best: dict[str, float] = {}
     deduped_keys: list[str] = []
@@ -275,7 +275,7 @@ def rank_hybrid(
     for key in deduped_keys[:top_k]:
         result = result_map[key]
         if result.get("score", 0) >= threshold:
-            # Attach raw cosine similarity from vector search (#94).
+            # Attach raw cosine similarity from vector search.
             # BM25-only results (no vector match) get raw_score=None.
             result["raw_score"] = raw_cosine.get(key)
             merged.append(result)

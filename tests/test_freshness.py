@@ -78,7 +78,7 @@ def test_freshness_check_performance(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Issue #203: multi-section files must compare per-section hashes
+# Issue multi-section files must compare per-section hashes
 # ---------------------------------------------------------------------------
 
 def _make_multisection_content() -> str:

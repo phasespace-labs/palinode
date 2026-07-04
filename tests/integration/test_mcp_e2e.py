@@ -491,10 +491,10 @@ def test_missing_required_arg_save(dispatch):
 
 
 # ---------------------------------------------------------------------------
-# Phase 1: every-tool smoke (issue #343, parent #342)
+# Phase 1: every-tool smoke (issue, parent)
 #
 # Registry-driven test that exercises every MCP tool with minimal valid args.
-# The smoke-args registry is shared with the stdio JSON-RPC test (#344) via
+# The smoke-args registry is shared with the stdio JSON-RPC test
 # tests/integration/_smoke_args.py — both surfaces stay in lockstep.
 # ---------------------------------------------------------------------------
 

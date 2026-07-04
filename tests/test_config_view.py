@@ -47,7 +47,7 @@ def test_palinode_cli_list_attribute_does_not_shadow_builtin():
     assert hasattr(palinode.cli, "list_cmd")
     # Defensive: if `list` does still resolve on palinode.cli for some
     # reason (e.g. a click command bound to that name), it must NOT be a
-    # module — that's the specific shape that caused #274.
+    # module — that's the specific shape that caused.
     import types
     list_attr = getattr(palinode.cli, "list", None)
     assert not isinstance(list_attr, types.ModuleType), (

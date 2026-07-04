@@ -110,7 +110,7 @@ def build_provenance(
         )
     )
 
-    # ── Claim type (real: frontmatter ``epistemic``, #72/ADR-018) ──────────────
+    # ── Claim type (real: frontmatter ``epistemic``,/ADR-018) ──────────────
     # The KIND of claim this memory makes. A MISSING field is ``unmarked`` — no
     # epistemic claim was made — and is rendered trust-neutral, deliberately NOT
     # as a fact (an audit tool must not present "nobody said" as "verified").

@@ -32,6 +32,7 @@ from palinode.cli.retrieval_stats import retrieval_stats
 from palinode.cli.import_vault import import_cmd
 from palinode.cli.depends import depends
 from palinode.cli.mcp_smoke import mcp_smoke
+from palinode.cli.worktree import worktree_reconcile
 
 def _print_version(ctx: click.Context, param: click.Parameter, value: bool) -> None:
     if not value or ctx.resilient_parsing:
@@ -110,25 +111,28 @@ main.add_command(init)
 # Diagnostics
 main.add_command(mcp_config, name="mcp-config")
 
-# Embedding tools (#210, #235 — Obsidian wiki maintenance helpers)
+# Maintenance
+main.add_command(worktree_reconcile, name="worktree-reconcile")
+
+# Embedding tools (Obsidian wiki maintenance helpers)
 main.add_command(dedup_suggest)
 main.add_command(orphan_repair)
 main.add_command(cluster_neighbors)
 main.add_command(topic_coverage)
 
-# Obsidian integration — backfill / migration (#210, Deliverable E)
+# Obsidian integration — backfill / migration (Deliverable E)
 main.add_command(obsidian_sync, name="obsidian-sync")
 
-# Instrumentation (#256 — ADR-007 prerequisite)
+# Instrumentation (— ADR-007 prerequisite)
 main.add_command(retrieval_stats, name="retrieval-stats")
 
-# Vault import (#236)
+# Vault import
 main.add_command(import_cmd, name="import")
 
-# Dependency graph (#97)
+# Dependency graph
 main.add_command(depends)
 
-# Harness smoke checklist (#345, parent #342)
+# Harness smoke checklist (parent)
 main.add_command(mcp_smoke, name="mcp-smoke")
 
 @main.command()
@@ -224,7 +228,7 @@ def config_view(fmt):
         # Pydantic to dict then yaml
         # We need to handle the nested dataclasses. `list` resolved by-name
         # was historically shadowed by the palinode.cli.list submodule
-        # (#274); we now reference the builtin directly through `builtins`
+        # we now reference the builtin directly through `builtins`
         # as a belt-and-suspenders guard against any future name collision.
         import builtins
         def to_dict(obj):

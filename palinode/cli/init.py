@@ -69,7 +69,7 @@ This project's slug is `{project_slug}`. Pass it as the `project` argument to
 
 
 # Appended to the CLAUDE.md memory block only when `--wrap-policy heavy` is
-# chosen (#419). This is the inspectable record of which `/wrap` variant the
+# chosen. This is the inspectable record of which `/wrap` variant the
 # repo runs — the behaviour itself lives in the installed `/wrap` command/skill
 # body (rendered from WRAP_HEAVY_COMMAND_BODY).
 WRAP_POLICY_HEAVY_NOTE = """
@@ -292,7 +292,7 @@ forgettable third step. For a quick mid-session checkpoint, use `/save` instead
 """
 
 
-# Heavy `/wrap` variant (#419). Installed as the `/wrap` command/skill body
+# Heavy `/wrap` variant. Installed as the `/wrap` command/skill body
 # only when `palinode init --wrap-policy heavy` is chosen. The light body
 # above stays the default — heavy is opt-in per repo because it takes
 # repo-mutating actions (merge, push) that must never be a surprise.
@@ -375,7 +375,19 @@ auto-merge, use the light `/wrap` instead (scaffold with the default
 """
 
 
+# Allow-rules so agents can reclaim their own stale worktrees without hitting
+# the auto-mode permission classifier. `git worktree remove/unlock/prune` only
+# ever touch the working directory — branches + commits are preserved — so they
+# are safe to pre-approve in scaffolded projects.
+WORKTREE_ALLOW_RULES = [
+    "Bash(git worktree remove:*)",
+    "Bash(git worktree prune:*)",
+    "Bash(git worktree unlock:*)",
+]
+
+
 SETTINGS_HOOK_BLOCK = {
+    "permissions": {"allow": list(WORKTREE_ALLOW_RULES)},
     "hooks": {
         "SessionEnd": [
             {
@@ -462,12 +474,20 @@ def _merge_settings(path: Path, force: bool) -> str:
         if not force:
             return "skipped (existing settings.json is not valid JSON — re-run with --force to overwrite)"
         existing = {}
+    # Merge the worktree allow-rules idempotently, independent of the hook so a
+    # re-run without the hook still tops them up.
+    allow = existing.setdefault("permissions", {}).setdefault("allow", [])
+    for rule in WORKTREE_ALLOW_RULES:
+        if rule not in allow:
+            allow.append(rule)
+
     hooks = existing.setdefault("hooks", {})
     session_end_hooks = hooks.setdefault("SessionEnd", [])
     # Check for an existing palinode hook
     for entry in session_end_hooks:
         for h in entry.get("hooks", []):
             if "palinode-session-end.sh" in h.get("command", ""):
+                path.write_text(json.dumps(existing, indent=2) + "\n")
                 return "skipped (palinode hook already registered)"
     session_end_hooks.append(SETTINGS_HOOK_BLOCK["hooks"]["SessionEnd"][0])
     path.write_text(json.dumps(existing, indent=2) + "\n")
@@ -810,7 +830,7 @@ def _merge_mcp_json(path: Path, force: bool) -> str:
     type=click.Choice(["light", "heavy"]),
     default="light",
     help=(
-        "Which /wrap variant to scaffold (#419). 'light' (default): /wrap just "
+        "Which /wrap variant to scaffold. 'light' (default): /wrap just "
         "pushes + session_end. 'heavy': /wrap also merges, pushes, and triages "
         "dangling items before archiving — opt-in per repo because it mutates "
         "the repo (merge/push)."
@@ -826,7 +846,7 @@ def _merge_mcp_json(path: Path, force: bool) -> str:
         "'personal' → ~/.claude/skills/ so /wrap is typeable in ALL projects "
         "(not just this one); 'project' → .claude/skills/; 'both'. Bodies come "
         "from the same source as the slash commands, so they can't drift. "
-        "Default: none. (#474)"
+        "Default: none."
     ),
 )
 @click.option(
@@ -907,7 +927,7 @@ def init(
     ps_cmd = target / ".claude" / "commands" / "ps.md"
     wrap_cmd = target / ".claude" / "commands" / "wrap.md"
 
-    # #474: optional skill-format install. Same bodies as the slash commands
+    # optional skill-format install. Same bodies as the slash commands
     # (single source — no drift); 'personal' scope makes /wrap typeable in every
     # project, not just this one.
     skill_specs = [

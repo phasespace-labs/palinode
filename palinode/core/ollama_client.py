@@ -47,13 +47,13 @@ from palinode.core.config import config
 
 logger = logging.getLogger(__name__)
 
-# A dedicated structured-event logger so #337 JSON lines can be routed/filtered
+# A dedicated structured-event logger so JSON lines can be routed/filtered
 # independently of the free-text diagnostic logging on the parent logger.
 event_logger = logging.getLogger("palinode.ollama.events")
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Typed exceptions (#338 acceptance criterion: callers get a typed error, not a
+# Typed exceptions (acceptance criterion: callers get a typed error, not a
 # bare httpx error)
 # ──────────────────────────────────────────────────────────────────────────
 
@@ -96,7 +96,7 @@ class OllamaCircuitOpen(OllamaError):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Embed context-overflow signal (#335) — defined here (not in embedder.py) so
+# Embed context-overflow signal — defined here (not in embedder.py) so
 # the embed path can raise it from inside this client without a circular import.
 # Re-exported from palinode.core.embedder for backward compatibility.
 # ──────────────────────────────────────────────────────────────────────────
@@ -129,7 +129,7 @@ class EmbeddingContextError(RuntimeError):
 
 
 # Patterns in Ollama error responses that indicate context overflow. Ollama
-# 0.3+ returns these in the JSON body with HTTP 200 (#335).
+# 0.3+ returns these in the JSON body with HTTP 200.
 _CTX_OVERFLOW_PATTERNS = (
     "too long for max context",
     "prompt is too long",
@@ -657,7 +657,7 @@ class OllamaClient:
             if vec is not None:
                 return vec
             # 200 OK but no vector. Ollama reports ctx overflow as an error body
-            # (#335) — raise immediately, do not try the other endpoint.
+            # raise immediately, do not try the other endpoint.
             err_msg = data.get("error", "") if isinstance(data, dict) else ""
             if err_msg and _is_ctx_overflow_message(err_msg):
                 raise EmbeddingContextError(

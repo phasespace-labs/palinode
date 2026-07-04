@@ -519,7 +519,7 @@ class TestInitMcpJsonBlock:
 
 
 # ---------------------------------------------------------------------------
-# Emit-mode builders (--http / --stdio) — #217 HTTP transport migration
+# Emit-mode builders (--http / --stdio) HTTP transport migration
 # ---------------------------------------------------------------------------
 
 
@@ -627,3 +627,60 @@ class TestEmitCommand:
         block = self._block(result.output)
         assert set(block.keys()) == {"mcpServers"}
         assert "palinode" in block["mcpServers"]
+
+
+class TestClaudeDesktopLiveWarning:
+    """`mcp-config` diagnose surfaces a LIVE warning only when Claude Desktop is
+    actually running — editing its config while it's live loses the edit (#373).
+
+    The always-on static "quit first" note is separate; this asserts the extra
+    live-detection escalation.
+
+    Note: ``palinode.cli.mcp_smoke`` the *name* is shadowed in the package by the
+    Click command, so we patch the module object directly (import as an alias)
+    rather than via a dotted string.
+    """
+
+    def _setup(self, fake_home, monkeypatch, verdict):
+        import importlib
+
+        # A palinode entry must exist or diagnose returns before the closing
+        # recommendation (where the static + live Claude Desktop warnings live).
+        _write(
+            _macos_paths(fake_home)["claude_json"],
+            {"mcpServers": {"palinode": STDIO_ENTRY}},
+        )
+        # `import palinode.cli.mcp_smoke as x` (and the dotted-string form) both
+        # getattr the *package*, whose `mcp_smoke` name is shadowed by the Click
+        # command. Reach the real submodule via sys.modules through import_module.
+        smoke_mod = importlib.import_module("palinode.cli.mcp_smoke")
+        monkeypatch.setattr(smoke_mod, "claude_desktop_running", lambda: verdict)
+
+    def test_warns_loudly_when_desktop_running(self, fake_home, monkeypatch):
+        self._setup(fake_home, monkeypatch, True)
+        result = CliRunner().invoke(main, ["mcp-config"])
+        assert result.exit_code == 0, result.output
+        assert "RUNNING right now" in result.output
+
+    def test_quiet_when_desktop_not_running(self, fake_home, monkeypatch):
+        self._setup(fake_home, monkeypatch, False)
+        result = CliRunner().invoke(main, ["mcp-config"])
+        assert result.exit_code == 0, result.output
+        assert "RUNNING right now" not in result.output
+        # The always-on static guidance still prints.
+        assert "quit the app" in result.output
+
+    def test_quiet_when_detection_uncertain(self, fake_home, monkeypatch):
+        """A ``None`` verdict ("couldn't tell") must not cry wolf."""
+        self._setup(fake_home, monkeypatch, None)
+        result = CliRunner().invoke(main, ["mcp-config"])
+        assert result.exit_code == 0, result.output
+        assert "RUNNING right now" not in result.output
+
+    def test_emit_mode_has_no_live_warning(self, fake_home, monkeypatch):
+        """The pipe-friendly emit modes must stay clean — the warning belongs to
+        the interactive diagnose path only, never in a config block a user
+        redirects into a file."""
+        self._setup(fake_home, monkeypatch, True)
+        result = CliRunner().invoke(main, ["mcp-config", "--stdio", "--json"])
+        assert "RUNNING right now" not in result.output

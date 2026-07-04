@@ -83,7 +83,7 @@ def test_overwrite_preserves_created_at_bumps_last_updated(client):
     first = _meta(fp)
     created0 = str(first["created_at"])
     updated0 = str(first["last_updated"])
-    assert created0 == updated0  # born identical on first write (#177)
+    assert created0 == updated0  # born identical on first write
 
     # Re-save the same slug with new content — same logical memory.
     fp2 = _save(client, "Updated state of the incident.", slug="incident-x")

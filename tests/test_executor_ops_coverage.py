@@ -243,7 +243,7 @@ def test_supersede_missing_id_returns_before_history_append(memory_file: Path) -
     assert not _history_path(memory_file).exists()
 
 
-# ── ARCHIVE (#485 — semantics unresolved; assert only the settled contract) ──
+# ── ARCHIVE (— semantics unresolved; assert only the settled contract) ──
 
 def test_archive_runs_and_preserves_audit_trail(memory_file: Path) -> None:
     stats = apply_operations(
@@ -252,15 +252,15 @@ def test_archive_runs_and_preserves_audit_trail(memory_file: Path) -> None:
     )
 
     assert stats["archived"] == 1
-    # Settled contract (both #485 resolutions agree): the audit trail is
+    # Settled contract (both resolutions agree): the audit trail is
     # preserved — PROGRAM.md "Never hard-delete … the audit trail matters".
     history = _read_history(memory_file)
     assert "Second project fact" in history
     assert "aged out" in history
     # NOT asserted: whether the fact line is removed from the source file
     # (current impl) or flagged `status: archived` in place, and whether the
-    # archived fact is suppressed from default recall — UNRESOLVED, see #485.
-    # Re-pin to the documented contract once #485 lands.
+    # archived fact is suppressed from default recall — UNRESOLVED.
+    # Re-pin to the documented contract once that is resolved.
 
 
 def test_archive_is_idempotent_for_already_archived_fact(memory_file: Path) -> None:
@@ -387,7 +387,7 @@ def test_malformed_or_incomplete_operations_are_skipped(
 
 
 # The next three document validation gaps the executor docstring implies but the
-# code does not enforce — exactly the discrepancies #311 wanted SURFACED.
+# code does not enforce — exactly the discrepancies wanted SURFACED.
 # strict=False (not strict=True): when the gap is later fixed the test simply
 # XPASSes instead of breaking CI.
 
@@ -404,9 +404,9 @@ def test_missing_op_key_is_malformed_and_skipped(memory_file: Path) -> None:
 
 
 def test_non_string_op_is_malformed_and_skipped(memory_file: Path) -> None:
-    # #555: op_kind() coerces with str() before .upper(), so a non-string op no
+    # op_kind coerces with str before.upper, so a non-string op no
     # longer crashes — it's stringified ("42"), matches no known op type, and is
-    # skipped as a no-op. Closes the #311 gap this previously xfailed on.
+    # skipped as a no-op. Closes the gap this previously xfailed on.
     before = _read(memory_file)
     stats = apply_operations(str(memory_file), [{"op": 42, "id": "f1"}])
 
@@ -445,7 +445,7 @@ def test_unknown_op_string_is_skipped_without_mutating(memory_file: Path) -> Non
     assert _read(memory_file) == before
 
 
-# ── update_policy: replace guard (ADR-015 §2.2 / #476) ───────────────────────
+# ── update_policy: replace guard (ADR-015 §2.2) ───────────────────────
 
 def test_replace_policy_rejects_history_forking_ops(tmp_path: Path) -> None:
     path = tmp_path / "replace-doc.md"
@@ -523,7 +523,7 @@ def test_archive_then_update_same_batch_does_not_resurrect_fact(memory_file: Pat
 
     # Settled contract: the archive runs and the later UPDATE's text never
     # becomes a live fact. (Whether UPDATE no-ops because the line was removed,
-    # or because an archived fact is not updatable, is #485-dependent — assert
+    # or because an archived fact is not updatable, is dependent — assert
     # the observable outcome, not the mechanism.)
     assert stats["archived"] == 1
     assert "Should not return" not in _read(memory_file)

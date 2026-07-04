@@ -252,3 +252,83 @@ def test_401_response_includes_www_authenticate_header():
         assert header_map[b"www-authenticate"].lower().startswith(b"bearer")
 
     asyncio.run(_check())
+
+
+# ---------------------------------------------------------------------------
+# 0.0.0.0 exposure warning — parity with the API server
+# ---------------------------------------------------------------------------
+
+
+def _run_main_http(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Drive ``main_http()`` with ``uvicorn.run`` stubbed to a no-op.
+
+    The startup banner + bind-intent warning all run before ``uvicorn.run``,
+    so stubbing it lets us observe the warning without binding a socket.
+    """
+    import uvicorn
+
+    import palinode.mcp as mcp_mod
+
+    monkeypatch.setattr(uvicorn, "run", lambda *a, **k: None)
+    mcp_mod.main_http()
+
+
+def test_default_bind_0000_no_token_warns(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    """The DEFAULT MCP HTTP bind (0.0.0.0, no token, no public intent) must
+    emit a loud exposure warning — not silently serve the tool surface."""
+    monkeypatch.delenv("PALINODE_MCP_HTTP_HOST", raising=False)
+    monkeypatch.delenv("PALINODE_MCP_SSE_HOST", raising=False)
+    monkeypatch.delenv("PALINODE_MCP_BIND_INTENT", raising=False)
+    monkeypatch.delenv("PALINODE_API_TOKEN", raising=False)
+    monkeypatch.delenv("PALINODE_API_TOKEN_FILE", raising=False)
+
+    with caplog.at_level("WARNING", logger="palinode.mcp"):
+        _run_main_http(monkeypatch)
+
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any(
+        "0.0.0.0" in m and "accessible from any network" in m for m in msgs
+    ), f"expected a 0.0.0.0 exposure warning, got: {msgs}"
+
+
+def test_loopback_bind_does_not_warn(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    """Binding to 127.0.0.1 is the safe local-only case — no exposure
+    warning should fire."""
+    monkeypatch.setenv("PALINODE_MCP_HTTP_HOST", "127.0.0.1")
+    monkeypatch.delenv("PALINODE_MCP_SSE_HOST", raising=False)
+    monkeypatch.delenv("PALINODE_MCP_BIND_INTENT", raising=False)
+    monkeypatch.delenv("PALINODE_API_TOKEN", raising=False)
+    monkeypatch.delenv("PALINODE_API_TOKEN_FILE", raising=False)
+
+    with caplog.at_level("WARNING", logger="palinode.mcp"):
+        _run_main_http(monkeypatch)
+
+    msgs = [r.getMessage() for r in caplog.records]
+    assert not any(
+        "accessible from any network" in m for m in msgs
+    ), f"loopback bind must not warn about exposure, got: {msgs}"
+
+
+def test_public_intent_with_token_does_not_warn(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    """An intentional public bind (PALINODE_MCP_BIND_INTENT=public) with a
+    token configured is the supported network-exposed deployment — it must
+    pass the startup gate and suppress the exposure warning."""
+    monkeypatch.delenv("PALINODE_MCP_HTTP_HOST", raising=False)
+    monkeypatch.delenv("PALINODE_MCP_SSE_HOST", raising=False)
+    monkeypatch.setenv("PALINODE_MCP_BIND_INTENT", "public")
+    monkeypatch.setenv("PALINODE_API_TOKEN", "t-secret")
+    monkeypatch.delenv("PALINODE_API_TOKEN_FILE", raising=False)
+
+    with caplog.at_level("WARNING", logger="palinode.mcp"):
+        _run_main_http(monkeypatch)
+
+    msgs = [r.getMessage() for r in caplog.records]
+    assert not any(
+        "accessible from any network" in m for m in msgs
+    ), f"public-intent + token must not warn, got: {msgs}"

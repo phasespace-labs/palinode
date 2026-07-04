@@ -37,7 +37,7 @@ def _read_frontmatter(file_path: str) -> dict:
     return yaml.safe_load(parts[1])
 
 
-# --- #114: content_hash in frontmatter ---
+# content_hash in frontmatter ---
 
 class TestContentHash:
     def test_save_includes_full_sha256_content_hash(self, mock_memory_dir):
@@ -90,7 +90,7 @@ class TestContentHash:
         assert fm["content_hash"] == expected
 
 
-# --- #113: confidence field ---
+# confidence field ---
 
 class TestConfidence:
     def test_save_with_confidence(self, mock_memory_dir):

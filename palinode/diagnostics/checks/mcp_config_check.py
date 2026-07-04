@@ -82,7 +82,7 @@ def mcp_config_homes(ctx: DoctorContext) -> CheckResult:
         # SSH-stdio deployment: palinode runs on the remote host; the MCP
         # client config lives on the originating machine and cannot be
         # inspected from here. Report informational rather than misleading
-        # "run palinode init". Fixes #255.
+        # "run palinode init".
         if ssh_origin:
             client_ip = ssh_origin.split()[0]
             return CheckResult(

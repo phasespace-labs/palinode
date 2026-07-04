@@ -149,7 +149,7 @@ def commit_memory_files(file_paths: list[str], message: str) -> bool:
     try:
         _run_git("add", "--", *rels)
         _run_git("commit", "-m", message)
-        # Mirror the #386 contract: "committed" means the commit subprocess was
+        # Mirror the contract: "committed" means the commit subprocess was
         # spawned without raising. A non-zero exit (e.g. "nothing to commit")
         # is not an error — the caller asked to commit and there was nothing
         # new, which is benign. Genuine I/O failures (git missing, timeout)
@@ -274,7 +274,7 @@ def blame(file_path: str, search: str | None = None) -> str:
     result = _run_git("blame", "--date=short", "-w", file_path)
 
     if result.returncode != 0:
-        # Surface to the log, not just the returned string (#337) — git
+        # Surface to the log, not just the returned string — git
         # failures returned as strings otherwise never reach journalctl.
         logger.warning(
             "git blame failed op=blame file_path=%s returncode=%d stderr=%r",
@@ -407,7 +407,7 @@ def rollback(file_path: str, commit: str | None = None, dry_run: bool = False) -
     checkout = _run_git("checkout", target, "--", file_path)
     if checkout.returncode != 0:
         # A failed rollback is operator-critical and was previously only a
-        # return value — log at ERROR (#337).
+        # return value — log at ERROR.
         logger.error(
             "rollback checkout failed op=rollback file_path=%s target=%s "
             "returncode=%d stderr=%r",
@@ -422,7 +422,7 @@ def rollback(file_path: str, commit: str | None = None, dry_run: bool = False) -
     if commit.returncode != 0:
         # The checkout landed but the commit did not — the working tree is now
         # dirty (rolled-back content uncommitted). Surface it so the operator
-        # knows the rollback is half-applied (#337). "nothing to commit" also
+        # knows the rollback is half-applied. "nothing to commit" also
         # lands here but is benign; stderr distinguishes the two.
         logger.warning(
             "rollback commit failed op=commit file_path=%s target=%s "
@@ -452,7 +452,7 @@ def push() -> str:
         )
         if pre_commit.returncode != 0:
             # A failed pre-push commit silently proceeds to push stale state —
-            # surface it (#337). "nothing to commit" also lands here but is
+            # surface it. "nothing to commit" also lands here but is
             # benign; stderr distinguishes a real failure.
             logger.warning(
                 "auto-commit before push failed op=commit returncode=%d stderr=%r",
@@ -462,7 +462,7 @@ def push() -> str:
     result = _run_git("push", "origin", "main")
     if result.returncode != 0:
         # Push failures (no remote, auth, not-a-repo) were returned as a string
-        # only — log so backup-sync drift is visible in journalctl (#337).
+        # only — log so backup-sync drift is visible in journalctl.
         logger.warning(
             "git push failed op=push returncode=%d stderr=%r",
             result.returncode, result.stderr.strip(),

@@ -113,7 +113,7 @@ def lint(fmt, deep_contradictions, max_llm_calls, similarity_threshold):
 
     console.print("")
 
-    # #459: source-citation anchor integrity (drifted / missing / tampered).
+    # source-citation anchor integrity (drifted / missing / tampered).
     source_issues = data.get("source_anchor_issues", [])
     if source_issues:
         console.print(f"[bold yellow]Source Anchor Issues ({len(source_issues)})[/bold yellow]")
@@ -127,7 +127,7 @@ def lint(fmt, deep_contradictions, max_llm_calls, similarity_threshold):
 
     console.print("")
 
-    # #72: long-lived unresolved open questions (epistemic: open_question).
+    # long-lived unresolved open questions (epistemic: open_question).
     stale_oq = data.get("stale_open_questions", [])
     if stale_oq:
         console.print(f"[bold yellow]Stale Open Questions ({len(stale_oq)})[/bold yellow]")
@@ -135,7 +135,7 @@ def lint(fmt, deep_contradictions, max_llm_calls, similarity_threshold):
             console.print(f"  - {oq['file']} ({oq['days_old']} days old)")
     else:
         console.print("[green]✓ No stale open questions (>90 days)[/green]")
-    # #533 (G4): unresolved typed contradiction links (neither side won yet).
+    # (G4): unresolved typed contradiction links (neither side won yet).
     open_contradictions = data.get("open_contradictions", [])
     if open_contradictions:
         console.print(

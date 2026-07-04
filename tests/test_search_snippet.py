@@ -88,7 +88,7 @@ def test_enrich_handles_missing_content():
 
 def test_format_results_default_uses_snippet():
     """Default render path uses snippet — never the unbounded content."""
-    big = "Z" * 50_000  # mimic the pathological 54KB chunk from #352
+    big = "Z" * 50_000  # mimic the pathological 54KB chunk
     results = [{
         "file_path": "infrastructure-misc.md",
         "content": big,
@@ -147,7 +147,7 @@ def test_format_results_no_truncation_footer_when_clean():
     assert "palinode_read" not in out
 
 
-# ---- Acceptance criterion from #352 -------------------------------------
+# Acceptance criterion from ------------------------------------
 
 
 def test_352_acceptance_limit_10_stays_bounded():
@@ -168,7 +168,7 @@ def test_352_acceptance_limit_10_stays_bounded():
     assert all(r["content"] == big_chunk for r in results)  # content preserved
 
 
-# ---- CLI rendering (#352 follow-up) -------------------------------------
+# CLI rendering (follow-up) -------------------------------------
 
 
 def test_cli_search_prefers_snippet_over_blind_truncation(monkeypatch):

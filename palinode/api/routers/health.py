@@ -38,7 +38,7 @@ def status_api() -> dict[str, Any]:
     import palinode.api.server as _srv
     stats: dict[str, Any] = dict(store.get_stats())
 
-    # Deployed package version (#579) — single source of truth is
+    # Deployed package version — single source of truth is
     # palinode.__version__ (importlib.metadata), the same value CLI --version
     # surfaces. Lets an operator confirm which release is actually running
     # (motivated by the v0.8.14/v0.8.15 confusion).
@@ -82,7 +82,7 @@ def status_api() -> dict[str, Any]:
     ollama_reachable = _srv.get_ollama_client().ping(OllamaRole.EMBED)
     stats["ollama_reachable"] = ollama_reachable
 
-    # Per-role Ollama traffic metrics (#338 Phase 5): p50/p95/error-rate over a
+    # Per-role Ollama traffic metrics (Phase 5): p50/p95/error-rate over a
     # 5-minute window plus circuit state, for each role that has seen traffic in
     # this process. Lets monitors + `palinode doctor` distinguish "reachable but
     # degraded" (p95 high / circuit half-open) from a flat binary reachable bool.
@@ -108,7 +108,7 @@ def status_api() -> dict[str, Any]:
             import logging
             logging.getLogger("palinode.api").warning(f"write-time status lookup failed: {e}")
 
-    # Reindex progress (#200)
+    # Reindex progress
     stats["reindex"] = {
         "running": _reindex_state["running"],
         "started_at": _reindex_state["started_at"],
@@ -116,7 +116,7 @@ def status_api() -> dict[str, Any]:
         "total_files": _reindex_state["total_files"],
     }
 
-    # auto_summary observability (#403). Since auto_summary moved off the
+    # auto_summary observability. Since auto_summary moved off the
     # /save hot path, external monitors need a way to detect a stalled pipeline.
     # last_run_at == None means /generate-summaries has never been invoked
     # in this process — expected on a freshly-started API before the watcher
@@ -127,7 +127,7 @@ def status_api() -> dict[str, Any]:
         "last_run_duration_ms": _auto_summary_state["last_run_duration_ms"],
         "last_run_count": _auto_summary_state["last_run_count"],
         "last_run_errors": _auto_summary_state["last_run_errors"],
-        # #405: description backfill shares the /generate-summaries run.
+        # description backfill shares the /generate-summaries run.
         "last_run_descriptions": _auto_summary_state["last_run_descriptions"],
         "last_run_description_errors": _auto_summary_state["last_run_description_errors"],
         "last_error": _auto_summary_state["last_error"],
@@ -148,12 +148,12 @@ def health_api() -> dict[str, Any]:
     status="degraded" with a db_error key if the database cannot be reached.
     """
     import palinode.api.server as _srv  # late lookup — see status_api
-    # version (#579) surfaced here too so the lightweight liveness probe can
+    # version surfaced here too so the lightweight liveness probe can
     # report the running release without a /status round-trip.
     result: dict[str, Any] = {"status": "ok", "version": __version__}
 
     # DB accessible + basic stats — delegate to store.get_stats() for chunk
-    # count so the code path is identical to /status and cannot diverge (#187).
+    # count so the code path is identical to /status and cannot diverge.
     try:
         stats = store.get_stats()
         result["chunks"] = stats["total_chunks"]
@@ -270,7 +270,7 @@ def auto_summary_health_api() -> dict[str, Any]:
         "last_run_at": _auto_summary_state["last_run_at"],
         "last_run_count": _auto_summary_state["last_run_count"],
         "last_run_errors": _auto_summary_state["last_run_errors"],
-        # #405: description backfill shares this run; surface its counters too.
+        # description backfill shares this run; surface its counters too.
         "last_run_descriptions": _auto_summary_state["last_run_descriptions"],
         "last_run_description_errors": _auto_summary_state["last_run_description_errors"],
         "last_error": _auto_summary_state["last_error"],
@@ -292,7 +292,7 @@ def auto_summary_health_api() -> dict[str, Any]:
 
     # Count pending files in a single walk:
     #   - pending (summaries): core:true with no summary and content >= threshold.
-    #   - pending_descriptions (#405/#472): eligible memory files (see
+    #   pending_descriptions: eligible memory files (see
     #     _is_description_eligible) missing a description field.
     # Both capped at 1000 — past that the count is a number, not an action item.
     pending = 0
@@ -306,8 +306,8 @@ def auto_summary_health_api() -> dict[str, Any]:
                 with open(filepath) as f:
                     content = f.read()
                 metadata, body = parser.parse_markdown(content)
-                # #405: description backlog — not core-gated, no length gate.
-                # #472: only count files that can actually persist a description
+                # description backlog — not core-gated, no length gate.
+                # only count files that can actually persist a description
                 # (the same eligibility predicate the backfill worklist uses), so
                 # the count reflects real work and drains to a stable floor
                 # instead of being pinned by structural / non-memory files.
@@ -410,7 +410,7 @@ def doctor_api(canary: bool = False, fast: bool = False) -> dict[str, Any]:
     result_dicts = _json.loads(format_json(results))
 
     return {
-        "version": __version__,  # #579: deployed release, for operator triage
+        "version": __version__,  # deployed release, for operator triage
         "results": result_dicts,
         "summary": {
             "total": len(results),

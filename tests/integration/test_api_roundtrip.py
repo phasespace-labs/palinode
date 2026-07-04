@@ -357,7 +357,7 @@ def test_session_end_creates_daily(client, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Git commit tests (issue #120)
+# Git commit tests (issue)
 # ---------------------------------------------------------------------------
 
 
@@ -457,7 +457,7 @@ def test_save_no_git_commit_when_disabled(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# CORS tests (issue #120)
+# CORS tests (issue)
 # ---------------------------------------------------------------------------
 
 
@@ -496,7 +496,7 @@ def test_cors_rejects_unknown_origin(client):
 
 
 # ---------------------------------------------------------------------------
-# Additional path-traversal / security tests (issue #120)
+# Additional path-traversal / security tests (issue)
 # ---------------------------------------------------------------------------
 
 
@@ -549,7 +549,7 @@ def test_save_unknown_type_rejected_or_defaulted(client):
 
 
 # ---------------------------------------------------------------------------
-# Save-then-search roundtrip (explicit end-to-end, issue #120)
+# Save-then-search roundtrip (explicit end-to-end, issue)
 # ---------------------------------------------------------------------------
 
 

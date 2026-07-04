@@ -67,7 +67,7 @@ SAVE_SOURCE_HEADER: str = "X-Palinode-Source"
 SAVE_SOURCE_API_DEFAULT: str = "api"
 
 
-# ── Session-end timeouts (#377) ──────────────────────────────────────────────
+# ── Session-end timeouts ──────────────────────────────────────────────
 
 #: HTTP request timeout (in seconds) for ``POST /session-end`` on every
 #: surface that calls it directly (CLI, MCP).  90 seconds matches the
@@ -88,7 +88,7 @@ SESSION_END_TIMEOUT_SECONDS: float = float(
 #: see which surfaces must be updated.
 _SESSION_END_TIMEOUT_SENTINEL: float = 90.0
 
-# ── Session-end dedup (#126) ─────────────────────────────────────────────────
+# ── Session-end dedup ─────────────────────────────────────────────────
 
 #: Lookback window (in minutes) over which ``session_end`` checks recently
 #: indexed saves for semantic overlap.  60 minutes covers a typical Claude

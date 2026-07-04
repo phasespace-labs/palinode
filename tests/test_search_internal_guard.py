@@ -167,11 +167,11 @@ _REPO_ROOT = Path(__file__).parent.parent
 _ALLOWLIST: frozenset[str] = frozenset({
     # Public search surface — these callers intentionally record recall.
     # The /search handler and its candidate-list helper moved out of server.py
-    # into the routers/ package during the #314 router split (stage 1); the
+    # into the routers/ package during the router split (stage 1); the
     # bare store.search() call now lives in routers/search.py and the comment
-    # that references it in api/search_helpers.py (the _shared.py successor, #556).
-    "palinode/api/routers/search.py",   # /search endpoint (moved from server.py, #314)
-    "palinode/api/search_helpers.py",  # comment referencing store.search() (moved, #556)
+    # that references it in api/search_helpers.py (the _shared.py successor).
+    "palinode/api/routers/search.py",   # /search endpoint (moved from server.py)
+    "palinode/api/search_helpers.py",  # comment referencing store.search (moved)
     "palinode/mcp.py",             # MCP palinode_search tool
     "palinode/cli/search.py",      # CLI palinode search
     # store.py contains search_hybrid's inner pass with explicit record_access=False.

@@ -319,7 +319,7 @@ def write_research_file(
         "source_type": file_type,
         "date": today,
         "tags": [],
-        # #193: timezone-aware UTC ISO-8601. Previously used
+        # timezone-aware UTC ISO-8601. Previously used
         # ``time.strftime("...Z")`` which emits local time stamped as UTC.
         "last_updated": datetime.now(UTC).isoformat(),
     }

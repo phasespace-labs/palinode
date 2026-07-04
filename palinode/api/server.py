@@ -36,7 +36,7 @@ from palinode.core.config import config
 # probes target. The enrichment module imports its own copy for its CHAT calls.
 from palinode.core.ollama_client import get_ollama_client  # noqa: F401
 
-# ── Re-exports from the focused _shared.py successor modules (#556) ──────────
+# ── Re-exports from the focused _shared.py successor modules ──────────
 # routers/_shared.py was resolved into path_safety / rate_limit / memory_write /
 # search_helpers / _util. These names are re-exported (not redefined) so existing
 # `from palinode.api.server import _X` imports — used widely by tests — keep
@@ -231,7 +231,7 @@ async def lifespan(app: FastAPI):
     for warning in path_warnings:
         _startup_logger.warning(warning)
 
-    # #354: when auto_commit is enabled but memory_dir is not a git
+    # when auto_commit is enabled but memory_dir is not a git
     # repository, every /save's `git add` + `git commit` silently no-ops
     # (subprocess prints "fatal: not a git repository" but check=False
     # eats the exit code). Saves keep landing on disk, history vanishes,
@@ -250,7 +250,7 @@ async def lifespan(app: FastAPI):
 
     # Refuse to start if the db_path parent doesn't exist — sqlite3.connect()
     # would silently auto-create the DB in a non-existent directory (raising an
-    # OperationalError on first write), producing silent 500s identical to #201.
+    # OperationalError on first write), producing silent 500s.
     _db_parent = Path(config.db_path).parent
     if not _db_parent.exists():
         raise RuntimeError(
@@ -261,7 +261,7 @@ async def lifespan(app: FastAPI):
     try:
         store.init_db()
     except RuntimeError as exc:
-        # #188: misconfiguration guard in store._ensure_db() — DB missing but
+        # misconfiguration guard in store._ensure_db — DB missing but
         # memory_dir has .md files. Log CRITICAL so the operator sees it in
         # journalctl before the process exits.
         logging.getLogger("palinode.api").critical(
@@ -292,8 +292,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Palinode API", lifespan=lifespan)
 
-# Reindex concurrency guard (#200) and auto_summary observability state (#403)
-# live in palinode/api/_util.py (#556) so the handlers that read them — now in
+# Reindex concurrency guard and auto_summary observability state
+# live in palinode/api/_util.py so the handlers that read them — now in
 # routers/maintenance.py and routers/health.py — share one source of truth.
 # Re-exported at the top of this module for compatibility.
 
@@ -421,6 +421,10 @@ class _BodySizeLimitMiddleware:
     total exceeds the limit we short-circuit with 413 Payload Too Large and
     stop reading from the client.
 
+    Because the downstream framework (Starlette) catches the receive-time
+    abort and would otherwise surface its own 400 "error parsing the body",
+    ``send`` is wrapped to override that with the correct 413 end-to-end.
+
     Header-based fast-path is preserved so well-behaved clients with an
     accurate ``Content-Length`` get rejected before any body is buffered.
     """
@@ -450,24 +454,44 @@ class _BodySizeLimitMiddleware:
                 break
 
         received = 0
+        over_limit = False
+        sent_413 = False
 
         async def limited_receive():
-            nonlocal received
+            nonlocal received, over_limit
             message = await receive()
             if message["type"] == "http.request":
                 body = message.get("body", b"") or b""
                 received += len(body)
                 if received > self.max_bytes:
-                    # Short-circuit: tell the receive loop the request body
-                    # is over and surface a 413 to the client. The downstream
-                    # app should never see this oversized body.
+                    # Short-circuit: raise so the receive loop unwinds. The
+                    # downstream app should never see this oversized body.
+                    over_limit = True
                     raise _BodyTooLargeError()
             return message
 
+        async def guarded_send(message):
+            # Once the limit is tripped, the downstream framework (Starlette)
+            # catches the receive() exception and tries to surface its OWN
+            # response — a 400 "error parsing the body". Override that with the
+            # correct 413 Payload Too Large and swallow everything else it
+            # emits, so the client sees 413 end-to-end (not just when the
+            # exception happens to propagate uncaught).
+            nonlocal sent_413
+            if over_limit:
+                if not sent_413:
+                    sent_413 = True
+                    await self._send_413(send)
+                return
+            await send(message)
+
         try:
-            await self.app(scope, limited_receive, send)
+            await self.app(scope, limited_receive, guarded_send)
         except _BodyTooLargeError:
-            await self._send_413(send)
+            # Reached when the downstream app does NOT catch the receive error
+            # (e.g. a raw ASGI app that never started a response).
+            if not sent_413:
+                await self._send_413(send)
 
     @staticmethod
     async def _send_413(send) -> None:
@@ -498,11 +522,11 @@ app.add_middleware(_BodySizeLimitMiddleware, max_bytes=_MAX_REQUEST_BYTES)
 # Startup warning for unsafe binding.
 # Set PALINODE_API_BIND_INTENT=public to suppress the warning for intentional
 # network-exposed deployments (e.g., Tailscale). Without the env var, the
-# warning fires on every 0.0.0.0 start. Fixes #253.
+# warning fires on every 0.0.0.0 start.
 # (_api_host and _bind_intent_public are resolved earlier so the bearer-auth
 # startup gate can reference them; this block reuses the same values.)
 # B104 rationale - "0.0.0.0" here is a literal compared to the resolved host;
-# the actual bind decision is gated on PALINODE_API_BIND_INTENT=public per #253.
+# the actual bind decision is gated on PALINODE_API_BIND_INTENT=public
 if _api_host == "0.0.0.0" and not _bind_intent_public:  # nosec B104
     if _api_token is None:
         logger.warning(
@@ -521,7 +545,7 @@ elif _api_host == "0.0.0.0" and _bind_intent_public:  # nosec B104
         "binding warning suppressed."
     )
 
-# ── Enrichment re-exports (#552) ─────────────────────────────────────────────
+# ── Enrichment re-exports ─────────────────────────────────────────────
 # Auto-summary/description logic lives in palinode/api/enrichment.py. Re-exported
 # here (not redefined) so `patch("palinode.api.server._generate_description")` in
 # tests rebinds the name routers/memory.py looks up via `_srv.<name>`, and so the
@@ -546,7 +570,7 @@ from palinode.api.enrichment import (  # noqa: E402,F401
 #: top-level doc like README.md / PROGRAM.md) is structural / non-memory: the
 #: description backfill regenerates a description for it every run but
 #: `_inject_description` never persists one (no memory frontmatter to land it
-#: in), so counting it as "pending" loops the backfill forever (#472).
+#: in), so counting it as "pending" loops the backfill forever.
 _MEMORY_CATEGORY_DIRS: frozenset[str] = frozenset(_TYPE_TO_CATEGORY.values())
 
 

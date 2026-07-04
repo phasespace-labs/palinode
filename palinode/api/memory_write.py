@@ -188,7 +188,7 @@ _TYPE_TO_CATEGORY: dict[str, str] = {
 #: top-level doc like README.md / PROGRAM.md) is structural / non-memory: the
 #: description backfill regenerates a description for it every run but
 #: `_inject_description` never persists one (no memory frontmatter to land it
-#: in), so counting it as "pending" loops the backfill forever (#472).
+#: in), so counting it as "pending" loops the backfill forever.
 _MEMORY_CATEGORY_DIRS: frozenset[str] = frozenset(_TYPE_TO_CATEGORY.values())
 
 

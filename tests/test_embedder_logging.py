@@ -103,7 +103,7 @@ def test_warning_includes_text_len_not_raw_text(caplog):
 
 
 # ---------------------------------------------------------------------------
-# #337 — the Gemini embed path was unwrapped; HTTP errors must now log + raise
+# the Gemini embed path was unwrapped; HTTP errors must now log + raise
 # ---------------------------------------------------------------------------
 
 

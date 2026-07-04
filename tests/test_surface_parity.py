@@ -88,7 +88,7 @@ def _cli_param_names(cmd: click.Command) -> set[str]:
     # Click uses `entities` (multiple=True) for `--entity` repeated.  Same
     # canonical name; nothing to do.
     # Click uses `external_ref_pairs` as dest for `--external-ref` (multiple);
-    # expose under the canonical "external_refs" name too (#115).
+    # expose under the canonical "external_refs" name too.
     if "external_ref_pairs" in names:
         names.add("external_refs")
     return names
@@ -316,7 +316,7 @@ def test_known_drift_references_a_canonical_param() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Inventory completeness — the surface→registry direction (#170)
+# Inventory completeness — the surface→registry direction
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # The param test above walks the registry and checks each surface.  It cannot

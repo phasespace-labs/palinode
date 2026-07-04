@@ -179,7 +179,7 @@ def _call_llm_for_contradiction(
         "then a one-sentence explanation."
     )
     try:
-        # #338 Phase 4: route through the centralized client (CONSOLIDATION role,
+        # Phase 4: route through the centralized client (CONSOLIDATION role,
         # OpenAI-compatible /v1/chat/completions). retries=0 — a contradiction
         # check is best-effort; a failure just yields UNKNOWN.
         content = get_ollama_client().chat_completions(

@@ -113,7 +113,7 @@ ADMIN_EXEMPT_OPERATIONS: frozenset[str] = frozenset(
 #: (plural) — that is the value the ``chunks.category`` column stores
 #: (``palinode/api/server.py:660-668`` and the watcher's directory-basename
 #: derivation).  Surfaces that expose a ``category`` filter MUST use
-#: this exact tuple — ADR-010, finding #161.
+#: this exact tuple — ADR-010, finding.
 CATEGORIES: tuple[str, ...] = (
     "people",
     "projects",
@@ -124,7 +124,7 @@ CATEGORIES: tuple[str, ...] = (
 
 #: The canonical memory ``type`` enum (used by save).  Lives here so
 #: the API can validate ``SaveRequest.type`` server-side instead of
-#: relying on per-surface enum lists.  ADR-010, finding #166.
+#: relying on per-surface enum lists. ADR-010, finding.
 MEMORY_TYPES: tuple[str, ...] = (
     "PersonMemory",
     "Decision",
@@ -135,7 +135,7 @@ MEMORY_TYPES: tuple[str, ...] = (
 )
 
 #: The canonical prompt-task enum.  Single source replacing the duplicate
-#: ``"enum"`` keys at ``palinode/mcp.py:624-625``.  ADR-010, finding #162.
+#: ``"enum"`` keys at ``palinode/mcp.py:624-625``. ADR-010, finding.
 PROMPT_TASKS: tuple[str, ...] = (
     "compaction",
     "extraction",
@@ -204,7 +204,7 @@ REGISTRY: tuple[Operation, ...] = (
             CanonicalParam(name="date_after", type="string"),
             CanonicalParam(name="date_before", type="string"),
             CanonicalParam(name="include_daily", type="boolean"),
-            # ADR-015 §5 (#480): telemetry-exclusion override; default false so
+            # ADR-015 §5: telemetry-exclusion override; default false so
             # monitoring writes don't pollute recall. First-class on all surfaces.
             CanonicalParam(name="include_telemetry", type="boolean"),
         ),
@@ -219,7 +219,7 @@ REGISTRY: tuple[Operation, ...] = (
     # and MCP ``ps`` are surface sugar that resolves to ``type=ProjectSnapshot``
     # locally before hitting the API.  Documented in ``docs/PARITY.md``;
     # surfaces are free to add the shortcut without parity overhead.  The
-    # plugin currently lacks it (#166 expansion), but adding it is a plugin
+    # plugin currently lacks it (expansion), but adding it is a plugin
     # courtesy, not a parity obligation.
     Operation(
         name="save",
@@ -236,7 +236,7 @@ REGISTRY: tuple[Operation, ...] = (
             CanonicalParam(name="slug", type="string"),
             CanonicalParam(name="core", type="boolean"),
             CanonicalParam(name="source", type="string"),
-            # ADR-015 §5 (#480): write-semantics axis. "append" (default) is
+            # ADR-015 §5: write-semantics axis. "append" (default) is
             # episodic; "replace" marks a living/current-state document. First-class
             # on all surfaces so callers don't need to tunnel it through metadata.
             CanonicalParam(
@@ -244,13 +244,13 @@ REGISTRY: tuple[Operation, ...] = (
                 type="string",
                 enum=("append", "replace"),
             ),
-            # #459: source-citation anchors. A list of {ref, quote, quote_hash}
+            # source-citation anchors. A list of {ref, quote, quote_hash}
             # dicts; the quote_hash is computed/verified on save. First-class on
             # all surfaces so callers don't tunnel citations through metadata.
             # The CLI surfaces this as the repeatable ``--cite REF::QUOTE`` flag
             # (dest ``sources``); MCP/API/plugin take the structured list.
             CanonicalParam(name="sources", type="array"),
-            # #533 (G4): typed relationship links. ``contradicts`` records a
+            # (G4): typed relationship links. ``contradicts`` records a
             # conflict with no winner picked; ``backed_by`` records an
             # evidence/support edge. First-class plaintext lists on all surfaces
             # so callers don't tunnel them through metadata. CLI surfaces them as
@@ -277,7 +277,7 @@ REGISTRY: tuple[Operation, ...] = (
         exempt_surfaces=frozenset({"plugin"}),
         known_drift={},
     ),
-    # ── archive-expired (ADR-015 §2.3 TTL sweep, #482) ──────────────────────
+    # ── archive-expired (ADR-015 §2.3 TTL sweep) ──────────────────────
     Operation(
         name="archive_expired",
         canonical_params=(
@@ -344,7 +344,7 @@ REGISTRY: tuple[Operation, ...] = (
         exempt_surfaces=frozenset({"plugin"}),
         known_drift={},
     ),
-    # ── cluster_neighbors (#235) ─────────────────────────────────────────────
+    # ── cluster_neighbors ─────────────────────────────────────────────
     Operation(
         name="cluster_neighbors",
         canonical_params=(
@@ -358,7 +358,7 @@ REGISTRY: tuple[Operation, ...] = (
         exempt_surfaces=frozenset({"plugin"}),
         known_drift={},
     ),
-    # ── topic_coverage (#235) ────────────────────────────────────────────────
+    # ── topic_coverage ────────────────────────────────────────────────
     Operation(
         name="topic_coverage",
         canonical_params=(
@@ -371,7 +371,7 @@ REGISTRY: tuple[Operation, ...] = (
         exempt_surfaces=frozenset({"plugin"}),
         known_drift={},
     ),
-    # ── review (#366) ────────────────────────────────────────────────────────
+    # ── review ────────────────────────────────────────────────────────
     # Advisory project-memory review. Composes the deterministic lint signals
     # scoped to a project and proposes corrective ops (read-only). Plugin-exempt
     # like the other quality/maintenance ops (lint/topic_coverage/consolidate).
@@ -386,7 +386,7 @@ REGISTRY: tuple[Operation, ...] = (
         exempt_surfaces=frozenset({"plugin"}),
         known_drift={},
     ),
-    # ── depends (#97) ────────────────────────────────────────────────────────
+    # ── depends ────────────────────────────────────────────────────────
     # The `unblocked` mode is exposed as a separate REST endpoint
     # (GET /depends/_unblocked) rather than a query param on
     # GET /depends/{slug}, so it does not appear in the API endpoint's
@@ -410,7 +410,7 @@ REGISTRY: tuple[Operation, ...] = (
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Inventory accounting — the surface→registry direction (#170)
+# Inventory accounting — the surface→registry direction
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # ``REGISTRY`` drives the param-level parity test (registry→surface).  That
@@ -430,7 +430,7 @@ REGISTRY: tuple[Operation, ...] = (
 #   3. ``INVENTORY_BACKLOG``       — a *memory-semantic* operation that already
 #      ships on the surface but has not yet been promoted into ``REGISTRY``
 #      with canonical params.  These are the ADR-010 implementation backlog
-#      (issue #170); they are acknowledged, not silently ignored.
+#      (issue); they are acknowledged, not silently ignored.
 #
 # A live capability that is in none of the three buckets fails the guard:
 # that is a brand-new operation that skipped the contract.  A bucket entry
@@ -512,6 +512,7 @@ INVENTORY_INFRA: dict[Surface, frozenset[str]] = {
             "migrate-mem0",
             "obsidian-sync",
             "retrieval-stats",
+            "worktree-reconcile",
         }
     ),
 }

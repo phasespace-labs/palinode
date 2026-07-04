@@ -34,7 +34,7 @@ def history_api(
         if not _os.path.exists(full_path):
             raise HTTPException(status_code=404, detail="File not found")
 
-    # Issue #256: history access is an explicit retrieval.
+    # Issue history access is an explicit retrieval.
     _retrieval_logger.record_file_read(
         file_path,
         source="palinode_history",
@@ -82,7 +82,7 @@ def diff_api(days: int = 7, paths: str | None = None) -> dict[str, Any]:
 @router.get("/blame/{file_path:path}")
 def blame_api(file_path: str, search: str | None = None) -> dict[str, Any]:
     """Show when each line of a memory file was last changed."""
-    # Issue #256: blame access is an explicit retrieval.
+    # Issue blame access is an explicit retrieval.
     _retrieval_logger.record_file_read(
         file_path,
         source="palinode_blame",

@@ -133,7 +133,7 @@ def test_describe_timeout_env_override_invalid_value_ignored(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# _clean_llm_oneliner — preamble strip + clean clip (#338 Phase 2)
+# _clean_llm_oneliner — preamble strip + clean clip (Phase 2)
 # ---------------------------------------------------------------------------
 
 

@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 
-# ---- #273: loud-recoverable defaults --------------------------------------
+# loud-recoverable defaults --------------------------------------
 
 
 def test_load_config_warns_when_using_defaults(tmp_path, monkeypatch, caplog):
@@ -85,7 +85,7 @@ def test_default_banner_label_is_loud(monkeypatch, capsys, tmp_path):
     captured = capsys.readouterr()
     # When defaults are loaded, banner contains the warning prefix.
     # When a file IS loaded (repo-root), banner contains a path.
-    # Either way, must NOT be the bare "defaults" string (#273 regression).
+    # Either way, must NOT be the bare "defaults" string (regression).
     if "defaults" in captured.err:
         assert "⚠" in captured.err or "no config file" in captured.err, (
             "When defaults are loaded, banner must be visibly marked. "
@@ -93,7 +93,7 @@ def test_default_banner_label_is_loud(monkeypatch, capsys, tmp_path):
         )
 
 
-# ---- #354: git-not-a-repo warning at API startup --------------------------
+# git-not-a-repo warning at API startup --------------------------
 
 
 def test_lifespan_warns_when_memory_dir_not_a_git_repo(tmp_path, monkeypatch, caplog):

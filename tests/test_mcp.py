@@ -15,7 +15,7 @@ import palinode.mcp as mcp
 from palinode.mcp import _coerce_str_array, _dispatch_tool, _resolve_save_type, _timeout_message
 
 
-# ---- _coerce_str_array (#147 — JSON-encoded array args from MCP clients) ----
+# _coerce_str_array (— JSON-encoded array args from MCP clients) ----
 
 
 def test_coerce_str_array_decodes_json_array_string():
@@ -48,7 +48,7 @@ def test_coerce_str_array_preserves_inner_types():
     assert _coerce_str_array("[1, 2, 3]") == [1, 2, 3]
 
 
-# ---- _resolve_save_type (#136 — palinode_save type / ps=true shortcut) ----
+# _resolve_save_type (— palinode_save type / ps=true shortcut) ----
 
 
 def test_resolve_save_type_explicit_type():
@@ -87,7 +87,7 @@ def test_resolve_save_type_falsy_ps_treated_as_unset():
     assert _resolve_save_type("Decision", False) == "Decision"
 
 
-# ---- _timeout_message (#416 — verify-before-retry hint on write-path timeout) ----
+# _timeout_message (— verify-before-retry hint on write-path timeout) ----
 
 
 def test_timeout_message_save_warns_verify_before_retry():
@@ -116,7 +116,7 @@ def test_timeout_message_read_path_keeps_plain_message():
     assert "palinode_search" not in msg.replace("Error:", "")  # no self-referential hint
 
 
-# ---- async dispatcher: slow server surfaces the right message (#416) ----
+# async dispatcher: slow server surfaces the right message ----
 
 
 async def _raise_timeout(*args, **kwargs):

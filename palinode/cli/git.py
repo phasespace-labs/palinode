@@ -68,7 +68,7 @@ def timeline(file_path, limit):
     is_flag=True,
     default=False,
     help=(
-        "Deprecated alias for --no-dry-run (ADR-010 / #164).  Will be "
+        "Deprecated alias for --no-dry-run (ADR-010).  Will be "
         "removed in a future release."
     ),
 )
@@ -79,7 +79,7 @@ def rollback(file_path, commit, dry_run, execute):
     apply the rollback.  ``COMMIT`` is optional; when omitted, rolls
     back to the immediately previous version.
     """
-    # ADR-010 / #164: --execute is a deprecated alias for --no-dry-run.
+    # ADR-010: --execute is a deprecated alias for --no-dry-run.
     # The Click pair --dry-run/--no-dry-run is the canonical convention
     # matching MCP and API.
     if execute:

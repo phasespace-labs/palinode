@@ -122,7 +122,7 @@ The param checks above walk `REGISTRY` and verify each surface (registry→surfa
 
 1. **`REGISTRY`** — a parity-bound memory operation (mapped via its `mcp_tool` / `api_endpoint` / `cli_command`).
 2. **`INVENTORY_INFRA`** (`palinode/core/parity.py`) — framework/admin/observability surface that is *not* a memory operation: Swagger/Redoc/OpenAPI, the HTML inspector under `/ui`, liveness probes, and the DB-maintenance + importer endpoints (the surface-identifier form of `ADMIN_EXEMPT_OPERATIONS`).
-3. **`INVENTORY_BACKLOG`** (`palinode/core/parity.py`) — a memory-semantic operation that already ships on the surface but has **not yet** been promoted into `REGISTRY` with canonical params. Each entry maps to a tracked backlog item. These are acknowledged, not silently ignored.
+3. **`INVENTORY_BACKLOG`** (`palinode/core/parity.py`) — a memory-semantic operation that already ships on the surface but has **not yet** been promoted into `REGISTRY` with canonical params. Each entry maps to its tracking issue (the ADR-010 implementation backlog, mostly #170). These are acknowledged, not silently ignored.
 
 A live capability in none of the three buckets **fails the guard** — that is an operation that skipped the contract. Stale buckets also fail (`test_inventory_accounting_is_not_stale`): an entry whose capability was renamed or removed must be cleaned up, mirroring the `known_drift` hygiene rule. `test_inventory_buckets_are_disjoint` keeps each capability classified exactly once.
 
@@ -130,9 +130,9 @@ A live capability in none of the three buckets **fails the guard** — that is a
 
 Identifier form per surface: MCP = tool name (`palinode_search`); API = `METHOD /path` (`POST /search`); CLI = command path (`trigger add`).
 
-### Registration Backlog — Memory Ops Not Yet In The Registry
+### Registration backlog — memory ops not yet in the registry (#170)
 
-These memory-semantic operations ship on all of MCP/API/CLI today but are not yet promoted into `REGISTRY` with canonical params. Admin/framework surface is in `INVENTORY_INFRA`, not here:
+These memory-semantic operations ship on all of MCP/API/CLI today but are not yet promoted into `REGISTRY` with canonical params. They are tracked under #170 (admin/framework surface is in `INVENTORY_INFRA`, not here):
 
 `dedup_suggest`, `diff`, `entities`, `history`, `ingest`/`ingest-url`, `lint`, `orphan_repair`, `prompt` (list/show/activate), `push`, `session_end`, `timeline`, and the trigger `list`/`remove` + `check-triggers` + `search-associative` API endpoints. `depends/_unblocked` is tracked under #97.
 
@@ -142,7 +142,7 @@ Promoting each (registry `Operation` + canonical params + removing its backlog e
 
 CLI commands and the plugin go through one HTTP layer each: `palinode/cli/_api.py` and `palinode/mcp.py`. Direct `httpx` calls from elsewhere skip rate limiting, audit logging, source headers, and any future API-side fixes. The pre-commit linter at `scripts/check-httpx-monopoly.sh` greps for offenders and fails CI.
 
-Today's bypass-vector files:
+Today's bypass-vector files (cleanup tracked in #168 and #170 lower-tier):
 
 - `palinode/cli/read.py` — reads disk directly, never calls API
 - `palinode/cli/list.py` — uses raw `httpx.get`
@@ -186,4 +186,4 @@ When an issue closes:
 - `palinode/core/parity.py` — the registry (source of truth).
 - `palinode/core/defaults.py` — shared defaults.
 - `tests/test_surface_parity.py` — the forcing function.
-- Implementation tracking for the registration backlog.
+- Issue #170 — implementation tracking.

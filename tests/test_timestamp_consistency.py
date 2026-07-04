@@ -157,7 +157,7 @@ def test_watcher_populates_created_at_from_frontmatter(tmp_path, monkeypatch):
         )
 
 
-# ---- #193: batch surfaces write timezone-aware UTC ISO-8601 --------------
+# batch surfaces write timezone-aware UTC ISO-8601 --------------
 #
 # One assertion shape, four invocation paths. Each test invokes the real
 # writer (no mocking of the timestamp call site itself), reads the value

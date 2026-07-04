@@ -75,7 +75,7 @@ def test_git_operations_on_non_git_fail_gracefully():
             assert "fatal: not a git repository" in res
 
 
-# ---- #337: git-persistence failures must reach the log, not just the return ----
+# git-persistence failures must reach the log, not just the return ----
 
 
 def test_blame_failure_logs_warning(caplog):

@@ -24,7 +24,7 @@ from palinode.core.retrieval_log import RetrievalLogger
 
 logger = logging.getLogger("palinode.api")
 
-# Issue #256: retrieval-event instrumentation (ADR-007 prerequisite).
+# Issue retrieval-event instrumentation (ADR-007 prerequisite).
 # Lazy-initialised once at import time; honors PALINODE_INSTRUMENTATION_DISABLED env var.
 _retrieval_logger = RetrievalLogger(
     config.memory_dir,
@@ -60,7 +60,7 @@ def _project_from_cwd(cwd: str | None) -> str | None:
     return s or None
 
 
-# ── Reindex concurrency guard (#200) ─────────────────────────────────────────
+# ── Reindex concurrency guard ─────────────────────────────────────────
 # asyncio.Lock is safe because FastAPI runs on a single event loop.  The
 # reindex work itself is synchronous (file I/O + Ollama HTTP) but the lock
 # acquisition is async so concurrent HTTP callers fail fast rather than queue.
@@ -72,7 +72,7 @@ _reindex_state: dict[str, Any] = {
     "total_files": 0,
 }
 
-# #403: runtime state for auto_summary observability. Populated by
+# runtime state for auto_summary observability. Populated by
 # /generate-summaries each run; surfaced via /status and /health/auto-summary
 # so external monitors can detect a stalled summary pipeline.
 # A separate URL is probed in /health/auto-summary because auto_summary may
@@ -82,7 +82,7 @@ _auto_summary_state: dict[str, Any] = {
     "last_run_duration_ms": None,  # wallclock duration of last run
     "last_run_count": 0,           # summaries successfully generated in last run
     "last_run_errors": 0,          # per-file summary errors in last run
-    # #405: the same /generate-summaries walk now also backfills the deferred
+    # the same /generate-summaries walk now also backfills the deferred
     # auto-description (moved off the /save hot path). Track description work
     # separately so operators can see the description pipeline independently of
     # the summary pipeline.

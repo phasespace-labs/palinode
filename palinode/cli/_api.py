@@ -3,7 +3,7 @@ import httpx
 from palinode.core.config import config
 from palinode.core.defaults import SAVE_SOURCE_HEADER, SESSION_END_TIMEOUT_SECONDS, _SESSION_END_TIMEOUT_SENTINEL
 
-# Cross-surface drift guard (#377): all three entry points (CLI, MCP, hook) must
+# Cross-surface drift guard: all three entry points (CLI, MCP, hook) must
 # use SESSION_END_TIMEOUT_SECONDS from defaults.  If the sentinel changes without
 # this module being updated, this assertion fires at import time.
 assert SESSION_END_TIMEOUT_SECONDS == _SESSION_END_TIMEOUT_SENTINEL or os.environ.get(
@@ -26,12 +26,12 @@ class PalinodeAPI:
             "PALINODE_API",
             f"http://{config.services.api.host}:{config.services.api.port}",
         )
-        # ADR-010 / #167: every request carries the surface attribution as
+        # ADR-010: every request carries the surface attribution as
         # a header.  The API uses this when the body doesn't explicitly set
         # `source`, giving consistent provenance without each surface having
         # to thread a source default through every call site.
         # An explicit client may be injected (e.g., for testing with an
-        # in-process ASGI transport). Fixes #197.
+        # in-process ASGI transport).
         self.client = client or httpx.Client(
             base_url=self.base_url,
             timeout=30.0,
@@ -53,7 +53,7 @@ class PalinodeAPI:
         include_daily: bool | None = None,
         include_telemetry: bool | None = None,
     ):
-        # ADR-010 / #163: forward the full canonical search surface.
+        # ADR-010: forward the full canonical search surface.
         # Non-None params land in the body verbatim; None means "API default".
         payload: dict = {"query": query, "limit": limit}
         if category:
@@ -114,7 +114,7 @@ class PalinodeAPI:
         if source:
             payload["source"] = source
         if project:
-            # ADR-010 / #159: project is API-side sugar; the API expands it
+            # ADR-010: project is API-side sugar; the API expands it
             # into entities.
             payload["project"] = project
         if slug is not None:
@@ -302,7 +302,7 @@ class PalinodeAPI:
         cooldown_hours: int | None = None,
         trigger_id: str | None = None,
     ):
-        # ADR-010 / #165: forward all four canonical params.  Defaults live
+        # ADR-010: forward all four canonical params. Defaults live
         # in palinode.core.defaults so the CLI can show them in --help.  We
         # only include them in the body when non-None so the API still
         # receives explicit user intent vs implicit defaults.

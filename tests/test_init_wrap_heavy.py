@@ -30,7 +30,7 @@ def run_init(tmp_path: Path, *extra_args: str):
 
 
 # ---------------------------------------------------------------------------
-# Template constant guards — the heavy body encodes the #419 contract
+# Template constant guards — the heavy body encodes the contract
 # ---------------------------------------------------------------------------
 
 def test_heavy_body_declares_policy():

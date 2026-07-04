@@ -10,14 +10,14 @@ from palinode.cli._format import print_result, get_default_format, OutputFormat
 @click.option("--blocker", "-b", multiple=True, help="Open blocker or next step (repeatable)")
 @click.option("--project", "-p", default=None, help="Project slug to append status to (e.g., 'palinode')")
 @click.option("--source", help="Source surface (e.g., claude-code, cursor, api)")
-@click.option("--harness", help="Harness identifier (e.g., claude-code, cursor) — #145")
-@click.option("--cwd", help="Working directory the session ran in — #145")
-@click.option("--model", help="Model name (e.g., claude-opus-4-7) — #145")
-@click.option("--trigger", help="What triggered this save (manual, wrap-slash, hook, …) — #145")
-@click.option("--session-id", "session_id", help="Opaque session id from the harness — #145")
-@click.option("--duration-seconds", "duration_seconds", type=int, help="Session duration in seconds — #145")
+@click.option("--harness", help="Harness identifier (e.g., claude-code, cursor)")
+@click.option("--cwd", help="Working directory the session ran in")
+@click.option("--model", help="Model name (e.g., claude-opus-4-7)")
+@click.option("--trigger", help="What triggered this save (manual, wrap-slash, hook, …)")
+@click.option("--session-id", "session_id", help="Opaque session id from the harness")
+@click.option("--duration-seconds", "duration_seconds", type=int, help="Session duration in seconds")
 @click.option("--push/--no-push", "push", default=None,
-              help="Push the memory repo after committing the note (#378). "
+              help="Push the memory repo after committing the note. "
                    "Default: server's auto_push setting. /wrap passes --push.")
 @click.option("--format", "fmt", type=click.Choice(["text", "json"]), default=None, help="Output format")
 def session_end(summary, decision, blocker, project, source, harness, cwd, model,
@@ -55,7 +55,7 @@ def session_end(summary, decision, blocker, project, source, harness, cwd, model
     except httpx.ReadTimeout as e:
         # Distinguish a slow-server timeout from a connection failure — the old
         # message ("is palinode running?") was misleading when the API was up but
-        # the embedding + git commit path exceeded the request budget (#377).
+        # the embedding + git commit path exceeded the request budget.
         from palinode.core.defaults import SESSION_END_TIMEOUT_SECONDS
         raise click.ClickException(
             f"Session-end timed out after {SESSION_END_TIMEOUT_SECONDS:.0f}s — "
@@ -88,7 +88,7 @@ def session_end(summary, decision, blocker, project, source, harness, cwd, model
         print_result(out, OutputFormat.JSON)
     else:
         status_msg = f" + status → {status_file.split('/')[-1]}" if status_file else ""
-        # Only annotate push state when a push was requested (#378); on the
+        # Only annotate push state when a push was requested; on the
         # auto_push default we say nothing to keep the legacy output stable.
         if push:
             push_msg = " + pushed" if pushed else " (push pending — commit local)"

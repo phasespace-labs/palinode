@@ -367,7 +367,7 @@ def execute_import(
             plan.dest_path.parent.mkdir(parents=True, exist_ok=True)
             # Route the write through the git_tools mutation choke point so the
             # vault-import write uses the same atomic primitive as every other
-            # memory mutation (#564). Committing is left to the import CLI layer
+            # memory mutation. Committing is left to the import CLI layer
             # (this function may target a dir other than config.memory_dir).
             git_tools.write_memory_file(str(plan.dest_path), plan.content)
             result.written.append(plan.dest_path)

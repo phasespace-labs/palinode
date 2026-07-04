@@ -117,7 +117,7 @@ def generate_files() -> dict:
             "source_agents": list(set(m.get("source_agent", "") for m in mems)),
             "date_range": f"{first_date} to {last_date}",
             "memory_count": len(mems),
-            # #193: timezone-aware UTC ISO-8601. Previously ``time.strftime``
+            # timezone-aware UTC ISO-8601. Previously ``time.strftime``
             # emitted local time stamped with the UTC marker ``Z``.
             "created_at": mems[0].get("created_at", datetime.now(UTC).isoformat()),
             "last_updated": datetime.now(UTC).isoformat(),
@@ -140,7 +140,7 @@ def generate_files() -> dict:
         stats[category] += 1
         logger.info(f"  {category}/{group_slug}.md ({len(mems)} memories)")
 
-    # One created memory = one per-file commit (#566) via the git_tools choke
+    # One created memory = one per-file commit via the git_tools choke
     # point — never the old whole-tree `git add .` that swept unrelated dirty
     # files into the backfill commit.
     for fp in written_files:
