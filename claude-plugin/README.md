@@ -4,7 +4,7 @@ Persistent memory for AI agents. Your agent's memory is a folder of plain markdo
 
 - **Files are the source of truth.** Not a database, not a cloud service, not a vector store. Markdown files you can read, diff, grep, and version.
 - **Hybrid search.** SQLite-vec for semantic similarity + FTS5 for BM25 keyword matching, fused via reciprocal rank fusion.
-- **Deterministic compaction.** Palinode validates structured compaction changes before applying them. Every operation is a git commit. You can `git blame` every line in your agent's brain.
+- **Deterministic compaction.** An LLM proposes typed operations (keep, update, merge, supersede, archive) and a Python executor applies them. Every operation is a git commit. You can `git blame` every line in your agent's brain.
 - **Local-first.** Runs entirely on your machine. BGE-M3 embeddings via local Ollama. No data leaves your machine unless you configure it to.
 
 ## Prerequisites
@@ -35,7 +35,13 @@ curl http://localhost:11434/api/tags
 
 ### 3. Install the Palinode Python package
 
-Install from source (PyPI publish coming soon):
+Install from PyPI:
+
+```bash
+pip install palinode        # or: uvx palinode --help
+```
+
+Or from source (for development):
 
 ```bash
 git clone https://github.com/phasespace-labs/palinode.git
@@ -43,8 +49,8 @@ cd palinode
 pip install -e .
 ```
 
-This installs four CLI binaries:
-- `palinode` — the main CLI (26 commands)
+This installs the CLI binaries:
+- `palinode` — the main CLI (40+ commands)
 - `palinode-api` — the REST API server (port 6340)
 - `palinode-watcher` — the file indexer daemon
 - `palinode-mcp` — the MCP server (stdio, what the plugin launches)
@@ -58,15 +64,15 @@ Palinode has two background services that need to be running: `palinode-api` (th
 In one terminal:
 
 ```bash
-export PALINODE_DIR=~/palinode
-mkdir -p ~/palinode
+export PALINODE_DIR=~/.palinode
+mkdir -p ~/.palinode
 palinode-api
 ```
 
 In a second terminal:
 
 ```bash
-export PALINODE_DIR=~/palinode
+export PALINODE_DIR=~/.palinode
 palinode-watcher
 ```
 
@@ -85,7 +91,7 @@ systemctl --user enable --now palinode-api palinode-watcher
 Once Palinode is installed and the services are running, install this Claude Code plugin:
 
 ```
-/plugin install palinode@Paul-Kyle
+/plugin install palinode@phasespace-labs
 ```
 
 Or, during development, point Claude Code at this directory directly:
@@ -98,7 +104,7 @@ The plugin configures Claude Code to launch `palinode-mcp` as a stdio MCP server
 
 ## What you get
 
-Once installed and connected, the plugin exposes 17 MCP tools to Claude Code:
+Once installed and connected, the plugin exposes 27 MCP tools to Claude Code:
 
 ### Search and retrieval
 - `palinode_search` — hybrid semantic + keyword search across all memory files
@@ -156,14 +162,14 @@ Ollama isn't running or isn't reachable at `http://localhost:11434`. Start Ollam
 
 ### Search returns nothing
 
-Run `palinode_status` and check `total_files` and `fts_chunks`. If both are 0, the watcher hasn't indexed anything yet — create a memory file in `~/palinode/projects/example.md` and wait a few seconds for the watcher to pick it up.
+Run `palinode_status` and check `total_files` and `fts_chunks`. If both are 0, the watcher hasn't indexed anything yet — create a memory file in `~/.palinode/projects/example.md` and wait a few seconds for the watcher to pick it up.
 
 ## Learn more
 
 - [Main repository](https://github.com/phasespace-labs/palinode)
-- [CHANGELOG](https://github.com/phasespace-labs/palinode/blob/main/docs/CHANGELOG.md) for what's in v0.6.1
+- [CHANGELOG](https://github.com/phasespace-labs/palinode/blob/main/docs/CHANGELOG.md) for the latest release notes
 - [Compaction demo](https://github.com/phasespace-labs/palinode/tree/main/examples/compaction-demo) — walkthrough of a memory file across three consolidation passes with blame + diff output
-- [Program notes](https://github.com/phasespace-labs/palinode/blob/main/PROGRAM.md) — design goals and operating model
+- [ADR-001: Tools Over Pipeline](https://github.com/phasespace-labs/palinode/blob/main/ADR-001-tools-over-pipeline.md) — why the executor is deterministic
 
 ## License
 

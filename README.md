@@ -91,59 +91,87 @@ That's the entire client config. Works with Claude Code, Claude Desktop, Cursor,
 
 ---
 
-## Getting started in 60 seconds (Claude Code)
+## Requirements
 
-Already have Palinode installed and `palinode-api` running? Drop it into any
-project in one command:
+- **Python 3.11+**
+- **Git**
+- **Ollama** with `bge-m3` (`ollama pull bge-m3`, ≈1.2 GB) — for semantic search.
+  **Optional:** without an embedder Palinode runs in **keyword-only mode** (BM25/FTS5) — save,
+  search, and audit all still work; you just don't get vector recall until you add one.
+
+Optional extras: a chat model for weekly consolidation (any 7B+ that outputs JSON), OpenClaw for agent plugin hooks.
+
+---
+
+## Install
+
+One path — clone, install, point at a memory directory, check it worked:
+
+```bash
+# 1. Get the code (lives separately from your memory — never the same directory)
+git clone https://github.com/phasespace-labs/palinode ~/palinode-src && cd ~/palinode-src
+python3 -m venv venv && source venv/bin/activate
+pip install -e .
+
+# 2. Create your memory directory (this is where your data lives — keep it private)
+mkdir -p ~/.palinode && cd ~/.palinode && git init
+cp ~/palinode-src/palinode.config.yaml.example palinode.config.yaml
+# memory_dir stays commented out in the copied config → it inherits PALINODE_DIR below
+
+# 3. Start the services (each in its own terminal — or as a service, next section)
+PALINODE_DIR=~/.palinode palinode-api        # REST API on :6340
+PALINODE_DIR=~/.palinode palinode-watcher     # auto-indexes on file save
+
+# 4. Did it work?
+palinode doctor
+```
+
+`palinode doctor` is the single "did it install correctly?" command — run it after every install, upgrade, or server move. On a fresh venv, use the venv's absolute path for the MCP command (`~/palinode-src/venv/bin/palinode-mcp`) so it resolves its own dependencies — see [llms-install.md](llms-install.md) for the wrong-Python trap.
+
+> Your memory directory is **private** — it holds personal data. Never make it public; the code repo contains zero memory files. For a pre-populated demo, copy `examples/sample-memory/` into `~/.palinode/`.
+
+---
+
+## Running as a service
+
+Three long-running processes (API, watcher, embedder) shouldn't live in terminal tabs. Pick one:
+
+| Platform | How | Details |
+|---|---|---|
+| **Anywhere with Docker** | `docker compose up -d` from the repo root — API + watcher + Ollama, with the `bge-m3` pull handled for you (≈1.2 GB on first run) | [docker-compose.yml](docker-compose.yml) header comments |
+| **Linux** | systemd units via `deploy/systemd/install.sh --enable` | [deploy/systemd/README.md](deploy/systemd/README.md) |
+| **macOS** | launchd LaunchAgents from templates | [deploy/launchd/README.md](deploy/launchd/README.md) |
+| **Windows** | use Docker Compose (set `PALINODE_DATA_DIR` to a Windows path) | [docker-compose.yml](docker-compose.yml) header comments |
+
+With compose, your memory stays on the **host** at `~/.palinode` (override with `PALINODE_DATA_DIR`) — the containers mount it; files remain the source of truth. Already running Ollama on the host? `OLLAMA_URL=http://host.docker.internal:11434 docker compose up -d palinode-api palinode-watcher` skips the bundled one. Verify any of the three the same way: `palinode doctor` (or `curl http://127.0.0.1:6340/status`).
+
+---
+
+## Connect your editor
+
+Palinode speaks MCP. Generate the correct config with the CLI instead of hand-pasting JSON (which drifts):
+
+| Editor / harness | One command |
+|---|---|
+| **Claude Code (CLI)** | `claude mcp add palinode -- palinode-mcp` |
+| **Claude Desktop** | `palinode mcp-config --stdio` → paste into the config it prints (quit Desktop first) |
+| **Cursor / Windsurf / other MCP clients** | `palinode mcp-config --stdio` (local) or `--http` (remote / streamable-HTTP) |
+| **Diagnose an existing setup** | `palinode mcp-config --diagnose` |
+
+`palinode mcp-config` never writes your editor's config file — it prints a ready-to-paste block (pipe it straight to the target). Full per-harness detail: [docs/MCP-INSTALL-RECIPES.md](docs/MCP-INSTALL-RECIPES.md).
+
+---
+
+## Daily use — drop into a project
+
+Already installed with `palinode-api` running? Scaffold any project in one command:
 
 ```bash
 cd your-project
 palinode init
 ```
 
-That scaffolds:
-
-- `.claude/CLAUDE.md` — memory instructions for the agent (appended if one
-  already exists)
-- `.claude/settings.json` — a `SessionEnd` hook that auto-captures on `/clear`,
-  logout, and normal exit
-- `.claude/hooks/palinode-session-end.sh` — the hook script itself
-- `.mcp.json` — points Claude Code at the `palinode` MCP server
-
-Open the project in Claude Code and your agent will search prior context on
-startup, save decisions as you work, and snapshot the session on `/clear`. No
-server restarts, no settings menus, no copy-paste.
-
-Re-run with `--dry-run` to preview, `--force` to overwrite, or `--no-mcp`
-/ `--no-hook` to scope what gets installed.
-
----
-
-## Quick Start
-
-```bash
-# Install
-git clone https://github.com/phasespace-labs/palinode && cd palinode
-python3 -m venv venv && source venv/bin/activate
-pip install -e .
-
-# Create your memory directory
-mkdir -p ~/.palinode/{people,projects,decisions,insights,daily}
-cd ~/.palinode && git init
-cp /path/to/palinode/palinode.config.yaml.example palinode.config.yaml  # adjust path
-
-# Start services
-PALINODE_DIR=~/.palinode palinode-api        # REST API on :6340
-PALINODE_DIR=~/.palinode palinode-watcher     # auto-indexes on file save
-PALINODE_DIR=~/.palinode palinode-mcp-sse     # MCP server on :6341 (streamable-HTTP at /mcp/; optional)
-
-# Verify
-curl http://localhost:6340/status
-```
-
-> Your memory directory is **private**. It contains personal data. Never make it public. The code repo contains zero memory files.
-
-> For a pre-populated demo, copy `examples/sample-memory/` to `~/.palinode/`.
+That scaffolds `.claude/CLAUDE.md` (memory instructions, appended if one exists), `.claude/settings.json` (a `SessionEnd` hook that auto-captures on `/clear`, logout, and exit), the hook script, and `.mcp.json` (points Claude Code at the `palinode` MCP server). Your agent then searches prior context on startup, saves decisions as you work, and snapshots the session on `/clear`. Re-run with `--dry-run` to preview, `--force` to overwrite, or `--no-mcp` / `--no-hook` to scope it.
 
 ---
 
@@ -184,7 +212,7 @@ palinode diff --days 7
 
 ## Tools
 
-25 tools available through every interface:
+27 tools available through every interface:
 
 | Tool | What It Does |
 |------|-------------|
@@ -320,16 +348,6 @@ consolidation:
 All models are swappable. Any Ollama embedding model, any OpenAI-compatible chat endpoint. See [palinode.config.yaml.example](palinode.config.yaml.example) for the full reference.
 
 When exposing the API beyond loopback, set `PALINODE_API_TOKEN` — see [SECURITY.md](SECURITY.md#api-authentication) for the bearer-token auth model and the public-bind startup gate.
-
----
-
-## Requirements
-
-- **Python 3.11+**
-- **Ollama** with `bge-m3` (`ollama pull bge-m3`)
-- **Git**
-
-Optional: a chat model for consolidation (any 7B+ works), OpenClaw for agent plugin hooks.
 
 ---
 

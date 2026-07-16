@@ -178,7 +178,6 @@ Content here.
 | Palinode API | 6340 | uvicorn (FastAPI) |
 | Palinode Watcher | — | python watchdog daemon |
 | Ollama (embeddings) | 11434 | ollama serve |
-| Qdrant (Mem0, separate) | 6333 | qdrant |
 
 ## Environment Variables
 

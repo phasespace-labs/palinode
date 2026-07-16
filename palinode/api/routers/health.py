@@ -12,6 +12,7 @@ from __future__ import annotations
 import glob
 import os
 import subprocess
+import time
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -26,6 +27,25 @@ from palinode.api._util import _auto_summary_state, _reindex_state, _utc_now
 from palinode.api.memory_write import _is_description_eligible
 
 router = APIRouter()
+
+# Cache the functional embed probe so a monitor polling /status doesn't trigger a
+# real embed on every hit. The probe itself is bounded (a ~2 s one-token embed);
+# this TTL keeps a warm result for a minute and a cold result from being re-paid
+# on back-to-back calls.
+_EMBED_PROBE_TTL_S = 60.0
+_embed_probe_cache: dict[str, Any] = {"ts": 0.0, "ok": None}
+
+
+def _embed_functional_cached(client: Any) -> bool:
+    """Return the cached functional-embed verdict, refreshing past the TTL."""
+    now = time.monotonic()
+    cached = _embed_probe_cache["ok"]
+    if cached is not None and (now - _embed_probe_cache["ts"]) < _EMBED_PROBE_TTL_S:
+        return cached
+    ok = client.probe_embed()
+    _embed_probe_cache["ts"] = now
+    _embed_probe_cache["ok"] = ok
+    return ok
 
 
 @router.get("/status")
@@ -79,8 +99,19 @@ def status_api() -> dict[str, Any]:
     stats["associative_capability"] = stats["total_entities"] > 0
 
     # Liveness via the centralized client's ping (raw GET, no circuit breaker).
-    ollama_reachable = _srv.get_ollama_client().ping(OllamaRole.EMBED)
+    _ollama_client = _srv.get_ollama_client()
+    ollama_reachable = _ollama_client.ping(OllamaRole.EMBED)
     stats["ollama_reachable"] = ollama_reachable
+
+    # `ollama_reachable` only means the daemon answered a GET — it says nothing
+    # about whether the embedding MODEL works. `embed_functional` is the honest
+    # signal: a real, bounded one-token embed (cached, see _embed_functional_cached).
+    # On a cold/absent bge-m3, ollama_reachable is True but embed_functional is
+    # False — so /status can no longer be falsely green (keyword-only mode is the
+    # actual state). Skip the probe entirely when the daemon isn't even reachable.
+    stats["embed_functional"] = (
+        _embed_functional_cached(_ollama_client) if ollama_reachable else False
+    )
 
     # Per-role Ollama traffic metrics (Phase 5): p50/p95/error-rate over a
     # 5-minute window plus circuit state, for each role that has seen traffic in

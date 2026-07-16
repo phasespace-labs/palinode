@@ -405,6 +405,7 @@ class OllamaClient:
         self._lock = threading.Lock()
         self._circuits: dict[OllamaRole, CircuitBreaker] = {}
         self._metrics: dict[OllamaRole, RollingMetrics] = {}
+        self._embed_ok_once = False
 
     # -- internal state accessors (lock-guarded) --------------------------------
 
@@ -655,6 +656,7 @@ class OllamaClient:
                 raise
             vec = _extract_embedding_vector(data)
             if vec is not None:
+                self._embed_ok_once = True
                 return vec
             # 200 OK but no vector. Ollama reports ctx overflow as an error body
             # raise immediately, do not try the other endpoint.
@@ -765,6 +767,33 @@ class OllamaClient:
             self._client.get(_resolve_base_url(role), timeout=timeout)
             return True
         except (httpx.HTTPError, OSError):
+            return False
+
+    @property
+    def has_embedded_ok(self) -> bool:
+        """True once any embed has succeeded in this process.
+
+        The cold-embed fast path in ``index_file`` uses this to decide
+        whether a bounded :meth:`probe_embed` is needed before attempting
+        inline embeds — a proven-warm embed path skips the probe entirely.
+        """
+        return self._embed_ok_once
+
+    def probe_embed(self, *, timeout: float = 2.0) -> bool:
+        """Functional embed probe — confirm the embed *model* produces a vector.
+
+        Unlike :meth:`ping` (a raw GET that returns True if the daemon answers at
+        *all*), this runs a real one-token embed with a short timeout and no
+        retries. It exists so ``/status`` cannot report a cold or absent
+        embedding model as healthy: on a box where Ollama is up but ``bge-m3`` is
+        unpulled or cold, ``ping`` is True while embeds hang — the false-green
+        this closes. Returns True only when a non-empty vector comes back within
+        *timeout*. A single bounded attempt: an open circuit fast-fails here
+        instead of waiting.
+        """
+        try:
+            return bool(self.embed("ok", timeout=timeout, retries=0))
+        except (OllamaError, EmbeddingContextError):
             return False
 
     def close(self) -> None:

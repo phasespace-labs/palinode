@@ -21,7 +21,7 @@ Lessons from running Palinode in production across multiple machines with Claude
                    │  palinode-api   │  ← port 6340
                    │  palinode-mcp   │  ← port 6341
                    │  palinode-watch │
-                   │  ~/palinode/    │  ← memory files
+                   │  ~/.palinode/   │  ← memory files
                    │  .palinode.db   │  ← SQLite-vec
                    └─────────────────┘
 ```
@@ -38,11 +38,11 @@ python3 -m venv venv && source venv/bin/activate
 pip install -e .
 
 # Create memory directory
-mkdir -p ~/palinode && cd ~/palinode && git init
-export PALINODE_DIR=~/palinode
+mkdir -p ~/.palinode && cd ~/.palinode && git init
+export PALINODE_DIR=~/.palinode
 
 # Configure embeddings (requires Ollama with bge-m3)
-cp palinode.config.yaml.example ~/palinode/palinode.config.yaml
+cp palinode.config.yaml.example ~/.palinode/palinode.config.yaml
 # Edit: set embeddings.primary.url to your Ollama endpoint
 
 # Run services
@@ -51,7 +51,7 @@ palinode-mcp-http  # MCP Streamable HTTP on :6341
 palinode-watcher   # File indexer
 ```
 
-For production, use systemd user services (see `systemd/` directory).
+For production, run the processes as services: Docker Compose (`docker compose up -d` at the repo root — bundles Ollama and the model pull), systemd on Linux (`deploy/systemd/`), or launchd on macOS (`deploy/launchd/`). See the README's **Running as a service** section.
 
 ## Client setup
 

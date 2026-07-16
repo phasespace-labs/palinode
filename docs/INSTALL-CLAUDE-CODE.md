@@ -1,6 +1,6 @@
 # Installing Palinode with Claude Code
 
-Palinode gives Claude Code persistent memory via MCP — 25 tools for searching, saving, diagnosing, and managing memories across sessions. The `palinode-session` skill auto-captures milestones and decisions during coding, so your memory stays fresh without manual effort.
+Palinode gives Claude Code persistent memory via MCP — 27 tools for searching, saving, diagnosing, and managing memories across sessions. The `palinode-session` skill auto-captures milestones and decisions during coding, so your memory stays fresh without manual effort.
 
 ## Prerequisites
 
@@ -30,18 +30,23 @@ Best if you run Claude Code on the same machine as Palinode.
 ### 1. Install Palinode
 
 ```bash
-git clone https://github.com/phasespace-labs/palinode.git ~/palinode
-cd ~/palinode
+git clone https://github.com/phasespace-labs/palinode.git ~/palinode-src
+cd ~/palinode-src
 python3 -m venv venv && source venv/bin/activate
 pip install -e .
 ```
+
+> The code lives in `~/palinode-src`; your **memory** lives in a separate
+> directory (`~/.palinode`, next step). Never point them at the same path —
+> memory files inside the git checkout is the #1 broken-install pattern.
 
 ### 2. Create Memory Directory
 
 ```bash
 mkdir -p ~/.palinode
-cp ~/palinode/palinode.config.yaml.example ~/.palinode/palinode.config.yaml
-# Edit ~/.palinode/palinode.config.yaml — set memory_dir: ~/.palinode
+cp ~/palinode-src/palinode.config.yaml.example ~/.palinode/palinode.config.yaml
+# No edit needed: memory_dir stays commented out so it inherits PALINODE_DIR
+# (=~/.palinode below). Only set memory_dir if you are NOT using PALINODE_DIR.
 ```
 
 ### 3. Start Palinode Services
@@ -59,24 +64,22 @@ Keep them running (add to login items, launchd, or systemd as needed).
 
 ### 4. Add MCP Server to Claude Code
 
-Edit `~/.claude/claude_desktop_config.json`:
+Let the CLI wire it — the Claude Code **CLI** reads `~/.claude.json` and project-local
+`.mcp.json`, **not** Claude Desktop's `claude_desktop_config.json` (a common mix-up; that
+file is for the Desktop app):
 
-```json
-{
-  "mcpServers": {
-    "palinode": {
-      "command": "python",
-      "args": ["-m", "palinode.mcp"],
-      "env": {
-        "PALINODE_DIR": "/Users/youruser/.palinode"
-      },
-      "cwd": "/Users/youruser/palinode"
-    }
-  }
-}
+```bash
+claude mcp add palinode -- palinode-mcp
+# or print a paste-ready block instead of writing config: palinode mcp-config --stdio
 ```
 
-Restart Claude Code. Run `/mcp` to verify `palinode` is connected.
+On a venv install, use the absolute path so the server resolves its own deps:
+
+```bash
+claude mcp add palinode -- ~/palinode-src/venv/bin/palinode-mcp
+```
+
+Run `/mcp` in Claude Code to verify `palinode` is connected.
 
 ---
 
@@ -158,18 +161,9 @@ systemctl --user enable --now palinode-mcp.service
 
 The MCP endpoint is `http://your-server:6341/mcp`. Configure your IDE:
 
-**Claude Code** (`~/.claude/claude_desktop_config.json`):
-```json
-{
-  "mcpServers": {
-    "palinode": {
-      "url": "http://your-server:6341/mcp/"
-    }
-  }
-}
-```
+**Claude Code** — one command: `claude mcp add --transport http palinode http://your-server:6341/mcp/` (writes `~/.claude.json`, **not** `claude_desktop_config.json`).
 
-**Claude Desktop** (`claude_desktop_config.json`):
+**Claude Desktop** (`claude_desktop_config.json` — the Desktop app's own file):
 ```json
 {
   "mcpServers": {
@@ -321,7 +315,7 @@ If something doesn't look right, run `palinode doctor` from your terminal for a 
 
 ---
 
-## Available Tools (21)
+## Available Tools (27)
 
 | Tool | Description |
 |---|---|
@@ -464,9 +458,10 @@ Without embeddings, Palinode falls back to BM25 keyword search only.
 ## Troubleshooting
 
 **MCP not connecting:**
-- Check `~/.claude/claude_desktop_config.json` syntax (valid JSON)
+- Confirm the server is registered: `claude mcp list` (the Claude Code CLI stores this in `~/.claude.json` / project `.mcp.json` — not `claude_desktop_config.json`)
+- Re-run `palinode mcp-config --diagnose` to check the config and surface a stale/duplicate entry
 - Verify `PALINODE_DIR` exists and contains at least one `.md` file
-- Test manually: `PALINODE_DIR=~/.palinode python -m palinode.mcp`
+- Test manually: `PALINODE_DIR=~/.palinode palinode-mcp`
 
 **"DB not initialized":**
 - Run `PALINODE_DIR=~/.palinode python -m palinode.api.server` once to create `.palinode.db`
@@ -485,7 +480,7 @@ There are four distinct things that can fail — tool fired, data on disk, retri
 - Fix: ensure the three keepalive `-o` flags are in your config (`ServerAliveInterval=30`, `ServerAliveCountMax=3`, `TCPKeepAlive=yes`). With them, SSH detects dead connections within ~90s and the IDE reconnects automatically
 
 **Slow first search:**
-- BGE-M3 is 568MB. Cold start takes 10-30s. Subsequent searches are fast (~100ms).
+- BGE-M3 is ≈1.2 GB. Cold start takes 10-30s. Subsequent searches are fast (~100ms).
 
 **`/wrap`, `/save`, or `palinode_push` denied with a "permission" / "auto mode classifier" message:**
 

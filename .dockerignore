@@ -1,0 +1,8 @@
+# Keep the build context to what the image actually installs:
+# pyproject.toml, README.md, palinode/, deploy/docker/.
+*
+!pyproject.toml
+!README.md
+!palinode
+!deploy/docker
+palinode/**/__pycache__

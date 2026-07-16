@@ -9,7 +9,15 @@
 # -----------------------------------------------------------------------------
 # Where Palinode stores markdown memory files and the SQLite-vec index.
 # All paths below are relative to this directory unless absolute.
-memory_dir: "~/palinode"
+#
+# Leave `memory_dir` commented out to inherit the PALINODE_DIR environment
+# variable — this is the recommended setup. The Quick Start exports
+# `PALINODE_DIR=~/.palinode`, and PALINODE_DIR overrides `memory_dir` at load
+# time; setting `memory_dir` here too only invites the two to disagree (files
+# write to one directory while the DB attaches to another, and search silently
+# returns nothing). Uncomment and set an absolute path only if you are NOT
+# using PALINODE_DIR.
+# memory_dir: "~/.palinode"
 
 # SQLite-vec database location (relative to memory_dir)
 db_path: ".palinode.db"

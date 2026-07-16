@@ -432,48 +432,60 @@ def upsert_chunks(
         )
         
         # --- vec0 index -------------------------------------------------------
-        # Pre-flight DELETE: remove the existing row if present before INSERT.
-        # Failure here is not an error — the row may simply not exist yet.
-        emb_json = json.dumps(chunk["embedding"])
-        try:
-            cursor.execute("DELETE FROM chunks_vec WHERE id = ?", (chunk["id"],))
-        except Exception as _del_exc:
+        if not chunk["embedding"]:
+            # Deferred/keyword-only row: no vector yet. Write chunks + FTS
+            # only — the absent chunks_vec row is the exact signal the
+            # index_file re-embed branch keys on, so the row converges to
+            # fully-embedded once the embedder is reachable. Deliberate skip,
+            # not a write failure: vec_ok is untouched.
             _store_logger.debug(
-                "palinode.store: chunks_vec pre-INSERT DELETE skipped for %r: %s",
-                chunk["id"], _del_exc,
+                "palinode.store: empty embedding for %r — chunks+FTS only, "
+                "vec write deferred", chunk["id"],
             )
-
-        # Primary INSERT.  On UNIQUE collision (DELETE silently failed above),
-        # fall back to a forced DELETE + retry.  Log at error on total failure
-        # because a missing vec0 row means this chunk is invisible to vector
-        # search.
-        try:
-            cursor.execute(
-                "INSERT INTO chunks_vec (id, embedding) VALUES (?, ?)",
-                (chunk["id"], emb_json),
-            )
-        except Exception as _ins_exc:
-            _store_logger.debug(
-                "palinode.store: chunks_vec INSERT collided for %r — forcing replace: %s",
-                chunk["id"], _ins_exc,
-            )
+        else:
+            # Pre-flight DELETE: remove the existing row if present before
+            # INSERT. Failure here is not an error — the row may simply not
+            # exist yet.
+            emb_json = json.dumps(chunk["embedding"])
             try:
                 cursor.execute("DELETE FROM chunks_vec WHERE id = ?", (chunk["id"],))
+            except Exception as _del_exc:
+                _store_logger.debug(
+                    "palinode.store: chunks_vec pre-INSERT DELETE skipped for %r: %s",
+                    chunk["id"], _del_exc,
+                )
+
+            # Primary INSERT.  On UNIQUE collision (DELETE silently failed
+            # above), fall back to a forced DELETE + retry.  Log at error on
+            # total failure because a missing vec0 row means this chunk is
+            # invisible to vector search.
+            try:
                 cursor.execute(
                     "INSERT INTO chunks_vec (id, embedding) VALUES (?, ?)",
                     (chunk["id"], emb_json),
                 )
-            except Exception as _retry_exc:
-                _store_logger.error(
-                    "palinode.store: chunks_vec write failed for %r "
-                    "(file=%r, content_hash=%s) — chunk absent from vector index: %s",
-                    chunk["id"],
-                    chunk.get("file_path"),
-                    content_hash[:12],
-                    _retry_exc,
-                    exc_info=True,
+            except Exception as _ins_exc:
+                _store_logger.debug(
+                    "palinode.store: chunks_vec INSERT collided for %r — forcing replace: %s",
+                    chunk["id"], _ins_exc,
                 )
-                vec_ok = False
+                try:
+                    cursor.execute("DELETE FROM chunks_vec WHERE id = ?", (chunk["id"],))
+                    cursor.execute(
+                        "INSERT INTO chunks_vec (id, embedding) VALUES (?, ?)",
+                        (chunk["id"], emb_json),
+                    )
+                except Exception as _retry_exc:
+                    _store_logger.error(
+                        "palinode.store: chunks_vec write failed for %r "
+                        "(file=%r, content_hash=%s) — chunk absent from vector index: %s",
+                        chunk["id"],
+                        chunk.get("file_path"),
+                        content_hash[:12],
+                        _retry_exc,
+                        exc_info=True,
+                    )
+                    vec_ok = False
 
         # --- FTS5 index -------------------------------------------------------
         # Best-effort: FTS5 external-content tables can get out of sync during

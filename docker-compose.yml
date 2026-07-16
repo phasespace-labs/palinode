@@ -1,0 +1,93 @@
+# Palinode — one-command install: API + watcher + Ollama (+ bge-m3 pull).
+#
+#   docker compose up -d
+#
+# First run pulls the bge-m3 embedding model (≈1.2 GB) — saves made before the
+# pull finishes are keyword-searchable immediately and embed once the model is
+# up (the watcher retries). Check readiness with:
+#
+#   curl http://127.0.0.1:6340/status        # embed_functional: true when ready
+#
+# Your memory lives on the HOST at ${PALINODE_DATA_DIR:-$HOME/.palinode} —
+# the bind mount below is load-bearing: files are the source of truth and must
+# survive the containers. On Windows, set PALINODE_DATA_DIR explicitly
+# (e.g. PALINODE_DATA_DIR=C:\Users\you\.palinode).
+#
+# Already running Ollama on the host? Skip the bundled one:
+#
+#   OLLAMA_URL=http://host.docker.internal:11434 \
+#     docker compose up -d palinode-api palinode-watcher
+#
+# Containers run as root by default, so files in the bind mount are root-owned
+# on Linux hosts; add `user: "1000:1000"` to both palinode services (with a
+# pre-created, owned data dir) if that matters to you. macOS/Windows Docker
+# Desktop maps ownership transparently.
+
+services:
+  palinode-api:
+    build: .
+    image: palinode:local
+    restart: unless-stopped
+    environment:
+      PALINODE_DIR: /data
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-bge-m3}
+    ports:
+      # Loopback-only by default. Set PALINODE_BIND=0.0.0.0 to expose on the
+      # network — the API will warn, and a public bind wants PALINODE_API_TOKEN
+      # (see deploy/systemd/palinode-api.service.template for the contract).
+      - "${PALINODE_BIND:-127.0.0.1}:${PALINODE_API_PORT:-6340}:6340"
+    volumes:
+      - ${PALINODE_DATA_DIR:-${HOME}/.palinode}:/data
+    # Lets the host-Ollama override (OLLAMA_URL=http://host.docker.internal:11434)
+    # work on Linux, where Docker doesn't provide host.docker.internal natively.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:6340/status', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+
+  palinode-watcher:
+    build: .
+    image: palinode:local
+    restart: unless-stopped
+    command: ["python", "-m", "palinode.indexer.watcher"]
+    environment:
+      PALINODE_DIR: /data
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-bge-m3}
+    volumes:
+      - ${PALINODE_DATA_DIR:-${HOME}/.palinode}:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - palinode-api
+
+  ollama:
+    image: ollama/ollama
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      start_period: 10s
+
+  # One-shot: pulls the embedding model into the ollama service's volume,
+  # then exits. Idempotent — an already-pulled model is a fast no-op.
+  ollama-init:
+    image: ollama/ollama
+    restart: "no"
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["ollama", "pull"]
+    command: ["${EMBEDDING_MODEL:-bge-m3}"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+volumes:
+  ollama-models:

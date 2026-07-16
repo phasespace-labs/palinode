@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.phasespace.palinode-api</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>${PALINODE_HOME}/venv/bin/uvicorn</string>
+        <string>palinode.api.server:app</string>
+        <string>--host</string>
+        <string>127.0.0.1</string>
+        <string>--port</string>
+        <string>${API_PORT}</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>${PALINODE_HOME}</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PALINODE_DIR</key>
+        <string>${PALINODE_DATA_DIR}</string>
+        <key>OLLAMA_URL</key>
+        <string>${OLLAMA_URL}</string>
+        <key>EMBEDDING_MODEL</key>
+        <string>${EMBEDDING_MODEL}</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>${HOME}/Library/Logs/palinode-api.log</string>
+    <key>StandardErrorPath</key>
+    <string>${HOME}/Library/Logs/palinode-api.log</string>
+</dict>
+</plist>

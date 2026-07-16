@@ -271,6 +271,17 @@ def save(
             filename = result.get("file_path", result.get("file", "unknown"))
             id_str = result.get("id", "unknown")
             console.print(f"[green]Saved:[/green] {filename} (id: {id_str})")
+            # The file is persisted (and git-committed) regardless of embedding.
+            # If the inline embed didn't complete — cold/absent Ollama — say so
+            # plainly instead of leaving the user thinking the save half-failed:
+            # the memory is safe and keyword-searchable now; the watcher re-embeds
+            # for semantic recall once the embedder is back.
+            if "embedded" in result and not result.get("embedded"):
+                console.print(
+                    "[yellow]  embedding deferred[/yellow] — saved and keyword-searchable now; "
+                    "semantic recall follows once the embedder is reachable "
+                    "(run `palinode doctor` if this persists)."
+                )
             if sync and "write_time_check" in result:
                 check = result["write_time_check"]
                 ops = check.get("operations", [])

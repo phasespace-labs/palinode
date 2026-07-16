@@ -15,12 +15,40 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import time
 from typing import Any
 
 from palinode.core import embedder, parser, store
 from palinode.core.hashing import stable_md5_hexdigest
+from palinode.core.ollama_client import get_ollama_client
 
 logger = logging.getLogger("palinode.indexer")
+
+# Cold-embed probe cache. Only negative verdicts need
+# caching: a successful probe IS an embed, so it flips the client's
+# ``has_embedded_ok`` and this cache is never consulted again. The TTL keeps a
+# keyword-only install (embedder absent forever) at one bounded probe per
+# window instead of one per indexed file when the watcher sweeps a batch.
+_PROBE_TTL_S = 30.0
+_probe_cache: dict[str, Any] = {"ts": 0.0, "ok": None}
+
+
+def _embeds_deferred(client: Any) -> bool:
+    """True when this pass should skip embeds (cold/absent embed path).
+
+    Until an embed has succeeded in-process, one bounded ``probe_embed``
+    (cached ``_PROBE_TTL_S`` seconds on failure) stands in for letting every
+    section pay the full embed timeout.
+    """
+    if client.has_embedded_ok:
+        return False
+    now = time.monotonic()
+    if _probe_cache["ok"] is not None and (now - _probe_cache["ts"]) < _PROBE_TTL_S:
+        return not _probe_cache["ok"]
+    ok = client.probe_embed()
+    _probe_cache["ts"] = now
+    _probe_cache["ok"] = ok
+    return not ok
 
 
 def _index_entries_present(db: Any, chunk_id: str) -> bool:
@@ -117,6 +145,19 @@ def index_file(filepath: str, *, content: str | None = None) -> dict[str, Any]:
     metadata, sections = parser.parse_markdown(content)
     category = metadata.get("category", os.path.basename(os.path.dirname(filepath)))
 
+    # Cold-embed fast path: until an embed has succeeded in this process, one
+    # bounded probe (~2 s, negative verdict cached) decides the fate of ALL
+    # sections instead of each one paying the full embed timeout — the "first
+    # save on a fully-cold host blocks until the embed timeout" gap. Deferred
+    # sections are written as FTS-only rows (keyword-searchable immediately,
+    # which makes the CLI's "keyword-searchable now" note true) with no
+    # chunks_vec entry — exactly the missing-index signal the re-embed branch
+    # below keys on, so the next pass after the embedder warms converges them
+    # to fully-embedded rows.
+    defer_embeds = _embeds_deferred(get_ollama_client())
+    if defer_embeds:
+        embedder._notice_keyword_only_once()
+
     chunks: list[dict[str, Any]] = []
     valid_chunk_ids: list[str] = []
     embed_failure = False
@@ -140,21 +181,25 @@ def index_file(filepath: str, *, content: str | None = None) -> dict[str, Any]:
             continue
 
         # Either the content changed, or the row exists but its FTS/vec
-        # entries are missing. Either way, embed (fix B).
-        emb = embedder.embed(sec["content"])
-        if not emb:
-            # Hard embedder failure (Ollama down, timeout, misconfig).
-            # Fall through — the file is on disk, the watcher / a later
-            # call can retry. Don't insert a half-baked row.
-            # Previously this swallowed the miss into a bare flag: the indexer
-            # never said which section failed. Per-section WARNING.
-            embed_failure = True
-            sections_failed += 1
-            logger.warning(
-                "section embed returned empty; skipping op=index file_path=%s section_id=%s",
-                filepath, sec["section_id"],
-            )
-            continue
+        # entries are missing. Either way, embed (fix B) — unless this pass
+        # is deferring embeds: then write the row with no vector (FTS-only).
+        if defer_embeds:
+            emb = []
+        else:
+            emb = embedder.embed(sec["content"])
+            if not emb:
+                # Hard embedder failure (Ollama down, timeout, misconfig).
+                # Fall through — the file is on disk, the watcher / a later
+                # call can retry. Don't insert a half-baked row.
+                # Previously this swallowed the miss into a bare flag: the indexer
+                # never said which section failed. Per-section WARNING.
+                embed_failure = True
+                sections_failed += 1
+                logger.warning(
+                    "section embed returned empty; skipping op=index file_path=%s section_id=%s",
+                    filepath, sec["section_id"],
+                )
+                continue
 
         if existing and existing["content_hash"] == content_hash and not index_ok:
             result["chunks_reembedded"] += 1
@@ -223,7 +268,24 @@ def index_file(filepath: str, *, content: str | None = None) -> dict[str, Any]:
     # writing fresh chunks or by hitting the unchanged-and-indexed fast
     # path. A hard embedder failure on any section flips it to False so
     # the API response can surface ``embedded: false``.
-    if embed_failure:
+    if defer_embeds and chunks:
+        # Rows were written FTS-only. Report as not-embedded (with the vec
+        # index flagged absent) so callers surface the deferred state; one
+        # INFO line, not a WARNING — this is the designed cold-host path,
+        # not a failure.
+        result["embedded"] = False
+        result["indexed_vec"] = False
+        if result["error"] is None:
+            result["error"] = (
+                "embed deferred: probe failed (cold or absent embedder); "
+                "rows are keyword-searchable now, re-embed follows"
+            )
+        logger.info(
+            "embeds deferred; sections written FTS-only "
+            "op=index file_path=%s sections_deferred=%d",
+            filepath, len(chunks),
+        )
+    elif embed_failure:
         result["embedded"] = False
         if result["error"] is None:
             result["error"] = "embedder unreachable"

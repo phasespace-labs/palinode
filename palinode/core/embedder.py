@@ -42,6 +42,30 @@ _MIN_EXPECTED_CTX = 8192
 _preflight_lock = threading.Lock()
 _preflight_done = False
 
+# One-time notice: the first time an embed fails (cold/absent model, unreachable
+# Ollama), tell the operator — once, plainly — that Palinode is running in
+# keyword-only mode and how to enable semantic search. Avoids burying the signal
+# under per-call WARNINGs on a fresh install.
+_keyword_only_lock = threading.Lock()
+_keyword_only_notice_done = False
+
+
+def _notice_keyword_only_once() -> None:
+    """Log the keyword-only-mode guidance exactly once per process."""
+    global _keyword_only_notice_done
+    with _keyword_only_lock:
+        if _keyword_only_notice_done:
+            return
+        _keyword_only_notice_done = True
+    logger.warning(
+        "Embeddings unavailable — running in keyword-only mode (BM25/FTS5). "
+        "Save, search, and audit still work; semantic recall is off until an "
+        "embedder is reachable. To enable it: `ollama pull bge-m3` (or point "
+        "embeddings.primary.url at a working Ollama host). "
+        "op=embed outcome=keyword_only_mode model=%s",
+        config.embeddings.primary.model,
+    )
+
 
 def check_model_context(
     url: Optional[str] = None,
@@ -201,6 +225,9 @@ def _embed_local(text: str) -> list[float]:
             "op=embed model=%s text_len=%d outcome=error error=%r",
             model, len(text), str(e),
         )
+        # First failure this process → surface the plain keyword-only-mode notice
+        # so a fresh-install operator sees one clear line, not just per-call noise.
+        _notice_keyword_only_once()
         return []
 
 
