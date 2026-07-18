@@ -21,6 +21,7 @@ import os
 
 TOOL_SMOKE_ARGS: dict[str, tuple[dict, bool]] = {
     # Read-only / index-side tools — should always succeed in a clean env
+    "palinode_session_init":      ({}, False),
     "palinode_list":              ({}, False),
     "palinode_read":              ({"file_path": "insights/smoke-target.md"}, False),
     "palinode_search":            ({"query": "smoke", "threshold": 0.0}, False),

@@ -416,6 +416,74 @@ describe("ADR-015 §5 plugin parity (#480)", () => {
     }
   });
 
+  it("palinode_save epistemic schema includes unverified", () => {
+    const tool = tools.get("palinode_save");
+    expect(tool).toBeDefined();
+    const prop = (tool!.parameters.properties as Record<string, any>)["epistemic"];
+    expect(JSON.stringify(prop)).toContain("unverified");
+  });
+
+  it("palinode_save claims schema describes claim and span anchors", () => {
+    const tool = tools.get("palinode_save");
+    expect(tool).toBeDefined();
+    const prop = (tool!.parameters.properties as Record<string, any>)["claims"];
+    expect(prop).toBeDefined();
+    const serialised = JSON.stringify(prop);
+    for (const field of ["claim_id", "text", "source_id", "span", "quote", "quote_hash", "anchor_id"]) {
+      expect(serialised).toContain(field);
+    }
+  });
+
+  it("palinode_save forwards claims in API request body", async () => {
+    const captured: any[] = [];
+    const origFetch = global.fetch;
+    global.fetch = async (_url: string, opts?: any) => {
+      captured.push(JSON.parse(opts?.body ?? "{}"));
+      return { ok: true, json: async () => ({ file_path: "test.md", id: "test-id" }) } as any;
+    };
+
+    try {
+      let capturedExecute: ((id: string, params: any) => Promise<any>) | null = null;
+      const fakeApi: any = {
+        pluginConfig: {
+          palinodeDir: path.join(process.env.HOME || "/tmp", "palinode"),
+          promptsDir: "specs/prompts",
+          autoRecall: false,
+          autoCapture: false,
+          midTurnMode: "none",
+        },
+        logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
+        registerTool: (toolDef: any) => {
+          if (toolDef.name === "palinode_save") capturedExecute = toolDef.execute;
+        },
+        on: () => undefined,
+        registerCli: () => undefined,
+        registerService: () => undefined,
+      };
+      palinodePlugin.register(fakeApi);
+
+      expect(capturedExecute).not.toBeNull();
+      const claims = [{
+        text: "The release is ready",
+        source_id: "research/release.md",
+        span: { quote: "All gates passed" },
+        anchor_id: "release-gate",
+      }];
+      await capturedExecute!("call-claims", {
+        content: "test",
+        type: "Insight",
+        epistemic: "unverified",
+        claims,
+      });
+
+      expect(captured).toHaveLength(1);
+      expect(captured[0].epistemic).toBe("unverified");
+      expect(captured[0].claims).toEqual(claims);
+    } finally {
+      global.fetch = origFetch;
+    }
+  });
+
   it("palinode_search forwards include_telemetry in API request body", async () => {
     const captured: any[] = [];
     const origFetch = global.fetch;

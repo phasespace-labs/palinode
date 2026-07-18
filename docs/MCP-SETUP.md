@@ -176,6 +176,7 @@ The three `ServerAlive*` / `TCPKeepAlive` options keep the SSH session alive acr
 
 | Tool | What it does |
 |------|-------------|
+| `palinode_session_init` | Session-start context digest: resolved project scope, core memories, recent decisions, open action items |
 | `palinode_search` | Semantic + keyword hybrid search over memory |
 | `palinode_save` | Write a new memory item (persists to git) |
 | `palinode_ingest` | Fetch a URL and save as research reference |

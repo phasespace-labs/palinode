@@ -5,11 +5,32 @@ from palinode.cli._format import console, print_result, get_default_format
 @click.command()
 @click.argument("file_path")
 @click.option("--search", help="Filter to matching lines")
-def blame(file_path, search):
+@click.option(
+    "--claims",
+    is_flag=True,
+    default=False,
+    help=(
+        "Also resolve the file's claim-level source anchors: which source "
+        "span justifies each claim, with live integrity status."
+    ),
+)
+def blame(file_path, search, claims):
     """Show when lines were changed."""
     try:
-        data = api_client.blame(file_path, search)
-        console.print(data)
+        data = api_client.blame(file_path, search, claims=claims)
+        if claims:
+            from palinode.core.claims import format_claims_resolution
+
+            # markup=False: blame/claims lines carry [status] and [git: …]
+            # brackets that Rich would otherwise consume as style tags.
+            console.print(data.get("blame", ""), markup=False)
+            console.print("")
+            console.print(
+                format_claims_resolution(file_path, data.get("claims", [])),
+                markup=False,
+            )
+        else:
+            console.print(data)
     except Exception as e:
         console.print(f"[red]Error blaming: {str(e)}[/red]")
 

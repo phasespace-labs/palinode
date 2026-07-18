@@ -36,6 +36,12 @@
     ]
   ],
   [
+    "/context/prime",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/dedup-suggest",
     [
       "POST"

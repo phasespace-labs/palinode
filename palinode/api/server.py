@@ -578,6 +578,7 @@ _MEMORY_CATEGORY_DIRS: frozenset[str] = frozenset(_TYPE_TO_CATEGORY.values())
 
 # ── Register sub-routers (routes moved from this module) ─────────────────────
 from palinode.api.routers.consolidation import router as _consolidation_router  # noqa: E402
+from palinode.api.routers.context import router as _context_router  # noqa: E402
 from palinode.api.routers.git_history import router as _git_history_router  # noqa: E402
 from palinode.api.routers.health import router as _health_router  # noqa: E402
 from palinode.api.routers.maintenance import router as _maintenance_router  # noqa: E402
@@ -593,6 +594,7 @@ app.include_router(_search_router)
 app.include_router(_health_router)
 app.include_router(_maintenance_router)
 app.include_router(_session_router)
+app.include_router(_context_router)
 
 # ── Local read-only provenance UI (Phase 0) ─────────────────────────────────
 # Server-rendered HTML under /ui — no new service, loopback-only, read-only.

@@ -80,6 +80,20 @@ from palinode.cli._format import console, print_result, get_default_format, Outp
     ),
 )
 @click.option(
+    "--claim",
+    "claims",
+    multiple=True,
+    metavar="TEXT::REF::QUOTE",
+    help=(
+        "Claim-level source anchor in TEXT::REF::QUOTE form (split on the "
+        "first two '::'). TEXT is the claim as stated in the memory, REF is "
+        "the cited source path under the memory dir, and QUOTE is the exact "
+        "passage that justifies the claim. The stable claim_id and integrity "
+        "hash are computed on save; read back with `palinode blame --claims`. "
+        "Repeatable. e.g. --claim 'embed moved to the GPU host::decisions/embed-move.md::the exact passage'"
+    ),
+)
+@click.option(
     "--contradicts",
     "contradicts",
     multiple=True,
@@ -115,13 +129,14 @@ from palinode.cli._format import console, print_result, get_default_format, Outp
 @click.option(
     "--epistemic",
     "epistemic",
-    type=click.Choice(["fact", "inference", "open_question"]),
+    type=click.Choice(["fact", "inference", "open_question", "unverified"]),
     default=None,
     help=(
         "Epistemic marker (ADR-018): the KIND of claim this memory makes — "
-        "'fact' (observed/verified), 'inference' (derived, lower trust), or "
-        "'open_question' (unresolved). Omit to leave the memory unmarked (no "
-        "claim — not treated as fact); persisted as frontmatter only when set."
+        "'fact' (observed/verified), 'inference' (derived, lower trust), "
+        "'open_question' (unresolved), or 'unverified' (asserted but not "
+        "checked). Omit to leave the memory unmarked (no claim — not treated "
+        "as fact); persisted as frontmatter only when set."
     ),
 )
 @click.option(
@@ -150,6 +165,7 @@ def save(
     external_ref_pairs,
     source,
     sources,
+    claims,
     contradicts,
     backed_by,
     update_policy,
@@ -238,6 +254,23 @@ def save(
             ref, _, quote = raw.partition("::")
             source_anchors.append({"ref": ref.strip(), "quote": quote})
 
+    # Parse --claim TEXT::REF::QUOTE triples into claim-level anchors.
+    # Split on the FIRST TWO '::' so the quote may itself contain '::'.
+    claim_anchors: list[dict] | None = None
+    if claims:
+        claim_anchors = []
+        for raw in claims:
+            parts = raw.split("::", 2)
+            if len(parts) != 3:
+                console.print(
+                    f"[red]Error: --claim must be TEXT::REF::QUOTE, got: {raw!r}[/red]"
+                )
+                raise click.Abort()
+            text, ref, quote = parts
+            claim_anchors.append(
+                {"text": text.strip(), "source_id": ref.strip(), "span": {"quote": quote}}
+            )
+
     try:
         # ADR-010: do not default source here. The HTTP client sets
         # X-Palinode-Source: cli on every request; only forward `source` in
@@ -258,6 +291,7 @@ def save(
             external_refs=external_refs,
             update_policy=update_policy,
             sources=source_anchors,
+            claims=claim_anchors,
             epistemic=epistemic,
             contradicts=list(contradicts) or None,
             backed_by=list(backed_by) or None,

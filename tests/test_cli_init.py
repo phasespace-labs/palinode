@@ -18,7 +18,6 @@ import tempfile
 from palinode.cli import main
 from palinode.cli.init import (
     HOOK_SCRIPT,
-    PS_COMMAND_BODY,
     WRAP_COMMAND_BODY,
     _slugify,
 )
@@ -43,18 +42,6 @@ def test_slugify_falls_back_to_project():
 # ---- Deterministic prompt guards ----------------------------------------
 
 
-def test_ps_command_is_deterministic():
-    """/ps must always call palinode_save with type=ProjectSnapshot, never session_end."""
-    body = PS_COMMAND_BODY
-    assert "palinode_save" in body
-    assert '"ProjectSnapshot"' in body
-    assert "This command is deterministic" in body
-    assert "Do not call any other tool" in body
-    # Must NOT contain smart dispatch instructions
-    assert "palinode_session_end" not in body or "use `/wrap`" in body
-    assert "Pick the right tool" not in body
-
-
 def test_wrap_command_is_deterministic():
     """/wrap must call palinode_push then palinode_session_end, never palinode_save.
 
@@ -75,13 +62,9 @@ def test_wrap_command_is_deterministic():
     assert body.find("palinode_push") < body.find("palinode_session_end"), (
         "palinode_push must appear before palinode_session_end (#353)"
     )
-    # Must NOT dispatch to palinode_save
-    assert "palinode_save" not in body or "use `/ps`" in body
-
-
-def test_ps_and_wrap_are_different():
-    """The two commands must be distinct operations, not aliases."""
-    assert PS_COMMAND_BODY != WRAP_COMMAND_BODY
+    # Must NOT dispatch to palinode_save (a pointer to the tool for
+    # mid-session checkpoints is fine; the /save //ps commands are removed)
+    assert "palinode_save" not in body or "mid-session checkpoint" in body
 
 
 # Hook script slurp-based extraction (mirrors) -------
@@ -330,9 +313,12 @@ def test_init_creates_all_files(tmp_path: Path):
     assert (tmp_path / ".claude" / "CLAUDE.md").exists()
     assert (tmp_path / ".claude" / "settings.json").exists()
     assert (tmp_path / ".claude" / "hooks" / "palinode-session-end.sh").exists()
-    assert (tmp_path / ".claude" / "commands" / "ps.md").exists()
+    assert (tmp_path / ".claude" / "hooks" / "palinode-session-start.sh").exists()
     assert (tmp_path / ".claude" / "commands" / "wrap.md").exists()
     assert (tmp_path / ".mcp.json").exists()
+    # /wrap is the sole scaffolded lifecycle command (save/ps deprecated)
+    assert not (tmp_path / ".claude" / "commands" / "save.md").exists()
+    assert not (tmp_path / ".claude" / "commands" / "ps.md").exists()
 
 
 def test_init_settings_include_worktree_allow_rules(tmp_path: Path):
@@ -413,7 +399,7 @@ def test_init_is_idempotent(tmp_path: Path):
     first = runner.invoke(main, ["init", "--dir", str(tmp_path)])
     assert first.exit_code == 0
 
-    ps_content = (tmp_path / ".claude" / "commands" / "ps.md").read_text()
+    wrap_content = (tmp_path / ".claude" / "commands" / "wrap.md").read_text()
     settings_content = (tmp_path / ".claude" / "settings.json").read_text()
 
     second = runner.invoke(main, ["init", "--dir", str(tmp_path)])
@@ -421,7 +407,7 @@ def test_init_is_idempotent(tmp_path: Path):
     assert "skipped" in second.output
 
     # Files unchanged
-    assert (tmp_path / ".claude" / "commands" / "ps.md").read_text() == ps_content
+    assert (tmp_path / ".claude" / "commands" / "wrap.md").read_text() == wrap_content
     assert (tmp_path / ".claude" / "settings.json").read_text() == settings_content
 
 
@@ -457,6 +443,50 @@ def test_init_merges_into_existing_settings_json(tmp_path: Path):
     assert "PreToolUse" in merged["hooks"]
     assert "SessionEnd" in merged["hooks"]
     assert len(merged["hooks"]["SessionEnd"]) == 1
+    assert "SessionStart" in merged["hooks"]
+    assert len(merged["hooks"]["SessionStart"]) == 1
+
+
+def test_init_registers_both_hooks_idempotently(tmp_path: Path):
+    """A double init registers SessionStart + SessionEnd exactly once each
+    (#261: the session-start hook rides the same settings merge as session-end)."""
+    runner = CliRunner()
+    runner.invoke(main, ["init", "--dir", str(tmp_path)])
+    runner.invoke(main, ["init", "--dir", str(tmp_path)])
+
+    settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+    for event, script in (
+        ("SessionStart", "palinode-session-start.sh"),
+        ("SessionEnd", "palinode-session-end.sh"),
+    ):
+        cmds = [
+            h["command"]
+            for entry in settings["hooks"][event]
+            for h in entry["hooks"]
+        ]
+        assert sum(script in c for c in cmds) == 1, f"{event} must register exactly once"
+
+
+def test_init_upgrades_sessionend_only_settings(tmp_path: Path):
+    """A settings.json scaffolded by a pre-#261 init (SessionEnd only) gains the
+    SessionStart registration on re-run without duplicating SessionEnd."""
+    settings_path = tmp_path / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(json.dumps({
+        "hooks": {"SessionEnd": [{"hooks": [{
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/palinode-session-end.sh",
+            "timeout": 35,
+        }]}]},
+    }, indent=2))
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["init", "--dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+
+    settings = json.loads(settings_path.read_text())
+    assert len(settings["hooks"]["SessionEnd"]) == 1, "SessionEnd must not duplicate"
+    assert len(settings["hooks"]["SessionStart"]) == 1, "SessionStart must be added"
 
 
 def test_init_scope_flags(tmp_path: Path):
@@ -472,5 +502,278 @@ def test_init_scope_flags(tmp_path: Path):
     assert not (tmp_path / ".claude" / "settings.json").exists()
     assert not (tmp_path / ".claude" / "hooks").exists()
     assert not (tmp_path / ".mcp.json").exists()
-    assert (tmp_path / ".claude" / "commands" / "ps.md").exists()
     assert (tmp_path / ".claude" / "commands" / "wrap.md").exists()
+
+
+# ---- /save //ps deprecation guards ---------------------------------------
+
+
+def test_init_never_scaffolds_save_or_ps(tmp_path: Path):
+    """#631: /wrap is the sole lifecycle command. Neither the command nor the
+    skill form of /save //ps may be written, in any scope."""
+    runner = CliRunner()
+    result = runner.invoke(main, [
+        "init", "--dir", str(tmp_path), "--skills", "project",
+    ])
+    assert result.exit_code == 0, result.output
+
+    for name in ("save", "ps"):
+        assert not (tmp_path / ".claude" / "commands" / f"{name}.md").exists()
+        assert not (tmp_path / ".claude" / "skills" / name).exists()
+    assert (tmp_path / ".claude" / "commands" / "wrap.md").exists()
+    assert (tmp_path / ".claude" / "skills" / "wrap" / "SKILL.md").exists()
+
+
+def test_init_preserves_existing_save_ps_installs(tmp_path: Path):
+    """Deprecation is forward-only: a re-run must not delete or rewrite
+    save.md/ps.md that an older init already installed."""
+    cmds = tmp_path / ".claude" / "commands"
+    cmds.mkdir(parents=True)
+    (cmds / "save.md").write_text("legacy save body\n")
+    (cmds / "ps.md").write_text("legacy ps body\n")
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["init", "--dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+
+    assert (cmds / "save.md").read_text() == "legacy save body\n"
+    assert (cmds / "ps.md").read_text() == "legacy ps body\n"
+
+
+# ---- ADR-012 Layer 1: AGENTS.md + .cursor/rules scaffolding -----------------
+
+
+_FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def test_claude_md_block_byte_identical_to_golden():
+    """The harness-neutral block split must not change CLAUDE.md output — the
+    rendered block (light and heavy wrap policy) is pinned byte-for-byte
+    against fixtures captured from the pre-split monolithic constant."""
+    from palinode.cli.init import CLAUDE_MD_BLOCK, WRAP_POLICY_HEAVY_NOTE
+
+    light = CLAUDE_MD_BLOCK.format(project_slug="sample-project", wrap_policy_note="")
+    heavy = CLAUDE_MD_BLOCK.format(
+        project_slug="sample-project", wrap_policy_note=WRAP_POLICY_HEAVY_NOTE
+    )
+    assert light == (_FIXTURES / "claude_md_memory_block_light.txt").read_text()
+    assert heavy == (_FIXTURES / "claude_md_memory_block_heavy.txt").read_text()
+
+
+def test_memory_block_core_is_harness_neutral():
+    """The shared core must carry the full memory contract but none of the
+    Claude-Code-only machinery — Codex/Antigravity/Cursor have no /clear,
+    /wrap, or SessionEnd hook."""
+    from palinode.cli.init import MEMORY_BLOCK_CORE
+
+    core = MEMORY_BLOCK_CORE.format(project_slug="sample-project")
+    for required in (
+        "## Memory (Palinode)",
+        "### At session start",
+        "### During work",
+        "### At session end",
+        "### What NOT to save",
+        "### Project slug",
+        "palinode_session_end",
+        "sample-project",
+    ):
+        assert required in core, f"core lost required section: {required!r}"
+    for claude_only in ("/wrap", "/clear", "/save", "/ps", "hook", "SessionEnd"):
+        assert claude_only not in core, f"Claude-ism leaked into core: {claude_only!r}"
+    assert core.count("## Memory (Palinode)") == 1
+
+
+def test_init_default_skips_agents_and_cursor(tmp_path: Path):
+    """No harness footprint → no AGENTS.md, no .cursor/ (detection default off)."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["init", "--dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert not (tmp_path / "AGENTS.md").exists()
+    assert not (tmp_path / ".cursor").exists()
+
+
+def test_init_detects_existing_agents_md(tmp_path: Path):
+    """A pre-existing AGENTS.md turns the writer on; user content is preserved
+    and the block is appended after it."""
+    original = "# My agents\n\nProject-specific agent instructions.\n"
+    (tmp_path / "AGENTS.md").write_text(original)
+    runner = CliRunner()
+    result = runner.invoke(main, ["init", "--dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    text = (tmp_path / "AGENTS.md").read_text()
+    assert text.startswith(original)
+    assert text.count("## Memory (Palinode)") == 1
+
+
+def test_init_detects_agent_dir(tmp_path: Path):
+    """A .agent/ directory (Antigravity footprint) also turns the writer on."""
+    (tmp_path / ".agent").mkdir()
+    runner = CliRunner()
+    result = runner.invoke(main, ["init", "--dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert "## Memory (Palinode)" in (tmp_path / "AGENTS.md").read_text()
+
+
+def test_init_detects_cursor_dir(tmp_path: Path):
+    (tmp_path / ".cursor").mkdir()
+    runner = CliRunner()
+    result = runner.invoke(main, ["init", "--dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    rules = tmp_path / ".cursor" / "rules" / "palinode.md"
+    assert "## Memory (Palinode)" in rules.read_text()
+
+
+def test_init_explicit_flags_force_without_detection(tmp_path: Path):
+    """--agents / --cursor write even when no harness footprint exists."""
+    runner = CliRunner()
+    result = runner.invoke(
+        main, ["init", "--dir", str(tmp_path), "--agents", "--cursor"]
+    )
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "AGENTS.md").exists()
+    assert (tmp_path / ".cursor" / "rules" / "palinode.md").exists()
+
+
+def test_init_no_flags_skip_despite_detection(tmp_path: Path):
+    (tmp_path / "AGENTS.md").write_text("# agents\n")
+    (tmp_path / ".cursor").mkdir()
+    runner = CliRunner()
+    result = runner.invoke(
+        main, ["init", "--dir", str(tmp_path), "--no-agents", "--no-cursor"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "## Memory (Palinode)" not in (tmp_path / "AGENTS.md").read_text()
+    assert not (tmp_path / ".cursor" / "rules" / "palinode.md").exists()
+
+
+def test_init_agents_and_cursor_are_idempotent(tmp_path: Path):
+    """Re-running init leaves exactly one memory section in each file."""
+    runner = CliRunner()
+    for _ in range(2):
+        result = runner.invoke(
+            main, ["init", "--dir", str(tmp_path), "--agents", "--cursor"]
+        )
+        assert result.exit_code == 0, result.output
+    assert (tmp_path / "AGENTS.md").read_text().count("## Memory (Palinode)") == 1
+    rules = tmp_path / ".cursor" / "rules" / "palinode.md"
+    assert rules.read_text().count("## Memory (Palinode)") == 1
+
+
+def test_init_dry_run_lists_detected_harness_files(tmp_path: Path):
+    (tmp_path / "AGENTS.md").write_text("# agents\n")
+    (tmp_path / ".cursor").mkdir()
+    runner = CliRunner()
+    result = runner.invoke(main, ["init", "--dir", str(tmp_path), "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "AGENTS.md" in result.output
+    assert ".cursor/rules/palinode.md" in result.output
+    # dry-run writes nothing
+    assert "## Memory (Palinode)" not in (tmp_path / "AGENTS.md").read_text()
+    assert not (tmp_path / ".cursor" / "rules").exists()
+
+
+# ---- ADR-012 Layer 2: palinode-session skill scaffolding --------------------
+
+
+def test_session_skill_constant_matches_canonical_file():
+    """The embedded PALINODE_SESSION_SKILL must stay byte-for-byte identical to
+    the canonical skill/palinode-session/SKILL.md (edit the canonical file
+    first, then mirror — this guard catches one-sided edits)."""
+    from palinode.cli.init import PALINODE_SESSION_SKILL
+
+    canonical = (
+        Path(__file__).parent.parent / "skill" / "palinode-session" / "SKILL.md"
+    ).read_text()
+    assert PALINODE_SESSION_SKILL == canonical
+
+
+def test_init_installs_session_skill_by_default(tmp_path: Path):
+    from palinode.cli.init import PALINODE_SESSION_SKILL
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["init", "--dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    installed = tmp_path / ".claude" / "skills" / "palinode-session" / "SKILL.md"
+    assert installed.read_text() == PALINODE_SESSION_SKILL
+
+
+def test_init_session_skill_into_detected_harness_paths(tmp_path: Path):
+    (tmp_path / ".cursor").mkdir()
+    (tmp_path / ".agent").mkdir()
+    runner = CliRunner()
+    result = runner.invoke(main, ["init", "--dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    for root in (".claude", ".cursor", ".agent"):
+        assert (tmp_path / root / "skills" / "palinode-session" / "SKILL.md").exists(), (
+            f"missing session skill under {root}/skills/"
+        )
+
+
+def test_init_user_flag_installs_per_user_not_project(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    project = tmp_path / "proj"
+    project.mkdir()
+    runner = CliRunner()
+    result = runner.invoke(main, ["init", "--dir", str(project), "--user"])
+    assert result.exit_code == 0, result.output
+    assert (home / ".claude" / "skills" / "palinode-session" / "SKILL.md").exists()
+    assert not (project / ".claude" / "skills" / "palinode-session").exists()
+
+
+def test_init_no_skill_skips(tmp_path: Path):
+    runner = CliRunner()
+    result = runner.invoke(main, ["init", "--dir", str(tmp_path), "--no-skill"])
+    assert result.exit_code == 0, result.output
+    assert not (tmp_path / ".claude" / "skills" / "palinode-session").exists()
+
+
+def test_init_skill_path_overrides_detection(tmp_path: Path):
+    (tmp_path / ".cursor").mkdir()
+    custom = tmp_path / "custom-skills"
+    runner = CliRunner()
+    result = runner.invoke(
+        main, ["init", "--dir", str(tmp_path), "--skill-path", str(custom)]
+    )
+    assert result.exit_code == 0, result.output
+    assert (custom / "palinode-session" / "SKILL.md").exists()
+    assert not (tmp_path / ".claude" / "skills" / "palinode-session").exists()
+    assert not (tmp_path / ".cursor" / "skills").exists()
+
+
+def test_init_session_skill_preserves_customization(tmp_path: Path):
+    """Re-running init never overwrites a customized skill without --force."""
+    runner = CliRunner()
+    assert runner.invoke(main, ["init", "--dir", str(tmp_path)]).exit_code == 0
+    installed = tmp_path / ".claude" / "skills" / "palinode-session" / "SKILL.md"
+    installed.write_text("# my customized skill\n")
+    result = runner.invoke(main, ["init", "--dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert installed.read_text() == "# my customized skill\n"
+    assert "skipped" in result.output
+
+
+def test_init_session_skill_never_clobbers_symlink(tmp_path: Path):
+    """A symlinked SKILL.md is curated externally — untouched even by --force."""
+    curated = tmp_path / "curated-source.md"
+    curated.write_text("# curated by an external repo\n")
+    skill_dir = tmp_path / ".claude" / "skills" / "palinode-session"
+    skill_dir.mkdir(parents=True)
+    link = skill_dir / "SKILL.md"
+    link.symlink_to(curated)
+    runner = CliRunner()
+    result = runner.invoke(main, ["init", "--dir", str(tmp_path), "--force"])
+    assert result.exit_code == 0, result.output
+    assert link.is_symlink()
+    assert curated.read_text() == "# curated by an external repo\n"
+    assert "symlink" in result.output
+
+
+def test_init_dry_run_lists_session_skill(tmp_path: Path):
+    (tmp_path / ".cursor").mkdir()
+    runner = CliRunner()
+    result = runner.invoke(main, ["init", "--dir", str(tmp_path), "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "palinode-session" in result.output
+    assert not (tmp_path / ".claude" / "skills").exists()

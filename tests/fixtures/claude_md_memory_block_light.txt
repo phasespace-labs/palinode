@@ -1,0 +1,38 @@
+## Memory (Palinode)
+
+This project uses Palinode for persistent memory via MCP (server name: `palinode`).
+
+### At session start
+- Call `palinode_search` with the current task or project name to pull prior context.
+- If the MCP server is down, fall back to the CLI: `palinode search "<query>"`.
+
+### During work
+- After a milestone (tests pass, feature shipped, bug root-caused), call
+  `palinode_save` with the outcome. Include *why*, not just *what*.
+- When making an architectural or design decision, save the decision AND the
+  rationale as `type="Decision"`.
+- Save surprising reusable findings as `type="Insight"`.
+- Every ~30 minutes of active work, save a one-line progress note.
+
+### At session end — including `/clear`
+- Call `palinode_session_end` with `summary`, `decisions`, `blockers`, and
+  `project="sample-project"` before the session terminates.
+- `/clear` counts as a session end. The SessionEnd hook installed by
+  `palinode init` captures a fallback snapshot automatically, but calling
+  `palinode_session_end` from the agent first produces a far better record.
+- The user may type `/wrap` (session wrap-up) as a shortcut. It is
+  **deterministic** — always `palinode_session_end` with
+  summary/decisions/blockers, before `/clear`. See the `/wrap` command/skill
+  definition (installed by `palinode init`) for the exact prompt.
+- Mid-session checkpoints go through the `palinode_save` tool directly
+  (`type="ProjectSnapshot"`); there is no separate slash command for them.
+  (`/save` and `/ps` are deprecated — existing installs keep working.)
+
+### What NOT to save
+- Raw code (git handles that).
+- Step-by-step debug logs — save the resolution, not the journey.
+- Trivial changes ("fixed typo" is not worth a memory).
+
+### Project slug
+This project's slug is `sample-project`. Pass it as the `project` argument to
+`palinode_save` and `palinode_session_end` so status rolls up correctly.

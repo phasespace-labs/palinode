@@ -104,9 +104,10 @@ The plugin configures Claude Code to launch `palinode-mcp` as a stdio MCP server
 
 ## What you get
 
-Once installed and connected, the plugin exposes 27 MCP tools to Claude Code:
+Once installed and connected, the plugin exposes 28 MCP tools to Claude Code:
 
 ### Search and retrieval
+- `palinode_session_init` — session-start context digest (project scope, core memories, recent decisions, open action items)
 - `palinode_search` — hybrid semantic + keyword search across all memory files
 - `palinode_status` — instance health, index size, embedding model, tier 2a queue depth
 - `palinode_list` — list memory files by category or core-only

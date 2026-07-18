@@ -5,6 +5,7 @@ from palinode.core.brand import BANNER
 from palinode.core.config import config
 
 _cli_logger = logging.getLogger("palinode.config")
+from palinode.cli.prime import prime
 from palinode.cli.search import search
 from palinode.cli.save import save
 from palinode.cli.status import status
@@ -67,6 +68,7 @@ def banner() -> None:
     click.echo(BANNER)
 
 # Registration
+main.add_command(prime)
 main.add_command(search)
 main.add_command(save)
 main.add_command(status)

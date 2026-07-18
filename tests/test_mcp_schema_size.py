@@ -75,6 +75,7 @@ async def test_mcp_core_surface_is_strict_slim_subset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     expected_core_names = {
+        "palinode_session_init",
         "palinode_save",
         "palinode_search",
         "palinode_read",

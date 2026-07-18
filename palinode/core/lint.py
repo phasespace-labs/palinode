@@ -102,6 +102,7 @@ def run_lint_pass() -> dict[str, Any]:
     missing_priority: list[str] = []
     wiki_drift: list[dict[str, Any]] = []
     source_anchor_issues: list[dict[str, Any]] = []
+    claim_anchor_issues: list[dict[str, Any]] = []
     # (ADR-018): an `epistemic: open_question` that has gone unresolved for a
     # long time is a staleness signal — it wants resolution into fact/inference
     # or supersession. Reuses the stale threshold (90 days).
@@ -257,6 +258,37 @@ def run_lint_pass() -> dict[str, Any]:
             if bad:
                 source_anchor_issues.append({"file": path, "anchors": bad})
 
+        # 8b. Claim-level anchors — resolve each ``claims:`` binding and
+        # surface the ones that no longer hold: a span failing its integrity
+        # check, a claim_id that no longer matches its content-addressed
+        # derivation, or a claim citing a source_id absent from the memory's
+        # own ``sources:`` anchors (advisory — a claim with no backing
+        # source anchor). Clean no-op for files with no claims.
+        if meta.get("claims"):
+            from palinode.core.claims import resolve_memory_claims
+            try:
+                claim_results = resolve_memory_claims(path, base_dir)
+            except OSError:
+                claim_results = []
+            bad_claims = []
+            for r in claim_results:
+                issues = []
+                if r.get("span_status") != "ok":
+                    issues.append(r["span_status"])
+                if r.get("claim_id_status") != "ok":
+                    issues.append("claim_id_mismatch")
+                if not r.get("source_declared", False):
+                    issues.append("source_undeclared")
+                if issues:
+                    bad_claims.append({
+                        "claim_id": r.get("claim_id", ""),
+                        "source_id": r.get("source_id", ""),
+                        "issues": issues,
+                        "detail": r.get("span_detail", ""),
+                    })
+            if bad_claims:
+                claim_anchor_issues.append({"file": path, "claims": bad_claims})
+
         # 9. Open contradictions (G4) — a non-empty `contradicts` link is
         # an UNRESOLVED disagreement (supersession resolves; a contradicts link
         # deliberately does not pick a winner). Surface every file that still
@@ -309,6 +341,7 @@ def run_lint_pass() -> dict[str, Any]:
         "missing_priority": missing_priority,
         "wiki_drift": wiki_drift,
         "source_anchor_issues": source_anchor_issues,
+        "claim_anchor_issues": claim_anchor_issues,
         "stale_open_questions": stale_open_questions,
         "open_contradictions": open_contradictions,
         "core_count": core_count,

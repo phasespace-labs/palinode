@@ -9,6 +9,7 @@
   "palinode_blame": {
     "description": "Trace a fact back to when it was first recorded. Shows which session or commit created each line in a memory file.",
     "params": {
+      "claims": {},
       "file": {},
       "file_path": {},
       "search": {}
@@ -197,6 +198,7 @@
     "description": "Save a memory to Palinode. Use for important facts, decisions, insights, or project updates worth remembering across sessions. Provide either `type` (one of the enum values) or `ps=true` for the ProjectSnapshot shortcut \u2014 exactly one is required. If this call times out, the save may still have committed server-side: call `palinode_search` with a distinctive phrase from your content to confirm before retrying, so you don't create a duplicate entry.",
     "params": {
       "backed_by": {},
+      "claims": {},
       "confidence": {},
       "content": {},
       "contradicts": {},
@@ -206,7 +208,8 @@
         "enum": [
           "fact",
           "inference",
-          "open_question"
+          "open_question",
+          "unverified"
         ]
       },
       "external_refs": {},
@@ -289,6 +292,14 @@
     "required": [
       "summary"
     ]
+  },
+  "palinode_session_init": {
+    "description": "Session-start context: call this FIRST in a new conversation. Returns the resolved project scope with core memories, recent decisions, and open action items as a bounded digest.",
+    "params": {
+      "cwd": {},
+      "project": {}
+    },
+    "required": []
   },
   "palinode_status": {
     "description": "Check Palinode health: API reachability, index stats, last watcher run.",

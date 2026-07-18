@@ -1,15 +1,16 @@
-"""ADR-009 Layer 1: scope chain resolution.
+"""ADR-009 Layer 1: scope chain resolution + visibility predicate.
 
-Build a ScopeChain from config + env + caller-supplied project/session, to be
-consumed by scope-filtered search (Slice 3) and the context prime endpoint
-(Slice 4). This module is pure resolution — no I/O, no DB, no filtering.
-Isolating it here keeps subsequent slices easy to test.
+Build a ScopeChain from config + env + caller-supplied project/session, and
+decide whether a memory's frontmatter permits it on a given chain (Slice 3).
+The context prime endpoint (Slice 4) consumes both. This module stays pure —
+no I/O, no DB; callers own file access and iteration.
 
-See ADR-009 §3.1-3.2 for the hierarchy and auto-detection rules.
+See ADR-009 §3.1-3.3 for the hierarchy and auto-detection rules.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from palinode.core.config import Config
 
@@ -72,3 +73,28 @@ def resolve_scope_chain(
         member=s.member,
         org=s.org,
     )
+
+
+def chain_allows(chain: ScopeChain, metadata: dict[str, Any]) -> bool:
+    """Scoped-mode visibility for one memory's frontmatter (ADR-009 Layer 1).
+
+    A memory with an **explicit** ``scope:`` frontmatter field is visible only
+    when that entity ref appears on the session's chain. A memory without one
+    is always visible — identical to classic-mode behavior.
+
+    Only explicit scope isolates, deliberately. The directory-inferred default
+    (:func:`palinode.core.parser._default_scope_from_path`) yields
+    ``project/<parent-dir>``, which in the standard category layout
+    (``decisions/``, ``insights/``, …) produces refs like ``project/decisions``
+    that no session chain ever contains — filtering on it would hide every
+    legacy memory. ADR-009 §7 requires the opposite: "no scope = works as
+    before". The inferred default remains reserved for #108's
+    visibility/access semantics.
+
+    Non-string or blank ``scope`` values are treated as unscoped, matching the
+    parser's soft-fail style.
+    """
+    raw = metadata.get("scope")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip() in chain.as_list()
+    return True

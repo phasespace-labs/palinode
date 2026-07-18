@@ -80,15 +80,37 @@ def diff_api(days: int = 7, paths: str | None = None) -> dict[str, Any]:
 
 
 @router.get("/blame/{file_path:path}")
-def blame_api(file_path: str, search: str | None = None) -> dict[str, Any]:
-    """Show when each line of a memory file was last changed."""
+def blame_api(file_path: str, search: str | None = None, claims: bool = False) -> dict[str, Any]:
+    """Show when each line of a memory file was last changed.
+
+    With ``claims=true``, additionally resolves each of the file's ``claims:``
+    anchors to its cited source span — answering "which source span justifies
+    this claim," not just "when was this line written" — returned as a
+    structured ``claims`` list alongside the blame text. Each resolution
+    carries the live span integrity status (ok / anchor_tampered /
+    source_drifted / source_missing), whether the stored claim_id still
+    matches its content-addressed derivation, and whether the cited source is
+    declared in the memory's ``sources:`` anchors.
+    """
     # Issue blame access is an explicit retrieval.
     _retrieval_logger.record_file_read(
         file_path,
         source="palinode_blame",
         mode="explicit",
     )
-    return {"blame": git_tools.blame(file_path, search)}
+    result: dict[str, Any] = {"blame": git_tools.blame(file_path, search)}
+    if claims:
+        from palinode.core.claims import resolve_memory_claims
+
+        try:
+            safe_rel = git_tools._resolve_memory_path(file_path)
+            result["claims"] = resolve_memory_claims(safe_rel, config.memory_dir)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except FileNotFoundError:
+            # blame already reports the missing file in its text output.
+            result["claims"] = []
+    return result
 
 
 @router.post("/rollback")

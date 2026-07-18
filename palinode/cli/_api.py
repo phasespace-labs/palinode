@@ -98,6 +98,7 @@ class PalinodeAPI:
         external_refs: dict | None = None,
         update_policy: str | None = None,
         sources: list[dict] | None = None,
+        claims: list[dict] | None = None,
         epistemic: str | None = None,
         contradicts: list[str] | None = None,
         backed_by: list[str] | None = None,
@@ -133,6 +134,8 @@ class PalinodeAPI:
             payload["update_policy"] = update_policy
         if sources is not None:
             payload["sources"] = sources
+        if claims is not None:
+            payload["claims"] = claims
         if epistemic is not None:
             payload["epistemic"] = epistemic
         if contradicts:
@@ -378,10 +381,22 @@ class PalinodeAPI:
         response.raise_for_status()
         return response.json()
 
-    def blame(self, file_path: str, search: str = None):
+    def context_prime(self, cwd: str = None, project: str = None):
+        payload: dict = {}
+        if cwd:
+            payload["cwd"] = cwd
+        if project:
+            payload["project"] = project
+        response = self.client.post("/context/prime", json=payload, timeout=15.0)
+        response.raise_for_status()
+        return response.json()
+
+    def blame(self, file_path: str, search: str = None, claims: bool = False):
         params: dict = {}
         if search:
             params["search"] = search
+        if claims:
+            params["claims"] = "true"
         response = self.client.get(f"/blame/{file_path}", params=params, timeout=10.0)
         response.raise_for_status()
         return response.json()

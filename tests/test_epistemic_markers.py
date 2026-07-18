@@ -66,7 +66,7 @@ def _meta(file_path: str) -> dict:
 
 # ── (a) epistemic round-trips and persists when set ──────────────────────────
 
-@pytest.mark.parametrize("value", ["fact", "inference", "open_question"])
+@pytest.mark.parametrize("value", ["fact", "inference", "open_question", "unverified"])
 def test_epistemic_persists_to_frontmatter(client, value):
     res = _save(client, content=f"A {value} claim.", slug=f"epi-{value}",
                 epistemic=value)
@@ -234,6 +234,36 @@ def test_provenance_open_question_warns():
     row = _claim_row({"id": "insights-x", "epistemic": "open_question"})
     assert "open question" in row.value
     assert row.state == "warn"
+
+
+def test_provenance_unverified_is_labelled_lower_trust():
+    """`unverified` renders like `inference` — an honest lower-trust assertion,
+    distinct from both `fact` and the trust-neutral `unmarked` (#589)."""
+    row = _claim_row({"id": "insights-x", "epistemic": "unverified"})
+    assert row.value == "unverified — asserted, not checked"
+    assert row.state == "ok"
+
+
+# ── search-result labelling (recall surfacing, ADR-018) ─────────────────────
+
+def _search_hit(epistemic: str | None) -> dict:
+    meta = {"epistemic": epistemic} if epistemic else {}
+    return {"file_path": "insights/x.md", "score": 0.9,
+            "snippet": "a hit", "metadata": meta}
+
+
+def test_search_results_label_unverified():
+    from palinode.mcp import _format_results
+
+    out = _format_results([_search_hit("unverified")])
+    assert "[unverified]" in out
+
+
+def test_search_results_leave_fact_unlabelled():
+    from palinode.mcp import _format_results
+
+    out = _format_results([_search_hit("fact")])
+    assert "[unverified]" not in out and "[inference]" not in out
 
 
 # ── unmarked is not a settable value ─────────────────────────────────────────

@@ -127,6 +127,21 @@ def lint(fmt, deep_contradictions, max_llm_calls, similarity_threshold):
 
     console.print("")
 
+    # claim-level anchor issues (span integrity / id mismatch / undeclared source).
+    claim_issues = data.get("claim_anchor_issues", [])
+    if claim_issues:
+        console.print(f"[bold yellow]Claim Anchor Issues ({len(claim_issues)})[/bold yellow]")
+        for ci in claim_issues:
+            for claim in ci["claims"]:
+                issues = ", ".join(claim.get("issues", []))
+                console.print(
+                    f"  - {ci['file']}: [{issues}] {claim['claim_id']} → {claim['source_id']}"
+                )
+    else:
+        console.print("[green]✓ No claim-anchor issues[/green]")
+
+    console.print("")
+
     # long-lived unresolved open questions (epistemic: open_question).
     stale_oq = data.get("stale_open_questions", [])
     if stale_oq:

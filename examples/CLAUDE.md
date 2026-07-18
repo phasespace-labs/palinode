@@ -32,13 +32,12 @@ This project uses Palinode for persistent memory via MCP (server name: `palinode
 - **`/clear` counts as session end.** Call `palinode_session_end` *before*
   running `/clear`. A SessionEnd hook captures a fallback snapshot, but an
   agent-synthesized summary is far richer than a transcript tail.
-- The user may type `/ps` ("Palinode Save") or `/wrap` ("wrap this up") as
-  shortcuts. These are **deterministic** — each maps to exactly one tool:
-  - `/ps` → always `palinode_save` with `type="ProjectSnapshot"` (mid-session)
-  - `/wrap` → always `palinode_session_end` with summary/decisions/blockers
-    (before `/clear`)
-  Never substitute one for the other. Two commands, two operations, zero
-  ambiguity.
+- The user may type `/wrap` ("wrap this up") as a shortcut. It is
+  **deterministic** — always `palinode_session_end` with
+  summary/decisions/blockers, before `/clear`.
+- Mid-session checkpoints call the `palinode_save` tool directly with
+  `type="ProjectSnapshot"` — there is no separate slash command for them.
+  (`/save` and `/ps` are deprecated; existing installs keep working.)
 
 ### What NOT to save
 - Raw code (git handles that).

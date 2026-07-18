@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from palinode.core import store, git_tools
 from palinode.core.config import config
+from palinode.core.scope import ScopeChain, chain_allows
 from palinode.api._util import (
     _auto_summary_state, _retrieval_logger, _safe_500, _utc_now,
 )
@@ -90,6 +91,21 @@ def _normalize_link_refs(raw: Any, field: str) -> list[str]:
     try:
         return normalize_link_refs(raw, field)
     except TypedLinkError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+def _normalize_claims_or_400(raw: Any, memory_ref: str) -> list[dict[str, Any]]:
+    """Validate claim-level source anchors, raising HTTP 400 on malformed input.
+
+    Thin wrapper over :func:`palinode.core.claims.normalize_claims` that maps
+    the core ``ClaimError`` to ``HTTPException(400)`` — the same boundary
+    discipline as ``_normalize_sources`` and ``_normalize_link_refs``.
+    """
+    from palinode.core.claims import ClaimError, normalize_claims
+
+    try:
+        return normalize_claims(raw, memory_ref)
+    except ClaimError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
@@ -198,7 +214,8 @@ class SaveRequest(BaseModel):
     #: normalizer can return a clean 400.
     sources: list[dict[str, Any]] | None = None
     #: (ADR-018): epistemic marker — the KIND of claim this memory makes
-    #: (``fact`` / ``inference`` / ``open_question``), orthogonal to ``type``.
+    #: (``fact`` / ``inference`` / ``open_question`` / ``unverified``),
+    #: orthogonal to ``type``.
     #: Validated against ``VALID_EPISTEMICS``. When omitted the memory is
     #: ``unmarked`` (``DEFAULT_EPISTEMIC``) — no epistemic claim, NOT a fact — and
     #: no frontmatter is written, so existing memories are byte-for-byte
@@ -213,10 +230,33 @@ class SaveRequest(BaseModel):
     #: input before ``_normalize_link_refs`` can return a clean 400.
     contradicts: Any | None = None
     backed_by: Any | None = None
+    #: Claim-level source anchors — the unsigned claim_id layer (public
+    #: issue Q1). A list of ``{claim_id?, text, source_id, span, anchor_id?}``
+    #: dicts binding a claim *inside* this memory to the source span that
+    #: justifies it: ``text`` is the claim as stated, ``source_id`` is a
+    #: sources[].ref-style path under the memory dir, and ``span`` reuses the
+    #: ``{quote, quote_hash}`` anchor verbatim (hash computed/verified on
+    #: save). ``claim_id`` is content-addressed (derived from the memory ref +
+    #: normalized claim text) — derived when omitted, verified when supplied.
+    #: Composes with (does not replace) file-level identity and the
+    #: ``sources:`` integrity anchors. Typed as Any so Pydantic doesn't reject
+    #: malformed input before our normalizer can return a clean 400.
+    claims: Any | None = None
 
 
-@router.get("/list")
-def list_api(category: str | None = None, core_only: bool = False) -> list[dict[str, Any]]:
+def collect_memory_files(
+    category: str | None = None,
+    core_only: bool = False,
+    scope_chain: ScopeChain | None = None,
+) -> list[dict[str, Any]]:
+    """Enumerate memory files as /list-shaped rows, newest first.
+
+    The shared selection path behind ``GET /list`` and the /context/prime
+    endpoint (ADR-009 Layer 1). When ``scope_chain`` is given, files whose
+    explicit ``scope:`` frontmatter is not on the chain are dropped
+    (scoped mode); ``None`` skips scope filtering entirely (classic mode,
+    the /list contract).
+    """
     import glob
     from palinode.core import parser
 
@@ -250,11 +290,22 @@ def list_api(category: str | None = None, core_only: bool = False) -> list[dict[
             if core_only and not is_core:
                 continue
 
+            if scope_chain is not None and not chain_allows(scope_chain, metadata):
+                continue
+
+            raw_scope = metadata.get("scope")
+            explicit_scope = (
+                raw_scope.strip()
+                if isinstance(raw_scope, str) and raw_scope.strip()
+                else None
+            )
+
             results.append({
                 "file": rel_path,
                 "name": metadata.get("name") or parts[-1].replace('.md', ''),
                 "category": metadata.get("category", parts[0]),
                 "core": is_core,
+                "scope": explicit_scope,
                 "summary": metadata.get("summary", ""),
                 "last_updated": metadata.get("last_updated", ""),
                 "entities": metadata.get("entities", []),
@@ -270,6 +321,11 @@ def list_api(category: str | None = None, core_only: bool = False) -> list[dict[
     # with missing or malformed frontmatter.
     results.sort(key=lambda r: str(r.get("last_updated") or ""), reverse=True)
     return results
+
+
+@router.get("/list")
+def list_api(category: str | None = None, core_only: bool = False) -> list[dict[str, Any]]:
+    return collect_memory_files(category=category, core_only=core_only)
 
 
 @router.post("/save")
@@ -499,7 +555,7 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
         # link fields `contradicts`/`backed_by` are each resolved +
         # validated above/below and written from their own normalized values, so a
         # malformed value tunneled through metadata still gets a clean 400.
-        _verbatim_excluded = {"update_policy", "epistemic", "contradicts", "backed_by"}
+        _verbatim_excluded = {"update_policy", "epistemic", "contradicts", "backed_by", "claims"}
         frontmatter_dict.update(
             {k: v for k, v in req.metadata.items() if k not in _verbatim_excluded}
         )
@@ -581,6 +637,18 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
         frontmatter_dict["contradicts"] = _resolved_contradicts
     if _resolved_backed_by:
         frontmatter_dict["backed_by"] = _resolved_backed_by
+
+    # Claim-level source anchors: resolved param-or-metadata like the typed
+    # links above (the explicit param wins; the metadata path was excluded from
+    # the verbatim merge so a malformed entry still gets a clean 400). The
+    # claim_id derivation is salted with this memory's path-relative ref, so
+    # the normalizer needs the resolved category/slug. Written only when
+    # non-empty so frontmatter stays clean otherwise.
+    _claims_in = req.claims if req.claims is not None else _meta_dict.get("claims")
+    if _claims_in is not None:
+        _resolved_claims = _normalize_claims_or_400(_claims_in, f"{category}/{slug}.md")
+        if _resolved_claims:
+            frontmatter_dict["claims"] = _resolved_claims
 
     # ADR-010: explicit body field > X-Palinode-Source header > env > "api".
     frontmatter_dict["source"] = _resolve_source(req.source, request)

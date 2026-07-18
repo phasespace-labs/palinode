@@ -415,6 +415,24 @@ class ContextConfig:
     embed_augment: bool = True      # Prepend project context to query before embedding
 
 @dataclass
+class AutoInjectConfig:
+    """ADR-012 Layer 4: server-side session-start context for MCP clients.
+
+    ``instructions_enabled`` puts a short, content-free memory contract into
+    the MCP ``initialize`` response — every client sees it, and because it
+    carries no memory content there is no scope-bleed risk. ``enabled`` is
+    the master switch for the ``palinode_session_init`` digest tool.
+    ``harnesses_disabled`` lists clientInfo-name substrings for harnesses
+    that already have instruction-file/skill/hook layers and should not
+    double-inject (Claude Code by default — CLAUDE.md, skills, and the
+    SessionStart hook already cover it).
+    """
+    enabled: bool = True
+    instructions_enabled: bool = True
+    harnesses_disabled: list[str] = field(default_factory=lambda: ["claude-code"])
+
+
+@dataclass
 class ScopeConfig:
     """ADR-009 Layer 1: scope chain for multi-harness, multi-agent, team memory.
 
@@ -495,6 +513,7 @@ class Config:
     compaction: CompactionConfig = field(default_factory=CompactionConfig)
     ku_compat: KUCompatConfig = field(default_factory=KUCompatConfig)
     context: ContextConfig = field(default_factory=ContextConfig)
+    auto_inject: AutoInjectConfig = field(default_factory=AutoInjectConfig)
     scope: ScopeConfig = field(default_factory=ScopeConfig)
     decay: DecayConfig = field(default_factory=DecayConfig)
     services: ServicesConfig = field(default_factory=ServicesConfig)

@@ -1,6 +1,6 @@
 # Installing Palinode with Claude Code
 
-Palinode gives Claude Code persistent memory via MCP — 27 tools for searching, saving, diagnosing, and managing memories across sessions. The `palinode-session` skill auto-captures milestones and decisions during coding, so your memory stays fresh without manual effort.
+Palinode gives Claude Code persistent memory via MCP — 28 tools for searching, saving, diagnosing, and managing memories across sessions. The `palinode-session` skill auto-captures milestones and decisions during coding, so your memory stays fresh without manual effort.
 
 ## Prerequisites
 
@@ -315,10 +315,11 @@ If something doesn't look right, run `palinode doctor` from your terminal for a 
 
 ---
 
-## Available Tools (27)
+## Available Tools (28)
 
 | Tool | Description |
 |---|---|
+| `palinode_session_init` | Session-start context digest: project scope, core memories, recent decisions, open action items |
 | `palinode_search` | Hybrid BM25+vector search over all memories |
 | `palinode_save` | Store a typed memory (person, decision, insight, project) |
 | `palinode_list` | List memory files with optional type/category filter |
@@ -482,9 +483,9 @@ There are four distinct things that can fail — tool fired, data on disk, retri
 **Slow first search:**
 - BGE-M3 is ≈1.2 GB. Cold start takes 10-30s. Subsequent searches are fast (~100ms).
 
-**`/wrap`, `/save`, or `palinode_push` denied with a "permission" / "auto mode classifier" message:**
+**`/wrap` or `palinode_push` denied with a "permission" / "auto mode classifier" message:**
 
-If Claude Code runs in **auto permission mode** (`"defaultMode": "auto"` in `settings.json`), tool calls without an explicit `allow` rule are judged by the permission classifier. Palinode's **remote-write** tools — `palinode_push` and `palinode_session_end` (which pushes the session note to your memory git remote) — look like un-allowlisted network-egress actions and can be **denied even when you invoke `/wrap` or `/save` yourself**. The read tools (`palinode_search`, `palinode_read`, `palinode_status`) and the local-only `palinode_save` are generally unaffected.
+If Claude Code runs in **auto permission mode** (`"defaultMode": "auto"` in `settings.json`), tool calls without an explicit `allow` rule are judged by the permission classifier. Palinode's **remote-write** tools — `palinode_push` and `palinode_session_end` (which pushes the session note to your memory git remote) — look like un-allowlisted network-egress actions and can be **denied even when you invoke `/wrap` yourself**. The read tools (`palinode_search`, `palinode_read`, `palinode_status`) and the local-only `palinode_save` are generally unaffected.
 
 **Fix — allowlist the Palinode MCP tools.** Add them to the `permissions.allow` list in your settings. Use `~/.claude/settings.json` to apply across **all** projects (Palinode is typically a global memory system), or a project's `.claude/settings.json` to scope it to one repo:
 

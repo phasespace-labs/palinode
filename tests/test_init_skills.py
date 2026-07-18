@@ -1,9 +1,10 @@
 """Tests for `palinode init --skills` (skill-format scaffolding, #474).
 
-`--skills {none|project|personal|both}` installs /save /ps /wrap as Claude Code
-SKILL.md files from the SAME `*_COMMAND_BODY` constants the slash commands use
-(single source — no drift). 'personal' targets `~/.claude/skills/` so /wrap is
-typeable in every project, not just the inited one.
+`--skills {none|project|personal|both}` installs /wrap as a Claude Code
+SKILL.md file from the SAME `WRAP_*_COMMAND_BODY` constant the slash command
+uses (single source — no drift). 'personal' targets `~/.claude/skills/` so
+/wrap is typeable in every project, not just the inited one. /wrap is the
+sole lifecycle skill since #631 (/save and /ps deprecated).
 
 All file-only; no network. Personal scope is sandboxed via a tmp HOME.
 """
@@ -24,19 +25,25 @@ def _run(args: list[str]) -> "object":
     return CliRunner().invoke(init, args)
 
 
-def test_default_writes_no_skills(tmp_path):
+def test_default_writes_no_wrap_skill(tmp_path):
+    """The wrap *lifecycle* skill stays opt-in (--skills). The ambient
+    palinode-session skill, by contrast, installs by default (ADR-012 Layer 2)
+    — so the guard is wrap-specific, not skills-dir-specific."""
     res = _run(["--dir", str(tmp_path), *_BASE])
     assert res.exit_code == 0, res.output
-    assert not (tmp_path / ".claude" / "skills").exists()
+    assert not (tmp_path / ".claude" / "skills" / "wrap").exists()
+    assert (tmp_path / ".claude" / "skills" / "palinode-session" / "SKILL.md").exists()
 
 
-def test_project_scope_writes_three_skills(tmp_path):
+def test_project_scope_writes_wrap_skill_only(tmp_path):
     res = _run(["--dir", str(tmp_path), *_BASE, "--skills", "project"])
     assert res.exit_code == 0, res.output
-    for name in ("save", "ps", "wrap"):
-        sk = tmp_path / ".claude" / "skills" / name / "SKILL.md"
-        assert sk.exists(), f"{name} skill missing"
-        assert sk.read_text().startswith(f"---\nname: {name}\n"), "skill needs name frontmatter"
+    sk = tmp_path / ".claude" / "skills" / "wrap" / "SKILL.md"
+    assert sk.exists(), "wrap skill missing"
+    assert sk.read_text().startswith("---\nname: wrap\n"), "skill needs name frontmatter"
+    # /save //ps are deprecated and must not be scaffolded
+    for name in ("save", "ps"):
+        assert not (tmp_path / ".claude" / "skills" / name).exists()
 
 
 def test_single_source_body_matches_command(tmp_path):
@@ -59,8 +66,9 @@ def test_personal_scope_targets_home(tmp_path, monkeypatch):
     res = _run(["--dir", str(proj), *_BASE, "--skills", "personal"])
     assert res.exit_code == 0, res.output
     assert (home / ".claude" / "skills" / "wrap" / "SKILL.md").exists()
-    # personal scope must NOT also write into the project
-    assert not (tmp_path / "proj" / ".claude" / "skills").exists()
+    # personal scope must NOT also write the wrap skill into the project (the
+    # default-installed palinode-session skill is a separate, project-scoped axis)
+    assert not (tmp_path / "proj" / ".claude" / "skills" / "wrap").exists()
 
 
 def test_both_scope_writes_project_and_personal(tmp_path, monkeypatch):

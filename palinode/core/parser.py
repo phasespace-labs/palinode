@@ -291,7 +291,12 @@ VALID_STATUSES: tuple[str, ...] = VALID_LIFECYCLES + VALID_INCIDENT_STATUSES
 #                   should ideally carry a `backed_by` link).
 #   open_question — unresolved; an explicit marker that this is NOT yet settled.
 #                   `lint` flags long-lived open questions as a staleness signal.
-VALID_EPISTEMICS: tuple[str, ...] = ("fact", "inference", "open_question")
+#   unverified    — asserted but not checked: a positive claim was made, but it
+#                   was neither verified into `fact` nor derived as an
+#                   `inference`, and it is not a question. Distinct from
+#                   `unmarked` (no claim at all). The prime candidate to acquire
+#                   a `backed_by` link and graduate toward `fact`.
+VALID_EPISTEMICS: tuple[str, ...] = ("fact", "inference", "open_question", "unverified")
 
 # The ABSENCE of the field is its own state — `unmarked`: no epistemic claim was
 # made. Crucially this is NOT equated with `fact`; for an audit-grade store,

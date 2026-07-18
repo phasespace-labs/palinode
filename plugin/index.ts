@@ -492,13 +492,15 @@ const palinodePlugin = {
               [
                 Type.Literal("fact"),
                 Type.Literal("inference"),
+                Type.Literal("unverified"),
                 Type.Literal("open_question"),
               ],
               {
                 description:
                   "Epistemic marker (ADR-018): the KIND of claim this memory makes. " +
-                  "'fact' (observed/verified), 'inference' (derived, lower trust), or " +
-                  "'open_question' (unresolved). Omit to leave the memory " +
+                  "'fact' (observed/verified), 'inference' (derived, lower trust), " +
+                  "'unverified' (asserted but not checked), or 'open_question' " +
+                  "(unresolved). Omit to leave the memory " +
                   "unmarked (no claim — not treated as fact); persisted as " +
                   "frontmatter only when set.",
               },
@@ -530,6 +532,30 @@ const palinodePlugin = {
                   "Source-citation anchors (#459): each {ref, quote, quote_hash} " +
                   "anchors this memory to the exact passage it cites. quote_hash is " +
                   "computed server-side when omitted; the verifier reads these back.",
+              },
+            ),
+          ),
+          claims: Type.Optional(
+            Type.Array(
+              Type.Object({
+                claim_id: Type.Optional(
+                  Type.String({ description: "Content-addressed claim identifier; derived when omitted." }),
+                ),
+                text: Type.String({ description: "The claim being supported by the cited span." }),
+                source_id: Type.String({ description: "Path under the memory dir of the cited source." }),
+                span: Type.Object({
+                  quote: Type.String({ description: "The exact source passage supporting the claim." }),
+                  quote_hash: Type.Optional(
+                    Type.String({ description: "Integrity hash; computed on save if omitted." }),
+                  ),
+                }),
+                anchor_id: Type.Optional(
+                  Type.String({ description: "Optional external anchor identifier carried verbatim." }),
+                ),
+              }),
+              {
+                description:
+                  "Claim-level source anchors: each claim binds its text to an exact source span.",
               },
             ),
           ),

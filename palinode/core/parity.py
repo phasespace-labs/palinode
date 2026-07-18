@@ -257,6 +257,15 @@ REGISTRY: tuple[Operation, ...] = (
             # the repeatable ``--contradicts``/``--backed-by`` flags.
             CanonicalParam(name="contradicts", type="array"),
             CanonicalParam(name="backed_by", type="array"),
+            # claim-level source anchors. A list of {claim_id?, text,
+            # source_id, span:{quote, quote_hash}, anchor_id?} dicts binding a
+            # claim inside the memory to the source span that justifies it;
+            # claim_id + quote_hash are derived/verified on save. First-class
+            # on all surfaces so callers don't tunnel bindings through
+            # metadata. The CLI surfaces this as the repeatable
+            # ``--claim TEXT::REF::QUOTE`` flag (dest ``claims``); MCP/API/
+            # plugin take the structured list.
+            CanonicalParam(name="claims", type="array"),
         ),
         cli_command="save",
         mcp_tool="palinode_save",
@@ -331,12 +340,32 @@ REGISTRY: tuple[Operation, ...] = (
         exempt_surfaces=frozenset({"plugin"}),
         known_drift={},
     ),
+    # ── context_prime (ADR-012 Layer 4) ─────────────────────────────────────
+    # Session-start context digest. cwd resolves the project scope (ADR-008
+    # resolution); project overrides. REST additionally accepts session_id
+    # (SessionStart-hook compat, reserved) — a superset, not drift.
+    Operation(
+        name="context_prime",
+        canonical_params=(
+            CanonicalParam(name="cwd", type="string"),
+            CanonicalParam(name="project", type="string"),
+        ),
+        cli_command="prime",
+        mcp_tool="palinode_session_init",
+        api_endpoint=("POST", "/context/prime"),
+        exempt_surfaces=frozenset({"plugin"}),
+        known_drift={},
+    ),
     # ── blame ───────────────────────────────────────────────────────────────
     Operation(
         name="blame",
         canonical_params=(
             CanonicalParam(name="file_path", type="string", required=True),
             CanonicalParam(name="search", type="string"),
+            # claim resolution mode: also resolve the file's claim-level
+            # source anchors to their cited spans with live integrity status,
+            # so blame answers "which source span justifies this claim".
+            CanonicalParam(name="claims", type="boolean"),
         ),
         cli_command="blame",
         mcp_tool="palinode_blame",

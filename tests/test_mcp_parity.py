@@ -73,8 +73,27 @@ async def test_save_schema_declares_epistemic():
     props = tools["palinode_save"].inputSchema["properties"]
     assert "epistemic" in props, "palinode_save schema dropped epistemic"
     assert set(props["epistemic"].get("enum", [])) >= {
-        "fact", "inference", "open_question"
-    }, "epistemic enum must offer fact + inference + open_question"
+        "fact", "inference", "open_question", "unverified"
+    }, "epistemic enum must offer fact + inference + open_question + unverified"
+
+
+@pytest.mark.asyncio
+async def test_save_schema_declares_claims():
+    tools = {t.name: t for t in await list_tools()}
+    props = tools["palinode_save"].inputSchema["properties"]
+    assert "claims" in props, "palinode_save schema dropped claims"
+    items = props["claims"].get("items", {})
+    assert set(items.get("required", [])) == {"text", "source_id", "span"}, (
+        "claims entries must require text + source_id + span"
+    )
+
+
+@pytest.mark.asyncio
+async def test_blame_schema_declares_claims():
+    tools = {t.name: t for t in await list_tools()}
+    props = tools["palinode_blame"].inputSchema["properties"]
+    assert "claims" in props, "palinode_blame schema dropped claims"
+    assert props["claims"].get("type") == "boolean"
 
 
 @pytest.mark.asyncio
@@ -126,6 +145,65 @@ async def test_save_omits_epistemic_when_absent(captured_post):
         "type": "Insight",
     })
     assert "epistemic" not in captured_post["body"]
+
+
+@pytest.mark.asyncio
+async def test_save_forwards_claims_to_api(captured_post):
+    claim = {
+        "text": "the port was held",
+        "source_id": "research/paper.md",
+        "span": {"quote": "the exact passage"},
+    }
+    await _dispatch_tool("palinode_save", {
+        "content": "anchored claim",
+        "type": "Decision",
+        "claims": [claim],
+    })
+    assert captured_post["path"] == "/save"
+    assert captured_post["body"].get("claims") == [claim]
+
+
+@pytest.mark.asyncio
+async def test_save_omits_claims_when_absent(captured_post):
+    await _dispatch_tool("palinode_save", {
+        "content": "plain note",
+        "type": "Insight",
+    })
+    assert "claims" not in captured_post["body"]
+
+
+@pytest.mark.asyncio
+async def test_blame_forwards_claims_param(monkeypatch):
+    """blame threads claims=true into the GET query and renders the resolution."""
+    captured: dict[str, Any] = {}
+
+    async def _fake_get(path, params=None, timeout=30.0):
+        captured["path"] = path
+        captured["params"] = params or {}
+        return _FakeResp({"blame": "blame text", "claims": []})
+
+    monkeypatch.setattr(mcp, "_get", _fake_get)
+    result = await _dispatch_tool("palinode_blame", {
+        "file_path": "decisions/x.md",
+        "claims": True,
+    })
+    assert captured["params"].get("claims") == "true"
+    rendered = result[0].text
+    assert "blame text" in rendered
+    assert "Claims:" in rendered
+
+
+@pytest.mark.asyncio
+async def test_blame_omits_claims_param_by_default(monkeypatch):
+    captured: dict[str, Any] = {}
+
+    async def _fake_get(path, params=None, timeout=30.0):
+        captured["params"] = params or {}
+        return _FakeResp({"blame": "blame text"})
+
+    monkeypatch.setattr(mcp, "_get", _fake_get)
+    await _dispatch_tool("palinode_blame", {"file_path": "decisions/x.md"})
+    assert "claims" not in captured["params"]
 
 
 @pytest.mark.asyncio

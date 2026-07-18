@@ -2,8 +2,9 @@
 
 Creates:
   - .claude/CLAUDE.md  (memory section, appended if file exists)
-  - .claude/settings.json  (SessionEnd hook for /clear auto-capture)
-  - .claude/hooks/palinode-session-end.sh  (hook script)
+  - .claude/settings.json  (SessionStart + SessionEnd hook registration)
+  - .claude/hooks/palinode-session-start.sh  (core-memory inject + context prime)
+  - .claude/hooks/palinode-session-end.sh  (/clear auto-capture)
   - .mcp.json  (MCP server block for palinode, if --mcp given)
 
 With --obsidian, additionally writes:
@@ -25,7 +26,12 @@ from pathlib import Path
 import click
 
 
-CLAUDE_MD_BLOCK = """\
+# ADR-012 Layer 1 (instruction file): ONE harness-neutral memory block,
+# inherited by every surface that reads an instruction file. The shared pieces
+# below are the single source of truth — per-surface variants may only vary
+# the session-end section (Claude Code has /clear, /wrap, and the SessionEnd
+# hook; other harnesses don't). Do not fork the shared text per surface.
+_MEMORY_BLOCK_TOP = """\
 ## Memory (Palinode)
 
 This project uses Palinode for persistent memory via MCP (server name: `palinode`).
@@ -42,21 +48,9 @@ This project uses Palinode for persistent memory via MCP (server name: `palinode
 - Save surprising reusable findings as `type="Insight"`.
 - Every ~30 minutes of active work, save a one-line progress note.
 
-### At session end — including `/clear`
-- Call `palinode_session_end` with `summary`, `decisions`, `blockers`, and
-  `project="{project_slug}"` before the session terminates.
-- `/clear` counts as a session end. The SessionEnd hook installed by
-  `palinode init` captures a fallback snapshot automatically, but calling
-  `palinode_session_end` from the agent first produces a far better record.
-- The user may type `/ps` (Palinode Save) or `/wrap` (session wrap-up) as
-  shortcuts. These are **deterministic** — each maps to exactly one tool:
-  - `/save` → always `palinode_save` with `type="ProjectSnapshot"`. Use for
-    mid-session checkpoints. (`/ps` is a back-compat alias for `/save`.)
-  - `/wrap` → always `palinode_session_end` with summary/decisions/blockers.
-    Use before `/clear`.
-  Never dispatch one to the other's tool. See the `/save` and `/wrap`
-  command/skill definitions (installed by `palinode init`) for the exact prompts.
+"""
 
+_MEMORY_BLOCK_TAIL = """\
 ### What NOT to save
 - Raw code (git handles that).
 - Step-by-step debug logs — save the resolution, not the journey.
@@ -65,7 +59,43 @@ This project uses Palinode for persistent memory via MCP (server name: `palinode
 ### Project slug
 This project's slug is `{project_slug}`. Pass it as the `project` argument to
 `palinode_save` and `palinode_session_end` so status rolls up correctly.
-{wrap_policy_note}"""
+"""
+
+_CLAUDE_SESSION_END = """\
+### At session end — including `/clear`
+- Call `palinode_session_end` with `summary`, `decisions`, `blockers`, and
+  `project="{project_slug}"` before the session terminates.
+- `/clear` counts as a session end. The SessionEnd hook installed by
+  `palinode init` captures a fallback snapshot automatically, but calling
+  `palinode_session_end` from the agent first produces a far better record.
+- The user may type `/wrap` (session wrap-up) as a shortcut. It is
+  **deterministic** — always `palinode_session_end` with
+  summary/decisions/blockers, before `/clear`. See the `/wrap` command/skill
+  definition (installed by `palinode init`) for the exact prompt.
+- Mid-session checkpoints go through the `palinode_save` tool directly
+  (`type="ProjectSnapshot"`); there is no separate slash command for them.
+  (`/save` and `/ps` are deprecated — existing installs keep working.)
+
+"""
+
+_NEUTRAL_SESSION_END = """\
+### At session end
+- Call `palinode_session_end` with `summary`, `decisions`, `blockers`, and
+  `project="{project_slug}"` before the session terminates.
+
+"""
+
+# The Claude Code rendering: shared core + Claude-only session-end machinery.
+# Byte-identical to the pre-split monolithic block (regression-pinned by
+# tests/fixtures/claude_md_memory_block_*.txt).
+CLAUDE_MD_BLOCK = (
+    _MEMORY_BLOCK_TOP + _CLAUDE_SESSION_END + _MEMORY_BLOCK_TAIL + "{wrap_policy_note}"
+)
+
+#: Harness-neutral rendering — what AGENTS.md (Antigravity/Codex) and
+#: .cursor/rules/ (Cursor) receive: the same recall / save-with-rationale /
+#: session-end contract, none of the Claude-Code-only machinery.
+MEMORY_BLOCK_CORE = _MEMORY_BLOCK_TOP + _NEUTRAL_SESSION_END + _MEMORY_BLOCK_TAIL
 
 
 # Appended to the CLAUDE.md memory block only when `--wrap-policy heavy` is
@@ -194,56 +224,129 @@ exit 0
 """
 
 
-SAVE_COMMAND_BODY = """\
----
-description: Palinode Save — drop a mid-session ProjectSnapshot to persistent memory.
----
+SESSION_START_HOOK_SCRIPT = """\
+#!/bin/bash
+# palinode-session-start.sh — warm + inject Palinode context on session start.
+#
+# Fires on Claude Code SessionStart (startup and /clear by default). Two
+# actions, both fail-silent:
+#
+#   1. POST /context/prime — warms server-side session context for this CWD
+#      (ADR-012 Layer 3 / PHASE-G). Until the endpoint ships this is a
+#      harmless 404; once it exists, already-installed hooks start priming
+#      with no re-install.
+#   2. GET /list?core_only=true — injects a bounded digest of core memories
+#      into the session as additionalContext, with a deterministic recall
+#      reminder. This is the "sessions start smart" half: grounding that does
+#      not depend on the agent remembering to search.
+#
+# Fail-silent by design — never block session start. API down → no output,
+# exit 0. The agent-side pull path (palinode_search) is unaffected either way.
+#
+# Install:
+#   1. Copy to .claude/hooks/palinode-session-start.sh (or ~/.claude/hooks/…)
+#   2. chmod +x .claude/hooks/palinode-session-start.sh
+#   3. Register in .claude/settings.json — see ./settings.json in this dir.
+#
+# Or just run: `palinode init` — it installs all of this for you.
 
-Call `palinode_save` with:
-- `type` — **always** `"ProjectSnapshot"` (this command is exclusively for
-  progress snapshots; use `/wrap` for end-of-session wrap-ups)
-- `content` — a one-to-three sentence summary of what's been done since the
-  last save and what's next. Written in past/present tense, specific enough
-  that a future session could pick up where this one left off.
-- `project` — the project slug from `.claude/CLAUDE.md` (or the directory
-  name if no slug is set)
+set -euo pipefail
 
-After saving, print one line: the file path and slug from the tool result.
-Do not editorialise. Do not call any other tool.
+# No jq → no way to parse the hook payload or build JSON. Bail silently.
+command -v jq >/dev/null 2>&1 || exit 0
 
-**This command is deterministic.** Always `palinode_save`, always
-`ProjectSnapshot`. If the user is wrapping up for the day, they should use
-`/wrap` instead — that calls `palinode_session_end` with a structured
-summary, decisions, and blockers.
-"""
+PALINODE_API="${PALINODE_API_URL:-http://localhost:6340}"
+# SessionStart blocks the session becoming interactive — keep timeouts tight.
+# This is per-curl total time; the settings.json hook timeout must exceed 2x.
+HOOK_TIMEOUT="${PALINODE_HOOK_START_TIMEOUT:-8}"
+# Sources to fire on. startup + clear = fresh context that needs grounding.
+# resume and compact are excluded by default (prior context usually still
+# carries the injection); extend via PALINODE_HOOK_START_SOURCES if you want
+# re-injection after compaction, e.g. "startup clear compact".
+ALLOWED_SOURCES="${PALINODE_HOOK_START_SOURCES:-startup clear}"
+# Injection bounds. MAX_FILES=0 disables injection entirely (prime-only mode).
+MAX_FILES="${PALINODE_HOOK_INJECT_MAX_FILES:-10}"
+MAX_CHARS="${PALINODE_HOOK_INJECT_MAX_CHARS:-4000}"
 
+# Optional bearer auth for token-protected deployments (PALINODE_API_TOKEN).
+# The ${AUTH[@]+…} expansion is the bash-3.2-safe empty-array idiom (set -u).
+AUTH=()
+if [ -n "${PALINODE_API_TOKEN:-}" ]; then
+  AUTH=(-H "Authorization: Bearer ${PALINODE_API_TOKEN}")
+fi
 
-PS_COMMAND_BODY = """\
----
-description: "DEPRECATED — use /save instead. /ps remains for back-compat."
----
+INPUT=$(cat)
+SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty')
+CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
+SOURCE=$(echo "$INPUT" | jq -r '.source // "startup"')
 
-> **DEPRECATED:** `/ps` is the legacy name for this command. Use `/save`
-> instead — it is identical and is now the canonical mid-session checkpoint.
-> `/ps` continues to work exactly as before; no action required on existing
-> installs.
+# Word-boundary match on a space-padded allowlist so substrings don't
+# false-positive (same pattern as palinode-session-end.sh).
+case " $ALLOWED_SOURCES " in
+  *" $SOURCE "*) ;;
+  *) exit 0 ;;
+esac
 
-Call `palinode_save` with:
-- `type` — **always** `"ProjectSnapshot"` (this command is exclusively for
-  progress snapshots; use `/wrap` for end-of-session wrap-ups)
-- `content` — a one-to-three sentence summary of what's been done since the
-  last save and what's next. Written in past/present tense, specific enough
-  that a future session could pick up where this one left off.
-- `project` — the project slug from `.claude/CLAUDE.md` (or the directory
-  name if no slug is set)
+# Dry-run: print what would happen, touch nothing.
+if [ "${PALINODE_HOOK_DRYRUN:-0}" = "1" ]; then
+  echo "[palinode-session-start DRYRUN] would POST ${PALINODE_API}/context/prime (cwd=${CWD}, session=${SESSION_ID}) and GET ${PALINODE_API}/list?core_only=true"
+  exit 0
+fi
 
-After saving, print one line: the file path and slug from the tool result.
-Do not editorialise. Do not call any other tool.
+# 1. Warm server-side session context (PHASE-G G2). No -f: a 404 from a server
+#    that doesn't have the endpoint yet is fine; only connection errors fail,
+#    and those are swallowed.
+PRIME_PAYLOAD=$(jq -n --arg cwd "$CWD" --arg session_id "$SESSION_ID" \\
+  '{cwd: $cwd, session_id: $session_id}')
+curl -s -o /dev/null \\
+  -X POST "${PALINODE_API}/context/prime" \\
+  ${AUTH[@]+"${AUTH[@]}"} \\
+  -H "Content-Type: application/json" \\
+  -d "$PRIME_PAYLOAD" \\
+  --connect-timeout 2 \\
+  --max-time "${HOOK_TIMEOUT}" 2>/dev/null || true
 
-**This command is deterministic.** Always `palinode_save`, always
-`ProjectSnapshot`. If the user is wrapping up for the day, they should use
-`/wrap` instead — that calls `palinode_session_end` with a structured
-summary, decisions, and blockers.
+# 2. Inject a bounded core-memory digest as session context.
+if [ "$MAX_FILES" -le 0 ]; then
+  exit 0
+fi
+
+CORE_JSON=$(curl -s -f \\
+  ${AUTH[@]+"${AUTH[@]}"} \\
+  "${PALINODE_API}/list?core_only=true" \\
+  --connect-timeout 2 \\
+  --max-time "${HOOK_TIMEOUT}" 2>/dev/null) || exit 0
+
+# Build "- [file] name — summary" lines inside jq (string concatenation, no
+# shell loop). /list sorts newest-first, so [:$max] keeps the freshest files.
+DIGEST=$(echo "$CORE_JSON" | jq -r --argjson max "$MAX_FILES" '
+  if type == "array" and length > 0 then
+    .[:$max]
+    | map("- [" + .file + "] " + (.name // "untitled")
+          + (if (.summary // "") != "" then " — " + .summary else "" end))
+    | join("\\n")
+  else empty end' 2>/dev/null) || exit 0
+
+if [ -z "$DIGEST" ]; then
+  exit 0
+fi
+
+CONTEXT="## Palinode memory (session start)
+
+Persistent memory is connected. Recall details with the palinode_search /
+palinode_read MCP tools — they read the live store; session notes are NOT
+files in this repo.
+
+Core memories:
+${DIGEST}"
+
+# Bound total size so a pathological store can't flood the context window.
+CONTEXT="${CONTEXT:0:${MAX_CHARS}}"
+
+jq -n --arg ctx "$CONTEXT" \\
+  '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx}}'
+
+exit 0
 """
 
 
@@ -287,8 +390,8 @@ with the daily-note path from the result.
 
 **This command is deterministic.** `palinode_push` → `palinode_session_end`
 (`push: true`). The note-ship is a property of the session_end call, not a
-forgettable third step. For a quick mid-session checkpoint, use `/save` instead
-(`/ps` also works as a back-compat alias).
+forgettable third step. For a quick mid-session checkpoint, call the
+`palinode_save` tool directly with `type="ProjectSnapshot"`.
 """
 
 
@@ -389,6 +492,17 @@ WORKTREE_ALLOW_RULES = [
 SETTINGS_HOOK_BLOCK = {
     "permissions": {"allow": list(WORKTREE_ALLOW_RULES)},
     "hooks": {
+        "SessionStart": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/palinode-session-start.sh",
+                        "timeout": 20,
+                    }
+                ]
+            }
+        ],
         "SessionEnd": [
             {
                 "hooks": [
@@ -399,9 +513,16 @@ SETTINGS_HOOK_BLOCK = {
                     }
                 ]
             }
-        ]
+        ],
     }
 }
+
+# (event, script filename) pairs _merge_settings registers. The filename doubles
+# as the already-registered probe so re-runs stay idempotent.
+_HOOK_EVENTS = (
+    ("SessionStart", "palinode-session-start.sh"),
+    ("SessionEnd", "palinode-session-end.sh"),
+)
 
 
 MCP_JSON_BLOCK = {
@@ -431,13 +552,14 @@ def _ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
-def _write_claude_md(
-    path: Path, project_slug: str, force: bool, wrap_policy: str = "light"
-) -> str:
-    wrap_policy_note = WRAP_POLICY_HEAVY_NOTE if wrap_policy == "heavy" else ""
-    block = CLAUDE_MD_BLOCK.format(
-        project_slug=project_slug, wrap_policy_note=wrap_policy_note
-    )
+def _write_memory_block(path: Path, block: str, force: bool) -> str:
+    """Create-or-append a rendered memory block with marker idempotency.
+
+    The shared write idiom for every instruction-file surface (CLAUDE.md,
+    AGENTS.md, .cursor/rules): create the file with the block if absent; if it
+    already carries a ``## Memory (Palinode)`` section, skip unless forced;
+    otherwise append — never clobber a user's existing file content.
+    """
     _ensure_parent(path)
     if not path.exists():
         path.write_text(block)
@@ -452,11 +574,33 @@ def _write_claude_md(
     return "appended"
 
 
-def _write_hook_script(path: Path, force: bool) -> str:
+def _write_claude_md(
+    path: Path, project_slug: str, force: bool, wrap_policy: str = "light"
+) -> str:
+    wrap_policy_note = WRAP_POLICY_HEAVY_NOTE if wrap_policy == "heavy" else ""
+    block = CLAUDE_MD_BLOCK.format(
+        project_slug=project_slug, wrap_policy_note=wrap_policy_note
+    )
+    return _write_memory_block(path, block, force)
+
+
+def _write_agents_md(path: Path, project_slug: str, force: bool) -> str:
+    """Write the harness-neutral memory block to AGENTS.md (Antigravity/Codex)."""
+    block = MEMORY_BLOCK_CORE.format(project_slug=project_slug)
+    return _write_memory_block(path, block, force)
+
+
+def _write_cursor_rules(path: Path, project_slug: str, force: bool) -> str:
+    """Write the harness-neutral memory block to .cursor/rules/palinode.md."""
+    block = MEMORY_BLOCK_CORE.format(project_slug=project_slug)
+    return _write_memory_block(path, block, force)
+
+
+def _write_hook_script(path: Path, force: bool, content: str = HOOK_SCRIPT) -> str:
     _ensure_parent(path)
     if path.exists() and not force:
         return "skipped (exists)"
-    path.write_text(HOOK_SCRIPT)
+    path.write_text(content)
     # chmod +x
     mode = path.stat().st_mode
     path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
@@ -482,16 +626,19 @@ def _merge_settings(path: Path, force: bool) -> str:
             allow.append(rule)
 
     hooks = existing.setdefault("hooks", {})
-    session_end_hooks = hooks.setdefault("SessionEnd", [])
-    # Check for an existing palinode hook
-    for entry in session_end_hooks:
-        for h in entry.get("hooks", []):
-            if "palinode-session-end.sh" in h.get("command", ""):
-                path.write_text(json.dumps(existing, indent=2) + "\n")
-                return "skipped (palinode hook already registered)"
-    session_end_hooks.append(SETTINGS_HOOK_BLOCK["hooks"]["SessionEnd"][0])
+    merged_any = False
+    for event, script_name in _HOOK_EVENTS:
+        event_hooks = hooks.setdefault(event, [])
+        already = any(
+            script_name in h.get("command", "")
+            for entry in event_hooks
+            for h in entry.get("hooks", [])
+        )
+        if not already:
+            event_hooks.append(SETTINGS_HOOK_BLOCK["hooks"][event][0])
+            merged_any = True
     path.write_text(json.dumps(existing, indent=2) + "\n")
-    return "merged"
+    return "merged" if merged_any else "skipped (palinode hooks already registered)"
 
 
 def _write_slash_command(path: Path, body: str, force: bool) -> str:
@@ -523,6 +670,112 @@ def _write_skill(skills_root: Path, name: str, body: str, force: bool) -> str:
         return "skipped (exists)"
     path.write_text(_skill_md(name, body))
     return "created"
+
+
+def _write_session_skill(skills_root: Path, force: bool) -> str:
+    """Install the canonical palinode-session skill verbatim.
+
+    A symlinked SKILL.md is never touched — even with ``--force``. A symlink
+    means the install is curated externally (e.g. a dotfiles/agents repo owns
+    the real file), and overwriting it would silently break that ownership. A
+    regular existing file is skipped unless forced, so a user's customized
+    skill survives a re-run.
+    """
+    path = skills_root / "palinode-session" / "SKILL.md"
+    if path.is_symlink():
+        return "skipped (symlink — curated externally, not touching)"
+    _ensure_parent(path)
+    if path.exists() and not force:
+        return "skipped (exists — re-run with --force to overwrite)"
+    path.write_text(PALINODE_SESSION_SKILL)
+    return "created"
+
+
+# The canonical palinode-session skill (ADR-012 Layer 2), embedded so
+# `palinode init` can install it from the packaged CLI without the repo
+# checkout. Byte-for-byte identical to skill/palinode-session/SKILL.md —
+# a drift-guard test pins the two; edit the canonical file first, then
+# mirror here. Written VERBATIM (it carries its own frontmatter), unlike
+# the wrap skill which is rendered from a command body via _skill_md.
+PALINODE_SESSION_SKILL = """\
+---
+name: palinode-session
+description: "Automatically manage persistent memory during coding sessions via Palinode MCP. Fires when: starting a new task, completing a milestone, making a decision, finishing a session, or when 30+ minutes have passed since last save. Also fires on 'save to memory', 'remember this', 'what do we know about'. Do NOT fire on trivial file edits or routine commands."
+---
+
+# Palinode Session Memory
+
+This skill keeps your AI agent's memory fresh across coding sessions using Palinode MCP tools.
+
+## On Session Start
+
+Search for prior context before beginning work:
+
+```
+palinode_search(query="[current project or task description]", limit=5)
+```
+
+Review results and reference relevant decisions or blockers from previous sessions.
+
+## During Work — Save Milestones
+
+After each major milestone, save the outcome:
+
+```
+palinode_save(
+  content="[what was accomplished and why]",
+  type="Decision",          # or "Insight" for reusable lessons
+  project="[project-slug]"
+)
+```
+
+### When to save:
+- Tests pass after a significant change
+- Feature is complete and working
+- Architectural or design decision made (include rationale)
+- Bug fixed that took >15 minutes (save the root cause)
+- Something surprising discovered (save as Insight)
+
+### When NOT to save:
+- Routine file edits, typo fixes
+- Intermediate debug steps (save the resolution only)
+- Things git already tracks (code changes, file history)
+
+## Every ~30 Minutes
+
+If actively working and 30+ minutes since last palinode_save, save a brief progress note:
+
+```
+palinode_save(
+  content="Progress: [what's been done so far, what's next]",
+  type="ProjectSnapshot"
+)
+```
+
+## On Session End
+
+Before the user exits, capture the session:
+
+```
+palinode_session_end(
+  summary="[1-2 sentence summary of accomplishments]",
+  decisions=["decision 1 with rationale", "decision 2"],
+  blockers=["open question or next step"],
+  project="[project-slug]"
+)
+```
+
+## Tool Reference
+
+| Tool | When |
+|---|---|
+| `palinode_search` | Start of session, or "what do we know about X" |
+| `palinode_save` | Milestones, decisions, insights, progress |
+| `palinode_session_end` | End of session — structured summary |
+| `palinode_diff` | "What changed recently?" |
+| `palinode_blame` | "When was this decided?" |
+| `palinode_trigger` | Register auto-recall for recurring topics |
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -816,14 +1069,35 @@ def _merge_mcp_json(path: Path, force: bool) -> str:
     help="Write the Palinode memory block to .claude/CLAUDE.md",
 )
 @click.option(
+    "--agents/--no-agents",
+    "agents",
+    default=None,
+    help=(
+        "Write the harness-neutral memory block to AGENTS.md (read by "
+        "Antigravity, Codex, and other AGENTS.md-aware harnesses). Default: "
+        "auto — on when AGENTS.md or a .agent/ directory exists in the target, "
+        "off otherwise. Explicit --agents forces it on."
+    ),
+)
+@click.option(
+    "--cursor/--no-cursor",
+    "cursor",
+    default=None,
+    help=(
+        "Write the harness-neutral memory block to .cursor/rules/palinode.md "
+        "(read by Cursor). Default: auto — on when a .cursor/ directory exists "
+        "in the target, off otherwise. Explicit --cursor forces it on."
+    ),
+)
+@click.option(
     "--hook/--no-hook",
     default=True,
-    help="Install the SessionEnd hook script + .claude/settings.json",
+    help="Install the SessionStart + SessionEnd hook scripts + .claude/settings.json",
 )
 @click.option(
     "--slash/--no-slash",
     default=True,
-    help="Install /save, /ps (back-compat alias), and /wrap slash commands for save-before-clear reflex",
+    help="Install the /wrap slash command for the save-before-clear reflex (/save and /ps are deprecated and no longer scaffolded)",
 )
 @click.option(
     "--wrap-policy",
@@ -841,12 +1115,44 @@ def _merge_mcp_json(path: Path, force: bool) -> str:
     type=click.Choice(["none", "project", "personal", "both"]),
     default="none",
     help=(
-        "Also install /save /ps /wrap as Claude Code *skills* — the modern "
+        "Also install /wrap as a Claude Code *skill* — the modern "
         "format (user-scope `.claude/commands/` is no longer searched). "
         "'personal' → ~/.claude/skills/ so /wrap is typeable in ALL projects "
-        "(not just this one); 'project' → .claude/skills/; 'both'. Bodies come "
-        "from the same source as the slash commands, so they can't drift. "
+        "(not just this one); 'project' → .claude/skills/; 'both'. The body "
+        "comes from the same source as the slash command, so they can't drift. "
         "Default: none."
+    ),
+)
+@click.option(
+    "--skill/--no-skill",
+    "session_skill",
+    default=True,
+    help=(
+        "Install the palinode-session skill (ambient memory behavior: recall "
+        "at start, save milestones, session-end capture) into the project's "
+        "harness skill paths — .claude/skills/ always, plus .cursor/skills/ "
+        "and .agent/skills/ when those harness footprints exist. Default: on."
+    ),
+)
+@click.option(
+    "--skill-path",
+    "skill_path",
+    type=click.Path(file_okay=False),
+    default=None,
+    help=(
+        "Override the skill install root: the palinode-session skill is "
+        "written to <path>/palinode-session/SKILL.md instead of the "
+        "auto-detected harness paths."
+    ),
+)
+@click.option(
+    "--user",
+    "user_skill",
+    is_flag=True,
+    default=False,
+    help=(
+        "Install the palinode-session skill to ~/.claude/skills/ (per-user, "
+        "available in every project) instead of the project-scoped paths."
     ),
 )
 @click.option(
@@ -882,10 +1188,15 @@ def init(
     project_slug,
     mcp,
     claudemd,
+    agents,
+    cursor,
     hook,
     slash,
     wrap_policy,
     skills,
+    session_skill,
+    skill_path,
+    user_skill,
     obsidian,
     force_obsidian,
     force,
@@ -894,10 +1205,18 @@ def init(
     """Scaffold Palinode into a project for zero-friction adoption.
 
     Creates (or appends to):
-      .claude/CLAUDE.md                     — memory instructions for the agent
-      .claude/settings.json                 — SessionEnd hook registration
-      .claude/hooks/palinode-session-end.sh — hook script (fires on /clear, exit)
-      .mcp.json                             — palinode MCP server block
+      .claude/CLAUDE.md                       — memory instructions for the agent
+      .claude/settings.json                   — SessionStart + SessionEnd hook registration
+      .claude/hooks/palinode-session-start.sh — hook script (core-memory inject + context prime)
+      .claude/hooks/palinode-session-end.sh   — hook script (fires on /clear, exit)
+      .mcp.json                               — palinode MCP server block
+      AGENTS.md                               — harness-neutral memory block (when AGENTS.md
+                                                or .agent/ is detected, or --agents)
+      .cursor/rules/palinode.md               — harness-neutral memory block (when .cursor/
+                                                is detected, or --cursor)
+      .claude/skills/palinode-session/SKILL.md — ambient memory skill (plus
+                                                .cursor/skills/ and .agent/skills/ when
+                                                detected; --user for ~/.claude/skills/)
 
     With --obsidian, additionally writes:
       .obsidian/app.json       — wikilinks, daily/ as default file location
@@ -920,19 +1239,27 @@ def init(
         obsidian = True
 
     claude_md = target / ".claude" / "CLAUDE.md"
+    agents_md = target / "AGENTS.md"
+    cursor_rules = target / ".cursor" / "rules" / "palinode.md"
+    # ADR-012 Layer 1 detection defaults: scaffold the other instruction-file
+    # surfaces only where the harness footprint already exists, unless the
+    # caller opts in/out explicitly (tri-state flags: None = auto-detect).
+    if agents is None:
+        agents = agents_md.exists() or (target / ".agent").is_dir()
+    if cursor is None:
+        cursor = (target / ".cursor").is_dir()
     settings = target / ".claude" / "settings.json"
     hook_script = target / ".claude" / "hooks" / "palinode-session-end.sh"
+    start_hook_script = target / ".claude" / "hooks" / "palinode-session-start.sh"
     mcp_json = target / ".mcp.json"
-    save_cmd = target / ".claude" / "commands" / "save.md"
-    ps_cmd = target / ".claude" / "commands" / "ps.md"
     wrap_cmd = target / ".claude" / "commands" / "wrap.md"
 
-    # optional skill-format install. Same bodies as the slash commands
+    # optional skill-format install. Same body as the slash command
     # (single source — no drift); 'personal' scope makes /wrap typeable in every
-    # project, not just this one.
+    # project, not just this one. /wrap is the sole lifecycle command — /save
+    # and /ps are deprecated and no longer scaffolded (mid-session checkpoints
+    # call the palinode_save tool directly).
     skill_specs = [
-        ("save", SAVE_COMMAND_BODY),
-        ("ps", PS_COMMAND_BODY),
         ("wrap", WRAP_HEAVY_COMMAND_BODY if wrap_policy == "heavy" else WRAP_COMMAND_BODY),
     ]
     skill_roots: list[tuple[str, Path]] = []
@@ -940,6 +1267,23 @@ def init(
         skill_roots.append(("project", target / ".claude" / "skills"))
     if skills in ("personal", "both"):
         skill_roots.append(("personal", Path.home() / ".claude" / "skills"))
+
+    # ADR-012 Layer 2: the palinode-session skill (ambient memory behavior)
+    # installs into every harness skill path detected in the project.
+    # Precedence: --skill-path override > --user (per-user, replaces
+    # project scope) > detection (.claude always; .cursor/.agent when present).
+    session_skill_roots: list[tuple[str, Path]] = []
+    if session_skill:
+        if skill_path:
+            session_skill_roots.append(("custom", Path(skill_path)))
+        elif user_skill:
+            session_skill_roots.append(("user", Path.home() / ".claude" / "skills"))
+        else:
+            session_skill_roots.append(("project", target / ".claude" / "skills"))
+            if (target / ".cursor").is_dir():
+                session_skill_roots.append(("cursor", target / ".cursor" / "skills"))
+            if (target / ".agent").is_dir():
+                session_skill_roots.append(("agent-dir", target / ".agent" / "skills"))
 
     click.echo(f"Palinode init → {target}")
     click.echo(f"  project slug: {slug}")
@@ -949,18 +1293,25 @@ def init(
         click.echo("[dry-run] Would write:")
         if claudemd:
             click.echo(f"  {claude_md.relative_to(target)}  (memory instructions)")
+        if agents:
+            click.echo(f"  {agents_md.relative_to(target)}  (memory instructions — Antigravity/Codex)")
+        if cursor:
+            click.echo(f"  {cursor_rules.relative_to(target)}  (memory instructions — Cursor rules)")
         if hook:
+            click.echo(f"  {start_hook_script.relative_to(target)}  (SessionStart hook script)")
             click.echo(f"  {hook_script.relative_to(target)}  (SessionEnd hook script)")
             click.echo(f"  {settings.relative_to(target)}  (hook registration)")
         if slash:
-            click.echo(f"  {save_cmd.relative_to(target)}  (/save slash command — canonical)")
-            click.echo(f"  {ps_cmd.relative_to(target)}  (/ps slash command — back-compat alias)")
             click.echo(
                 f"  {wrap_cmd.relative_to(target)}  (/wrap slash command — {wrap_policy} policy)"
             )
         for scope_label, root in skill_roots:
             for name, _ in skill_specs:
                 click.echo(f"  {root / name / 'SKILL.md'}  (/{name} skill — {scope_label} scope)")
+        for scope_label, root in session_skill_roots:
+            click.echo(
+                f"  {root / 'palinode-session' / 'SKILL.md'}  (memory skill — {scope_label} scope)"
+            )
         if mcp:
             click.echo(f"  {mcp_json.relative_to(target)}  (MCP server block)")
         if obsidian:
@@ -976,12 +1327,20 @@ def init(
         results.append(
             ("CLAUDE.md", _write_claude_md(claude_md, slug, force, wrap_policy))
         )
+    if agents:
+        results.append(("AGENTS.md", _write_agents_md(agents_md, slug, force)))
+    if cursor:
+        results.append(
+            (".cursor/rules/palinode.md", _write_cursor_rules(cursor_rules, slug, force))
+        )
     if hook:
-        results.append(("hook script", _write_hook_script(hook_script, force)))
+        results.append((
+            "session-start hook",
+            _write_hook_script(start_hook_script, force, SESSION_START_HOOK_SCRIPT),
+        ))
+        results.append(("session-end hook", _write_hook_script(hook_script, force)))
         results.append(("settings.json", _merge_settings(settings, force)))
     if slash:
-        results.append(("/save command", _write_slash_command(save_cmd, SAVE_COMMAND_BODY, force)))
-        results.append(("/ps command (alias)", _write_slash_command(ps_cmd, PS_COMMAND_BODY, force)))
         wrap_body = WRAP_HEAVY_COMMAND_BODY if wrap_policy == "heavy" else WRAP_COMMAND_BODY
         results.append(
             (f"/wrap command ({wrap_policy})", _write_slash_command(wrap_cmd, wrap_body, force))
@@ -991,6 +1350,13 @@ def init(
             results.append(
                 (f"/{name} skill ({scope_label})", _write_skill(root, name, body, force))
             )
+    for scope_label, root in session_skill_roots:
+        results.append(
+            (
+                f"palinode-session skill ({scope_label})",
+                _write_session_skill(root, force),
+            )
+        )
     if mcp:
         results.append((".mcp.json", _merge_mcp_json(mcp_json, force)))
     if obsidian:

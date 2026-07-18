@@ -51,8 +51,47 @@ from palinode.core.defaults import (
 logger = logging.getLogger("palinode.mcp")
 logging.basicConfig(level=logging.WARNING)  # quiet — don't pollute stdio
 
-server = Server("palinode")
+# ADR-012 Layer 4, lever 1: a content-free memory contract in the MCP
+# initialize response. Every client renders server `instructions` — this is
+# the only session-start surface MCP-only harnesses (Claude Desktop, Codex
+# CLI, Gemini CLI) have. Deliberately carries NO memory content (no scope
+# risk); the content digest is the explicit palinode_session_init tool.
+_SERVER_INSTRUCTIONS = (
+    "Palinode persistent memory is connected. At the start of a conversation, "
+    "call palinode_session_init for project context (core memories, recent "
+    "decisions, open action items). Call palinode_search before answering "
+    "questions about prior decisions or project state. Save decisions and "
+    "insights with palinode_save (include the rationale). Call "
+    "palinode_session_end before the session ends."
+)
+
+server = Server(
+    "palinode",
+    instructions=_SERVER_INSTRUCTIONS if config.auto_inject.instructions_enabled else None,
+)
 _audit = AuditLogger(config.memory_dir, config.audit)
+
+
+def _auto_inject_suppressed_for(client_name: str) -> bool:
+    """Harness policy: skip the digest for clients that already carry
+    instruction-file/skill/hook layers (double-injection is noise). Matching
+    is substring-on-lowercased clientInfo.name; an unidentifiable client is
+    NOT suppressed — the tool is explicit-invocation, not a push."""
+    if not client_name:
+        return False
+    lowered = client_name.lower()
+    return any(h.lower() in lowered for h in config.auto_inject.harnesses_disabled)
+
+
+def _session_init_client_name() -> str:
+    """Best-effort clientInfo.name from the initialize handshake."""
+    try:
+        client_params = getattr(server.request_context.session, "client_params", None)
+        if client_params is not None and client_params.clientInfo is not None:
+            return client_params.clientInfo.name or ""
+    except Exception:  # noqa: BLE001 — outside a request context (tests, tooling)
+        pass
+    return ""
 
 
 def _coerce_str_array(value: Any) -> Any:
@@ -233,12 +272,15 @@ def _format_results(results: list[dict[str, Any]], full: bool = False) -> str:
             refs_label = " [" + ", ".join(ref_parts) + "]"
 
         # ADR-018: surface a non-default epistemic marker so a reader sees
-        # at a glance that a hit is an inference or an open question rather than a
-        # verified fact. `fact` (the default) is left unlabelled to avoid noise.
+        # at a glance that a hit is an inference, an open question, or an
+        # unchecked assertion rather than a verified fact. `fact` (the default)
+        # is left unlabelled to avoid noise.
         epi = meta.get("epistemic")
-        epi_label = ""
-        if epi in ("inference", "open_question"):
-            epi_label = " [inference]" if epi == "inference" else " [open question?]"
+        epi_label = {
+            "inference": " [inference]",
+            "open_question": " [open question?]",
+            "unverified": " [unverified]",
+        }.get(epi, "")
 
         # pick body — snippet (default) or capped content (full=True).
         if full:
@@ -294,6 +336,7 @@ def _resolve_save_type(arg_type: str | None, arg_ps: bool | None) -> str:
 
 CORE_TOOL_NAMES = frozenset(
     {
+        "palinode_session_init",
         "palinode_save",
         "palinode_search",
         "palinode_read",
@@ -319,6 +362,31 @@ def _resolve_tool_surface() -> ToolSurface:
 
 def _all_tools() -> list[types.Tool]:
     return [
+        types.Tool(
+            name="palinode_session_init",
+            description=(
+                "Session-start context: call this FIRST in a new conversation. "
+                "Returns the resolved project scope with core memories, recent "
+                "decisions, and open action items as a bounded digest."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "cwd": {
+                        "type": "string",
+                        "description": "Working directory used to resolve the project scope. Defaults to the server process CWD when omitted.",
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": "Explicit project slug or entity ref; overrides cwd resolution.",
+                    },
+                },
+            },
+            annotations=types.ToolAnnotations(
+                title="Session Init / Context",
+                readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False,
+            ),
+        ),
         types.Tool(
             name="palinode_list",
             description=(
@@ -540,11 +608,11 @@ def _all_tools() -> list[types.Tool]:
                     },
                     "epistemic": {
                         "type": "string",
-                        "enum": ["fact", "inference", "open_question"],
+                        "enum": ["fact", "inference", "open_question", "unverified"],
                         # ADR-018: the KIND of claim this memory makes.
                         # Omitting it leaves the memory `unmarked` (no claim —
                         # NOT fact); no frontmatter is written.
-                        "description": "Epistemic marker: 'fact' (observed/verified), 'inference' (derived, lower trust), or 'open_question' (unresolved). Omit to leave the memory unmarked (no claim is made — not treated as fact).",
+                        "description": "Epistemic marker: 'fact' (observed/verified), 'inference' (derived, lower trust), 'open_question' (unresolved), or 'unverified' (asserted but not checked). Omit to leave the memory unmarked (no claim is made — not treated as fact).",
                     },
                     "external_refs": {
                         "type": "object",
@@ -594,6 +662,32 @@ def _all_tools() -> list[types.Tool]:
                         # (G4): typed evidence link — this memory is supported
                         # by the listed source/fact refs.
                         "description": "Refs (category/slug) that support/back this memory (evidence links).",
+                    },
+                    "claims": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "text": {"type": "string", "description": "The claim as stated in the memory."},
+                                "source_id": {"type": "string", "description": "Path under the memory dir of the source that justifies the claim (a sources[].ref)."},
+                                "span": {
+                                    "type": "object",
+                                    "properties": {
+                                        "quote": {"type": "string", "description": "The exact passage in the source that justifies the claim."},
+                                        "quote_hash": {"type": "string", "description": "Optional integrity hash; computed on save if omitted."},
+                                    },
+                                    "required": ["quote"],
+                                },
+                                "claim_id": {"type": "string", "description": "Optional stable claim id; content-addressed, derived on save if omitted."},
+                                "anchor_id": {"type": "string", "description": "Optional opaque pointer within a large source (interop; nullable)."},
+                            },
+                            "required": ["text", "source_id", "span"],
+                        },
+                        # Claim-level source anchors: bind a claim inside this
+                        # memory to the source span that justifies it. claim_id
+                        # (addressing) composes with quote_hash (integrity);
+                        # blame resolves them back.
+                        "description": "Claim-level source anchors: list of {text, source_id, span:{quote, quote_hash}} bindings resolving each claim to the source span that justifies it. claim_id is derived on save; read back via palinode_blame with claims=true.",
                     },
                 },
                 "required": ["content"],
@@ -819,6 +913,10 @@ def _all_tools() -> list[types.Tool]:
                     "search": {
                         "type": "string",
                         "description": "Optional: filter to lines containing this text",
+                    },
+                    "claims": {
+                        "type": "boolean",
+                        "description": "Also resolve the file's claim-level source anchors: which source span justifies each claim, with live integrity status.",
                     },
                 },
                 # `file_path` or `file` (legacy) — validated in the dispatcher.
@@ -1411,6 +1509,12 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
                 body["contradicts"] = arguments["contradicts"]
             if arguments.get("backed_by") is not None:
                 body["backed_by"] = arguments["backed_by"]
+            # claim-level source anchors. Forwarded verbatim; the API
+            # validates each entry, derives/verifies claim_id + quote_hash, and
+            # 400s on a malformed or inconsistent anchor (surfaced below as the
+            # standard "Save failed" message).
+            if arguments.get("claims") is not None:
+                body["claims"] = arguments["claims"]
 
             resp = await _post("/save", json=body)
             if resp.status_code != 200:
@@ -1558,6 +1662,36 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
                 return _text(f"Error: {resp.text}")
             return _text(resp.json().get("diff", "No changes."))
 
+        # ── session init (ADR-012 Layer 4) ────────────────────────────────
+        elif name == "palinode_session_init":
+            if not config.auto_inject.enabled:
+                return _text(
+                    "Session auto-inject is disabled (auto_inject.enabled=false). "
+                    "Call palinode_search directly for context."
+                )
+            client_name = _session_init_client_name()
+            if _auto_inject_suppressed_for(client_name):
+                return _text(
+                    f"Session auto-inject is suppressed for this client ({client_name}) — "
+                    "it already receives memory instructions through its instruction "
+                    "file/skill/hook layers. Call palinode_search directly for context."
+                )
+            body = {}
+            if arguments.get("project"):
+                body["project"] = arguments["project"]
+            if arguments.get("cwd"):
+                body["cwd"] = arguments["cwd"]
+            elif not body:
+                # stdio servers run on the client's machine, so the server
+                # process CWD is a usable default scope hint. Explicit args win.
+                body["cwd"] = os.getcwd()
+            resp = await _post("/context/prime", json=body)
+            if resp.status_code != 200:
+                return _text(f"Error: {resp.text}")
+            from palinode.core.context_prime import format_context_digest
+
+            return _text(format_context_digest(resp.json()))
+
         # ── blame ─────────────────────────────────────────────────────────
         elif name == "palinode_blame":
             # ADR-010: prefer canonical `file_path`; accept legacy
@@ -1568,10 +1702,19 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
             params: dict[str, str] = {}
             if arguments.get("search"):
                 params["search"] = arguments["search"]
+            if arguments.get("claims"):
+                params["claims"] = "true"
             resp = await _get(f"/blame/{file_path}", params=params)
             if resp.status_code != 200:
                 return _text(f"Error: {resp.text}")
-            return _text(resp.json().get("blame", "No blame data."))
+            data = resp.json()
+            blame_text = data.get("blame", "No blame data.")
+            if arguments.get("claims"):
+                from palinode.core.claims import format_claims_resolution
+
+                claims_text = format_claims_resolution(file_path, data.get("claims", []))
+                return _text(f"{blame_text}\n\n{claims_text}")
+            return _text(blame_text)
 
         # ── rollback ──────────────────────────────────────────────────────
         elif name == "palinode_rollback":

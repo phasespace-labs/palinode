@@ -133,6 +133,14 @@ def build_provenance(
                 state="ok",
             )
         )
+    elif epistemic == "unverified":
+        rows.append(
+            ProvenanceRow(
+                kicker="Claim type",
+                value="unverified — asserted, not checked",
+                state="ok",
+            )
+        )
     elif epistemic == "fact":
         rows.append(
             ProvenanceRow(
