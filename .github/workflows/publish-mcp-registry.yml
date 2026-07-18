@@ -1,0 +1,56 @@
+name: Publish MCP Registry
+
+# Publishes server.json to the MCP registry on every release tag, closing the
+# manual `mcp-publisher publish` step that drifted the registry behind PyPI
+# (v0.8.8 shipped while the registry sat at v0.8.6 until it was noticed).
+#
+# Runs as its own workflow so a registry outage never blocks the PyPI release:
+# if this job fails, rerun it via workflow_dispatch once the registry is back.
+# The registry entry references the PyPI package, so the job first waits for
+# the tagged version to be installable from PyPI (publish-pypi.yml runs on the
+# same tag; cross-workflow `needs:` doesn't exist, hence the poll).
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # OIDC auth to the MCP registry (io.github.* namespace)
+
+jobs:
+  publish-mcp-registry:
+    name: Publish to MCP Registry
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Wait for the tagged version on PyPI
+        run: |
+          VERSION="$(python3 -c 'import json; print(json.load(open("server.json"))["version"])')"
+          echo "server.json version: $VERSION"
+          for i in $(seq 1 40); do
+            if curl -sf "https://pypi.org/pypi/palinode/$VERSION/json" > /dev/null; then
+              echo "palinode $VERSION is live on PyPI"
+              exit 0
+            fi
+            echo "attempt $i/40: palinode $VERSION not on PyPI yet; retrying in 15s"
+            sleep 15
+          done
+          echo "::error::palinode $VERSION never appeared on PyPI (waited 10 min)." \
+               "Check publish-pypi.yml, then rerun this workflow via workflow_dispatch."
+          exit 1
+
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      - name: Authenticate to MCP Registry (GitHub OIDC)
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server.json
+        run: ./mcp-publisher publish
