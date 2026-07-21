@@ -5,9 +5,10 @@
 # actions, both fail-silent:
 #
 #   1. POST /context/prime — warms server-side session context for this CWD
-#      (ADR-012 Layer 3 / PHASE-G). Until the endpoint ships this is a
-#      harmless 404; once it exists, already-installed hooks start priming
-#      with no re-install.
+#      (ADR-012 Layer 4 + ADR-009 Layer 1). The endpoint returns the
+#      scope-aware context digest; this hook discards the body and injects
+#      via the /list digest below. An older server (pre-0.9.3) 404s
+#      harmlessly.
 #   2. GET /list?core_only=true — injects a bounded digest of core memories
 #      into the session as additionalContext, with a deterministic recall
 #      reminder. This is the "sessions start smart" half: grounding that does
@@ -66,9 +67,10 @@ if [ "${PALINODE_HOOK_DRYRUN:-0}" = "1" ]; then
   exit 0
 fi
 
-# 1. Warm server-side session context (PHASE-G G2). No -f: a 404 from a server
-#    that doesn't have the endpoint yet is fine; only connection errors fail,
-#    and those are swallowed.
+# 1. Warm server-side session context (/context/prime — ADR-012 Layer 4 +
+#    ADR-009 Layer 1). No -f: an older server (pre-0.9.3) without the
+#    endpoint 404s harmlessly; only connection errors fail, and those are
+#    swallowed.
 PRIME_PAYLOAD=$(jq -n --arg cwd "$CWD" --arg session_id "$SESSION_ID" \
   '{cwd: $cwd, session_id: $session_id}')
 curl -s -o /dev/null \

@@ -11,7 +11,8 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from palinode.core import store, git_tools
 from palinode.core.config import config
-from palinode.core.scope import ScopeChain, chain_allows
+from palinode.core.scope import ScopeChain
+from palinode.core.visibility import is_visible
 from palinode.api._util import (
     _auto_summary_state, _retrieval_logger, _safe_500, _utc_now,
 )
@@ -252,10 +253,22 @@ def collect_memory_files(
     """Enumerate memory files as /list-shaped rows, newest first.
 
     The shared selection path behind ``GET /list`` and the /context/prime
-    endpoint (ADR-009 Layer 1). When ``scope_chain`` is given, files whose
-    explicit ``scope:`` frontmatter is not on the chain are dropped
-    (scoped mode); ``None`` skips scope filtering entirely (classic mode,
-    the /list contract).
+    endpoint (ADR-009 Layer 1/2). Every row goes through the visibility choke
+    point (:func:`palinode.core.visibility.is_visible`):
+
+    - With a ``scope_chain`` carrying an identity level, off-chain explicit
+      ``scope:``, off-chain-owned ``private``, and non-intersecting
+      ``restricted`` memories are all dropped (scoped mode).
+    - With ``scope_chain=None`` — the ``GET /list`` contract — scope
+      isolation does not apply, but **access control still does**:
+      ``private`` and ``restricted`` memories are never listed (#108).
+      That gate is load-bearing, not decorative: the shipped SessionStart
+      hook injects from ``GET /list?core_only=true``, so without it a
+      ``core: true`` memory marked ``private`` would be auto-injected into
+      every session on the machine.
+
+    Frontmatter parsed here is passed to the choke point directly — it is
+    live (just read from disk), so no second read is needed.
     """
     import glob
     from palinode.core import parser
@@ -290,7 +303,7 @@ def collect_memory_files(
             if core_only and not is_core:
                 continue
 
-            if scope_chain is not None and not chain_allows(scope_chain, metadata):
+            if not is_visible(scope_chain, filepath, metadata=metadata):
                 continue
 
             raw_scope = metadata.get("scope")
@@ -325,6 +338,13 @@ def collect_memory_files(
 
 @router.get("/list")
 def list_api(category: str | None = None, core_only: bool = False) -> list[dict[str, Any]]:
+    """Browse memories, newest first.
+
+    Never scope-filters (no session chain here — that's /context/prime's job),
+    but ``private`` and ``restricted`` memories are always withheld: this is
+    the endpoint the SessionStart hook injects from, so access control cannot
+    be optional here (#108).
+    """
     return collect_memory_files(category=category, core_only=core_only)
 
 
@@ -429,6 +449,58 @@ def save_api(req: SaveRequest, request: Request = None, sync: bool = False) -> d
                 f"expected one of {list(_VALID_STATUSES)}"
             ),
         )
+
+    # ADR-009 Layer 2: validate the visibility axis. It arrives only via
+    # the `metadata` dict today (no first-class param yet — promoting it to a
+    # four-surface param per ADR-010 is a follow-on). Two checks, both aimed at
+    # the same failure: a memory the author believes is protected, or believes
+    # is reachable, when it is neither.
+    #
+    # `private` with no `scope:` names no owner. The read path falls back to the
+    # directory-inferred `project/<dir>`, which no real session chain contains,
+    # so the memory would be invisible on every scoped surface — including to
+    # its own author, silently and forever. Reject it here so the failure is
+    # loud at write time, with the fix in the message.
+    #
+    # `restricted` with no `access:` allowlist is the mirror image: nothing can
+    # ever intersect an empty list, so the memory is unreachable by everyone.
+    _meta = req.metadata if isinstance(req.metadata, dict) else {}
+    _visibility = _meta.get("visibility")
+    if _visibility is not None:
+        from palinode.core.parser import VALID_VISIBILITIES as _VALID_VISIBILITIES
+        if _visibility not in _VALID_VISIBILITIES:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Invalid visibility {_visibility!r}; "
+                    f"expected one of {list(_VALID_VISIBILITIES)}"
+                ),
+            )
+        _scope_val = _meta.get("scope")
+        _has_scope = isinstance(_scope_val, str) and _scope_val.strip()
+        if _visibility == "private" and not _has_scope:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "visibility: private requires an explicit scope: naming the "
+                    "owner, e.g. scope: agent/<name> or scope: member/<name>. "
+                    "Without one the memory is visible to no session, including "
+                    "yours."
+                ),
+            )
+        _access_val = _meta.get("access")
+        if _visibility == "restricted" and not (
+            isinstance(_access_val, list)
+            and any(a is not None and str(a).strip() for a in _access_val)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "visibility: restricted requires a non-empty access: "
+                    "allowlist of entity refs, e.g. access: [member/alice]. "
+                    "An empty allowlist matches no session."
+                ),
+            )
 
     # (ADR-018): validate the epistemic marker. Like update_policy/status it
     # may arrive via the first-class param OR the `metadata` dict (merged verbatim

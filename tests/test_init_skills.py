@@ -57,6 +57,15 @@ def test_single_source_body_matches_command(tmp_path):
     assert "name: wrap" in wrap_skill
 
 
+def test_wrap_skill_inherits_step0_preflight(tmp_path):
+    """#618: because the skill renders from WRAP_COMMAND_BODY, the Step 0 git
+    pre-flight lands in the skill too — no separate copy to keep in sync."""
+    _run(["--dir", str(tmp_path), *_BASE, "--skills", "project"])
+    wrap_skill = (tmp_path / ".claude" / "skills" / "wrap" / "SKILL.md").read_text()
+    assert "Step 0" in wrap_skill
+    assert "git status" in wrap_skill
+
+
 def test_personal_scope_targets_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))

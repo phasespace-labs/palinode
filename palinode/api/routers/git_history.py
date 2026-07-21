@@ -113,6 +113,42 @@ def blame_api(file_path: str, search: str | None = None, claims: bool = False) -
     return result
 
 
+@router.get("/trace/{file_path:path}")
+def trace_api(file_path: str) -> dict[str, Any]:
+    """Compose the full provenance lineage for one memory file (#536).
+
+    The consumer that joins every provenance primitive — source-citation anchors
+    (G1), git blame/history, the supersession trail, typed ``contradicts`` /
+    ``backed_by`` links (G4), and the retrieval log — into one lineage object.
+    Rows whose provenance gap is not built yet (G2 extraction metadata #534, G3
+    terminal edge #535) render an honest ``not_captured`` placeholder. The JSON
+    is the structured object the review UI consumes.
+    """
+    from palinode.core.trace import compose_trace
+
+    try:
+        safe_rel = git_tools._resolve_memory_path(file_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    try:
+        trace = compose_trace(safe_rel, config.memory_dir)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    # Composing a trace is an explicit retrieval. Log the CANONICAL ref that
+    # compose resolved (``trace["file"]``), not the raw request path:
+    # _resolve_memory_path validates but returns its input verbatim, so a
+    # request for `./decisions/x.md` would otherwise log an event that a later
+    # trace of the same memory could never match — silently undercounting the
+    # recall this feature exists to surface.
+    _retrieval_logger.record_file_read(
+        trace["file"],
+        source="palinode_trace",
+        mode="explicit",
+    )
+    return trace
+
+
 @router.post("/rollback")
 def rollback_api(file_path: str, commit: str | None = None, dry_run: bool = True) -> dict[str, Any]:
     """Revert a memory file to a previous version.

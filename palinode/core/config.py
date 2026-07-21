@@ -451,17 +451,19 @@ class ScopeConfig:
       PALINODE_AGENT    → scope.agent    (multi-agent orchestration only)
 
     prime_mode:
-      "classic" — inject all core files regardless of scope (legacy, default
-                  during Layer 1 rollout for backwards compatibility).
-      "scoped"  — filter core files by the session's scope chain. Flip the
-                  default to "scoped" in a follow-up once Slices 2-3 land.
+      "classic" — /context/prime injects all core files regardless of scope.
+      "scoped"  — /context/prime filters core files by the session's scope
+                  chain (the default). Safe flip per ADR-009 §7: only memories
+                  with *explicit* scope: frontmatter isolate, so scoped is
+                  behavior-identical to classic until someone writes
+                  harness/member-scoped memories.
     """
     enabled: bool = False
     org: str | None = None
     member: str | None = None
     harness: str | None = None
     agent: str | None = None
-    prime_mode: str = "classic"
+    prime_mode: str = "scoped"
 
 
 @dataclass

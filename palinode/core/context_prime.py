@@ -2,9 +2,10 @@
 
 One bounded, deterministic digest of "what should a fresh session know":
 the resolved project scope, `core: true` memories, recently-modified
-decisions, and open action items — built from frontmatter reads and mtime
-sorts only (no embeds, no LLM, no network), so it is safe on the session
-cold-start path.
+decisions, open action items, and the most recent project snapshots (the
+`/wrap` "pick up where you left off" notes) — built from frontmatter reads
+and mtime sorts only (no embeds, no LLM, no network), so it is safe on the
+session cold-start path.
 
 Serves every surface per ADR-010 parity:
 
@@ -35,6 +36,9 @@ from palinode.core.config import config
 MAX_CORE_MEMORIES = 10
 MAX_RECENT_DECISIONS = 5
 MAX_OPEN_ACTION_ITEMS = 5
+#: Snapshots accrete fast (one per /wrap), so keep this tight — a fresh
+#: session wants the last couple of "where I left off" notes, not a history.
+MAX_RECENT_SNAPSHOTS = 3
 #: Hard cap on any single digest line (title + description).
 MAX_LINE_CHARS = 200
 
@@ -53,12 +57,16 @@ def resolve_project(cwd: str | None = None, project: str | None = None) -> str |
     """Resolve a project entity ref, or None when no project can be named.
 
     Explicit ``project`` wins (bare slugs gain the ``project/`` prefix), then
-    the ``cwd`` basename through ``config.context.project_map`` and
-    ``auto_detect`` — the same ADR-008 resolution order the ambient search
-    boost uses. Never guesses when neither is usable.
+    the ``PALINODE_PROJECT`` env var, then the ``cwd`` basename through
+    ``config.context.project_map`` and ``auto_detect`` — the same ADR-008
+    resolution order ``mcp.py:_resolve_context()`` uses. Never guesses when
+    none is usable.
     """
     if project:
         return project if "/" in project else f"project/{project}"
+    env = os.environ.get("PALINODE_PROJECT")
+    if env:
+        return env if "/" in env else f"project/{env}"
     if not cwd:
         return None
     basename = os.path.basename(os.path.normpath(cwd))
@@ -108,17 +116,41 @@ def _has_entity(meta: dict[str, Any], entity: str) -> bool:
 
 
 def build_context_digest(
-    cwd: str | None = None, project: str | None = None
+    cwd: str | None = None,
+    project: str | None = None,
+    scope_chain: Any | None = None,
 ) -> dict[str, Any]:
-    """Build the bounded session-start digest for the resolved scope."""
+    """Build the bounded session-start digest for the resolved scope.
+
+    ``scope_chain`` (a :class:`palinode.core.scope.ScopeChain`) enables
+    ADR-009 scoped mode: memories not visible on the chain are dropped from
+    every digest section — an off-chain explicit ``scope:`` (Layer 1), a
+    ``private`` memory whose owner is off-chain, or a ``restricted`` memory
+    whose ``access`` the chain doesn't intersect (#108). Memories without an
+    explicit scope always pass (ADR-009 §7).
+
+    ``None`` = classic mode: scope isolation is off (all ``core: true``
+    memories, the pre-slice-4 behavior) but ``private``/``restricted``
+    memories are still withheld — classic is a *selection* mode, and it was
+    never meant to be a way around access control (#108).
+    """
     resolved = resolve_project(cwd=cwd, project=project)
     memories = _scan_memories(config.memory_dir)
+    # Always route through the choke point; `meta` here is live frontmatter
+    # (just parsed by _scan_memories), so this costs no extra read.
+    from palinode.core.visibility import is_visible
+
+    memories = [
+        m for m in memories
+        if is_visible(scope_chain, m["file"], metadata=m["meta"])
+    ]
 
     core = [m for m in memories if m["meta"].get("core") is True]
     core.sort(key=lambda m: m["mtime"], reverse=True)
 
     recent_decisions: list[dict[str, Any]] = []
     open_action_items: list[dict[str, Any]] = []
+    recent_snapshots: list[dict[str, Any]] = []
     if resolved:
         scoped = [m for m in memories if _has_entity(m["meta"], resolved)]
         decisions = [
@@ -136,11 +168,29 @@ def build_context_digest(
         actions.sort(key=lambda m: m["mtime"], reverse=True)
         open_action_items = actions[:MAX_OPEN_ACTION_ITEMS]
 
+        # ProjectSnapshots are the session_end / palinode_save wrap notes.
+        # Select by type only, NOT by a projects/ path OR (as decisions does
+        # with decisions/): projects/ is a mixed dir — it also holds the
+        # append-only <project>-status.md logs — so a path fallback would
+        # surface non-snapshot files.
+        snapshots = [
+            m for m in scoped if m["meta"].get("type") == "ProjectSnapshot"
+        ]
+        snapshots.sort(key=lambda m: m["mtime"], reverse=True)
+        recent_snapshots = snapshots[:MAX_RECENT_SNAPSHOTS]
+
+    # A ProjectSnapshot flagged core: true satisfies both filters. Its
+    # purpose-built home is the Recent snapshots section (which leads the
+    # digest), so drop it from Core memories rather than render it twice.
+    snapshot_files = {m["file"] for m in recent_snapshots}
+    core = [m for m in core if m["file"] not in snapshot_files]
+
     return {
         "project": resolved,
         "core_memories": [_digest_row(m) for m in core[:MAX_CORE_MEMORIES]],
         "recent_decisions": [_digest_row(m) for m in recent_decisions],
         "open_action_items": [_digest_row(m) for m in open_action_items],
+        "recent_snapshots": [_digest_row(m) for m in recent_snapshots],
         "_palinode_hint": PALINODE_HINT,
     }
 
@@ -153,6 +203,9 @@ def format_context_digest(digest: dict[str, Any]) -> str:
     else:
         lines.append("## Session context (no project resolved — core memories only)")
     sections = (
+        # Snapshots first: the /wrap "where did I leave off" note is the single
+        # most useful thing a resuming session can see.
+        ("Recent snapshots", digest.get("recent_snapshots", [])),
         ("Core memories", digest.get("core_memories", [])),
         ("Recent decisions", digest.get("recent_decisions", [])),
         ("Open action items", digest.get("open_action_items", [])),

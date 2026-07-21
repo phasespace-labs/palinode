@@ -26,8 +26,8 @@ def prime(cwd, project, fmt):
     """Show the session-start context digest for this project.
 
     The same digest the SessionStart hook warms and the MCP session-init
-    tool returns: core memories, recent decisions, and open action items
-    for the resolved scope.
+    tool returns: recent project snapshots, core memories, recent decisions,
+    and open action items for the resolved scope.
     """
     try:
         data = api_client.context_prime(cwd=cwd or os.getcwd(), project=project)

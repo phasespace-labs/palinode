@@ -45,7 +45,7 @@ Index (SQLite-vec vectors + FTS5 keywords, single .db file)
   ↓ queried by
 Interfaces (MCP server, REST API, CLI, OpenClaw plugin)
   ↓ compacted by
-LLM (proposes ops → deterministic executor applies them → git commits)
+Consolidation (structured operations → validated updates → git history)
 ```
 
 That's the whole architecture. One directory of `.md` files, one SQLite database, one API server. No Postgres, no Redis, no cloud dependency.
@@ -85,7 +85,7 @@ That's the entire client config. Works with Claude Code, Claude Desktop, Cursor,
 
 **Search** — Hybrid BM25 + vector search merged with Reciprocal Rank Fusion. Keyword precision when you need exact terms, semantic recall when you don't. Optional associative entity graph and prospective triggers.
 
-**Compact** — Weekly consolidation where an LLM proposes structured operations (KEEP / UPDATE / MERGE / SUPERSEDE / ARCHIVE) and a deterministic executor applies them. The LLM never touches your files directly. Every compaction is a git commit you can review, blame, or revert.
+**Compact** — Weekly consolidation produces structured, previewable changes and commits applied updates to git. You can review, blame, or revert every compaction.
 
 **Audit** — `git blame` any fact. `git diff` any change. `rollback` any mistake. These aren't just git-compatible files — `palinode_diff`, `palinode_blame`, and `palinode_rollback` are first-class tools your agent can call.
 
@@ -206,6 +206,10 @@ palinode session-end \
 # Trace a fact back to when it was recorded
 palinode blame decisions/auth-migration.md
 
+# Compose the full provenance lineage of a fact — sources, saved/changed
+# commits, supersession trail, typed links, and recall — in one view
+palinode trace decisions/auth-migration.md
+
 # See what changed across all memory in the last week
 palinode diff --days 7
 ```
@@ -214,7 +218,7 @@ palinode diff --days 7
 
 ## Tools
 
-28 tools available through every interface:
+29 tools available through every interface:
 
 | Tool | What It Does |
 |------|-------------|
@@ -229,6 +233,7 @@ palinode diff --days 7
 | `consolidate` | Preview or run LLM-powered compaction |
 | `diff` | What changed in the last N days |
 | `blame` | Trace a fact back to the commit that recorded it |
+| `trace` | Compose a fact's full provenance lineage — sources, saved/changed commits, supersession, typed links, recall |
 | `history` | Git history for a file with diff stats and rename tracking |
 | `rollback` | Revert a file to a previous commit (safe, creates new commit) |
 | `push` | Sync memory to a remote git repo |
@@ -370,6 +375,7 @@ When exposing the API beyond loopback, set `PALINODE_API_TOKEN` — see [SECURIT
 | `GET` | `/history/{file_path}` | Git log for a file |
 | `GET` | `/diff` | Recent changes |
 | `GET` | `/blame/{file_path}` | Git blame |
+| `GET` | `/trace/{file_path}` | Composed provenance lineage for a file |
 | `POST` | `/rollback` | Revert a file |
 | `POST` | `/push` | Push to git remote |
 | `POST` | `/reindex` | Rebuild indices |
@@ -399,7 +405,7 @@ When exposing the API beyond loopback, set `PALINODE_API_TOKEN` — see [SECURIT
 - **Your data, your files** — No accounts, no cloud dependency, no vendor lock-in. Your memory is markdown files in a directory you control. Export is `cp`. Backup is `git push`. Whatever happens to any tool in this ecosystem, your data is plain text on your filesystem.
 - **Cross-IDE memory** — Your memory lives in one place. Connect from Claude Code, Cursor, Windsurf, Zed, or any MCP-compatible editor. Switch IDEs without losing context.
 - **Git operations as agent tools** — `diff`, `blame`, `rollback`, `push` exposed via MCP. No other system makes git ops callable by the agent.
-- **Operation-based compaction** — KEEP/UPDATE/MERGE/SUPERSEDE/ARCHIVE DSL. The LLM proposes structured operations and the deterministic executor applies them. Every compaction is a reviewable git commit.
+- **Operation-based compaction** — Consolidation plans discrete changes, validates them, and records the applied result in git.
 - **Per-fact addressability** — `<!-- fact:slug -->` IDs inline in markdown, invisible in rendering, preserved by git, targetable by compaction.
 - **4-phase injection** — Core (always) + Topic (per-turn search) + Associative (entity graph) + Triggered (prospective recall).
 - **Multi-transport MCP** — stdio for local, Streamable HTTP for remote. One server, any IDE on any machine.

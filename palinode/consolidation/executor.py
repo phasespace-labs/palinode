@@ -1,14 +1,10 @@
 """
 Compaction Executor
 
-Applies structured operations (KEEP/UPDATE/MERGE/SUPERSEDE/ARCHIVE/RETRACT)
-to markdown memory files. The LLM decides what to do; the executor
-does it deterministically.
-
-This separation ensures:
-- LLMs never touch files directly
-- Every change is a git commit with clear provenance
-- Operations are auditable and reversible
+Validates and applies structured operations
+(KEEP/UPDATE/MERGE/SUPERSEDE/ARCHIVE/RETRACT) to markdown memory files.
+Operations have explicit preconditions and produce auditable, reversible
+changes that callers can record in git.
 """
 from __future__ import annotations
 

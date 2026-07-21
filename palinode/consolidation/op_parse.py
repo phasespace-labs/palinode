@@ -1,8 +1,7 @@
-"""Parse + normalize LLM-proposed consolidation operations (#555).
+"""Parse and normalize generated consolidation operations (#555).
 
-The seam right after the proposer (#554) and right before the deterministic
-executor: turn the raw LLM response into a clean list of operation dicts, and
-read an op's fields through one canonical accessor instead of re-deriving the
+Turn a raw model response into a clean list of operation dicts, and read an
+operation's fields through one canonical accessor instead of re-deriving the
 ``op``/``operation`` and ``reason``/``rationale`` aliases (and the
 ``isinstance(op, dict)`` / nested-list defense) at every call site.
 
@@ -27,7 +26,7 @@ import re
 
 logger = logging.getLogger("palinode.consolidation")
 
-# An LLM op may carry its kind under "op" (consolidation/executor convention) or
+# A generated op may carry its kind under "op" (consolidation convention) or
 # "operation" (the write-time contradiction-check convention); its rationale
 # under "reason" or "rationale". These accessors are the single place that knows.
 _KIND_KEYS = ("op", "operation")

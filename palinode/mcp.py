@@ -58,8 +58,8 @@ logging.basicConfig(level=logging.WARNING)  # quiet — don't pollute stdio
 # risk); the content digest is the explicit palinode_session_init tool.
 _SERVER_INSTRUCTIONS = (
     "Palinode persistent memory is connected. At the start of a conversation, "
-    "call palinode_session_init for project context (core memories, recent "
-    "decisions, open action items). Call palinode_search before answering "
+    "call palinode_session_init for project context (recent session snapshots, "
+    "core memories, recent decisions, open action items). Call palinode_search before answering "
     "questions about prior decisions or project state. Save decisions and "
     "insights with palinode_save (include the rationale). Call "
     "palinode_session_end before the session ends."
@@ -366,8 +366,8 @@ def _all_tools() -> list[types.Tool]:
             name="palinode_session_init",
             description=(
                 "Session-start context: call this FIRST in a new conversation. "
-                "Returns the resolved project scope with core memories, recent "
-                "decisions, and open action items as a bounded digest."
+                "Returns the resolved project scope with recent session snapshots, "
+                "core memories, recent decisions, and open action items as a bounded digest."
             ),
             inputSchema={
                 "type": "object",
@@ -923,6 +923,30 @@ def _all_tools() -> list[types.Tool]:
             },
             annotations=types.ToolAnnotations(
                 title="Blame / Provenance",
+                readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False,
+            ),
+        ),
+        types.Tool(
+            name="palinode_trace",
+            description=(
+                "Compose the full provenance lineage of a memory file into one view: "
+                "source citations, when it was first saved and last changed, the "
+                "supersession trail, typed contradiction/evidence links, and how often "
+                "it has been recalled. Rows whose provenance is not yet captured render "
+                "an honest placeholder. Read-only."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Memory file path (e.g., 'decisions/auth-session-tokens.md')",
+                    },
+                },
+                "required": ["file_path"],
+            },
+            annotations=types.ToolAnnotations(
+                title="Trace / Lineage",
                 readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False,
             ),
         ),
@@ -1715,6 +1739,18 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
                 claims_text = format_claims_resolution(file_path, data.get("claims", []))
                 return _text(f"{blame_text}\n\n{claims_text}")
             return _text(blame_text)
+
+        # ── trace ─────────────────────────────────────────────────────────
+        elif name == "palinode_trace":
+            file_path = arguments.get("file_path")
+            if not file_path:
+                return _text("Error: file_path is required")
+            resp = await _get(f"/trace/{file_path}")
+            if resp.status_code != 200:
+                return _text(f"Error: {resp.text}")
+            from palinode.core.trace import format_trace_text
+
+            return _text(format_trace_text(resp.json()))
 
         # ── rollback ──────────────────────────────────────────────────────
         elif name == "palinode_rollback":

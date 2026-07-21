@@ -372,6 +372,35 @@ def history(
     return commits
 
 
+def first_commit(file_path: str) -> dict[str, str] | None:
+    """Return the earliest commit that touched a memory file (its creation).
+
+    The provenance counterpart to :func:`history` (which lists recent changes,
+    newest-first): this answers "when was this fact first saved" by walking the
+    full ``--follow`` log and taking the oldest entry. Returns a dict with keys
+    ``hash``, ``date`` (ISO-8601), ``author``, and ``message``, or ``None`` when
+    the file is absent or has no git history.
+    """
+    file_path = _resolve_memory_path(file_path)
+    if not os.path.exists(os.path.join(config.memory_dir, file_path)):
+        return None
+
+    # Full log (no -N limit — a bounded limit would combine badly with --reverse,
+    # which reverses only the already-limited window). Memory files are small, so
+    # the whole-history read is cheap; take the last (oldest) line.
+    result = _run_git(
+        "log", "--format=%h|%aI|%an|%s", "--follow", "--", file_path
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    oldest = result.stdout.strip().split("\n")[-1]
+    parts = oldest.split("|", 3)
+    if len(parts) != 4:
+        return None
+    hash_short, date, author, message = parts
+    return {"hash": hash_short, "date": date, "author": author, "message": message}
+
+
 def rollback(file_path: str, commit: str | None = None, dry_run: bool = False) -> str:
     """Revert a memory file to a previous version.
 

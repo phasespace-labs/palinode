@@ -401,6 +401,11 @@ class PalinodeAPI:
         response.raise_for_status()
         return response.json()
 
+    def trace(self, file_path: str):
+        response = self.client.get(f"/trace/{file_path}", timeout=15.0)
+        response.raise_for_status()
+        return response.json()
+
     def rollback(self, file_path: str, commit: str = None, dry_run: bool = True):
         params: dict = {"file_path": file_path, "dry_run": dry_run}
         if commit:

@@ -67,6 +67,39 @@ def test_wrap_command_is_deterministic():
     assert "palinode_save" not in body or "mid-session checkpoint" in body
 
 
+def test_wrap_light_has_step0_git_preflight():
+    """#618: the light /wrap opens with a Step 0 git pre-flight that OFFERS to
+    land uncommitted/unmerged work before archiving — offer, never act."""
+    body = WRAP_COMMAND_BODY
+    # Step 0 is present and precedes the existing push/session-end steps.
+    assert "Step 0" in body
+    assert body.index("Step 0") < body.index("Step 1")
+    assert body.index("Step 0") < body.index("palinode_push")
+    # It inspects the WORKING repo's git state — dirty tree + branch-ahead.
+    assert "git status" in body
+    assert "ahead of" in body and "main" in body
+    # Clean tree = no offer, straight to Step 1.
+    assert "clean tree" in body.lower()
+    # It OFFERS and never mutates without an explicit yes (non-mutating light
+    # contract — distinct from the heavy halt-on-failure merge sequence).
+    assert "offer" in body.lower()
+    assert "explicit yes" in body.lower()
+    assert "never commit, merge, or push" in body.lower()
+    assert "Step 1 — Merge" not in body  # not the heavy sequence
+    # Decline path proceeds to archive anyway.
+    assert "decline" in body.lower()
+
+
+def test_wrap_light_step0_scaffolds_into_command(tmp_path: Path):
+    """The Step 0 pre-flight reaches the scaffolded .claude/commands/wrap.md."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["init", "--dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    wrap = (tmp_path / ".claude" / "commands" / "wrap.md").read_text()
+    assert "Step 0" in wrap
+    assert "git status" in wrap
+
+
 # Hook script slurp-based extraction (mirrors) -------
 
 
@@ -300,6 +333,22 @@ def test_hook_happy_path_posts_once_no_fallback(tmp_path):
     assert curl_called.exists()
     assert "/session-end" in curl_called.read_text()
     assert not fallback.exists()
+
+
+def test_hook_bearer_token_sent_when_configured(tmp_path):
+    """PALINODE_API_TOKEN adds an Authorization: Bearer header to the POST —
+    parity with the session-start hook for token-protected deployments."""
+    proc, _fallback, curl_called = _run_hook(
+        tmp_path, _NONTRIVIAL, env={"PALINODE_API_TOKEN": "sekrit-token"})
+    assert proc.returncode == 0, proc.stderr
+    assert "Authorization: Bearer sekrit-token" in curl_called.read_text()
+
+
+def test_hook_no_auth_header_by_default(tmp_path):
+    """No token configured → no Authorization header (unauthenticated default)."""
+    proc, _fallback, curl_called = _run_hook(tmp_path, _NONTRIVIAL)
+    assert proc.returncode == 0, proc.stderr
+    assert "Authorization" not in curl_called.read_text()
 
 
 # ---- Scaffolding flow ---------------------------------------------------

@@ -8,7 +8,7 @@ consolidation_passes: 1
 
 # My App — Status (Pass 1: after UPDATE + SUPERSEDE)
 
-> This file shows the state after the nightly/debounced reflection pass. The executor applied 13 operations proposed by the LLM: 6 UPDATE, 4 SUPERSEDE, 2 KEEP, 1 NOOP. Nothing has been merged or archived yet — that's the next pass. See `pass-0-initial.md` for the raw state and the inline diff comments below for what changed.
+> This file shows the state after the nightly/debounced reflection pass. Thirteen operations were applied: 6 UPDATE, 4 SUPERSEDE, 2 KEEP, 1 NOOP. Nothing has been merged or archived yet — that's the next pass. See `pass-0-initial.md` for the raw state and the inline diff comments below for what changed.
 
 ## Current Work
 

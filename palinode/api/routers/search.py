@@ -2,7 +2,7 @@ from __future__ import annotations
 import os
 import re
 import logging
-from typing import Any
+from typing import Any, Callable
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from palinode.core import store, embedder
@@ -22,6 +22,99 @@ from palinode.api.search_helpers import (
 )
 logger = logging.getLogger("palinode.api")
 router = APIRouter()
+
+
+#: How much wider to re-fetch when visibility filtering starved a result
+#: window. Only paid when a hidden memory actually landed in the window.
+_VISIBILITY_OVERFETCH = 5
+
+
+def _resolve_scope_chain(
+    context: list[str] | None = None,
+    session_id: str | None = None,
+):
+    """Resolve the session scope chain for ADR-009 Layer 2 (#108) search gating.
+
+    The project level is taken from the caller-supplied ambient ``context``
+    (the same ``project/*`` refs used for the ADR-008 boost — never guessed);
+    agent/harness/member/org come from env + config via
+    :func:`resolve_scope_chain`.
+
+    Returns ``None`` unless the chain carries a real **identity** level. The
+    gate is :meth:`ScopeChain.has_identity`, not ``is_empty``: ``session_id``
+    is ADR-007 recall-dedup telemetry that any caller may send, and a
+    ``session/<id>``-only chain describes nobody — treating it as a scope
+    would silently hide every explicitly-scoped shared memory. ``None`` still
+    withholds ``private``/``restricted`` memories at the choke point; it only
+    turns off *scope isolation*.
+    """
+    from palinode.core.scope import resolve_scope_chain
+
+    project = None
+    for ref in (context or []):
+        if isinstance(ref, str) and ref.startswith("project/"):
+            project = ref.split("/", 1)[1]
+            break
+    chain = resolve_scope_chain(config, project=project, session_id=session_id)
+    return chain if chain.has_identity() else None
+
+
+def _resolve_search_scope_chain(req: "SearchRequest"):
+    """``_resolve_scope_chain`` for a /search request body."""
+    return _resolve_scope_chain(context=req.context, session_id=req.session_id)
+
+
+def _fetch_visible(
+    chain,
+    run,
+    base_limit: int,
+    *,
+    record_recall: Callable[[list[str]], None] | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch rows and apply the ADR-009 Layer 2 visibility gate (#108).
+
+    ``run(n)`` performs the bounded store fetch. Visibility cannot be pushed
+    into SQL — the authoritative frontmatter lives in the file, not in
+    ``chunks.metadata`` (which the indexer's unchanged-content fast path
+    leaves stale after a frontmatter-only edit) — so hidden rows are removed
+    after the fetch and can, in principle, consume the window ahead of visible
+    matches ranked just below it.
+
+    Rather than always over-fetching (which widens the RRF candidate set and
+    would perturb ranking for every search), the window is widened **only when
+    it was actually starved**: something was hidden *and* the fetch came back
+    saturated, so more rows may exist behind it. When nothing is hidden — the
+    overwhelmingly common case — this is a single fetch with today's exact
+    limits and today's exact ranking.
+
+    Recall metadata is de-duplicated across the two passes (#667). The store
+    records ADR-007 recall inside each fetch, so a naive widened re-fetch would
+    increment ``recall_count`` twice for a row present in both passes. When a
+    ``record_recall`` callback is supplied (the hybrid/vector search path), the
+    wider pass is fetched with store-level recording suppressed and access is
+    recorded once here for only the rows the wider window newly surfaced. The
+    per-session importance nudge is separately deduped by ``session_id``, and
+    the retrieval log is written once, on the final set. Callers with no
+    recall write-back (recency, associative) pass ``record_recall=None`` and
+    take the plain wider re-fetch unchanged.
+    """
+    from palinode.core.visibility import filter_visible
+
+    rows = run(base_limit)
+    visible = filter_visible(chain, rows)
+    if len(visible) == len(rows) or len(rows) < base_limit:
+        return visible
+    if record_recall is None:
+        # No recall write-back on this path: a plain wider re-fetch, unchanged.
+        return filter_visible(chain, run(base_limit * _VISIBILITY_OVERFETCH))
+    # The initial pass already recorded access for its rows. Suppress the
+    # store-level write on the wider pass and record access once here for only
+    # the rows the wider window newly surfaced, so a row present in both passes
+    # is counted a single time.
+    counted = {r.get("id") for r in rows}
+    wide = run(base_limit * _VISIBILITY_OVERFETCH, record_access=False)
+    record_recall([r.get("id") for r in wide if r.get("id") not in counted])
+    return filter_visible(chain, wide)
 
 
 class SearchRequest(BaseModel):
@@ -170,17 +263,25 @@ def search_api(req: SearchRequest, request: Request = None) -> list[dict[str, An
         # telemetry when the caller passes the explicit override.
         kind_exclude_list = [] if req.include_telemetry else None
 
+        # ADR-009 Layer 2: the session scope chain. `None` = no scope
+        # identity → access control only (private/restricted still withheld).
+        scope_chain = _resolve_search_scope_chain(req)
+
         # empty query → recency-only mode. Skip embedding, query chunks
         # directly ordered by created_at desc, apply types/date_after filter.
         if not req.query.strip():
             recent_limit = limit * 5 if req.min_priority else limit
-            recent = store.list_recent(
-                types=req.types,
-                category=req.category,
-                date_after=effective_date_after,
-                date_before=req.date_before,
-                limit=recent_limit,
-                kind_exclude_list=kind_exclude_list,
+            recent = _fetch_visible(
+                scope_chain,
+                lambda n: store.list_recent(
+                    types=req.types,
+                    category=req.category,
+                    date_after=effective_date_after,
+                    date_before=req.date_before,
+                    limit=n,
+                    kind_exclude_list=kind_exclude_list,
+                ),
+                recent_limit,
             )
             # apply type_deny post-fetch (list_recent does allow-filter
             # types, but has no deny param — mirror the same pattern as below).
@@ -216,35 +317,51 @@ def search_api(req: SearchRequest, request: Request = None) -> list[dict[str, An
         store_limit = limit * 5 if (req.types or req.type_deny or req.min_priority) else limit
 
         if use_hybrid:
-            results = store.search_hybrid(
-                query_text=req.query,
-                query_embedding=query_emb,
-                category=req.category,
-                top_k=store_limit,
-                threshold=req.threshold or config.search.api_threshold,
-                hybrid_weight=config.search.hybrid_weight,
-                date_after=effective_date_after,
-                date_before=req.date_before,
-                context_entities=req.context,
-                include_daily=bool(req.include_daily),
-                kind_exclude_list=kind_exclude_list,
-                mode=recall_mode,
-                session_id=req.session_id,
-            )
+            def _run(n: int, record_access: bool = True) -> list[dict[str, Any]]:
+                return store.search_hybrid(
+                    query_text=req.query,
+                    query_embedding=query_emb,
+                    category=req.category,
+                    top_k=n,
+                    threshold=req.threshold or config.search.api_threshold,
+                    hybrid_weight=config.search.hybrid_weight,
+                    date_after=effective_date_after,
+                    date_before=req.date_before,
+                    context_entities=req.context,
+                    include_daily=bool(req.include_daily),
+                    kind_exclude_list=kind_exclude_list,
+                    mode=recall_mode,
+                    session_id=req.session_id,
+                    record_access=record_access,
+                )
         else:
-            results = store.search(
-                query_embedding=query_emb,
-                category=req.category,
-                top_k=store_limit,
-                threshold=req.threshold or config.search.api_threshold,
-                date_after=effective_date_after,
-                date_before=req.date_before,
-                context_entities=req.context,
-                include_daily=bool(req.include_daily),
-                kind_exclude_list=kind_exclude_list,
-                mode=recall_mode,
-                session_id=req.session_id,
-            )
+            def _run(n: int, record_access: bool = True) -> list[dict[str, Any]]:
+                return store.search(
+                    query_embedding=query_emb,
+                    category=req.category,
+                    top_k=n,
+                    threshold=req.threshold or config.search.api_threshold,
+                    date_after=effective_date_after,
+                    date_before=req.date_before,
+                    context_entities=req.context,
+                    include_daily=bool(req.include_daily),
+                    kind_exclude_list=kind_exclude_list,
+                    mode=recall_mode,
+                    session_id=req.session_id,
+                    record_access=record_access,
+                )
+
+        # The store fetch records ADR-007 recall metadata itself; when the
+        # visibility gate widens the window it re-fetches, so recall write-back
+        # is deferred to _fetch_visible to keep it counted once per retrieval.
+        results = _fetch_visible(
+            scope_chain,
+            _run,
+            store_limit,
+            record_recall=lambda ids: store.record_recall(
+                ids, mode=recall_mode, session_id=req.session_id
+            ),
+        )
 
         # Apply type filters post-fetch, then trim to caller's limit.
         # type_deny takes precedence: applied after allow-list so a type in both
@@ -285,17 +402,32 @@ def search_api(req: SearchRequest, request: Request = None) -> list[dict[str, An
 
 @router.post("/search-associative")
 def search_associative_api(req: SearchAssociativeRequest) -> list[dict[str, Any]]:
-    """Entity graph spreading activation recall."""
+    """Entity graph spreading activation recall.
+
+    Subject to the same ADR-009 Layer 2 visibility gate as ``/search`` (#108).
+    Entity-graph traversal reaches memories no query term matched, so leaving
+    it ungated would have made it the way around every rule ``/search``
+    enforces. Note ``store.search_associative`` returns rows with empty
+    ``metadata`` — it never parses frontmatter — which is exactly why the
+    choke point reads the file rather than trusting the row.
+    """
     try:
         seed_entities = req.seed_entities
         if not seed_entities:
             seed_entities = store.detect_entities_in_text(req.query)
 
-        results = store.search_associative(
-            query_text=req.query,
-            seed_entities=seed_entities,
-            top_k=req.limit or 5
-        )
+        limit = req.limit or 5
+        # No ambient context on this request shape, so the chain comes from
+        # env identity alone (agent/harness/member/org).
+        results = _fetch_visible(
+            _resolve_scope_chain(),
+            lambda n: store.search_associative(
+                query_text=req.query,
+                seed_entities=seed_entities,
+                top_k=n,
+            ),
+            limit,
+        )[:limit]
 
         # per-result snippet enrichment so MCP callers (and any other
         # budget-constrained consumer) can avoid pulling full chunk bodies.

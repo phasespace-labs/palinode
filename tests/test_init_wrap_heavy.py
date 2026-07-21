@@ -80,6 +80,13 @@ def test_light_and_heavy_bodies_differ():
     assert "Step 1 — Merge" not in WRAP_COMMAND_BODY
 
 
+def test_heavy_body_has_no_step0_preflight():
+    """#618: the Step 0 git courtesy pre-flight is light-only. Heavy already
+    lands the session's work (merge → push) with halt semantics, so a courtesy
+    "offer to land it" step would be redundant — heavy stays four steps."""
+    assert "Step 0" not in WRAP_HEAVY_COMMAND_BODY
+
+
 def test_heavy_merge_step_handles_non_github_remote():
     """#440: the merge step must gracefully skip (not halt) on a non-GitHub
     remote (e.g. Gitea), and must name the non-`gh` filing path."""
@@ -112,6 +119,8 @@ def test_default_scaffolds_light_wrap(tmp_path: Path):
     wrap = (tmp_path / ".claude" / "commands" / "wrap.md").read_text()
     assert "Step 1 — Merge" not in wrap
     assert "palinode_push" in wrap
+    # The light wrap carries the Step 0 git courtesy pre-flight.
+    assert "Step 0" in wrap
 
 
 def test_default_does_not_add_wrap_policy_to_claude_md(tmp_path: Path):

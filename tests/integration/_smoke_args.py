@@ -46,6 +46,9 @@ TOOL_SMOKE_ARGS: dict[str, tuple[dict, bool]] = {
     "palinode_timeline":          ({"file_path": "insights/smoke-target.md"}, False),
     "palinode_blame":             ({"file_path": "insights/smoke-target.md"}, False),
     "palinode_rollback":          ({"file_path": "insights/smoke-target.md"}, False),
+    # trace composes over the same git surface; with no commits the saved/
+    # changed rows resolve to "none" rather than erroring.
+    "palinode_trace":             ({"file_path": "insights/smoke-target.md"}, False),
 
     # Embedding-aware tools — _fake_embed returns a constant vector, so
     # similarity is uniform; tools should still dispatch and return either

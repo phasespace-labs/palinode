@@ -16,14 +16,11 @@ import shutil
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any, Callable
 
-# The propose→apply seam. The nondeterministic half of consolidation is a
-# single call shaped (system_prompt, user_prompt) -> (response_text, model_used);
-# the deterministic half (parse → executor.apply_operations) runs on its output.
-# Making this callable injectable lets the runner→executor path be driven with
-# canned op-JSON — no live LLM, no wholesale mock of _consolidate_project. The
-# default is the live fallback-chain caller; tests pass a fake that returns
-# deterministic op-JSON. Kept here (not a separate module) so the client-factory
-# patch seam test_fallback relies on — `runner.get_ollama_client` — stays put.
+# Injectable consolidation callback shaped as
+# (system_prompt, user_prompt) -> (response_text, model_used). Tests can return
+# canned operation JSON while exercising parsing, application, and commit
+# behavior without a live model or a wholesale mock of _consolidate_project.
+# Kept here so the `runner.get_ollama_client` patch point stays stable.
 LlmFn = Callable[[str, str], tuple[str, str]]
 
 import yaml
@@ -272,10 +269,11 @@ def _consolidate_project(
         project_id: Project slug.
         notes: Recent daily notes mentioning this project.
         is_nightly: Use the lightweight nightly prompt.
-        llm_fn: The propose seam (#554). ``(system_prompt, user_prompt) ->
+        llm_fn: Injectable consolidation callback (#554).
+            ``(system_prompt, user_prompt) ->
             (response_text, model_used)``. Defaults to the live fallback-chain
-            caller; tests inject a fake returning deterministic op-JSON so the
-            real fact-extraction + parse + executor path runs without an LLM.
+            caller; tests inject canned operation JSON while exercising the
+            real fact-extraction, parsing, and application path.
 
     Returns:
         Tuple of (List of operation dicts, model_used).
@@ -333,7 +331,7 @@ def _consolidate_project(
 
 Return the operations JSON array."""
 
-    # Call LLM (via the injectable propose seam; default = live fallback chain).
+    # Call the model through the injectable callback (default: live fallback chain).
     try:
         result_text, model_used = (llm_fn or _call_llm_with_fallback)(system_prompt, user_prompt)
     except Exception as e:
@@ -349,7 +347,7 @@ def _check_contradictions(
 ) -> list[dict]:
     """Check new items for contradictions against existing knowledge base.
 
-    ``llm_fn`` is the same propose seam (#554) — defaults to the live caller;
+    ``llm_fn`` is the same injectable callback (#554) — defaults to the live caller;
     tests inject a fake returning a canned contradiction op so the embed/search
     + parse + translate path runs deterministically.
     """

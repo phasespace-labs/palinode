@@ -373,6 +373,22 @@ REGISTRY: tuple[Operation, ...] = (
         exempt_surfaces=frozenset({"plugin"}),
         known_drift={},
     ),
+    # ── trace (C1 provenance composition) ────────────────────────────────────
+    # Composes the provenance primitives (source citations, blame/history,
+    # supersession trail, typed links, retrieval log) into one lineage view for
+    # a file. Read-only. Plugin-exempt like its git-provenance siblings
+    # (blame/rollback/history).
+    Operation(
+        name="trace",
+        canonical_params=(
+            CanonicalParam(name="file_path", type="string", required=True),
+        ),
+        cli_command="trace",
+        mcp_tool="palinode_trace",
+        api_endpoint=("GET", "/trace/{file_path:path}"),
+        exempt_surfaces=frozenset({"plugin"}),
+        known_drift={},
+    ),
     # ── cluster_neighbors ─────────────────────────────────────────────
     Operation(
         name="cluster_neighbors",

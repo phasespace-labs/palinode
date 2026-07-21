@@ -9,6 +9,15 @@ name: Publish MCP Registry
 # The registry entry references the PyPI package, so the job first waits for
 # the tagged version to be installable from PyPI (publish-pypi.yml runs on the
 # same tag; cross-workflow `needs:` doesn't exist, hence the poll).
+#
+# Two independent propagation windows, hardened separately:
+#   1. The direct PyPI poll below proves the *release* is installable.
+#   2. The registry runs its OWN PyPI cross-check when validating server.json,
+#      and that check can lag step 1 by seconds — the release is live on PyPI
+#      but the registry still 404s it and rejects publish with HTTP 400. The
+#      first live run hit exactly this: the PyPI poll passed, publish 400'd,
+#      and a workflow_dispatch rerun seconds later succeeded. The publish step
+#      now retries with backoff across that window instead of failing the run.
 
 on:
   push:
@@ -53,4 +62,29 @@ jobs:
         run: ./mcp-publisher login github-oidc
 
       - name: Publish server.json
-        run: ./mcp-publisher publish
+        run: |
+          # Retry the registry publish across its PyPI-propagation window. A
+          # fresh release can be installable from PyPI (the poll above passed)
+          # while the registry's own PyPI cross-check still 404s it, rejecting
+          # publish with HTTP 400. Bounded settle: 6 attempts, 20s apart —
+          # ~100s max, well inside the 20-min job timeout. If it still fails,
+          # exit non-zero with a clear message and rerun via workflow_dispatch.
+          attempts=6
+          delay=20
+          for i in $(seq 1 "$attempts"); do
+            if ./mcp-publisher publish; then
+              echo "mcp-publisher publish succeeded on attempt $i/$attempts"
+              exit 0
+            fi
+            if [ "$i" -lt "$attempts" ]; then
+              echo "attempt $i/$attempts: publish failed" \
+                   "(registry PyPI cross-check may still be propagating);" \
+                   "retrying in ${delay}s"
+              sleep "$delay"
+            fi
+          done
+          echo "::error::mcp-publisher publish failed after $attempts attempts" \
+               "over ~$((attempts * delay))s. If the version is live on PyPI this is" \
+               "likely registry-side propagation lag or an outage — rerun this" \
+               "workflow via workflow_dispatch once the registry is healthy."
+          exit 1

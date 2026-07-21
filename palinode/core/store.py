@@ -1387,6 +1387,7 @@ def search_hybrid(
     kind_exclude_list: Sequence[str] | None = None,
     mode: str = "explicit",
     session_id: str | None = None,
+    record_access: bool = True,
 ) -> list[dict[str, Any]]:
     """Hybrid search combining semantic vectors and BM25 keyword matching.
 
@@ -1401,6 +1402,10 @@ def search_hybrid(
         threshold: Minimum score threshold (applied after RRF merging).
         hybrid_weight: Balance between vector and BM25.
             0.0 = vector only, 1.0 = BM25 only, 0.5 = equal weight.
+        record_access: When True (default), ADR-006/007 recall metadata is
+            written back for the merged hit set. The visibility-widening
+            re-fetch passes False so a row already counted by the initial
+            pass is not incremented a second time.
 
     Returns:
         Merged and re-ranked list of result dicts, sorted by combined score.
@@ -1453,7 +1458,7 @@ def search_hybrid(
         merged = check_freshness(merged)
 
     # Record retrieval access metadata (ADR-006/007): batched, resilient.
-    if merged:
+    if merged and record_access:
         record_recall([r.get("id") for r in merged[:top_k]], mode=mode, session_id=session_id)
 
     return merged

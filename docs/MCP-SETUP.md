@@ -187,6 +187,7 @@ The three `ServerAlive*` / `TCPKeepAlive` options keep the SSH session alive acr
 | `palinode_history` | Git history of a memory file; `detail="full"` adds per-commit diffs |
 | `palinode_timeline` | **Deprecated** — alias for `palinode_history` with `detail="full"`; will be removed in v0.9 |
 | `palinode_blame` | Per-line provenance for a memory file |
+| `palinode_trace` | Composed provenance lineage for a memory file: sources, saved/changed commits, supersession, typed links, recall |
 | `palinode_diff` | What changed across memory in the last N days |
 | `palinode_rollback` | Revert a memory file to a previous version |
 | `palinode_push` | Push memory changes to remote git |

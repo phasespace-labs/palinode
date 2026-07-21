@@ -128,7 +128,10 @@ def test_scope_config_defaults_are_none(monkeypatch):
     assert cfg.scope.harness is None
     assert cfg.scope.agent is None
     assert cfg.scope.enabled is False
-    assert cfg.scope.prime_mode == "classic"
+    # Default flipped classic → scoped in Layer 1 slice 4 — safe per ADR-009
+    # §7: only explicit scope: frontmatter isolates, so scoped ≈ classic until
+    # someone writes harness/member-scoped memories.
+    assert cfg.scope.prime_mode == "scoped"
 
 
 def test_backwards_compat_no_scope_config_in_yaml(monkeypatch):

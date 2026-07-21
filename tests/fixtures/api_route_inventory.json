@@ -292,6 +292,12 @@
     ]
   ],
   [
+    "/trace/{file_path:path}",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/triggers",
     [
       "GET"

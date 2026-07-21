@@ -16,6 +16,7 @@ from palinode.cli.trigger import trigger
 from palinode.cli.doctor import doctor
 from palinode.cli.manage import reindex, rebuild_fts, split_layers, bootstrap_ids, migrate_mem0
 from palinode.cli.git import blame, history, rollback, push, timeline
+from palinode.cli.trace import trace
 from palinode.cli.query import entities
 from palinode.cli.session_end import session_end
 from palinode.cli.read import read
@@ -89,6 +90,7 @@ main.add_command(migrate_mem0)
 main.add_command(blame)
 main.add_command(history)
 main.add_command(timeline)
+main.add_command(trace)
 main.add_command(rollback)
 main.add_command(push)
 

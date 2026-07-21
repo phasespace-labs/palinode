@@ -117,8 +117,17 @@ HOOK_SCRIPT = """\
 # Fires on SessionEnd (including /clear, logout, exit). Reads the transcript
 # from stdin JSON, extracts a minimal summary, and POSTs to palinode-api.
 #
-# Fail-silent by design — never block Claude Code exit. If the API is down
-# we drop the capture and move on.
+# Fail-silent by design — never block Claude Code exit. If the API is
+# unreachable the capture is appended to a local replay log
+# (.claude/session-floor-fallback.jsonl) rather than lost, and the hook still
+# exits cleanly.
+#
+# Install:
+#   1. Copy to .claude/hooks/palinode-session-end.sh (or ~/.claude/hooks/…)
+#   2. chmod +x .claude/hooks/palinode-session-end.sh
+#   3. Register in .claude/settings.json — see ./settings.json in this dir.
+#
+# Or just run: `palinode init` — it installs all of this for you.
 
 set -euo pipefail
 
@@ -135,6 +144,13 @@ HOOK_TIMEOUT="${PALINODE_HOOK_TIMEOUT:-30}"
 # See https://code.claude.com/docs/en/hooks.md for the full reason list.
 ALLOWED_REASONS="${PALINODE_HOOK_REASONS:-clear logout prompt_input_exit other}"
 
+# Optional bearer auth for token-protected deployments (PALINODE_API_TOKEN).
+# The ${AUTH[@]+…} expansion is the bash-3.2-safe empty-array idiom (set -u).
+AUTH=()
+if [ -n "${PALINODE_API_TOKEN:-}" ]; then
+  AUTH=(-H "Authorization: Bearer ${PALINODE_API_TOKEN}")
+fi
+
 INPUT=$(cat)
 TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // empty')
 CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
@@ -147,12 +163,12 @@ case " $ALLOWED_REASONS " in
   *) exit 0 ;;
 esac
 
-# No transcript → nothing to capture
+# No transcript → nothing to capture.
 if [ -z "$TRANSCRIPT_PATH" ] || [ ! -f "$TRANSCRIPT_PATH" ]; then
   exit 0
 fi
 
-# Skip-if-/wrap-ran (#378 floor/ceiling): if the human already ran /wrap this
+# Skip-if-/wrap-ran (floor/ceiling): if the human already ran /wrap this
 # session, the transcript holds a `palinode_session_end` tool call. That
 # agent-authored capture (summary + decisions + blockers, each with a why) is
 # strictly richer than this deterministic floor, so writing the floor too just
@@ -162,7 +178,7 @@ if [ "${PALINODE_HOOK_FORCE:-0}" != "1" ] \\
   exit 0
 fi
 
-# Claude Code transcript format:
+# Claude Code transcript format (JSONL):
 #   user:      {type: "user", message: {role: "user", content: "text"}}
 #   assistant: {type: "assistant", message: {content: [{type: "text", text: "..."}]}}
 #
@@ -170,16 +186,13 @@ fi
 # Earlier versions piped `jq | head -1` and `jq | grep -c '.'`, which was
 # fragile under `set -o pipefail`: the downstream consumer exits early, the
 # next jq write hits a closed pipe → SIGPIPE → pipefail aborts the script.
-# The MSG_COUNT case was first patched with `|| true` (#151); the
-# FIRST_PROMPT case retained the same fragile shape until #267. Slurping
-# reads JSONL lines into an array; map+filter+slice runs without an
+# Slurping reads JSONL lines into an array; map+filter+slice runs without an
 # early-exit downstream consumer, eliminating the SIGPIPE class entirely.
-# Mirrors examples/hooks/palinode-session-end.sh fix from #257.
 MSG_COUNT=$(jq -r -s 'map(select(.type == "user") | .message.content // empty) | length' \\
   "$TRANSCRIPT_PATH" 2>/dev/null || echo 0)
 MSG_COUNT=${MSG_COUNT:-0}
 
-# Skip trivial sessions
+# Skip trivial sessions (few messages = not worth a memory).
 if [ "$MSG_COUNT" -lt "$MIN_MESSAGES" ]; then
   exit 0
 fi
@@ -211,6 +224,7 @@ fi
 # can replay. Always exit 0: a floor-capture failure must not block session exit.
 if ! curl -sS -o /dev/null -f \\
     -X POST "${PALINODE_API}/session-end" \\
+    ${AUTH[@]+"${AUTH[@]}"} \\
     -H "Content-Type: application/json" \\
     -d "$PAYLOAD" \\
     --connect-timeout 5 \\
@@ -232,9 +246,10 @@ SESSION_START_HOOK_SCRIPT = """\
 # actions, both fail-silent:
 #
 #   1. POST /context/prime — warms server-side session context for this CWD
-#      (ADR-012 Layer 3 / PHASE-G). Until the endpoint ships this is a
-#      harmless 404; once it exists, already-installed hooks start priming
-#      with no re-install.
+#      (ADR-012 Layer 4 + ADR-009 Layer 1). The endpoint returns the
+#      scope-aware context digest; this hook discards the body and injects
+#      via the /list digest below. An older server (pre-0.9.3) 404s
+#      harmlessly.
 #   2. GET /list?core_only=true — injects a bounded digest of core memories
 #      into the session as additionalContext, with a deterministic recall
 #      reminder. This is the "sessions start smart" half: grounding that does
@@ -293,9 +308,10 @@ if [ "${PALINODE_HOOK_DRYRUN:-0}" = "1" ]; then
   exit 0
 fi
 
-# 1. Warm server-side session context (PHASE-G G2). No -f: a 404 from a server
-#    that doesn't have the endpoint yet is fine; only connection errors fail,
-#    and those are swallowed.
+# 1. Warm server-side session context (/context/prime — ADR-012 Layer 4 +
+#    ADR-009 Layer 1). No -f: an older server (pre-0.9.3) without the
+#    endpoint 404s harmlessly; only connection errors fail, and those are
+#    swallowed.
 PRIME_PAYLOAD=$(jq -n --arg cwd "$CWD" --arg session_id "$SESSION_ID" \\
   '{cwd: $cwd, session_id: $session_id}')
 curl -s -o /dev/null \\
@@ -352,8 +368,27 @@ exit 0
 
 WRAP_COMMAND_BODY = """\
 ---
-description: Wrap up this session — sync prior work, then a structured session_end that commits AND pushes the note, before /clear.
+description: Wrap up this session — offer to land any open git work, sync prior memory work, then a structured session_end that commits AND pushes the note, before /clear.
 ---
+
+**Step 0 — Pre-flight: offer to land the working repo's git work.**
+Before archiving, glance at the *working repo's* git state — the code repo you
+were editing, not the Palinode memory repo (Steps 1–2 handle that). This is a
+light courtesy check, **not** the heavy wrap's halt-on-failure merge sequence:
+you **offer** to close things out, you never commit, merge, or push without an
+explicit yes in this session (#618).
+- Run `git status --short`. If on a feature branch, also check whether it is
+  ahead of `main` — e.g. `git log --oneline main..HEAD`.
+- **Clean tree and not ahead of `main`?** Say nothing and go straight to
+  Step 1 — there is nothing to land.
+- **Dirty tree or unmerged branch?** State it in **one line** (e.g. `3
+  uncommitted files; branch feat/x is 2 commits ahead of main`) and **offer**
+  to close it out first: commit the changes and/or ff-only merge the branch
+  back to `main`. Push only if the user explicitly asks, and honor the repo's
+  push policy (some repos forbid direct pushes — don't assume one is wanted).
+- If the user declines, or says something like "just wrap" / "leave it",
+  proceed to Step 1 and archive anyway — a dirty tree is theirs to keep. The
+  offer is a courtesy, never a gate.
 
 **Step 1 — Push prior work (before archiving).**
 Call `palinode_push` to sync any commits already on the branch to the remote
@@ -388,10 +423,12 @@ or the push failed), print: `✓ session saved — note committed locally but NO
 pushed; run palinode_push when the remote is reachable.` In both cases follow
 with the daily-note path from the result.
 
-**This command is deterministic.** `palinode_push` → `palinode_session_end`
-(`push: true`). The note-ship is a property of the session_end call, not a
-forgettable third step. For a quick mid-session checkpoint, call the
-`palinode_save` tool directly with `type="ProjectSnapshot"`.
+**This command is deterministic.** The archive path is `palinode_push` →
+`palinode_session_end` (`push: true`); the note-ship is a property of the
+session_end call, not a forgettable third step. Step 0's git offer never blocks
+that path and never acts without your explicit yes — decline it and the wrap
+proceeds unchanged. For a quick mid-session checkpoint, call the `palinode_save`
+tool directly with `type="ProjectSnapshot"`.
 """
 
 

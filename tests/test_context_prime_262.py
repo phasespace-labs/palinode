@@ -12,6 +12,7 @@ design.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -24,6 +25,7 @@ from palinode.core.config import config
 from palinode.core.context_prime import (
     MAX_CORE_MEMORIES,
     MAX_RECENT_DECISIONS,
+    MAX_RECENT_SNAPSHOTS,
     build_context_digest,
     format_context_digest,
     resolve_project,
@@ -83,6 +85,7 @@ def test_digest_core_only_when_no_project(mock_memory_dir, monkeypatch):
     assert [r["file"] for r in digest["core_memories"]] == ["insights/core-one.md"]
     assert digest["recent_decisions"] == []
     assert digest["open_action_items"] == []
+    assert digest["recent_snapshots"] == []
     assert "_palinode_hint" in digest
 
 
@@ -96,10 +99,15 @@ def test_digest_project_scoped_no_bleed(mock_memory_dir):
           {"type": "ActionItem", "entities": ["project/alpha"], "title": "Alpha todo"})
     _seed(mock_memory_dir, "inbox/beta-todo.md",
           {"type": "ActionItem", "entities": ["project/beta"], "title": "Beta todo"})
+    _seed(mock_memory_dir, "projects/alpha-snap.md",
+          {"type": "ProjectSnapshot", "entities": ["project/alpha"], "title": "Alpha snap"})
+    _seed(mock_memory_dir, "projects/beta-snap.md",
+          {"type": "ProjectSnapshot", "entities": ["project/beta"], "title": "Beta snap"})
     digest = build_context_digest(project="alpha")
     assert digest["project"] == "project/alpha"
     assert [r["file"] for r in digest["recent_decisions"]] == ["decisions/alpha-dec.md"]
     assert [r["file"] for r in digest["open_action_items"]] == ["inbox/alpha-todo.md"]
+    assert [r["file"] for r in digest["recent_snapshots"]] == ["projects/alpha-snap.md"]
 
 
 def test_digest_excludes_closed_action_items(mock_memory_dir):
@@ -125,6 +133,52 @@ def test_digest_is_bounded(mock_memory_dir):
     assert len(digest["recent_decisions"]) == MAX_RECENT_DECISIONS
 
 
+def test_digest_surfaces_snapshots_newest_first(mock_memory_dir):
+    """ProjectSnapshots for the resolved project surface, most-recent first."""
+    old = _seed(mock_memory_dir, "projects/session-end-old.md",
+                {"type": "ProjectSnapshot", "entities": ["project/p"], "title": "Old wrap"})
+    new = _seed(mock_memory_dir, "projects/session-end-new.md",
+                {"type": "ProjectSnapshot", "entities": ["project/p"], "title": "New wrap"})
+    os.utime(old, (1000, 1000))
+    os.utime(new, (2000, 2000))
+    digest = build_context_digest(project="p")
+    assert [r["file"] for r in digest["recent_snapshots"]] == [
+        "projects/session-end-new.md",
+        "projects/session-end-old.md",
+    ]
+
+
+def test_digest_snapshots_bounded(mock_memory_dir):
+    n = MAX_RECENT_SNAPSHOTS + 2
+    for i in range(n):
+        p = _seed(mock_memory_dir, f"projects/snap-{i:02d}.md",
+                  {"type": "ProjectSnapshot", "entities": ["project/p"], "title": f"Snap {i}"})
+        os.utime(p, (1000 + i, 1000 + i))
+    digest = build_context_digest(project="p")
+    # Bounded to the cap, and it keeps the newest ones in newest-first order.
+    assert [r["file"] for r in digest["recent_snapshots"]] == [
+        f"projects/snap-{i:02d}.md"
+        for i in range(n - 1, n - 1 - MAX_RECENT_SNAPSHOTS, -1)
+    ]
+
+
+def test_digest_snapshots_empty_when_none(mock_memory_dir):
+    """A resolved project with decisions but no snapshots yields an empty section."""
+    _seed(mock_memory_dir, "decisions/d.md",
+          {"type": "Decision", "entities": ["project/p"], "title": "D"})
+    digest = build_context_digest(project="p")
+    assert digest["recent_snapshots"] == []
+
+
+def test_digest_snapshots_ignores_status_log(mock_memory_dir):
+    """The append-only projects/<p>-status.md log is not a ProjectSnapshot and
+    must not surface (selection is by type, not by the projects/ path)."""
+    _seed(mock_memory_dir, "projects/p-status.md",
+          {"entities": ["project/p"], "title": "p status log"})
+    digest = build_context_digest(project="p")
+    assert digest["recent_snapshots"] == []
+
+
 def test_digest_skips_daily_and_archive(mock_memory_dir, monkeypatch):
     monkeypatch.setattr(config.context, "auto_detect", False)
     _seed(mock_memory_dir, "daily/2026-07-18.md", {"core": True, "title": "Daily"})
@@ -141,6 +195,16 @@ def test_format_digest_renders_sections_and_hint(mock_memory_dir):
     assert "Session context: project/p" in text
     assert "The decision — why it was made" in text
     assert "palinode_search" in text  # the hint
+
+
+def test_format_digest_renders_snapshot_section(mock_memory_dir):
+    _seed(mock_memory_dir, "projects/wrap.md",
+          {"type": "ProjectSnapshot", "entities": ["project/p"],
+           "title": "Where I left off", "description": "wired the renderer"})
+    text = format_context_digest(build_context_digest(project="p"))
+    assert "### Recent snapshots" in text
+    assert "Where I left off — wired the renderer" in text
+    assert "[projects/wrap.md]" in text
 
 
 def test_format_digest_no_project_label(monkeypatch, mock_memory_dir):

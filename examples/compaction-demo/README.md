@@ -41,10 +41,10 @@ Between pass 1 and pass 2 (9 operations):
 - 4 × `ARCHIVE` — moved superseded entries to `archive/2026/my-app-status.md`
 - 2 × `UPDATE` — final wording pass on merged lines
 
-All 22 operations were **proposed by an LLM** but **applied by deterministic Python** (`palinode/consolidation/executor.py`). The LLM never touches the file directly — it only emits JSON like `{"op": "SUPERSEDE", "id": "f-0317-1", "superseded_by": "f-0324-2", "reason": "stripe integration actually shipped on the 24th"}` and the executor validates and applies it. That's the [ADR-001](../../ADR-001-tools-over-pipeline.md) invariant in action.
+These 22 operations are recorded individually in git. The consolidation executor validates each JSON operation before updating the memory file, preserving a reviewable history of every change.
 
 ## Why this matters
 
-A lot of AI-memory systems will happily let an LLM rewrite a memory file in one shot. That's fast but lossy — you lose the trail from "what we thought on March 15" to "what we actually decided on March 24." Palinode's trick is that the LLM never rewrites; it proposes discrete operations, and every operation is a git commit. You get the speed of LLM-driven consolidation *and* the auditability of an append-only log.
+One-shot memory rewrites can erase the trail from "what we thought on March 15" to "what we actually decided on March 24." This workflow records consolidation changes separately, preserving a reviewable history between those states.
 
 If you want to see this on your own data: run `palinode consolidate --dry-run` and inspect the proposed ops before applying. Compaction is powerful, and you should be able to see exactly what it wants to do to your memory before it does it.

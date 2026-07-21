@@ -185,3 +185,21 @@ def test_init_py_settings_timeout_matches_canonical():
         f"examples/hooks/settings.json timeout ({canonical_timeout}) — "
         "keep them in sync (#377)"
     )
+
+
+def test_hook_script_byte_identical_to_canonical():
+    """`palinode init` embeds the session-end hook as a string constant because
+    an installed package cannot read examples/. Pin the embedded HOOK_SCRIPT
+    byte-for-byte to examples/hooks/palinode-session-end.sh so the two can't
+    silently drift — the #633 failure mode, where the embedded copy carried the
+    /wrap-skip dedup gate, PALINODE_HOOK_DRYRUN, and the fallback-log-on-failure
+    path while the manual-install examples copy carried none of them. Mirrors
+    the session-start guard test_embedded_init_copy_matches_canonical_script.
+    Edit the canonical examples file first, then mirror HOOK_SCRIPT."""
+    from palinode.cli.init import HOOK_SCRIPT
+
+    canonical = REPO_ROOT / "examples" / "hooks" / "palinode-session-end.sh"
+    assert HOOK_SCRIPT == canonical.read_text(), (
+        "palinode/cli/init.py HOOK_SCRIPT has drifted from "
+        "examples/hooks/palinode-session-end.sh — re-sync them byte-for-byte."
+    )

@@ -9,8 +9,7 @@ supersession can't:
   review." No winner is picked; the conflict is recorded so ``lint`` can flag it.
 - ``backed_by: [<ref>...]`` — "this fact is supported by that source/fact."
 
-Both are PLAINTEXT frontmatter lists (the signed attestation layer is
-out of scope, ADR-016 §4). Refs follow the same ``category/slug`` identity
+Both are plaintext frontmatter lists. Refs follow the same ``category/slug`` identity
 convention used elsewhere — the path-relative id of a memory file.
 
 This module is the single home for: validation, the soft-fail read accessor, the
