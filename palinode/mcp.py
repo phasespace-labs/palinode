@@ -868,6 +868,43 @@ def _all_tools() -> list[types.Tool]:
             ),
         ),
         types.Tool(
+            name="palinode_archive",
+            description=(
+                "Retire one specific memory that is wrong or obsolete. Sets "
+                "`status: archived` so it leaves default recall, records the reason "
+                "in the file's history sibling, and commits — never hard-deletes, so "
+                "the content stays auditable. Pass `superseded_by` to name the memory "
+                "that replaces it (a SUPERSEDE rather than a plain archive). Use this "
+                "instead of re-saving a memory with a hand-written tombstone body: "
+                "that leaves the wrong content live in search."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Memory file path (e.g., 'insights/stale-finding.md')",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Why this memory is being retired (kept in the audit trail).",
+                    },
+                    "superseded_by": {
+                        "type": "string",
+                        "description": (
+                            "Slug or path of the memory that replaces this one. "
+                            "Omit for a plain archive with no successor."
+                        ),
+                    },
+                },
+                "required": ["file_path"],
+            },
+            annotations=types.ToolAnnotations(
+                title="Archive / Supersede Memory",
+                readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False,
+            ),
+        ),
+        types.Tool(
             name="palinode_diff",
             description=(
                 "Show what memories changed recently. Use to review what was learned, "
@@ -1652,6 +1689,30 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
             if resp.status_code != 200:
                 return _text(f"Archive-expired sweep failed: {resp.text}")
             return _text(json.dumps(resp.json(), indent=2))
+
+        # ── archive (on-demand ARCHIVE / SUPERSEDE) ────────────────────────
+        elif name == "palinode_archive":
+            file_path = arguments.get("file_path")
+            if not file_path:
+                return _text("Error: file_path is required")
+            body = {"file_path": file_path}
+            if arguments.get("reason"):
+                body["reason"] = arguments["reason"]
+            if arguments.get("superseded_by"):
+                body["superseded_by"] = arguments["superseded_by"]
+            resp = await _post("/archive", json=body)
+            if resp.status_code != 200:
+                return _text(f"Archive failed: {resp.text}")
+            data = resp.json()
+            if data.get("status") == "already_archived":
+                return _text(f"{data.get('file')} is already archived — no change.")
+            successor = data.get("superseded_by")
+            verb = f"Superseded by {successor}" if successor else "Archived"
+            return _text(
+                f"{verb}: {data.get('file')}\n"
+                f"History: {data.get('history_file')}\n"
+                f"Chunks suppressed from recall: {data.get('chunks_updated', 0)}"
+            )
 
         # ── status ────────────────────────────────────────────────────────
         elif name == "palinode_status":

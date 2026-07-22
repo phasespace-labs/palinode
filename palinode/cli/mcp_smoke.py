@@ -237,7 +237,7 @@ def mcp_smoke(
       palinode mcp-smoke --list
       palinode mcp-smoke claude-code
       palinode mcp-smoke cursor --json
-      palinode mcp-smoke codex --record --operator paul
+      palinode mcp-smoke codex --record --operator alice
     """
     # --list mode
     if list_harnesses:

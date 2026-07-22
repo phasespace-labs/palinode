@@ -151,16 +151,27 @@ def run_lint_pass() -> dict[str, Any]:
         path = f["path"]
         meta = f["metadata"]
         
-        # 1. Missing fields
-        missing = []
-        if not meta.get("id"):
-            missing.append("id")
-        if not meta.get("type"):
-            missing.append("type")
-        if not meta.get("category"):
-            missing.append("category")
-        if missing:
-            missing_fields.append({"file": path, "missing": missing})
+        # 1. Missing fields — memory files only.
+        #
+        # `daily/` notes are the structural log tier, not a memory tier: they
+        # are append-only (N sessions per file), and session-end already
+        # persists each session separately as a typed memory. They are exempt
+        # from the required-frontmatter contract — see PROGRAM.md § File tiers.
+        # Every sibling check below already skips them; this one didn't, so it
+        # counted `daily/` violations in a numerator whose denominator
+        # (`total_files`) excludes `daily/`. The exemption makes the report
+        # internally consistent and restores its value as a regression signal:
+        # a flagged file is now always a real problem.
+        if not path.startswith("daily/"):
+            missing = []
+            if not meta.get("id"):
+                missing.append("id")
+            if not meta.get("type"):
+                missing.append("type")
+            if not meta.get("category"):
+                missing.append("category")
+            if missing:
+                missing_fields.append({"file": path, "missing": missing})
             
         # 2. Orphans
         category = meta.get("category", "")
@@ -234,11 +245,18 @@ def run_lint_pass() -> dict[str, Any]:
                 except Exception:
                     pass
 
-        # 7. Wiki drift — frontmatter entities vs. body wikilinks
-        body = f.get("body", "")
-        drift_warnings = check_wiki_drift(meta, body)
-        if drift_warnings:
-            wiki_drift.append({"file": path, "warnings": drift_warnings})
+        # 7. Wiki drift — frontmatter entities vs. body wikilinks.
+        # Skipped for daily/ logs, the second outlier found in this pass: they
+        # are a structural tier with no `entities:` contract (PROGRAM.md
+        # § File tiers), so a [[wikilink]] written in a session summary gets
+        # reported as drifting from a list the file will never carry. The
+        # check measures agreement between two halves of the wiki contract;
+        # a file outside that contract has nothing to disagree with.
+        if not path.startswith("daily/"):
+            body = f.get("body", "")
+            drift_warnings = check_wiki_drift(meta, body)
+            if drift_warnings:
+                wiki_drift.append({"file": path, "warnings": drift_warnings})
 
         # 8. Source-citation anchors — verify each ``sources:`` anchor's
         # integrity hash and that the cited quote still appears in its source.

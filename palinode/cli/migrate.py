@@ -1,5 +1,6 @@
 import click
 from palinode.cli._format import console, print_result, get_default_format, OutputFormat
+from palinode.migration.frontmatter_backfill import VALID_DAILY_MODES
 
 
 @click.group()
@@ -92,4 +93,106 @@ def openclaw(memory_file: str, dry_run: bool, review: bool, fmt: str | None) -> 
     if dry_run:
         console.print(
             "\n[yellow]Dry run — no files written. Remove --dry-run to import.[/yellow]"
+        )
+
+
+@migrate.command(name="frontmatter")
+@click.option(
+    "--apply",
+    "apply_changes",
+    is_flag=True,
+    default=False,
+    help="Write and git-commit the backfill. Without it, nothing is written.",
+)
+@click.option(
+    "--daily-mode",
+    type=click.Choice(list(VALID_DAILY_MODES)),
+    default="skip",
+    show_default=True,
+    help=(
+        "How to treat daily/ notes. 'skip' leaves them alone — a daily note is "
+        "an append-only log, not a memory, and is exempt from the "
+        "required-frontmatter contract; 'minimal' fills id + category + dates "
+        "anyway, but never a type:."
+    ),
+)
+@click.option(
+    "--no-commit",
+    "no_commit",
+    is_flag=True,
+    default=False,
+    help="With --apply, write the files but skip the per-file git commit.",
+)
+@click.option("--format", "fmt", type=click.Choice(["text", "json"]), help="Output format")
+def frontmatter(apply_changes: bool, daily_mode: str, no_commit: bool, fmt: str | None) -> None:
+    """Backfill missing required frontmatter on legacy memory files.
+
+    Fills only fields that are absent, only from an honest derivation
+    (directory, filename, a legacy field of identical meaning, or git history) —
+    a field with no such source is left absent and reported, never guessed.
+    Existing values are never overwritten, so re-running is a no-op.
+
+    Dry-run by default; pass --apply to write. Each applied file is written
+    through the mutation choke point and committed on its own, with the
+    derivation of every value recorded in the commit body.
+
+    Operates on the configured memory dir — set PALINODE_DIR to target another
+    store.
+    """
+    from palinode.migration.frontmatter_backfill import BackfillError, run_backfill
+
+    output_fmt = OutputFormat(fmt) if fmt else get_default_format()
+
+    try:
+        result = run_backfill(
+            apply=apply_changes,
+            daily_mode=daily_mode,
+            commit=not no_commit,
+        )
+    except BackfillError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise SystemExit(1)
+
+    if output_fmt == OutputFormat.JSON:
+        print_result(result, fmt=output_fmt)
+        return
+
+    prefix = "[yellow](dry-run)[/yellow] " if result["dry_run"] else ""
+    console.print(f"\n{prefix}[bold]Frontmatter backfill[/bold]")
+    console.print(f"  Files scanned:      {result['scanned']}")
+    console.print(f"  Already conformant: {result['conformant']}")
+    console.print(f"  Needing fields:     {len(result['files'])}")
+    console.print(f"  Excluded:           {len(result['excluded'])}")
+    if result["unreadable"]:
+        console.print(f"  [red]Unreadable:         {len(result['unreadable'])}[/red]")
+
+    for entry in result["files"]:
+        console.print(f"\n  [cyan]{entry['path']}[/cyan]")
+        for fill in entry["fills"]:
+            console.print(
+                f"    + {fill['field']}: {fill['value']} [dim](source: {fill['source']})[/dim]"
+            )
+        for item in entry["undeliverable"]:
+            console.print(f"    [yellow]? {item['field']}: not derivable — {item['reason']}[/yellow]")
+        for item in entry["withheld"]:
+            console.print(f"    [dim]· {item['field']} withheld — {item['reason']}[/dim]")
+        for note in entry["notes"]:
+            console.print(f"    [dim]note: {note}[/dim]")
+
+    if result["excluded"]:
+        console.print("\n[dim]Excluded (not memory files, or out of scope):[/dim]")
+        for item in result["excluded"]:
+            console.print(f"  [dim]{item['path']} — {item['reason']}[/dim]")
+
+    for item in result["unreadable"]:
+        console.print(f"\n[red]Unreadable:[/red] {item['path']} — {item['error']}")
+
+    if result["dry_run"]:
+        console.print(
+            "\n[yellow]Dry run — no files written. Re-run with --apply to write.[/yellow]"
+        )
+    else:
+        console.print(
+            f"\n[green]Wrote {len(result['files_written'])} file(s); "
+            f"{result['commits']} commit(s).[/green]"
         )

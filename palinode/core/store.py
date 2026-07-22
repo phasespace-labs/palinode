@@ -1373,6 +1373,68 @@ def set_status_for_path(file_path: str, status: str) -> int:
         db.close()
 
 
+def set_entities_for_path(file_path: str, entities: list[str]) -> int:
+    """Replace the indexed entity refs for one file (#679 repair path).
+
+    Sibling of :func:`set_status_for_path`, for the same reason and with the
+    same shape. Correcting a memory's ``entities:`` frontmatter is a
+    frontmatter-only change, so it does not move the body content-hash that
+    ``index_file`` keys its fast path on — a re-index reports the file
+    unchanged and the indexed refs stay stale.
+
+    Two things go stale, and both are handled here:
+
+    * ``chunks.metadata['entities']`` — the cached copy of the frontmatter.
+    * the ``entities`` table — which ``upsert_entities`` only ever inserts
+      into, so a *changed* ref writes a new row and orphans the old one.
+      Deleting this file's rows first is what makes a correction a correction
+      rather than an addition.
+
+    Both run in one transaction, so a crash cannot leave a file with its old
+    refs deleted and no new ones written.
+
+    ``file_path`` must be the absolute path stored in ``chunks.file_path``.
+
+    Returns the number of chunk rows whose metadata changed.
+    """
+    now = _utc_now().isoformat().replace("+00:00", "Z")
+    db = get_db()
+    try:
+        rows = db.execute(
+            "SELECT id, metadata FROM chunks WHERE file_path = ?", (file_path,)
+        ).fetchall()
+        updated = 0
+        category = ""
+        for row in rows:
+            meta = json.loads(row["metadata"]) if row["metadata"] else {}
+            category = category or meta.get("category", "")
+            if meta.get("entities") == entities:
+                continue
+            meta["entities"] = entities
+            db.execute(
+                "UPDATE chunks SET metadata = ? WHERE id = ?",
+                (json.dumps(meta, default=str), row["id"]),
+            )
+            updated += 1
+
+        # Replace, don't accumulate. Without the delete, a corrected ref adds a
+        # row and the stale one survives forever (the entity graph is otherwise
+        # append-only).
+        db.execute("DELETE FROM entities WHERE file_path = ?", (file_path,))
+        for entity_ref in entities:
+            db.execute(
+                """
+                INSERT OR REPLACE INTO entities (entity_ref, file_path, category, last_seen)
+                VALUES (?, ?, ?, ?)
+                """,
+                (entity_ref, file_path, category, now),
+            )
+        db.commit()
+        return updated
+    finally:
+        db.close()
+
+
 def search_hybrid(
     query_text: str,
     query_embedding: list[float],

@@ -55,11 +55,11 @@ Return a JSON array of memory items. Each item must match one of these schemas:
   },
   {
     "type": "ActionItem",
-    "slug": "send-alice-5module-proposal",
-    "content": "Send Alice the 5-module structure proposal",
-    "assignee": "Paul",
+    "slug": "send-bob-5module-proposal",
+    "content": "Send Bob the 5-module structure proposal",
+    "assignee": "Alice",
     "due": "2026-03-25",
-    "entities": ["person/alice", "project/my-app"],
+    "entities": ["person/bob", "project/my-app"],
     "confidence": 0.85
   }
 ]

@@ -60,7 +60,7 @@ def _patch_embed_ok():
     return patch("palinode.core.embedder.embed", return_value=_FAKE_VECTOR)
 
 
-def _save(client, content: str, slug: str = "lyapunov-probe"):
+def _save(client, content: str, slug: str = "stability-probe"):
     with _patch_scan(), _patch_embed_ok():
         res = client.post(
             "/save",

@@ -11,6 +11,7 @@ from palinode.cli.save import save
 from palinode.cli.status import status
 from palinode.cli.diff import diff
 from palinode.cli.consolidate import consolidate
+from palinode.cli.archive import archive
 from palinode.cli.archive_expired import archive_expired
 from palinode.cli.trigger import trigger
 from palinode.cli.doctor import doctor
@@ -35,6 +36,7 @@ from palinode.cli.import_vault import import_cmd
 from palinode.cli.depends import depends
 from palinode.cli.mcp_smoke import mcp_smoke
 from palinode.cli.worktree import worktree_reconcile
+from palinode.cli.repair_status import repair_status
 
 def _print_version(ctx: click.Context, param: click.Parameter, value: bool) -> None:
     if not value or ctx.resilient_parsing:
@@ -75,6 +77,7 @@ main.add_command(save)
 main.add_command(status)
 main.add_command(diff)
 main.add_command(consolidate)
+main.add_command(archive)
 main.add_command(archive_expired)
 main.add_command(trigger)
 main.add_command(doctor)
@@ -117,6 +120,7 @@ main.add_command(mcp_config, name="mcp-config")
 
 # Maintenance
 main.add_command(worktree_reconcile, name="worktree-reconcile")
+main.add_command(repair_status, name="repair-status")
 
 # Embedding tools (Obsidian wiki maintenance helpers)
 main.add_command(dedup_suggest)

@@ -26,7 +26,7 @@ If you discover a security vulnerability in Palinode, please report it responsib
 Palinode runs locally on your machine. The primary attack surface is:
 - Path traversal in file operations (mitigated: all paths validated against PALINODE_DIR)
 - API endpoint abuse (mitigated: rate limiting, request size limits, optional bearer auth — see below)
-- LLM prompt injection via memory content (mitigated: schema-restricted operations and path-safe file-update APIs)
+- LLM prompt injection via memory content (mitigated: deterministic executor, LLM never writes files directly)
 
 ## API authentication
 

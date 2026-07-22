@@ -96,7 +96,7 @@ def test_inline_body_link_covers_frontmatter_entity():
     """Inline [[wikilink]] in body satisfies the frontmatter entity → no warning."""
     metadata = {"entities": ["project/checkout-redesign", "person/alice-smith"]}
     body = (
-        "[[Alice Smith]] and Paul agreed to drop legacy browser support "
+        "[[Alice Smith]] and Bob agreed to drop legacy browser support "
         "from the [[checkout-redesign]] roadmap."
     )
     warnings = check_wiki_drift(metadata, body)

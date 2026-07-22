@@ -258,6 +258,10 @@ class ConsolidationConfig:
     nightly: NightlyConfig = field(default_factory=NightlyConfig)
     write_time: WriteTimeConfig = field(default_factory=WriteTimeConfig)
     keyword_map: dict[str, list[str]] | None = None
+    # `### <date>` blocks kept verbatim in a status doc's Consolidation Log;
+    # older blocks collapse into one cumulative elision line (the full detail
+    # stays in git history). 0 disables the cap.
+    status_log_max_blocks: int = 10
 
 @dataclass
 class DecayConfig:

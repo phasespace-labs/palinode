@@ -52,7 +52,7 @@ All of these store things. None of them *remember*.
 
 **Primary:** AI agents (Claude-based) acting as long-lived personal assistants.
 
-**Secondary:** The human (Paul) who browses, edits, and reviews memory files directly; receives daily digests and weekly reviews.
+**Secondary:** The human who browses, edits, and reviews memory files directly; receives daily digests and weekly reviews.
 
 **Tertiary:** Other AI agents that read from shared memory (multi-agent setups).
 
@@ -190,7 +190,7 @@ When a chunk matches, don't return the chunk alone:
 **Conflict resolution:**
 
 - Recency wins: `last_updated` field determines which version is current
-- Explicit supersession: new Decision that contradicts old → old gets `status: superseded`, new gets `supersedes: [old_id]`
+- Explicit supersession: new Decision that contradicts old → old gets `status: archived` + `superseded_by: [new_id]`, new gets `supersedes: [old_id]`
 - Both versions kept (audit trail); search layer prefers `status: active`
 
 **Aggressiveness controls** (all defined in PROGRAM.md, not hardcoded):
@@ -294,7 +294,7 @@ When a chunk matches, don't return the chunk alone:
 
 - Scan for new decisions that contradict existing ones (same project + topic)
 - LLM comparison: "Does NEW supersede OLD, complement, or contradict?"
-- If supersede: mark old as `status: superseded`, link from new via `supersedes: [old_id]`
+- If supersede: mark old as `status: archived` (the only status that excludes from recall) plus `superseded_by`, link from new via `supersedes: [old_id]`
 
 **Cross-project insights:**
 
@@ -311,7 +311,7 @@ When a chunk matches, don't return the chunk alone:
 **Archive management:**
 
 - Consolidated daily notes → `archive/daily/`
-- Superseded decisions → `status: superseded` (stay in `decisions/`, excluded from default search)
+- Superseded decisions → `status: archived` + `superseded_by` (stay in `decisions/`, excluded from default search — `archived` is what `config.search.exclude_status` filters on)
 - Truly obsolete items → `archive/` with pointer from main file
 
 ### 5.7 Surfacing (the proactive layer)
@@ -704,7 +704,7 @@ Prompts are not disposable. They're the most durable artifact in the system — 
 
 - [ ] Agent remembers project state across sessions without MEMORY.md
 - [ ] Semantic search returns relevant results for project/people queries
-- [ ] Paul re-explains stable facts less often
+- [ ] The user re-explains stable facts less often
 
 **After 1 month:**
 
@@ -717,4 +717,4 @@ Prompts are not disposable. They're the most durable artifact in the system — 
 
 - [ ] Multiple agents share Palinode (read access for all agent profiles)
 - [ ] Palinode has survived at least one infrastructure failure without data loss
-- [ ] Paul trusts the system enough to stop manually curating MEMORY.md
+- [ ] The user trusts the system enough to stop manually curating MEMORY.md

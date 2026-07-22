@@ -1,11 +1,11 @@
-"""The injectable consolidation callback (#554).
+"""The consolidation propose→apply seam (#554).
 
-Previously, the only way to test the runner→executor path was to mock
+Before this seam, the only way to test the runner→executor path was to mock
 ``_consolidate_project`` wholesale (see test_consolidation_dry_run), which skips
 the real fact-extraction, prompt-building, JSON parse/repair, and executor
 application — the parts most likely to harbour bugs. The injectable ``llm_fn``
-lets a fake adapter return canned operation JSON while driving the real pipeline
-end to end.
+splits the nondeterministic half (the LLM call) from the deterministic half, so
+a fake adapter returning canned op-JSON drives the real pipeline end to end.
 
 Live adapter = the default ``_call_llm_with_fallback`` (covered by test_fallback);
 fake adapter = the ``_FAKE_*`` callables below. Two adapters → a real seam.
@@ -87,7 +87,8 @@ def test_no_facts_short_circuits_without_calling_llm(tmp_path, monkeypatch):
 
 
 def test_run_consolidation_applies_canned_ops_end_to_end(tmp_path, monkeypatch):
-    """Canned operations exercise extraction, parsing, application, and git."""
+    """Full runner→executor path with a fake LLM — no wholesale mock of
+    _consolidate_project, so fact-extraction + parse + executor.apply + git all run."""
     target = _seed(tmp_path, monkeypatch, with_git=True)
     monkeypatch.setattr(config, "db_path", str(tmp_path / ".palinode.db"))
     monkeypatch.setattr(config.git, "auto_commit", True)

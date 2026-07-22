@@ -146,3 +146,92 @@ def test_lint_missing_priority_for_core_and_decisions_only(tmp_path, monkeypatch
     assert any("core.md" in f for f in result["missing_priority"])
     assert not any("insight.md" in f for f in result["missing_priority"])
     assert not any("prioritized.md" in f for f in result["missing_priority"])
+
+
+def test_lint_missing_fields_exempts_daily_logs(tmp_path, monkeypatch):
+    """`daily/` is the structural log tier — never flagged for missing fields.
+
+    See PROGRAM.md § File tiers: a daily note is an append-only log holding N
+    sessions, whose content session-end already persists separately as typed
+    memories. Flagging it here also made the report internally inconsistent —
+    `total_files` (the denominator) has always excluded `daily/`.
+    """
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    daily_dir = tmp_path / "daily"
+    insights_dir = tmp_path / "insights"
+    daily_dir.mkdir()
+    insights_dir.mkdir()
+
+    # A real session-end note: appended, so it never has frontmatter.
+    (daily_dir / "2026-04-19.md").write_text(
+        "## Session End — 2026-04-19T10:00:00Z\n\n**Summary:** shipped it\n",
+        encoding="utf-8",
+    )
+    (insights_dir / "conformant.md").write_text(
+        "---\nid: insights-conformant\ncategory: insights\ntype: Insight\n---\nBody",
+        encoding="utf-8",
+    )
+    (insights_dir / "broken.md").write_text("No frontmatter at all\n", encoding="utf-8")
+
+    result = run_lint_pass()
+
+    flagged = [mf["file"] for mf in result["missing_fields"]]
+    assert not any(f.startswith("daily/") for f in flagged)
+    # Non-daily files are still flagged — the exemption is scoped, not a mute.
+    assert any("broken.md" in f for f in flagged)
+
+
+def test_lint_missing_fields_numerator_matches_total_files_denominator(tmp_path, monkeypatch):
+    """Nothing counted in `missing_fields` may be outside `total_files`.
+
+    The invariant the daily/ exemption restores: a corpus of nothing but daily
+    logs has a zero denominator, so it must also report zero violations.
+    """
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    daily_dir = tmp_path / "daily"
+    daily_dir.mkdir()
+    for day in ("2026-04-19", "2026-04-20", "2026-04-21"):
+        (daily_dir / f"{day}.md").write_text(f"## Session End — {day}\n", encoding="utf-8")
+
+    result = run_lint_pass()
+
+    assert result["total_files"] == 0
+    assert result["missing_fields"] == []
+
+
+def test_lint_wiki_drift_exempts_daily_logs(tmp_path, monkeypatch):
+    """`daily/` is exempt from wiki drift too — the second outlier.
+
+    `check_wiki_drift` measures agreement between frontmatter `entities:` and
+    body `[[wikilinks]]`. A daily log is a structural tier with no `entities:`
+    contract (PROGRAM.md § File tiers), so a wikilink written in a session
+    summary was reported as drifting from a list the file will never carry —
+    a disagreement between two halves of a contract the file isn't party to.
+    """
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    daily_dir = tmp_path / "daily"
+    decisions_dir = tmp_path / "decisions"
+    daily_dir.mkdir()
+    decisions_dir.mkdir()
+
+    # A session summary that mentions an entity in prose, as they routinely do.
+    (daily_dir / "2026-04-19.md").write_text(
+        "## Session End — 2026-04-19T10:00:00Z\n\n"
+        "**Summary:** paired with [[person/alice]] on the executor\n",
+        encoding="utf-8",
+    )
+    # A real memory whose body links an entity absent from its frontmatter —
+    # genuine drift, and it must still be reported.
+    (decisions_dir / "drifted.md").write_text(
+        "---\nid: decisions-drifted\ncategory: decisions\ntype: Decision\n"
+        "entities:\n- project/palinode\n---\n"
+        "Decided with [[person/bob]], who is not in the frontmatter.\n",
+        encoding="utf-8",
+    )
+
+    result = run_lint_pass()
+
+    drifted = [w["file"] for w in result["wiki_drift"]]
+    assert not any(f.startswith("daily/") for f in drifted)
+    # Scoped, not a mute: real drift in a real memory is still caught.
+    assert any("drifted.md" in f for f in drifted)

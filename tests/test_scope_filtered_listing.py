@@ -22,13 +22,13 @@ client = TestClient(app)
 # ── chain_allows: pure predicate ──────────────────────────────────────────
 
 
-CHAIN = ScopeChain(harness="claude-code", project="palinode", member="paul")
+CHAIN = ScopeChain(harness="claude-code", project="palinode", member="alice")
 
 
 def test_explicit_scope_on_chain_is_allowed():
     assert chain_allows(CHAIN, {"scope": "project/palinode"})
     assert chain_allows(CHAIN, {"scope": "harness/claude-code"})
-    assert chain_allows(CHAIN, {"scope": "member/paul"})
+    assert chain_allows(CHAIN, {"scope": "member/alice"})
 
 
 def test_explicit_scope_off_chain_is_hidden():

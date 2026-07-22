@@ -60,6 +60,10 @@ TOOL_SMOKE_ARGS: dict[str, tuple[dict, bool]] = {
 
     # Deterministic maintenance sweep — dry-run completes in a clean env
     "palinode_archive_expired":   ({"dry_run": True}, False),
+    # On-demand retire — mutates the shared seed, but each parametrized case
+    # gets its own function-scoped seeded_env, so no ordering coupling.
+    "palinode_archive":           ({"file_path": "insights/smoke-target.md",
+                                    "reason": "smoke"}, False),
 
     # Lenient — legitimately may error in test env
     "palinode_ingest":            ({"url": "https://example.com/"}, True),       # no network in CI
@@ -94,6 +98,7 @@ DISPATCH_ERROR_PREFIXES: tuple[str, ...] = (
     "Doctor (deep) failed",
     "Lint failed",
     "Consolidation failed",
+    "Archive failed",
     "Archive-expired sweep failed",
     "Push failed",
     "Ingest failed",

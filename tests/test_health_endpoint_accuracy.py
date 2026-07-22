@@ -110,7 +110,7 @@ def test_health_reports_correct_counts_on_populated_db(client):
     must reflect those live values — not zeros.
     """
     _insert_chunks(5)
-    _insert_entities(["project/palinode", "person/paul", "tool/sqlite"])
+    _insert_entities(["project/palinode", "person/alice", "tool/sqlite"])
 
     with mock.patch("httpx.get"):  # skip Ollama reachability check
         resp = client.get("/health")

@@ -18,9 +18,9 @@ Load all files with `core: true` in frontmatter. No search, no ranking — just 
 ```yaml
 # Palinode Core Memory
 user:
-  name: Paul
-  location: Santa Clarita, CA
-  roles: [film/video faculty, software developer]
+  name: Alice
+  location: Example City, CA
+  roles: [educator, software developer]
 
 active_projects:
   - name: My App
@@ -55,7 +55,7 @@ Where:
 - `importance`: from frontmatter (default 0.5 if not set)
 
 **Filters applied:**
-- Exclude `status: archived` and `status: superseded`
+- Exclude `status: archived` (the only terminal status; superseded memories are archived and carry `superseded_by`)
 - Prefer items matching detected entities (project names, person names in the message)
 - Limit to `searchTopK` results (default 10)
 

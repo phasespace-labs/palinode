@@ -42,5 +42,5 @@ Return a single JSON object:
 - Prefer `UPDATE` over `ADD` when the same entity already has a file. Append to the existing file rather than creating a new one.
 - Never hard-delete. `ARCHIVE` sets `status: archived`. `RETRACT` leaves a strikethrough tombstone. Both stay for audit.
 - Use `RETRACT` only when you can prove the fact was wrong, not just outdated. Outdated → SUPERSEDE. Wrong → RETRACT.
-- When superseding a decision: the new decision gets `supersedes: [old_id]`, the old gets `superseded_by: new_id` and `status: superseded`.
+- When superseding a decision: the new decision gets `supersedes: [old_id]`, the old gets `superseded_by: new_id` and `status: archived`. Use `archived`, never `superseded` — `archived` is the only status that excludes a memory from default recall, so a decision marked `superseded` stays fully recallable and the supersession has no effect.
 - Explain your reasoning in `reason` — this gets logged for the audit trail.

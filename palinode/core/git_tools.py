@@ -401,6 +401,31 @@ def first_commit(file_path: str) -> dict[str, str] | None:
     return {"hash": hash_short, "date": date, "author": author, "message": message}
 
 
+def last_commit(file_path: str) -> dict[str, str] | None:
+    """Return the most recent commit that touched a memory file.
+
+    The newest-end counterpart to :func:`first_commit`: "when did this file last
+    change on disk", as recorded by git. Same return shape (``hash``, ``date``,
+    ``author``, ``message``) and the same ``None`` for an absent file or a path
+    with no git history. Single ``git log`` call — unlike :func:`history`, which
+    also shells out for a per-commit ``--stat``.
+    """
+    file_path = _resolve_memory_path(file_path)
+    if not os.path.exists(os.path.join(config.memory_dir, file_path)):
+        return None
+
+    result = _run_git(
+        "log", "-1", "--format=%h|%aI|%an|%s", "--follow", "--", file_path
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    parts = result.stdout.strip().split("\n")[0].split("|", 3)
+    if len(parts) != 4:
+        return None
+    hash_short, date, author, message = parts
+    return {"hash": hash_short, "date": date, "author": author, "message": message}
+
+
 def rollback(file_path: str, commit: str | None = None, dry_run: bool = False) -> str:
     """Revert a memory file to a previous version.
 

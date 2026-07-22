@@ -196,6 +196,7 @@ The three `ServerAlive*` / `TCPKeepAlive` options keep the SSH session alive acr
 | `palinode_trigger` | Register prospective memory triggers |
 | `palinode_prompt` | Manage versioned LLM prompt files |
 | `palinode_consolidate` | Run memory consolidation |
+| `palinode_archive` | Retire one specific memory — archive it, or supersede it with a named replacement |
 | `palinode_archive_expired` | Archive ephemeral memories whose TTL has expired |
 | `palinode_session_end` | Capture session outcomes to daily notes |
 | `palinode_dedup_suggest` | Pre-write check: existing files semantically near a draft (Obsidian wiki contract) |

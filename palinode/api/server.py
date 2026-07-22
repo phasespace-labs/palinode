@@ -623,8 +623,8 @@ from palinode.api.routers.triggers import (  # noqa: E402,F401
     list_triggers_api, delete_trigger_api, check_triggers_api,
 )
 from palinode.api.routers.consolidation import (  # noqa: E402,F401
-    ConsolidateRequest, ArchiveExpiredRequest, consolidate_api,
-    archive_expired_api, split_layers_api, bootstrap_fact_ids_api,
+    ConsolidateRequest, ArchiveExpiredRequest, ArchiveRequest, consolidate_api,
+    archive_expired_api, archive_api, split_layers_api, bootstrap_fact_ids_api,
 )
 from palinode.api.routers.git_history import (  # noqa: E402,F401
     history_api, timeline_api, diff_api, blame_api, rollback_api,

@@ -11,6 +11,7 @@ mock of the SQLite layer.
 """
 from __future__ import annotations
 
+import logging
 import random
 import threading
 import time
@@ -147,6 +148,43 @@ def test_safe_call_converts_exception_to_error_result():
     r = _safe_call(_raising_check, _ctx())
     assert r.passed is False and r.severity == "error"
     assert "boom" in r.message
+
+
+def test_abandoned_check_stays_silent_when_it_finally_raises(caplog):
+    """An over-budget check's thread outlives the runner; it must not log.
+
+    Nobody is waiting for its verdict, and by the time a blocking check
+    unblocks the process may already be tearing down stderr — a background
+    thread writing there at interpreter shutdown is what aborted the test
+    suite with exit 134.
+    """
+    from palinode.diagnostics.runner import _safe_call
+
+    abandoned = threading.Event()
+    abandoned.set()
+
+    with caplog.at_level(logging.WARNING, logger="palinode.diagnostics.runner"):
+        r = _safe_call(_raising_check, _ctx(), abandoned=abandoned)
+
+    assert r.passed is False and r.severity == "error"
+    assert caplog.records == []
+
+
+def test_timed_out_check_marks_itself_abandoned():
+    from palinode.diagnostics.runner import _run_with_timeout
+
+    published: list[str] = []
+
+    def _late_check(ctx):
+        time.sleep(0.4)
+        published.append("late")
+        return CheckResult(name="late", severity="info", passed=True, message="late")
+
+    r = _run_with_timeout(_late_check, _ctx(), 0.1)
+    assert r.severity == "warn" and "timed out" in r.message.lower()
+
+    time.sleep(0.6)  # let the abandoned worker finish
+    assert published == ["late"], "worker should still run to completion"
 
 
 def test_run_all_streams_each_result_and_survives_a_bad_check(monkeypatch):

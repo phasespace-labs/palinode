@@ -29,17 +29,28 @@ logger = logging.getLogger(__name__)
 DEFAULT_CHECK_TIMEOUT_S = 15.0
 
 
-def _safe_call(check_fn: Callable[[DoctorContext], CheckResult], ctx: DoctorContext) -> CheckResult:
+def _safe_call(
+    check_fn: Callable[[DoctorContext], CheckResult],
+    ctx: DoctorContext,
+    abandoned: threading.Event | None = None,
+) -> CheckResult:
     """Run one check, converting an exception into an ``error`` CheckResult.
 
     A check that raises must not abort the whole doctor run — every other check
     still needs to report.
+
+    *abandoned*, when set, means the runner already gave up waiting for this
+    check and reported a timeout. The worker thread outlives the caller (a
+    blocking syscall cannot be cancelled), so an abandoned check must not log:
+    nobody is listening, and by the time it finishes the process may be tearing
+    down its stderr.
     """
     name = getattr(check_fn, "__name__", "unknown_check")
     try:
         return check_fn(ctx)
     except Exception as exc:  # noqa: BLE001 — a bad check must not kill the runner
-        logger.warning("doctor check %s raised: %r", name, exc, exc_info=True)
+        if abandoned is None or not abandoned.is_set():
+            logger.warning("doctor check %s raised: %r", name, exc, exc_info=True)
         return CheckResult(
             name=name,
             severity="error",
@@ -60,21 +71,29 @@ def _run_with_timeout(
     cancelled, so on timeout we stop *waiting* (and let the thread die on its own
     once its I/O returns or the process exits) rather than joining forever — that
     is exactly the silent-hang the budget exists to prevent.
+
+    An overrun check is explicitly marked *abandoned* so that when it eventually
+    finishes it neither publishes a result nobody asked for nor logs into a
+    stream that may already be gone.
     """
     name = getattr(check_fn, "__name__", "unknown_check")
     if not timeout_s or timeout_s <= 0:
         return _safe_call(check_fn, ctx)
 
     box: dict[str, CheckResult] = {}
+    abandoned = threading.Event()
 
     def _worker() -> None:
-        box["result"] = _safe_call(check_fn, ctx)
+        result = _safe_call(check_fn, ctx, abandoned=abandoned)
+        if not abandoned.is_set():
+            box["result"] = result
 
     thread = threading.Thread(target=_worker, name=f"doctor-{name}", daemon=True)
     thread.start()
     thread.join(timeout_s)
 
     if thread.is_alive():
+        abandoned.set()
         return CheckResult(
             name=name,
             severity="warn",

@@ -169,7 +169,7 @@ entities:
   - project/checkout-redesign
   - person/alice-smith
 ---
-[[Alice Smith]] and Paul agreed to drop legacy browser support from [[checkout-redesign]].
+[[Alice Smith]] and Bob agreed to drop legacy browser support from [[checkout-redesign]].
 """
     metadata, _ = parse_markdown(content)
     import frontmatter as _fm

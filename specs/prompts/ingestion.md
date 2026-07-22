@@ -28,7 +28,7 @@ You receive:
   "slug": "date-slug",
   "summary": "2-3 sentence overview",
   "key_points": ["bullet 1", "bullet 2", "..."],
-  "relevance": "Why this matters for Paul's work",
+  "relevance": "Why this matters for the user's work",
   "tags": ["memory", "agents", "architecture"],
   "source_url": "https://...",
   "source_file": "original-filename.pdf"

@@ -33,6 +33,196 @@ router = APIRouter()
 
 # ── Session-end ──────────────────────────────────────────────────────────────
 
+#: How much of the session summary the project-status one-liner keeps.
+#: The status file is a longitudinal index — one dated line per session — so the
+#: line has to stay scannable. The previous 200 was a bare magic number with no
+#: measured constraint behind it and routinely cut a real /wrap summary in half.
+#: 400 is the repo's existing answer to "how much text is enough to recognise a
+#: memory at a glance" (``config.search.snippet_max_chars``); reusing it keeps
+#: one number rather than two. The full text is never lost: it lives verbatim in
+#: the daily note and in the indexed session-end file this line points at.
+STATUS_SUMMARY_MAX_CHARS = 400
+
+
+def _truncate_marked(text: str, limit: int) -> str:
+    """Trim ``text`` to at most ``limit`` chars on a word boundary, marking the
+    cut with ``"..."`` (the convention already used by ``palinode/cli/search.py``).
+
+    Returns ``text`` unchanged when it already fits. A *silent* mid-word cut is
+    what made the status file read as corrupted (#681): a reader could not tell
+    "the summary ended there" from "the summary was cut".
+    """
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    if text[limit] != " ":
+        # Fall back to the hard cut for a single unbroken token longer than the
+        # limit — there is no word boundary to retreat to.
+        head = head.rsplit(" ", 1)[0] or head
+    return head.rstrip() + "..."
+
+
+def _count_phrase(n: int, noun: str) -> str:
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
+
+
+def _status_line(
+    today: str,
+    summary: str,
+    decisions: list[str] | None,
+    blockers: list[str] | None,
+    pointer: str,
+) -> str:
+    """Render the one dated line a session-end appends to ``projects/<p>-status.md``.
+
+    The status file is deliberately a longitudinal *index*, one line per session
+    — so this does not inline decision/blocker prose, which is already stored
+    verbatim in two other places (the daily note and the indexed session-end
+    file). It records the **count** and a **pointer** to the durable copy, so a
+    reader can see that the material exists and where to read it. Dropping the
+    arrays with no trace at all — the pre-#681 behaviour — is what made the file
+    look like session-end had corrupted its own input.
+    """
+    one_liner = _truncate_marked(" ".join(summary.split()), STATUS_SUMMARY_MAX_CHARS)
+    counts = []
+    if decisions:
+        counts.append(_count_phrase(len(decisions), "decision"))
+    if blockers:
+        counts.append(_count_phrase(len(blockers), "blocker"))
+
+    parts = [f"- [{today}]"]
+    if one_liner:
+        parts.append(one_liner)
+    if counts:
+        parts.append(f"({', '.join(counts)} → {pointer})")
+    return " ".join(parts)
+
+
+# ── Envelope-markup guard ────────────────────────────────────────────────────
+#
+# A session-end string parameter should never carry a *tool envelope*. Two
+# entry points put one there:
+#   1. a malformed model tool-call, whose tail is absorbed into the preceding
+#      string parameter — which also swallows the arrays that followed it;
+#   2. the SessionEnd hook's transcript extraction, which used to lift Claude
+#      Code harness markup straight out of the first user turn (fixed at source
+#      in examples/hooks/palinode-session-end.sh; this is the backstop).
+#
+# Detection deliberately is NOT a substring blacklist. Palinode is a memory
+# system for developers, and a note *about* tool-call syntax is legitimate
+# content — the investigation that produced this guard has to stay saveable. A
+# fragment from the vocabulary below is only a *candidate*; rejection needs one
+# of three corroborating signals, and anything inside a code fence or code span
+# is exempt outright.
+
+#: Tag names whose appearance in a session-end string is a candidate envelope
+#: leak. Three groups: model tool-call syntax, this tool's own parameter names
+#: (what mechanism-1 absorption leaves behind), and Claude Code harness markup.
+#: `project` is deliberately absent — `<project>` is the root element of real
+#: build files people write notes about, and it is not an absorption target for
+#: `summary`.
+_ENVELOPE_TAGS: tuple[str, ...] = (
+    "invoke", "parameter", "function_calls", "tool_call", "tool_use",
+    "summary", "decisions", "blockers",
+    "system-reminder", "command-message", "command-name", "command-args",
+    "local-command-stdout", "local-command-stderr", "user-prompt-submit-hook",
+    "bash-input", "bash-stdout", "bash-stderr",
+    "ide_selection", "ide_opened_file",
+)
+
+#: Matches `<tag>`, `</tag>`, `<tag …attrs>` and namespaced forms (`<invoke>`).
+#: Group 1 = "/" for a closing tag, group 2 = the bare tag name.
+_ENVELOPE_RE = re.compile(
+    r"<(/?)(?:[A-Za-z][\w.-]*:)?(" + "|".join(_ENVELOPE_TAGS) + r")(?:\s[^<>]*)?/?>",
+    re.IGNORECASE,
+)
+
+#: Fenced blocks and inline spans are the escape hatch: markup quoted as code is
+#: always content. Replaced with a space so surrounding offsets stay meaningful.
+_CODE_SPANS = (
+    re.compile(r"```.*?```", re.DOTALL),
+    re.compile(r"~~~.*?~~~", re.DOTALL),
+    re.compile(r"`[^`\n]+`"),
+)
+
+
+def _strip_code(text: str) -> str:
+    for pattern in _CODE_SPANS:
+        text = pattern.sub(" ", text)
+    return text
+
+
+def _envelope_complaint(text: str, field: str, *, arrays_present: bool) -> str | None:
+    """Return an actionable rejection message when ``text`` carries a tool
+    envelope rather than content, else ``None`` (#682).
+
+    ``arrays_present`` reports whether *this request* delivered any
+    ``decisions``/``blockers``; absent arrays alongside envelope markup is the
+    mechanism-1 signature and the highest-signal discriminator available.
+    """
+    scrubbed = _strip_code(text)
+    matches = list(_ENVELOPE_RE.finditer(scrubbed))
+    if not matches:
+        return None
+
+    openers = {m.group(2).lower() for m in matches if not m.group(1)}
+    unmatched = next(
+        (m for m in matches if m.group(1) and m.group(2).lower() not in openers), None
+    )
+    # Absorption lands the envelope at the very tail of the value.
+    tail_end = len(scrubbed.rstrip())
+    trailing = next((m for m in matches if m.end() == tail_end), None)
+
+    if not arrays_present:
+        offender, why = (unmatched or trailing or matches[-1]), (
+            "and no `decisions`/`blockers` arrays arrived with it — the signature "
+            "of a tool envelope absorbed into the string parameter"
+        )
+    elif unmatched is not None:
+        offender, why = unmatched, "as a closing tag with no matching opener"
+    elif trailing is not None:
+        offender, why = trailing, "at the very end of the value, where an absorbed envelope lands"
+    else:
+        return None
+
+    return (
+        f"Refusing to store `{field}`: it contains tool-envelope markup "
+        f"{why} — {offender.group(0)!r}. Palinode fails loud here rather than "
+        "indexing an envelope as if it were memory. Re-send with "
+        "`decisions`/`blockers` as real JSON arrays. If the markup really is part "
+        "of the note, put it in a fenced code block or backticks and it will pass."
+    )
+
+
+def _first_envelope_complaint(req: SessionEndRequest) -> str | None:
+    """First envelope complaint across ``summary`` and every array entry."""
+    arrays_present = bool(req.decisions or req.blockers)
+    complaint = _envelope_complaint(req.summary, "summary", arrays_present=arrays_present)
+    if complaint:
+        return complaint
+    for label, items in (("decisions", req.decisions), ("blockers", req.blockers)):
+        for i, item in enumerate(items or []):
+            complaint = _envelope_complaint(item, f"{label}[{i}]", arrays_present=True)
+            if complaint:
+                return complaint
+    return None
+
+
+def _status_pointer(individual_file: str | None, daily_rel: str) -> str:
+    """Memory-relative path of the durable home for this session's full entry.
+
+    Prefers the indexed session-end file: it is permanent and searchable. The
+    daily note is the fallback, and only a fallback, because consolidation later
+    moves ``daily/*.md`` into ``archive/<year>/`` — a pointer at it goes stale.
+    """
+    if individual_file:
+        try:
+            return os.path.relpath(individual_file, _memory_base_dir())
+        except ValueError:  # different drive (Windows) — keep what we have
+            return individual_file
+    return daily_rel
+
+
 class SessionEndRequest(BaseModel):
     summary: str
     decisions: list[str] | None = None
@@ -58,6 +248,17 @@ class SessionEndRequest(BaseModel):
 @router.post("/session-end")
 def session_end_api(req: SessionEndRequest, request: Request = None) -> dict[str, Any]:
     """Capture session outcomes to daily notes and project status files."""
+    # Fail loud BEFORE any write: an envelope stored as memory is silent
+    # corruption in a system whose whole claim is audit-grade recall. Safe to
+    # 400 even though session-end is the last call of a session — the SessionEnd
+    # hook's curl uses `-f`, so HTTP >=400 routes the payload to
+    # .claude/session-floor-fallback.jsonl for replay rather than the void, and
+    # an interactive MCP/CLI caller is still live and can re-send corrected.
+    complaint = _first_envelope_complaint(req)
+    if complaint:
+        logger.warning("session-end rejected: %s", complaint)
+        raise HTTPException(status_code=400, detail=complaint)
+
     today = _utc_now().strftime("%Y-%m-%d")
     now_iso = _utc_now().isoformat().replace("+00:00", "Z")
     # ADR-010: same precedence as save_api — explicit > header > env > default.
@@ -109,16 +310,6 @@ def session_end_api(req: SessionEndRequest, request: Request = None) -> dict[str
     with open(daily_path, "a") as f:
         f.write(f"\n{session_entry}\n")
 
-    # Append status to project file if specified (or auto-derived from cwd).
-    status_file = None
-    if project:
-        status_path = os.path.join(_memory_base_dir(), "projects", f"{project}-status.md")
-        if os.path.exists(status_path):
-            one_liner = req.summary.replace("\n", " ").strip()[:200]
-            with open(status_path, "a") as f:
-                f.write(f"\n- [{today}] {one_liner}\n")
-            status_file = f"projects/{project}-status.md"
-
     # Semantic dedup against recent saves. The daily note + project
     # status file are append-only logs we always write — only the indexed
     # individual file is suppressed when a near-duplicate already exists,
@@ -165,6 +356,30 @@ def session_end_api(req: SessionEndRequest, request: Request = None) -> dict[str
             individual_file = save_result.get("file_path")
         except Exception as e:
             logger.error(f"Individual session-end file save failed (non-fatal): {e}")
+
+    # Append status to project file if specified (or auto-derived from cwd).
+    # Deliberately runs *after* the individual-file save so the one-liner can
+    # point at the durable indexed record rather than only at the daily note.
+    # Safe to sequence here: `_check_session_end_dedup` swallows all its own
+    # failures and the individual save is wrapped, so neither can skip this.
+    status_file = None
+    if project:
+        status_path = os.path.join(_memory_base_dir(), "projects", f"{project}-status.md")
+        if os.path.exists(status_path):
+            line = _status_line(
+                today,
+                req.summary,
+                req.decisions,
+                req.blockers,
+                _status_pointer(individual_file, f"daily/{today}.md"),
+            )
+            with open(status_path, "a") as f:
+                f.write(f"\n{line}\n")
+            status_file = f"projects/{project}-status.md"
+            logger.info(
+                "session_end status append: file=%s decisions=%d blockers=%d",
+                status_file, len(req.decisions or []), len(req.blockers or []),
+            )
 
     # Git commit (covers daily + status). One session-end is one logical event,
     # so daily + status stay in a single commit — but it stages an explicit file

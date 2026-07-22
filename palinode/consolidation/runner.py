@@ -16,11 +16,14 @@ import shutil
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any, Callable
 
-# Injectable consolidation callback shaped as
-# (system_prompt, user_prompt) -> (response_text, model_used). Tests can return
-# canned operation JSON while exercising parsing, application, and commit
-# behavior without a live model or a wholesale mock of _consolidate_project.
-# Kept here so the `runner.get_ollama_client` patch point stays stable.
+# The propose→apply seam. The nondeterministic half of consolidation is a
+# single call shaped (system_prompt, user_prompt) -> (response_text, model_used);
+# the deterministic half (parse → executor.apply_operations) runs on its output.
+# Making this callable injectable lets the runner→executor path be driven with
+# canned op-JSON — no live LLM, no wholesale mock of _consolidate_project. The
+# default is the live fallback-chain caller; tests pass a fake that returns
+# deterministic op-JSON. Kept here (not a separate module) so the client-factory
+# patch seam test_fallback relies on — `runner.get_ollama_client` — stays put.
 LlmFn = Callable[[str, str], tuple[str, str]]
 
 import yaml
@@ -28,6 +31,8 @@ import yaml
 from palinode.core.config import config
 from palinode.core import store, embedder, git_tools
 from palinode.core.ollama_client import OllamaError, OllamaRole, get_ollama_client
+from palinode.core.parser import split_frontmatter
+from palinode.consolidation import status_doc
 from palinode.consolidation.op_parse import op_kind, op_reason, parse_operations
 
 logger = logging.getLogger("palinode.consolidation")
@@ -70,7 +75,7 @@ def _touched_files(target: str) -> list[str]:
 
     The op target itself plus its ``-history.md`` sibling, which the executor
     appends to on SUPERSEDE/ARCHIVE/RETRACT. Mirrors the path derivation in
-    ``executor._append_to_history`` so a history append is committed alongside
+    ``executor.append_to_history`` so a history append is committed alongside
     its parent mutation rather than swept up later (#565).
     """
     base = re.sub(r"-status\.md$", "", target)
@@ -269,11 +274,10 @@ def _consolidate_project(
         project_id: Project slug.
         notes: Recent daily notes mentioning this project.
         is_nightly: Use the lightweight nightly prompt.
-        llm_fn: Injectable consolidation callback (#554).
-            ``(system_prompt, user_prompt) ->
+        llm_fn: The propose seam (#554). ``(system_prompt, user_prompt) ->
             (response_text, model_used)``. Defaults to the live fallback-chain
-            caller; tests inject canned operation JSON while exercising the
-            real fact-extraction, parsing, and application path.
+            caller; tests inject a fake returning deterministic op-JSON so the
+            real fact-extraction + parse + executor path runs without an LLM.
 
     Returns:
         Tuple of (List of operation dicts, model_used).
@@ -296,12 +300,15 @@ def _consolidate_project(
     
     with open(target_file) as f:
         file_content = f.read()
-    
-    # Extract facts with IDs
+
+    # Extract facts with IDs — body only. A YAML frontmatter list entry uses the
+    # same `- item` syntax, and harvesting one as a "fact" is what invited the
+    # LLM to propose operations against `entities:`.
+    _, file_body = split_frontmatter(file_content)
     facts = []
-    for match in re.finditer(r'^[\s]*[-*]\s+(.*?)<!-- fact:(\S+) -->', file_content, re.MULTILINE):
+    for match in re.finditer(r'^[\s]*[-*]\s+(.*?)<!-- fact:(\S+) -->', file_body, re.MULTILINE):
         facts.append({"id": match.group(2), "text": match.group(1).strip()})
-    
+
     if not facts:
         logger.info(f"No tagged facts in {target_file}, skipping compaction")
         return [], "primary"
@@ -331,7 +338,7 @@ def _consolidate_project(
 
 Return the operations JSON array."""
 
-    # Call the model through the injectable callback (default: live fallback chain).
+    # Call LLM (via the injectable propose seam; default = live fallback chain).
     try:
         result_text, model_used = (llm_fn or _call_llm_with_fallback)(system_prompt, user_prompt)
     except Exception as e:
@@ -347,7 +354,7 @@ def _check_contradictions(
 ) -> list[dict]:
     """Check new items for contradictions against existing knowledge base.
 
-    ``llm_fn`` is the same injectable callback (#554) — defaults to the live caller;
+    ``llm_fn`` is the same propose seam (#554) — defaults to the live caller;
     tests inject a fake returning a canned contradiction op so the embed/search
     + parse + translate path runs deterministically.
     """
@@ -512,45 +519,75 @@ def _archive_daily_notes(notes: list[dict]) -> None:
         except Exception as e:
             logger.error(f"Failed to archive note {note['filepath']}: {e}")
 
-def _update_status_summary(file_path: str, new_activity: list[dict]) -> None:
+def _fact_ids_before_apply(file_path: str) -> set[str]:
+    """Fact ids present in ``file_path`` before the executor runs.
+
+    Captured pre-apply because ARCHIVE removes a fact's marker from the file —
+    validating an ARCHIVE's ``fact_id`` against post-apply content alone would
+    mark every legitimate archive unresolved.
+    """
+    if not os.path.exists(file_path):
+        return set()
+    with open(file_path, encoding="utf-8") as f:
+        return status_doc.fact_ids(f.read())
+
+
+def _update_status_summary(
+    file_path: str,
+    new_activity: list[dict],
+    known_fact_ids: set[str] | None = None,
+) -> None:
     """
     Update a -status.md file by merging new activity into existing sections
     rather than rewriting from scratch. Preserves longitudinal history.
     Inspired by NousResearch/hermes-agent trajectory compressor (MIT).
 
+    The audit contract (#679) lives in :mod:`palinode.consolidation.status_doc`
+    and is shared verbatim with ``palinode repair-status``: op fields are read
+    through ``op_kind``/``op_reason`` (the dry-run preview's accessors, so the
+    write path can no longer disagree with what ``--dry-run`` showed), a missing
+    kind defaults to ``KEEP`` like the executor, unresolvable ``fact_id``s never
+    reach the file, the log is bounded, and the frontmatter counts are
+    reconciled with the body on every write.
+
     Args:
         file_path: Absolute path to the status markdown file.
-        new_activity: List of operation dicts with keys: op, fact_id, reason.
+        new_activity: List of operation dicts (``op``/``operation``,
+            ``id``/``fact_id``/``ids``, ``reason``/``rationale``).
+        known_fact_ids: Fact ids that existed before ``apply_operations`` ran.
+            Unioned with the ids currently in the file, so both an ARCHIVE'd
+            fact and a freshly minted ``supersedes-*`` id validate.
     """
-    STATUS_SECTIONS = ["Current Work", "Open Tasks", "Recent Progress", "Next Steps", "Consolidation Log"]  # noqa: F841
-
     if not os.path.exists(file_path):
         return  # No existing status file to update
-
-    with open(file_path, 'r') as f:
-        existing = f.read()
 
     if not new_activity:
         return  # Nothing to update
 
-    # Append new activity to "Consolidation Log" section if it exists,
-    # otherwise append at end.
-    timestamp = datetime.now().strftime("%Y-%m-%d")
-    new_entry = f"\n### {timestamp}\n"
-    for item in new_activity:
-        op = item.get("op", item.get("operation", "UPDATE"))
-        fact_id = item.get("fact_id", item.get("id", ""))
-        reason = item.get("reason", "")
-        new_entry += f"- [{op}] {fact_id}: {reason}\n"
+    with open(file_path, encoding="utf-8") as f:
+        existing = f.read()
 
-    if "## Consolidation Log" in existing:
-        updated = existing + new_entry
-    else:
-        updated = existing + f"\n## Consolidation Log\n{new_entry}"
+    valid_ids = set(known_fact_ids or set()) | status_doc.fact_ids(existing)
+    lines = status_doc.render_log_lines(new_activity, valid_ids)
+    if not lines:
+        logger.info(
+            "No auditable operations to log for %s (%d no-op KEEP(s) suppressed)",
+            file_path, len(new_activity),
+        )
+        return
+
+    frontmatter_block, body = split_frontmatter(existing)
+    today = _utc_now().strftime("%Y-%m-%d")
+    max_blocks = getattr(
+        config.consolidation, "status_log_max_blocks",
+        status_doc.DEFAULT_MAX_LOG_BLOCKS,
+    )
+    body = status_doc.merge_log_entry(body, today, lines, max_blocks=max_blocks)
+    updated = status_doc.reconcile_frontmatter(frontmatter_block + body)
 
     git_tools.write_memory_file(file_path, updated)
 
-    logger.info(f"Updated status summary: {file_path} (+{len(new_activity)} entries)")
+    logger.info(f"Updated status summary: {file_path} (+{len(lines)} entries)")
 
 
 def _proposed_changes(target: str, operations: list[dict]) -> list[dict[str, str]]:
@@ -617,12 +654,13 @@ def run_consolidation(lookback_days: int | None = None, dry_run: bool = False, l
                 logger.info(f"Previewed compaction for {project_id}: {len(operations)} operation(s)")
                 continue
 
+            pre_apply_ids = _fact_ids_before_apply(target)
             stats = apply_operations(target, operations)
             for k, v in stats.items():
                 total_stats[k] = total_stats.get(k, 0) + v
 
             # Iteratively append operations to the status file, preserving history
-            _update_status_summary(target, operations)
+            _update_status_summary(target, operations, known_fact_ids=pre_apply_ids)
 
             # Track exactly the files this project's compaction touched so the
             # commit stages only them (one-mutation-one-commit).
@@ -734,11 +772,12 @@ def run_nightly(lookback_days: int | None = None, dry_run: bool = False, llm_fn:
                 logger.info(f"Previewed nightly compaction for {project_id}: {len(operations)} operation(s)")
                 continue
 
+            pre_apply_ids = _fact_ids_before_apply(target)
             stats = apply_operations(target, operations, nightly_policy=True)
             for k, v in stats.items():
                 total_stats[k] = total_stats.get(k, 0) + v
 
-            _update_status_summary(target, operations)
+            _update_status_summary(target, operations, known_fact_ids=pre_apply_ids)
 
             mutated_files.extend(_touched_files(target))
 

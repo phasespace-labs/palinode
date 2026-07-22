@@ -177,7 +177,7 @@ id: secret-doc
 scope: org/phasespace
 visibility: restricted
 access:
-  - member/paul
+  - member/alice
   - harness/claude-code
 ---
 AWS rotation schedule.
@@ -185,7 +185,7 @@ AWS rotation schedule.
     meta, _ = parse_markdown(content)
     parsed = parse_scope(meta)
     assert parsed["visibility"] == "restricted"
-    assert parsed["access"] == ["member/paul", "harness/claude-code"]
+    assert parsed["access"] == ["member/alice", "harness/claude-code"]
 
 
 def test_access_defaults_to_empty_list_when_absent():
@@ -202,15 +202,15 @@ Body.
 
 def test_access_non_list_coerces_to_empty():
     # Malformed: scalar where a list was expected.
-    parsed = parse_scope({"access": "member/paul"})
+    parsed = parse_scope({"access": "member/alice"})
     assert parsed["access"] == []
 
 
 def test_access_filters_blank_entries():
     parsed = parse_scope(
-        {"access": ["member/paul", "", None, "  ", "harness/claude-code"]}
+        {"access": ["member/alice", "", None, "  ", "harness/claude-code"]}
     )
-    assert parsed["access"] == ["member/paul", "harness/claude-code"]
+    assert parsed["access"] == ["member/alice", "harness/claude-code"]
 
 
 # ---------- backwards compatibility ----------
@@ -263,7 +263,7 @@ category: insight
 core: true
 entities:
   - project/palinode
-  - person/paul
+  - person/alice
 scope: project/palinode
 visibility: private
 canonical_question: How does scope interact with existing metadata?
@@ -274,7 +274,7 @@ Body.
     # Existing fields untouched.
     assert meta["category"] == "insight"
     assert meta["core"] is True
-    assert meta["entities"] == ["project/palinode", "person/paul"]
+    assert meta["entities"] == ["project/palinode", "person/alice"]
     # canonical_question prefix still applied to the first section.
     assert sections[0]["content"].startswith(
         "Q: How does scope interact with existing metadata?\n\n"

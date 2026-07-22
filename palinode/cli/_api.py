@@ -292,6 +292,21 @@ class PalinodeAPI:
         response.raise_for_status()
         return response.json()
 
+    def archive(
+        self,
+        file_path: str,
+        reason: str | None = None,
+        superseded_by: str | None = None,
+    ):
+        payload: dict = {"file_path": file_path}
+        if reason is not None:
+            payload["reason"] = reason
+        if superseded_by is not None:
+            payload["superseded_by"] = superseded_by
+        response = self.client.post("/archive", json=payload)
+        response.raise_for_status()
+        return response.json()
+
     def archive_expired(self, dry_run: bool = False):
         response = self.client.post("/archive-expired", json={"dry_run": dry_run})
         response.raise_for_status()

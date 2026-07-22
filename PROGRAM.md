@@ -54,7 +54,7 @@ Extract only things that will be useful **across sessions** — facts that a fut
 
 **Commitments and action items** — things promised to people, deadlines agreed to, follow-ups needed.
 
-- *Example:* "Alice will follow up with legal about copyright clearance." → ActionItem.
+- *Example:* "Alice will follow up with the designer about the homepage mockup." → ActionItem.
 - *Example:* "Q3 Marketing Launch due Week 10 (April 14)." → ActionItem linked to project/marketing-launch.
 
 ### Sometimes extract
@@ -63,7 +63,7 @@ Extract only things that will be useful **across sessions** — facts that a fut
 
 - *Example:* "Alice uses VS Code + Gemini 3.1 Pro (High) as default for executing milestone build specs." → Preference (tool + workflow).
 - *Example:* "Don't comment on time of day or suggest quitting." → Preference (communication). Already known — likely NOOP.
-- *NOT example:* Paul used vim once in a session → don't infer "prefers vim." Single instances aren't preferences.
+- *NOT example:* Alice used vim once in a session → don't infer "prefers vim." Single instances aren't preferences.
 
 **Technical context** — extract when it represents a *decision*, not just mentioned in passing.
 
@@ -120,7 +120,7 @@ id: person-{slug}
 category: person
 name: Full Name
 aliases: [nickname, shortened]
-role: their relationship to Paul
+role: their relationship to the user
 core: false  # set true for inner circle
 entities: [project/related-project]
 last_contact: 2026-03-22
@@ -129,7 +129,7 @@ last_updated: 2026-03-22T16:00:00Z
 # Full Name
 
 ## Context
-Who they are, how Paul knows them, what their role is.
+Who they are, how the user knows them, what their role is.
 
 ## Preferences & Communication
 How they like to work, communication style, things to remember.
@@ -208,10 +208,10 @@ The **identity sections** (What This Is, People, Architecture, Key Files) change
 ---
 id: decision-{slug}
 category: decision
-status: active | superseded
+status: active | archived   # `archived` is the only terminal value — it is what excludes from recall
 entities: [project/affected-project, person/decision-maker]
 supersedes: []  # list of decision IDs this replaces
-superseded_by: ""  # if this decision was later overridden
+superseded_by: ""  # what replaced this, when superseded — records the successor, does NOT affect recall
 confidence: 0.9
 created: 2026-03-22T16:00:00Z
 last_updated: 2026-03-22T16:00:00Z
@@ -275,8 +275,25 @@ last_updated: 2026-03-22T16:00:00Z
 - Bullet list of the important takeaways.
 
 ## Relevance
-Why this matters for Paul's work.
+Why this matters for the user's work.
 ```
+
+### File tiers — what is a memory, and what isn't
+
+Not every file under `PALINODE_DIR` is a memory. The schemas above define the **memory tier**: one file per remembered thing, each carrying the required `id`, `category`, and `type` frontmatter. Alongside it sits a **structural tier** that the required-frontmatter contract does not apply to.
+
+> **The rule.** A file is a **memory** if it lives in one of the memory-category directories the save path writes to — `people/`, `projects/`, `decisions/`, `insights/`, `research/`, `inbox/` — and holds exactly one remembered thing. It must carry `id`, `category`, and `type`.
+>
+> Everything else is **structural**: `daily/`, `archive/`, `logs/`, `prompts/`, `specs/`, and top-level documents in the memory dir. Structural files are exempt from the required-frontmatter contract, are not typed, and **must not be given invented frontmatter to make them look conformant**.
+
+**`daily/{date}.md` is a log, not a memory.** Session-end *appends* to it, so one file accumulates every session of that day — N distinct memories in one document, which no single set of frontmatter can honestly describe. Nothing is lost to the memory tier by leaving it untyped: session-end **dual-writes**, persisting each session separately as a typed `ProjectSnapshot` (or `Insight`) with full frontmatter, entities, and an embedding. The daily note is the transcript those were extracted *from*.
+
+What follows from the tiering, and can be relied on:
+
+- **`palinode lint` never reports a `daily/` file as missing frontmatter**, and never counts one in `total_files` — numerator and denominator now cover the same set. It also never reports one for **wiki drift**: that check measures agreement between frontmatter `entities:` and body `[[wikilinks]]`, and a file with no `entities:` contract is not party to that agreement, so a wikilink written in a session summary is prose, not drift. (Both exemptions are implemented for `daily/` only: lint still flags top-level documents and `specs/`, which the rule above also calls structural. Those are a known residual, not an invitation to give them frontmatter.)
+- **Frontmatter backfills skip the structural tier** — `palinode migrate frontmatter` and the auto-description backfill both stop at the memory-category directories. Writing fields there is a no-op the backfill would otherwise re-attempt forever.
+- **Recall still reaches daily notes**, ranked below memories (`search.daily_penalty`); `include_daily` opts back in at full rank. Structural does not mean invisible.
+- **To make something in a daily note durable, write it as a memory.** Do not add frontmatter to the log.
 
 ---
 
@@ -329,7 +346,7 @@ last_updated: 2026-04-26T14:30:00Z
 # Decision: Drop legacy browser support
 
 ## Statement
-[[Alice Smith]] and Paul agreed to drop legacy browser support from the [[checkout-redesign]] roadmap.
+[[Alice Smith]] and Bob agreed to drop legacy browser support from the [[checkout-redesign]] roadmap.
 
 ## Rationale
 Not relevant for the target user base; the test matrix cost outweighed the coverage value.
@@ -400,20 +417,33 @@ When you extract a candidate memory, ALWAYS check for existing related memories 
    - **Same fact, no change** → `NOOP` (most common — don't create duplicates)
    - **Same entity, updated info** → `UPDATE` (edit the existing file, update `last_updated`)
    - **New fact, no conflict** → `ADD` (create new file)
-   - **Direct contradiction** → `SUPERSEDE` (mark old as superseded, create new with `supersedes: [old_id]`)
+   - **Direct contradiction** → `SUPERSEDE` (retire old with `status: archived` + `superseded_by: <new-id>`, create new with `supersedes: [old_id]`)
    - **Obsolete/wrong** → `ARCHIVE` (move to `status: archived`, never hard-delete)
 
 ### Never hard-delete
 
-Mark as archived or superseded. The audit trail matters.
+Mark as archived. The audit trail matters.
 
 `ARCHIVE` (and the old-version side of `SUPERSEDE`) moves the fact out of the
 source file and into a `{base}-history.md` sibling. That history file carries
 `status: archived` frontmatter, which the indexer propagates to its chunks, so
-`config.search.exclude_status` suppresses the archived/superseded content from
+`config.search.exclude_status` suppresses the retired content from
 default recall while keeping it indexed and retrievable on demand (the audit
 trail). The fact is never hard-deleted — it is relocated to history and made
 recall-invisible by default, not erased.
+
+**`archived` is the only terminal status, and it is what controls recall.**
+Both verbs end there; they differ only in whether a successor is named.
+`config.search.exclude_status` defaults to `["archived"]` — **`superseded` is
+not in it, and nothing anywhere filters on it**, so a memory marked
+`status: superseded` stays fully recallable, which is the opposite of what
+retiring it is for. The successor belongs in the **`superseded_by`** field,
+which records *what replaced this* without being load-bearing for recall.
+
+Keep the two axes separate when reading or writing this: `status` decides
+whether a memory is surfaced; `superseded_by` decides what it points at. A
+supersession that sets only `superseded_by` has documented a replacement
+without retiring anything.
 
 ### Merging into existing files
 
@@ -440,7 +470,9 @@ For each project with daily notes from the past week:
 Scan for decisions about the same project+topic that contradict each other:
 
 - Compare: does the newer one clearly replace the older?
-- If yes: mark old as `status: superseded`, add `superseded_by: new-id`
+- If yes: mark old as `status: archived`, add `superseded_by: new-id`
+  (`archived` is what suppresses recall — see "Never hard-delete". Marking it
+  `superseded` leaves the retired decision fully recallable.)
 - If complementary: both stay `status: active`
 - If unclear: leave both active, note the tension in an Insight
 

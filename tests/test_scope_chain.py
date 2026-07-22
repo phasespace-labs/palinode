@@ -27,7 +27,7 @@ def test_scope_chain_narrow_to_broad_order():
         agent="researcher",
         harness="claude-code",
         project="palinode",
-        member="paul",
+        member="alice",
         org="phasespace",
     )
     assert chain.as_list() == [
@@ -35,14 +35,14 @@ def test_scope_chain_narrow_to_broad_order():
         "agent/researcher",
         "harness/claude-code",
         "project/palinode",
-        "member/paul",
+        "member/alice",
         "org/phasespace",
     ]
 
 
 def test_scope_chain_drops_unset_levels():
-    chain = ScopeChain(project="palinode", member="paul")
-    assert chain.as_list() == ["project/palinode", "member/paul"]
+    chain = ScopeChain(project="palinode", member="alice")
+    assert chain.as_list() == ["project/palinode", "member/alice"]
 
 
 def test_scope_chain_is_frozen():
@@ -84,7 +84,7 @@ def test_resolve_scope_chain_reads_env_vars(monkeypatch):
         monkeypatch,
         env={
             "PALINODE_ORG": "phasespace",
-            "PALINODE_MEMBER": "paul",
+            "PALINODE_MEMBER": "alice",
             "PALINODE_HARNESS": "claude-code",
         },
     )
@@ -93,7 +93,7 @@ def test_resolve_scope_chain_reads_env_vars(monkeypatch):
         "session/s1",
         "harness/claude-code",
         "project/palinode",
-        "member/paul",
+        "member/alice",
         "org/phasespace",
     ]
 
@@ -102,7 +102,7 @@ def test_resolve_scope_chain_multi_agent(monkeypatch):
     cfg = _fresh_config(
         monkeypatch,
         env={
-            "PALINODE_MEMBER": "paul",
+            "PALINODE_MEMBER": "alice",
             "PALINODE_AGENT": "researcher",
         },
     )

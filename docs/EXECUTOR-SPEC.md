@@ -7,7 +7,8 @@ checkout, so tests and future ports can assert this contract without
 reverse-engineering implementation details.
 
 The source of truth for memory remains markdown files on disk. SQLite search
-indexes are derived state.
+indexes are derived state. Related private derivation notes are intentionally
+not quoted or linked from this public spec.
 
 ## Scope
 
@@ -263,7 +264,14 @@ caller-layer paths such as the consolidation runner and write-time dedup flow.
 The returned stats dict is the executor's auditable record of what happened
 inside this call.
 
-## Unsupported Operations
+## Divergence Notes
 
-Current `apply_operations` dispatch handles only the six operations listed in
-this specification. Explicit unknown operation strings are silently skipped.
+DIVERGENCE / TODO: ADR-016 and private derivation notes describe human
+actor-class operations such as `CREATE`, `REVISE`, `APPROVE`, and `REJECT`, but
+current `apply_operations` dispatch handles only the six AI operations listed
+in this spec. Explicit unknown op strings are silently skipped.
+
+DIVERGENCE / TODO: In this checkout,
+`palinode/consolidation/op_registry.py` is not present, despite derivation
+notes referencing it. Current executor behavior is the direct `if`/`elif`
+dispatch described above.

@@ -87,9 +87,12 @@ ADMIN_EXEMPT_OPERATIONS: frozenset[str] = frozenset(
         "rebuild-fts",
         "split-layers",
         "bootstrap-fact-ids",
-        # One-off importers (CLI + API only)
+        # One-off importers / migrations (CLI + API only; the frontmatter
+        # backfill is CLI-only by design — a whole-store mutation should not be
+        # remotely triggerable over HTTP)
         "migrate-openclaw",
         "migrate-mem0",
+        "migrate-frontmatter",
         # Local / operational (CLI only)
         "doctor",
         "start",
@@ -283,6 +286,26 @@ REGISTRY: tuple[Operation, ...] = (
         cli_command="consolidate",
         mcp_tool="palinode_consolidate",
         api_endpoint=("POST", "/consolidate"),
+        exempt_surfaces=frozenset({"plugin"}),
+        known_drift={},
+    ),
+    # ── archive (on-demand ARCHIVE / SUPERSEDE for one named memory) ──
+    # The addressable counterpart to the TTL sweep below: retires *this*
+    # memory rather than everything whose expiry passed. `superseded_by` is
+    # what makes it a SUPERSEDE — one verb, one optional argument, because
+    # both end at `status: archived` and differ only in whether a successor
+    # is named. Plugin-exempt like its maintenance/git-provenance siblings
+    # (archive_expired, consolidate, rollback).
+    Operation(
+        name="archive",
+        canonical_params=(
+            CanonicalParam(name="file_path", type="string", required=True),
+            CanonicalParam(name="reason", type="string"),
+            CanonicalParam(name="superseded_by", type="string"),
+        ),
+        cli_command="archive",
+        mcp_tool="palinode_archive",
+        api_endpoint=("POST", "/archive"),
         exempt_surfaces=frozenset({"plugin"}),
         known_drift={},
     ),
@@ -553,9 +576,14 @@ INVENTORY_INFRA: dict[Surface, frozenset[str]] = {
             "init",
             "mcp-config",
             "mcp-smoke",
+            "migrate frontmatter",
             "migrate openclaw",
             "migrate-mem0",
             "obsidian-sync",
+            # One-time local repair of rotted projects/*-status.md files: it
+            # rewrites files on disk, exposes no memory-semantic operation, and
+            # is deliberately CLI-only (dry-run by default, human commits).
+            "repair-status",
             "retrieval-stats",
             "worktree-reconcile",
         }

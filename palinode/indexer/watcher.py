@@ -7,9 +7,11 @@ operations enforcing real-time DB synchronization boundaries.
 """
 from __future__ import annotations
 
+import atexit
 import time
 import os
 import logging
+import weakref
 
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileModifiedEvent, FileCreatedEvent, FileDeletedEvent, DirModifiedEvent, DirCreatedEvent, DirDeletedEvent
@@ -25,6 +27,16 @@ from datetime import UTC, datetime
 
 logger = logging.getLogger("palinode.watcher")
 logger.setLevel(logging.INFO)
+
+# Debounce windows for the two background retry paths. Named (rather than magic
+# numbers at the call sites) so shutdown tests can shorten them deterministically.
+SUMMARY_DEBOUNCE_S = 5.0
+DESCRIPTION_DEBOUNCE_S = 10.0
+
+# How long ``shutdown()`` waits for a debounce timer thread to exit. A cancelled
+# timer that has not fired yet exits immediately; one already inside its blocking
+# urlopen cannot be interrupted, so the wait is bounded rather than indefinite.
+SHUTDOWN_JOIN_TIMEOUT_S = 2.0
 
 
 def _utc_now() -> datetime:
@@ -53,6 +65,34 @@ fh.setFormatter(JsonlFormatter())
 logger.addHandler(fh)
 
 
+# Every live handler, so its debounce timers can be stopped deterministically at
+# process exit. Weak references: registration must never be the thing keeping a
+# handler alive. A *pending* timer holds a strong reference to its handler
+# through the bound method, so anything worth cancelling is still reachable here.
+_live_handlers: weakref.WeakSet[PalinodeHandler] = weakref.WeakSet()
+_live_handlers_lock = threading.Lock()
+
+
+def shutdown_handlers(timeout: float = SHUTDOWN_JOIN_TIMEOUT_S) -> None:
+    """Stop every live handler's debounce timers and wait for their threads.
+
+    Registered with ``atexit`` so no watcher timer is still running when the
+    interpreter finalizes. That was the #677 abort: a daemon timer holding the
+    stderr buffer lock while the main thread flushed it produced
+    ``_enter_buffered_busy ... at interpreter shutdown`` (SIGABRT, exit 134)
+    *after* every test had already passed.
+
+    Idempotent and safe to call from anywhere (tests call it at session end).
+    """
+    with _live_handlers_lock:
+        handlers = list(_live_handlers)
+    for handler in handlers:
+        handler.shutdown(timeout=timeout)
+
+
+atexit.register(shutdown_handlers)
+
+
 class PalinodeHandler(FileSystemEventHandler):
     """File Event System Handler wrapping Palinode embedding lifecycle hooks."""
 
@@ -64,9 +104,31 @@ class PalinodeHandler(FileSystemEventHandler):
         self._description_timer: threading.Timer | None = None
         # Files needing description retry, accumulated between debounce ticks.
         self._description_pending: list[str] = []
+        self._stopped = False
+        with _live_handlers_lock:
+            _live_handlers.add(self)
+
+    def shutdown(self, timeout: float = SHUTDOWN_JOIN_TIMEOUT_S) -> None:
+        """Cancel pending debounce timers and wait for their threads to exit.
+
+        Idempotent. After this the handler refuses to arm new timers, so a
+        late file event on a shut-down handler is a no-op rather than a
+        resurrected background thread.
+        """
+        self._stopped = True
+        for attr in ("_summary_timer", "_description_timer"):
+            timer: threading.Timer | None = getattr(self, attr)
+            if timer is None:
+                continue
+            setattr(self, attr, None)
+            timer.cancel()
+            timer.join(timeout)
+        self._description_pending.clear()
 
     def _trigger_summaries(self) -> None:
         """Hits the summary generation API to auto-fill missing summaries."""
+        if self._stopped:
+            return
         logger.info("Triggering POST /generate-summaries from watcher...")
         try:
             # B310 rationale - hardcoded loopback URL to local palinode-api; no user-controlled scheme
@@ -77,9 +139,11 @@ class PalinodeHandler(FileSystemEventHandler):
 
     def _schedule_summary_generation(self) -> None:
         """Debounces the summary generation call."""
+        if self._stopped:
+            return
         if self._summary_timer is not None:
             self._summary_timer.cancel()
-        self._summary_timer = threading.Timer(5.0, self._trigger_summaries)
+        self._summary_timer = threading.Timer(SUMMARY_DEBOUNCE_S, self._trigger_summaries)
         self._summary_timer.daemon = True
         self._summary_timer.start()
 
@@ -95,6 +159,8 @@ class PalinodeHandler(FileSystemEventHandler):
         Runs from a debounced timer after file events. Logs WARNING if Ollama
         is still unavailable so the operator can correlate.
         """
+        if self._stopped:
+            return
         pending = list(self._description_pending)
         self._description_pending.clear()
         if not pending:
@@ -125,12 +191,17 @@ class PalinodeHandler(FileSystemEventHandler):
         """Debounce description fill calls across multiple rapid file events.
 
         Accumulates filepaths; fires _fill_pending_descriptions once after
-        10 s of inactivity so a batch of file events doesn't hammer the API.
+        DESCRIPTION_DEBOUNCE_S of inactivity so a batch of file events doesn't
+        hammer the API.
         """
+        if self._stopped:
+            return
         self._description_pending.append(filepath)
         if self._description_timer is not None:
             self._description_timer.cancel()
-        self._description_timer = threading.Timer(10.0, self._fill_pending_descriptions)
+        self._description_timer = threading.Timer(
+            DESCRIPTION_DEBOUNCE_S, self._fill_pending_descriptions
+        )
         self._description_timer.daemon = True
         self._description_timer.start()
         
@@ -295,8 +366,14 @@ def main() -> None:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
+        pass
+    finally:
+        # Stop the observer *and* the handler's debounce timers before joining,
+        # so Ctrl-C exits promptly instead of leaving a 10 s timer to fire into
+        # a half-torn-down interpreter.
         observer.stop()
-    observer.join()
+        event_handler.shutdown()
+        observer.join()
 
 
 if __name__ == "__main__":

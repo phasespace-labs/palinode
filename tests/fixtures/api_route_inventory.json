@@ -1,5 +1,11 @@
 [
   [
+    "/archive",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/archive-expired",
     [
       "POST"

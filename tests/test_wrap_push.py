@@ -50,7 +50,7 @@ def test_wrap_body_surfaces_non_remote_push_failures():
         "print the error" in body
         or "surface" in body
         or "ask the user" in body
-        or "ask Paul" in body
+        or "ask Alice" in body
         or "abort" in body
     )
     assert has_error_surface, (

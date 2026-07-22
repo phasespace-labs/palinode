@@ -109,14 +109,20 @@ def test_hook_script_uses_slurp_extraction():
     were fragile under `set -o pipefail`: downstream early-exit triggers
     SIGPIPE on jq. #151 patched MSG_COUNT with `|| true`; #267 + #257 moved
     both to slurp, which has no early-exit downstream consumer and thus
-    no SIGPIPE class to swallow. Guard against regression."""
+    no SIGPIPE class to swallow. Guard against regression.
+
+    Asserted on the *slurp + selector* shape rather than one literal string:
+    the FIRST_PROMPT filter grew a harness-markup strip in #682 and is now
+    multi-line, but the property this guard exists for — `jq -s`, no piped
+    early-exit consumer — is unchanged."""
     # Old fragile patterns must be absent
     assert "grep -c '.' || true" not in HOOK_SCRIPT
     assert "head -1 | cut -c1-200)" not in HOOK_SCRIPT
     assert "head -1 | cut -c1-200 || true" not in HOOK_SCRIPT
     # New slurp patterns must be present
     assert "jq -r -s 'map(select(.type == \"user\") | .message.content // empty) | length'" in HOOK_SCRIPT
-    assert "jq -r -s 'map(select(.type == \"user\") | .message.content // empty) | .[0] // \"\"'" in HOOK_SCRIPT
+    assert HOOK_SCRIPT.count("jq -r -s") == 2, "both extractions must slurp"
+    assert 'map(select(.type == "user") | .message.content // empty) | .[0] // ""' in HOOK_SCRIPT
     # Safe default for MSG_COUNT must remain
     assert "MSG_COUNT=${MSG_COUNT:-0}" in HOOK_SCRIPT
 

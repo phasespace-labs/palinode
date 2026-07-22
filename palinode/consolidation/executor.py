@@ -1,10 +1,14 @@
 """
 Compaction Executor
 
-Validates and applies structured operations
-(KEEP/UPDATE/MERGE/SUPERSEDE/ARCHIVE/RETRACT) to markdown memory files.
-Operations have explicit preconditions and produce auditable, reversible
-changes that callers can record in git.
+Applies structured operations (KEEP/UPDATE/MERGE/SUPERSEDE/ARCHIVE/RETRACT)
+to markdown memory files. The LLM decides what to do; the executor
+does it deterministically.
+
+This separation ensures:
+- LLMs never touch files directly
+- Every change is a git commit with clear provenance
+- Operations are auditable and reversible
 """
 from __future__ import annotations
 
@@ -18,6 +22,7 @@ import yaml
 
 from palinode.core import git_tools
 from palinode.core.config import config
+from palinode.core.parser import split_frontmatter
 from palinode.consolidation.op_parse import op_kind
 
 logger = logging.getLogger("palinode.consolidation.executor")
@@ -140,6 +145,15 @@ def apply_operations(file_path: str, operations: list[dict], *, nightly_policy: 
     with open(file_path) as f:
         content = f.read()
 
+    # Every fact operation below matches markdown list syntax with a whole-file
+    # MULTILINE regex. YAML frontmatter uses the same `- item` syntax, so an op
+    # could (and did) rewrite an `entities:` entry with LLM-supplied prose —
+    # producing frontmatter that no longer strict-parses. Split once and mutate
+    # only the body; the frontmatter block is preserved byte-for-byte
+    # (PROPOSE_CONTRADICTS below is the sole intentional frontmatter writer, and
+    # it goes through the typed-links merger).
+    frontmatter_block, body = split_frontmatter(content)
+
     # ADR-015 §2.2 §3: a memory declaring `update_policy: replace` is a
     # living/current-state document. Consolidation may UPDATE it in place but
     # must NEVER SUPERSEDE it (strikethrough + spawn a "supersedes-" sibling)
@@ -186,16 +200,16 @@ def apply_operations(file_path: str, operations: list[dict], *, nightly_policy: 
             fact_id = op.get("id")
             new_text = op.get("new_text", "")
             if fact_id and new_text:
-                updated_content = _update_fact(content, fact_id, new_text)
-                if updated_content != content:
-                    content = updated_content
+                updated_body = _update_fact(body, fact_id, new_text)
+                if updated_body != body:
+                    body = updated_body
                     stats["updated"] += 1
-        
+
         elif op_type == "MERGE":
             ids = op.get("ids", [])
             new_text = op.get("new_text", "")
             if ids and new_text:
-                if nightly_policy and not _nightly_merge_allowed(content, ids):
+                if nightly_policy and not _nightly_merge_allowed(body, ids):
                     id_list = ", ".join(ids)
                     logger.warning(
                         f"MERGE rejected by nightly policy: cross-date or undated facts "
@@ -203,37 +217,37 @@ def apply_operations(file_path: str, operations: list[dict], *, nightly_policy: 
                     )
                     stats["merge_rejected"] += 1
                     continue
-                merged_content = _merge_facts(content, ids, new_text)
-                if merged_content != content:
-                    content = merged_content
+                merged_body = _merge_facts(body, ids, new_text)
+                if merged_body != body:
+                    body = merged_body
                     stats["merged"] += 1
-        
+
         elif op_type == "SUPERSEDE":
             fact_id = op.get("id")
             new_text = op.get("new_text", "")
             reason = op.get("reason", "")
             if fact_id and new_text:
-                superseded_content = _supersede_fact(content, fact_id, new_text, reason, file_path)
-                if superseded_content != content:
-                    content = superseded_content
+                superseded_body = _supersede_fact(body, fact_id, new_text, reason, file_path)
+                if superseded_body != body:
+                    body = superseded_body
                     stats["superseded"] += 1
-        
+
         elif op_type == "ARCHIVE":
             fact_id = op.get("id")
             reason = op.get("rationale", op.get("reason", ""))
             if fact_id:
-                archived_content = _archive_fact(content, fact_id, reason, file_path)
-                if archived_content != content:
-                    content = archived_content
+                archived_body = _archive_fact(body, fact_id, reason, file_path)
+                if archived_body != body:
+                    body = archived_body
                     stats["archived"] += 1
 
         elif op_type == "RETRACT":
             fact_id = op.get("id")
             reason = op.get("reason", op.get("rationale", ""))
             if fact_id:
-                retracted_content = _retract_fact(content, fact_id, reason, file_path)
-                if retracted_content != content:
-                    content = retracted_content
+                retracted_body = _retract_fact(body, fact_id, reason, file_path)
+                if retracted_body != body:
+                    body = retracted_body
                     stats["retracted"] += 1
 
         elif op_type == "PROPOSE_CONTRADICTS":
@@ -258,16 +272,19 @@ def apply_operations(file_path: str, operations: list[dict], *, nightly_policy: 
                 )
                 norm = []
             if norm:
+                current = frontmatter_block + body
                 proposed_content = merge_link_refs_into_content(
-                    content, "contradicts", norm
+                    current, "contradicts", norm
                 )
-                if proposed_content != content:
-                    content = proposed_content
+                if proposed_content != current:
+                    # The merger re-dumps the whole document; re-split so the
+                    # remaining ops keep operating on the body alone.
+                    frontmatter_block, body = split_frontmatter(proposed_content)
                     stats["contradicts_proposed"] += 1
 
     # Write back
-    _atomic_write_text(file_path, content)
-    
+    _atomic_write_text(file_path, frontmatter_block + body)
+
     return stats
 
 
@@ -332,7 +349,7 @@ def _supersede_fact(content: str, fact_id: str, new_text: str,
         return content
     
     # Also append to history file
-    _append_to_history(file_path, fact_id, f"Superseded ({now}): {reason}")
+    append_to_history(file_path, fact_id, f"Superseded ({now}): {reason}")
     
     return updated_content
 
@@ -347,9 +364,9 @@ def _archive_fact(content: str, fact_id: str, reason: str, file_path: str) -> st
     match = pattern.search(content)
     if match:
         archived_text = match.group(2).strip()
-        _append_to_history(file_path, fact_id, 
+        append_to_history(file_path, fact_id,
                           f"Archived: {archived_text} (reason: {reason})")
-    
+
     # Remove from main file
     content = pattern.sub('', content)
     return content
@@ -378,7 +395,7 @@ def _retract_fact(content: str, fact_id: str, reason: str, file_path: str) -> st
     if substitutions == 0:
         return content
 
-    _append_to_history(file_path, fact_id, f"Retracted ({now}): {reason}")
+    append_to_history(file_path, fact_id, f"Retracted ({now}): {reason}")
 
     return updated_content
 
@@ -405,13 +422,16 @@ def _ensure_archived_frontmatter(content: str) -> str:
     return content[:fm_match.start(1)] + new_fm_body + content[fm_match.end(1):]
 
 
-def _append_to_history(file_path: str, fact_id: str, text: str) -> None:
-    """Append an entry to the corresponding history file.
+def append_to_history(file_path: str, fact_id: str, text: str) -> str:
+    """Append an entry to the corresponding history file; return its path.
 
     The history file carries ``status: archived`` frontmatter so its content
     (archived + superseded facts) is suppressed from default recall while
     remaining indexed and retrievable on demand — preserving the audit trail
     PROGRAM.md's "never hard-delete" contract requires (#485).
+
+    Returns the history-file path so callers that must stage it in the same
+    commit (the on-demand archive op, #664) don't re-derive the naming rule.
     """
     base = re.sub(r'-status\.md$', '', file_path)
     base = re.sub(r'\.md$', '', base)
@@ -428,3 +448,4 @@ def _append_to_history(file_path: str, fact_id: str, text: str) -> None:
         history_content = "---\ncategory: history\ncore: false\nstatus: archived\n---\n\n# History\n\n"
 
     _atomic_write_text(history_path, history_content + entry)
+    return history_path

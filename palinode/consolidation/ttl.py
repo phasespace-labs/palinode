@@ -31,8 +31,7 @@ import os
 import re
 from datetime import UTC, datetime, timedelta
 
-import frontmatter
-
+from palinode.consolidation.archive import set_archived_frontmatter
 from palinode.core import parser, store, git_tools
 from palinode.core.config import config
 
@@ -140,11 +139,12 @@ def _iter_memory_files(root: str):
 
 
 def _archive_file(path: str) -> None:
-    """Set ``status: archived`` in a file's frontmatter, preserving the body."""
-    with open(path, encoding="utf-8") as f:
-        post = frontmatter.load(f)
-    post["status"] = "archived"
-    git_tools.write_memory_file(path, frontmatter.dumps(post) + "\n")
+    """Set ``status: archived`` in a file's frontmatter, preserving the body.
+
+    Thin alias for the shared frontmatter-flip primitive (#664) so the sweep and
+    the on-demand op cannot drift on what "archived" writes.
+    """
+    set_archived_frontmatter(path)
 
 
 def archive_expired(now: datetime | None = None, dry_run: bool = False) -> dict:

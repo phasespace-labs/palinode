@@ -1,4 +1,15 @@
 {
+  "palinode_archive": {
+    "description": "Retire one specific memory that is wrong or obsolete. Sets `status: archived` so it leaves default recall, records the reason in the file's history sibling, and commits \u2014 never hard-deletes, so the content stays auditable. Pass `superseded_by` to name the memory that replaces it (a SUPERSEDE rather than a plain archive). Use this instead of re-saving a memory with a hand-written tombstone body: that leaves the wrong content live in search.",
+    "required": [
+      "file_path"
+    ],
+    "params": {
+      "file_path": {},
+      "reason": {},
+      "superseded_by": {}
+    }
+  },
   "palinode_archive_expired": {
     "description": "Archive ephemeral memories whose `expires_at` has passed (ADR-015 \u00a72.3 TTL regime). Deterministic + idempotent \u2014 flips expired memories to status: archived so they drop out of default recall while staying on disk. Set `dry_run=true` to preview.",
     "required": [],

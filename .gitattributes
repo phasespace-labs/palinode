@@ -1,0 +1,18 @@
+# Append-only files: take both sides on merge instead of conflicting.
+#
+# Every feature branch adds a bullet under `## Unreleased`, always at the same
+# offset, so N parallel PRs produce N-1 conflicts — each one resolved the same
+# way (keep both) and each one costing a push and a full CI cycle. The v0.9.5
+# cycle had six parallel branches and burned five rounds of this.
+#
+# `union` is a built-in git merge driver: on conflict it keeps both sides in
+# order rather than writing markers. That is exactly right for an append-only
+# log and exactly wrong for anything where the two sides might be alternatives,
+# so keep this list narrow — one entry, deliberately.
+#
+# This does NOT remove the need to look: union can still put a bullet under the
+# wrong heading if a branch introduces its own `### Added`/`### Fixed`. The
+# standard headings are pre-seeded under `## Unreleased` so branches add bullets
+# under existing headings instead of creating duplicates. Leave them in place
+# when you cut a release.
+docs/CHANGELOG.md merge=union

@@ -85,8 +85,24 @@ if [ "$MSG_COUNT" -lt "$MIN_MESSAGES" ]; then
 fi
 
 PROJECT=$(basename "$CWD" 2>/dev/null || echo "unknown")
-FIRST_PROMPT=$(jq -r -s 'map(select(.type == "user") | .message.content // empty) | .[0] // ""' \
-  "$TRANSCRIPT_PATH" 2>/dev/null | cut -c1-200)
+
+# The first user turn is a *topic hint*, not content — and in Claude Code it is
+# routinely wrapped in harness markup (slash-command expansion, system
+# reminders, bash/IDE blocks). Left in, that markup is embedded and indexed as
+# though it were what the session was about (#682). Strip it here, at the
+# source: wrapper blocks whose body is machinery lose the whole block; the
+# command-name tags lose only the tags, keeping the human-meaningful text. A
+# `type` guard keeps gsub safe when `content` is a block array rather than a
+# string, and `|| echo ""` keeps a jq failure from tripping `set -e`.
+FIRST_PROMPT=$(jq -r -s '
+    map(select(.type == "user") | .message.content // empty) | .[0] // ""
+    | if type == "string" then . else tojson end
+    | gsub("<system-reminder>.*?</system-reminder>"; ""; "s")
+    | gsub("<local-command-std(out|err)>.*?</local-command-std(out|err)>"; ""; "s")
+    | gsub("<bash-(input|stdout|stderr)>.*?</bash-(input|stdout|stderr)>"; ""; "s")
+    | gsub("</?(command-message|command-name|command-args|user-prompt-submit-hook|ide_selection|ide_opened_file)>"; " ")
+    | gsub("\\s+"; " ") | sub("^ +"; "") | sub(" +$"; "")' \
+  "$TRANSCRIPT_PATH" 2>/dev/null | cut -c1-200 || echo "")
 
 SUMMARY="Auto-captured (${SOURCE_REASON}, ${MSG_COUNT} messages). Topic: ${FIRST_PROMPT}"
 

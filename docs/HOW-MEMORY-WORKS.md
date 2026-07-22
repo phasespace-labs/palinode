@@ -70,7 +70,7 @@ Core memory persists in the model's context window from turn 1 until OpenClaw co
 
 **Currently ~6 core files:**
 
-- `people/paul.md` — who you are
+- `people/alice.md` — who you are
 - `people/alice.md` — your collaborator
 - `projects/my-app.md` — current project status
 - `projects/palinode.md` — memory system status
@@ -209,8 +209,8 @@ graph LR
    - Entity tags in frontmatter (`entities: [project/my-app]`)
    - Keyword fallback (scans content for project names, tool names, etc.)
 3. **Analyze** — for each project, sends notes + current summary + existing decisions to the LLM (OLMo 3.1:32b) with the compaction prompt to determine what facts are relevant
-4. **Determine Operations** — the consolidation response is parsed into structured JSON operations (`KEEP`, `UPDATE`, `MERGE`, `SUPERSEDE`, `ARCHIVE`) for each active fact
-5. **Execute Compaction** — the Compaction Executor validates each operation before modifying or moving facts:
+4. **Determine Operations** — the LLM returns structured JSON operations (`KEEP`, `UPDATE`, `MERGE`, `SUPERSEDE`, `ARCHIVE`) determining the fate of each active fact
+5. **Execute Compaction** — the Compaction Executor runs deterministically to modify or move facts:
    - Updated/Merged facts are preserved in the Identity or Status layers.
    - Superseded or Archived facts are moved to the History layer (`{name}-history.md`) with a rationale and timestamp ensuring data is never lost.
 6. **Assign IDs** — any newly generated facts get a deterministic `<!-- fact:slug -->` ID block for tracking.

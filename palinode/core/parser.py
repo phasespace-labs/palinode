@@ -24,6 +24,31 @@ _CANONICAL_KINDS: frozenset[str] = frozenset(
     ("person", "project", "decision", "insight", "research", "daily")
 )
 
+# The leading YAML frontmatter block, delimiters included. ``group(1)`` is the
+# raw YAML. Used by ``split_frontmatter`` to give body-only writers a boundary
+# they can trust: fact-ID tagging and the consolidation executor both matched
+# ``- item`` list syntax with whole-file MULTILINE regexes, so YAML list entries
+# under ``entities:`` were tagged as facts and later rewritten with LLM-supplied
+# prose, corrupting the frontmatter.
+FRONTMATTER_RE = re.compile(r'\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*\r?\n', re.DOTALL)
+
+
+def split_frontmatter(content: str) -> tuple[str, str]:
+    """Split *content* into ``(frontmatter_block, body)``.
+
+    The split is lossless — ``frontmatter_block + body == content`` always — so
+    a caller can transform only the body and reassemble byte-for-byte. The
+    returned block keeps its ``---`` delimiters and trailing newline.
+
+    Returns ``("", content)`` when there is no parseable frontmatter block
+    (including the malformed "opens with ``---`` but never closes" case), so
+    callers degrade to today's whole-file behaviour rather than raising.
+    """
+    match = FRONTMATTER_RE.match(content)
+    if not match:
+        return "", content
+    return content[: match.end()], content[match.end():]
+
 
 def slugify(text: str) -> str:
     """Converts a standard text string to a URL-safe lowercase slug.

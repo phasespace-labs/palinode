@@ -22,9 +22,14 @@ def mock_memory_dir(tmp_path):
     old_auto_commit = config.git.auto_commit
     config.memory_dir = str(tmp_path)
     config.git.auto_commit = False
-    yield str(tmp_path)
-    config.memory_dir = old_memory_dir
-    config.git.auto_commit = old_auto_commit
+    try:
+        yield str(tmp_path)
+    finally:
+        # try/finally, not a bare restore after yield: a failing test would
+        # otherwise leave git.auto_commit off and memory_dir pointing at a
+        # deleted tmp_path for every test that runs after it.
+        config.memory_dir = old_memory_dir
+        config.git.auto_commit = old_auto_commit
 
 
 def _read_frontmatter(file_path: str) -> dict:

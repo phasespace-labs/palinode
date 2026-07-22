@@ -52,8 +52,8 @@ from palinode.core.visibility import filter_visible, is_visible, normalize_memor
 client = TestClient(app)
 
 # A representative multi-agent chain: agent researcher, in project palinode,
-# member paul. No org level set.
-CHAIN = ScopeChain(agent="researcher", project="palinode", member="paul")
+# member alice. No org level set.
+CHAIN = ScopeChain(agent="researcher", project="palinode", member="alice")
 
 
 # ── visible_on_chain: inherited (default / absence-is-neutral) ─────────────
@@ -122,7 +122,7 @@ def test_restricted_access_intersects_chain_is_visible():
     meta = {
         "scope": "org/phasespace",
         "visibility": "restricted",
-        "access": ["member/paul", "harness/cursor"],
+        "access": ["member/alice", "harness/cursor"],
     }
     assert visible_on_chain(CHAIN, meta) is True
 
@@ -158,7 +158,7 @@ def test_malformed_visibility_behaves_as_inherited():
 
 def test_malformed_access_on_restricted_hides_memory():
     assert visible_on_chain(CHAIN, {"visibility": "restricted",
-                                    "access": "member/paul"}) is False
+                                    "access": "member/alice"}) is False
 
 
 # ── access_allows: the no-chain rule ──────────────────────────────────────
@@ -174,7 +174,7 @@ def test_access_allows_passes_inherited_including_scoped():
 
 def test_access_allows_withholds_private_and_restricted():
     assert access_allows({"scope": "agent/x", "visibility": "private"}) is False
-    assert access_allows({"visibility": "restricted", "access": ["member/paul"]}) is False
+    assert access_allows({"visibility": "restricted", "access": ["member/alice"]}) is False
 
 
 # ── ScopeChain.has_identity (finding 5) ───────────────────────────────────
@@ -352,9 +352,9 @@ def visibility_memory_dir(tmp_path):
     # A *core* private memory — the SessionStart-hook injection case.
     _write("decisions/core-private.md",
            "name: CorePrivate\ncore: true\nscope: agent/researcher\nvisibility: private\n")
-    _write("decisions/secret-paul.md",
-           "name: SecretPaul\ncore: true\nscope: org/phasespace\n"
-           "visibility: restricted\naccess:\n  - member/paul\n")
+    _write("decisions/secret-alice.md",
+           "name: SecretAlice\ncore: true\nscope: org/phasespace\n"
+           "visibility: restricted\naccess:\n  - member/alice\n")
     _write("decisions/secret-sarah.md",
            "name: SecretSarah\ncore: true\nscope: org/phasespace\n"
            "visibility: restricted\naccess:\n  - member/sarah\n")
@@ -374,7 +374,7 @@ def test_collect_without_chain_withholds_private_and_restricted(visibility_memor
     assert names == {"Legacy", "Shared"}
     assert "Scratch" not in names
     assert "CorePrivate" not in names
-    assert "SecretPaul" not in names
+    assert "SecretAlice" not in names
 
 
 def test_list_endpoint_never_injects_private_core_memories(visibility_memory_dir):
@@ -384,7 +384,7 @@ def test_list_endpoint_never_injects_private_core_memories(visibility_memory_dir
     names = {d["name"] for d in res.json()}
     assert names == {"Legacy", "Shared"}
     assert "CorePrivate" not in names
-    assert "SecretPaul" not in names
+    assert "SecretAlice" not in names
     assert "SecretSarah" not in names
 
 
@@ -396,12 +396,12 @@ def test_list_endpoint_still_returns_scoped_inherited_memories(visibility_memory
 
 def test_collect_chain_applies_scope_and_access(visibility_memory_dir):
     names = {r["name"] for r in collect_memory_files(scope_chain=CHAIN)}
-    assert names == {"Legacy", "Shared", "Scratch", "CorePrivate", "SecretPaul"}
+    assert names == {"Legacy", "Shared", "Scratch", "CorePrivate", "SecretAlice"}
 
 
 def test_collect_composes_with_core_only(visibility_memory_dir):
     names = {r["name"] for r in collect_memory_files(core_only=True, scope_chain=CHAIN)}
-    assert names == {"Legacy", "Shared", "CorePrivate", "SecretPaul"}
+    assert names == {"Legacy", "Shared", "CorePrivate", "SecretAlice"}
 
 
 # ── /context/prime digest ─────────────────────────────────────────────────
@@ -419,7 +419,7 @@ def test_digest_classic_mode_still_withholds_access_controlled(visibility_memory
 def test_digest_scoped_mode_applies_chain(visibility_memory_dir):
     scoped = build_context_digest(project="palinode", scope_chain=CHAIN)
     files = {row["file"] for row in scoped["core_memories"]}
-    assert "decisions/secret-paul.md" in files
+    assert "decisions/secret-alice.md" in files
     assert "decisions/core-private.md" in files  # owner is on the chain
     assert "decisions/secret-sarah.md" not in files
 
@@ -481,7 +481,7 @@ def test_resolve_search_chain_none_without_identity():
 
 def test_resolve_search_chain_derives_project_from_context():
     chain = _resolve_search_scope_chain(
-        SearchRequest(query="x", context=["project/palinode", "person/paul"])
+        SearchRequest(query="x", context=["project/palinode", "person/alice"])
     )
     assert chain is not None and "project/palinode" in chain.as_list()
 
