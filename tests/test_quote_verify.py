@@ -10,6 +10,7 @@ Real tmp files only — no mocks (repo rule). The primitive is network-free.
 """
 from __future__ import annotations
 
+import pytest
 
 from palinode.core.quote_verify import (
     QuoteStatus,
@@ -25,6 +26,33 @@ def test_normalize_is_idempotent_and_folds_punctuation():
     once = normalize_quote(raw)
     assert once == '"Curly" quotes-and spaces'
     assert normalize_quote(once) == once  # idempotent
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("\u2018", "'"),
+        ("\u2019", "'"),
+        ("\u201a", "'"),
+        ("\u201b", "'"),
+        ("\u201c", '"'),
+        ("\u201d", '"'),
+        ("\u201e", '"'),
+        ("\u201f", '"'),
+        ("\u2013", "-"),
+        ("\u2014", "-"),
+        ("\u2212", "-"),
+        ("x\u00a0y", "x y"),
+        ("x\u2009y", "x y"),
+        ("x\u202fy", "x y"),
+        ("x\u200by", "xy"),
+        ("\u2026", "..."),
+    ],
+)
+def test_normalize_folds_each_punctuation_entry(source, expected):
+    normalized = normalize_quote(source)
+    assert normalized == expected
+    assert normalize_quote(normalized) == normalized
 
 
 def test_quote_hash_stable_across_cosmetic_variation():
