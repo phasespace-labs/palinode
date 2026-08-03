@@ -115,6 +115,7 @@ reader before writing new records with v0.10.0.
   warning naming the file, the offending value, and the accepted set, reports
   `layer_hint_ignored` in the `split_file` result, and counts `hints_ignored` in the
   sweep's stats — so a run that fell back to heuristics no longer reports as clean.
+- **Display** `(partial — no stored hash)` marker for claims with `span_partial=True` in `format_claims_resolution` (#66).
 
 ### Removed
 

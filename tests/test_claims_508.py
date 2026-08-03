@@ -558,3 +558,37 @@ def test_cli_save_without_claim_sends_no_claims():
     result, body = _run_cli_save(["--type", "Decision", "plain body"])
     assert result.exit_code == 0, result.output
     assert "claims" not in body
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Partial span marker rendering tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_format_claims_resolution_renders_partial_marker():
+    """Verify that (partial — no stored hash) is rendered when span_partial is True."""
+    text = format_claims_resolution("decisions/claim.md", [{
+        "claim_id": "abc123",
+        "text": "the claim",
+        "source_id": "research/src.md",
+        "span": {"quote": "q"},
+        "span_status": "ok",
+        "claim_id_status": "ok",
+        "source_declared": True,
+        "span_partial": True,
+    }])
+    assert "(partial — no stored hash)" in text
+
+
+def test_format_claims_resolution_omits_partial_marker_when_false():
+    """Verify that (partial — no stored hash) is omitted when span_partial is False."""
+    text = format_claims_resolution("decisions/claim.md", [{
+        "claim_id": "abc123",
+        "text": "the claim",
+        "source_id": "research/src.md",
+        "span": {"quote": "q", "quote_hash": "hash123"},
+        "span_status": "ok",
+        "claim_id_status": "ok",
+        "source_declared": True,
+        "span_partial": False,
+    }])
+    assert "(partial — no stored hash)" not in text

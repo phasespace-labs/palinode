@@ -301,6 +301,8 @@ def format_claims_resolution(file_path: str, resolutions: list[dict[str, Any]]) 
             flags.append("claim_id mismatch")
         if not r.get("source_declared", False):
             flags.append("source not in sources[]")
+        if r.get("span_partial", False):
+            flags.append("partial — no stored hash")
         flag_note = f" ({'; '.join(flags)})" if flags else ""
         lines.append(f"[{r.get('span_status', '?')}] {r.get('claim_id', '?')}{flag_note}")
         lines.append(f"  claim:  {r.get('text', '')}")
