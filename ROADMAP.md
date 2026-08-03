@@ -63,12 +63,12 @@ well-scoped issues, so that the project is straightforward to help with.
 
 Reasonably well understood; not yet started.
 
-**Bi-temporal claims.** Palinode currently records *when we learned something* (git
+**[Bi-temporal claims](https://github.com/phasespace-labs/palinode/issues/76).** Palinode currently records *when we learned something* (git
 gives this for free). It does not record *when that thing was true*. Separating event
 time from record time is what turns "what did the file say on this date" into "what did
 we believe was true as of this date" — the second being the question an auditor asks.
 
-**Idle-time consolidation.** Compaction is currently invoked explicitly. Running it
+**[Idle-time consolidation](https://github.com/phasespace-labs/palinode/issues/77).** Compaction is currently invoked explicitly. Running it
 during idle periods is low-risk here specifically because the deterministic executor
 already gates every write.
 
