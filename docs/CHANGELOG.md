@@ -10,6 +10,8 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- **`palinode_save` MCP schema size regression now gates compact `inputSchema` (#72).** v0.9.7 trimmed description prose and added a per-tool wire-size budget (#765), but that gate measured name + description + inputSchema together. The new `test_palinode_save_input_schema_fits_budget` enforces a ~3.5 KB (3,584 B) limit on the compact serialized `inputSchema` itself — the form clients cap — so schema growth is caught before a client silently replaces the contract with `{}`.
+
 ### Removed
 
 ### Security

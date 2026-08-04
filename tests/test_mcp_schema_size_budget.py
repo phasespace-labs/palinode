@@ -17,12 +17,11 @@ an aggregator's own tool accounting can observe it. Staying under a plausible
 client cap is therefore the only lever available here, and this test is the
 only thing that can notice when a new field spends the remaining room.
 
-**When this test fails, split the tool — do not compress prose.** Shrinking
-descriptions buys a few hundred bytes and leaves the next field to re-break it;
-moving a cohesive parameter cluster to its own tool fixes the class. The
-provenance cluster on ``palinode_save`` (``claims``/``sources``/``backed_by``/
-``contradicts``) is the standing candidate: ~1.4 KB for structures a typical
-save never sends.
+``palinode_save`` is the largest schema and the primary regression target.
+Its ``inputSchema`` is gated at :data:`SAVE_INPUT_SCHEMA_BUDGET_BYTES` (~3.5 KB)
+to leave headroom below the observed 4,096-byte client cap as the contract
+evolves.  Other tools are checked against the full wire size
+(name + description + inputSchema) at :data:`SCHEMA_BUDGET_BYTES`.
 """
 from __future__ import annotations
 
@@ -37,6 +36,16 @@ from palinode.mcp import _all_tools
 #: because the failure mode when a client enforces one is a write tool with no
 #: contract, reported nowhere.
 SCHEMA_BUDGET_BYTES = 4096
+
+#: ``palinode_save`` inputSchema budget (~3.5 KB).  Measured as compact JSON
+#: (``separators=(',', ':')``) — the form clients receive — not the full tool
+#: definition.  Headroom below the 4,096-byte client cap is the deliverable.
+SAVE_INPUT_SCHEMA_BUDGET_BYTES = 3584
+
+
+def _compact_input_schema_size(tool) -> int:
+    """Bytes of one tool's inputSchema, serialized compactly."""
+    return len(json.dumps(tool.input_schema, separators=(",", ":")))
 
 
 def _wire_size(tool) -> int:
@@ -53,6 +62,26 @@ def _wire_size(tool) -> int:
          "inputSchema": tool.input_schema},
         separators=(",", ":"),
     ))
+
+
+def _save_tool():
+    for tool in _all_tools():
+        if tool.name == "palinode_save":
+            return tool
+    raise AssertionError("palinode_save not found in _all_tools()")
+
+
+def test_palinode_save_input_schema_fits_budget():
+    """Regression gate: compact serialized inputSchema, not the full tool def."""
+    tool = _save_tool()
+    size = _compact_input_schema_size(tool)
+    assert size <= SAVE_INPUT_SCHEMA_BUDGET_BYTES, (
+        f"palinode_save inputSchema serializes to {size} B, over the "
+        f"{SAVE_INPUT_SCHEMA_BUDGET_BYTES} B budget by "
+        f"{size - SAVE_INPUT_SCHEMA_BUDGET_BYTES} B. Clients may drop the "
+        f"schema entirely. Trim description prose or split a parameter cluster "
+        f"onto its own tool — see the module docstring."
+    )
 
 
 @pytest.mark.parametrize("tool", _all_tools(), ids=lambda t: t.name)
