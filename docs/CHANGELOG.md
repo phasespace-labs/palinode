@@ -6,6 +6,10 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Added
 
+- **`palinode dream` command alias.** The alias runs the existing consolidation
+  command, while its help text keeps `palinode consolidate` visible as the
+  canonical name.
+
 ### Changed
 
 ### Fixed

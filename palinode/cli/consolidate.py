@@ -14,7 +14,7 @@ from palinode.cli._format import console, print_result, get_default_format, Outp
 )
 @click.option("--format", "fmt", type=click.Choice(["json", "text"]), help="Output format")
 def consolidate(nightly, dry_run, sources, fmt):
-    """Run or preview memory compaction (weekly full or --nightly lightweight)."""
+    """Run memory compaction. The ``dream`` command is an alias for this command."""
     try:
         data = api_client.consolidate(
             dry_run=dry_run, nightly=nightly, sources=list(sources) or None
