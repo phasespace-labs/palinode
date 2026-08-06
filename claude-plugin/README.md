@@ -115,7 +115,7 @@ Once installed and connected, the plugin exposes 28 MCP tools to Claude Code:
 - `palinode_entities` — entity graph traversal (people, projects, decisions)
 
 ### Save and capture
-- `palinode_save` — write a new memory item. Supports type, entities, core flag, slug, source. As of v0.6.0, saves run write-time contradiction checking in the background (ADR-004).
+- `palinode_save` — write a new memory item. Supports type, entities, core flag, slug, source. Saves can also run a background write-time contradiction check against similar existing memories — opt-in, off by default: set `consolidation.write_time.enabled: true` in your config. The check never blocks or fails the save.
 - `palinode_session_end` — capture session outcomes (summary, decisions, blockers) to daily notes and project status files
 - `palinode_ingest` — fetch a URL and store it as a research reference
 
@@ -170,6 +170,7 @@ Run `palinode_status` and check `total_files` and `fts_chunks`. If both are 0, t
 - [Main repository](https://github.com/phasespace-labs/palinode)
 - [CHANGELOG](https://github.com/phasespace-labs/palinode/blob/main/docs/CHANGELOG.md) for the latest release notes
 - [Compaction demo](https://github.com/phasespace-labs/palinode/tree/main/examples/compaction-demo) — walkthrough of a memory file across three consolidation passes with blame + diff output
+- [ADR-001: Tools Over Pipeline](https://github.com/phasespace-labs/palinode/blob/main/ADR-001-tools-over-pipeline.md) — why the executor is deterministic
 
 ## License
 
