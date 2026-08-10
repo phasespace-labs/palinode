@@ -11,4 +11,6 @@ def test_dream_help_points_to_the_canonical_command() -> None:
     result = CliRunner().invoke(main, ["dream", "--help"])
 
     assert result.exit_code == 0
-    assert "alias for this command" in result.output
+    normalized_help = " ".join(result.output.split())
+    assert "``palinode dream`` is an alias" in normalized_help
+    assert "``palinode consolidate`` is the canonical name" in normalized_help

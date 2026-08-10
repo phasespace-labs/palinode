@@ -516,6 +516,8 @@ def _live_cli_capabilities() -> set[str]:
     def walk(group: click.Group, prefix: str = "") -> list[str]:
         out: list[str] = []
         for name, cmd in group.commands.items():
+            if name != cmd.name and group.commands.get(cmd.name) is cmd:
+                continue  # Alias key; the canonical command is already registered.
             full = f"{prefix} {name}".strip()
             if isinstance(cmd, click.Group):
                 out.extend(walk(cmd, full))
