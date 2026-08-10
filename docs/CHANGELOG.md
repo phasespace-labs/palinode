@@ -14,6 +14,9 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- **`palinode read` frontmatter stripping.** Using `parser.split_frontmatter`
+  instead of splitting on the first two `---` occurrences preserves the body when
+  frontmatter values contain `---` sequences.
 - **Native Windows memory writes now avoid unsupported directory fsync and
   preserve overwrite permissions on Python 3.11/3.12.** Source-capture tests
   read Palinode-written files as UTF-8 instead of using the locale default.

@@ -16,6 +16,7 @@ import click
 
 from palinode.cli._api import HTTPStatusError, api_client
 from palinode.cli._format import OutputFormat, get_default_format
+from palinode.core.parser import split_frontmatter
 
 
 @click.command()
@@ -86,16 +87,6 @@ def _format_with_meta(result: dict) -> str:
     # When meta=True, the API returns the full file content (frontmatter +
     # body).  Strip the leading frontmatter block for cleaner CLI output.
     content = result.get("content", "")
-    body = _strip_frontmatter(content)
+    _, body = split_frontmatter(content)
     lines.append(body)
     return "\n".join(lines)
-
-
-def _strip_frontmatter(content: str) -> str:
-    """If `content` starts with `---`, drop the frontmatter block."""
-    if not content.startswith("---"):
-        return content
-    parts = content.split("---", 2)
-    if len(parts) < 3:
-        return content
-    return parts[2].lstrip("\n")
