@@ -138,3 +138,25 @@ def test_push_failure_logs_warning(caplog):
         r.levelno == _logging.WARNING and "git push failed" in r.message
         for r in caplog.records
     )
+
+
+def test_write_memory_file_skips_directory_fsync_on_windows(tmp_path, monkeypatch):
+    """Windows cannot open a directory as a file descriptor for fsync."""
+    target = tmp_path / "memory.md"
+    monkeypatch.setattr(git_tools.os, "name", "nt")
+    with patch.object(git_tools, "_fsync_directory") as fsync_directory:
+        git_tools.write_memory_file(str(target), "UTF-8 content: “quotes”\n")
+
+    assert target.read_text(encoding="utf-8") == "UTF-8 content: “quotes”\n"
+    fsync_directory.assert_not_called()
+
+
+def test_write_memory_file_overwrite_works_without_fchmod(tmp_path, monkeypatch):
+    """Python 3.11/3.12 Windows needs the path-based chmod fallback."""
+    target = tmp_path / "memory.md"
+    target.write_text("old\n", encoding="utf-8")
+    monkeypatch.delattr(git_tools.os, "fchmod", raising=False)
+
+    git_tools.write_memory_file(str(target), "new\n")
+
+    assert target.read_text(encoding="utf-8") == "new\n"

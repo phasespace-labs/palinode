@@ -37,7 +37,7 @@ def mock_memory_dir(tmp_path, monkeypatch):
 
 
 def _frontmatter(file_path: str) -> dict:
-    with open(file_path, "r") as f:
+    with open(file_path, "r", encoding="utf-8") as f:
         text = f.read()
     parts = text.split("---", 2)
     assert len(parts) >= 3, f"no frontmatter in {file_path}: {text[:120]}"
@@ -58,7 +58,7 @@ def _save(json_body: dict):
 
 
 def test_save_with_sources_round_trips_frontmatter(mock_memory_dir):
-    quote = "the exact cited passage"
+    quote = "the exact cited passage with smart “quotes”"
     res = _save({
         "content": "claim body",
         "type": "Decision",

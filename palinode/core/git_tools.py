@@ -106,7 +106,13 @@ def write_memory_file(file_path: str, content: str) -> None:
     fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=prefix, suffix=".tmp")
     try:
         if os.path.exists(file_path):
-            os.fchmod(fd, os.stat(file_path).st_mode & 0o777)
+            mode = os.stat(file_path).st_mode & 0o777
+            fchmod = getattr(os, "fchmod", None)
+            if fchmod is not None:
+                fchmod(fd, mode)
+            else:
+                # ``os.fchmod`` is unavailable on Windows before Python 3.13.
+                os.chmod(tmp_path, mode)
 
         with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
             fd = -1
@@ -115,7 +121,10 @@ def write_memory_file(file_path: str, content: str) -> None:
             os.fsync(tmp_file.fileno())
 
         os.replace(tmp_path, file_path)
-        _fsync_directory(directory)
+        # Windows cannot open a directory for fsync, so the rename's metadata
+        # durability is weaker there after a crash.
+        if os.name != "nt":
+            _fsync_directory(directory)
     except Exception:
         if fd != -1:
             os.close(fd)
