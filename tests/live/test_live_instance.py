@@ -159,11 +159,26 @@ class TestSearch:
 
     @pytest.mark.slow
     def test_search_returns_results(self):
-        """Search for something that should exist in any palinode instance."""
-        resp = client.post("/search", json={"query": "palinode memory", "limit": 3})
-        assert resp.status_code == 200
-        results = resp.json()
-        assert len(results) > 0, "Search returned no results"
+        """Search for a unique phrase that the test itself saves."""
+        unique_phrase = f"unique-search-results-{_TEST_PREFIX}"
+        client.post("/save", json={
+            "content": f"Live test ensuring search returns results: {unique_phrase}",
+            "type": "Insight",
+            "slug": f"{_TEST_PREFIX}-search-returns",
+        })
+        
+        # Poll for up to 30s to allow for indexing
+        found = False
+        for _attempt in range(6):
+            time.sleep(5)
+            resp = client.post("/search", json={"query": unique_phrase, "limit": 3})
+            assert resp.status_code == 200
+            results = resp.json()
+            if len(results) > 0 and any(unique_phrase in r.get("content", "") for r in results):
+                found = True
+                break
+                
+        assert found, "Search returned no results for the freshly saved content"
 
     @pytest.mark.slow
     def test_search_has_score_fields(self):
