@@ -167,19 +167,28 @@ class TestSearch:
             "slug": f"{_TEST_PREFIX}-search-result",
         })
         assert save_resp.status_code == 200
+        save_data = save_resp.json()
 
-        # Poll for up to 30s — watcher indexing is asynchronous.
-        for _attempt in range(6):
-            time.sleep(5)
+        # API saves index inline when possible. Only poll for the watcher fallback
+        # when the save response says inline indexing was deferred.
+        search_attempts = (
+            1 if save_data.get("indexed") or save_data.get("embedded") else 7
+        )
+        for attempt in range(search_attempts):
             resp = client.post("/search", json={"query": unique, "limit": 3})
             assert resp.status_code == 200
             results = resp.json()
             if any(unique in result.get("content", "") for result in results):
                 break
+            if attempt < search_attempts - 1:
+                time.sleep(5)
         else:
+            waited_seconds = (search_attempts - 1) * 5
             pytest.fail(
-                f"Search did not return the memory containing '{unique}' after 30s — "
-                "watcher may not be running or Ollama unreachable"
+                f"Search did not return the memory containing '{unique}' after "
+                f"{waited_seconds}s — save indexed={save_data.get('indexed')}, "
+                f"embedded={save_data.get('embedded')}, "
+                f"index_error={save_data.get('index_error')!r}"
             )
 
     @pytest.mark.slow
