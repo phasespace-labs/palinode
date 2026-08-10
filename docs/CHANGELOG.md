@@ -14,6 +14,10 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- **The live search smoke test is now self-contained.** It saves and queries a
+  unique marker instead of depending on unrelated content already being present
+  in the tested instance.
+
 - **Native Windows memory writes now avoid unsupported directory fsync and
   preserve overwrite permissions on Python 3.11/3.12.** Source-capture tests
   read Palinode-written files as UTF-8 instead of using the locale default.

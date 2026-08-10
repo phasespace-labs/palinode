@@ -159,11 +159,28 @@ class TestSearch:
 
     @pytest.mark.slow
     def test_search_returns_results(self):
-        """Search for something that should exist in any palinode instance."""
-        resp = client.post("/search", json={"query": "palinode memory", "limit": 3})
-        assert resp.status_code == 200
-        results = resp.json()
-        assert len(results) > 0, "Search returned no results"
+        """Search returns content created by this test, not ambient instance data."""
+        unique = f"xyzzy-{_TEST_PREFIX}-search-result"
+        save_resp = client.post("/save", json={
+            "content": f"Live test: {unique}. This phrase belongs to the search result test.",
+            "type": "Insight",
+            "slug": f"{_TEST_PREFIX}-search-result",
+        })
+        assert save_resp.status_code == 200
+
+        # Poll for up to 30s — watcher indexing is asynchronous.
+        for _attempt in range(6):
+            time.sleep(5)
+            resp = client.post("/search", json={"query": unique, "limit": 3})
+            assert resp.status_code == 200
+            results = resp.json()
+            if any(unique in result.get("content", "") for result in results):
+                break
+        else:
+            pytest.fail(
+                f"Search did not return the memory containing '{unique}' after 30s — "
+                "watcher may not be running or Ollama unreachable"
+            )
 
     @pytest.mark.slow
     def test_search_has_score_fields(self):
