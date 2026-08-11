@@ -1,4 +1,4 @@
-"""CLI-surface tests for ``palinode review`` (issue #114).
+"""CLI-surface tests for ``palinode review`` (https://github.com/phasespace-labs/palinode/issues/114).
 
 ``review`` must follow the two CLI conventions the rest of the commands honour:
 
