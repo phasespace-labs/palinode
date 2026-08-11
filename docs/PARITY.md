@@ -142,45 +142,32 @@ Promoting each (registry `Operation` + canonical params + removing its backlog e
 
 ## httpx monopoly — the bypass linter
 
-CLI commands and the plugin go through one HTTP layer each: `palinode/cli/_api.py` and `palinode/mcp.py`. Direct `httpx` calls from elsewhere skip rate limiting, audit logging, source headers, and any future API-side fixes. The pre-commit linter at `scripts/check-httpx-monopoly.sh` greps for offenders and fails CI.
+Python CLI commands that call the Palinode API go through
+`palinode/cli/_api.py`. Direct `httpx` calls from another CLI module skip rate
+limiting, audit logging, source headers, and any future API-side fixes.
 
-Today's bypass-vector files (cleanup tracked in #168 and #170 lower-tier):
+`scripts/check-httpx-monopoly.sh` enforces that boundary. It scans
+`palinode/cli/*.py`, allows the canonical `_api.py` client, and fails on raw
+`httpx` use anywhere else in that scope. Its `GRANDFATHERED` list is empty, so
+there are no accepted bypasses to inventory here.
 
-- `palinode/cli/read.py` — reads disk directly, never calls API
-- `palinode/cli/list.py` — uses raw `httpx.get`
-- `palinode/cli/lint.py` — falls back to direct module import on connection failure
-- `palinode/cli/session_end.py` — bypasses `_api.py`
+CI runs both the guard and its regression suite in the `httpx-monopoly` job:
+`bash scripts/check-httpx-monopoly.sh` followed by
+`bash tests/test_check_httpx_monopoly.sh`. The executable guard is the current
+inventory; this document does not duplicate temporary exceptions.
 
-After cleanup, the linter prevents recurrence.
+## Known drift
 
-## Known drift — at-a-glance
+`Operation.known_drift` in `palinode/core/parity.py` is the only drift
+inventory. Do not copy its entries into a hand-maintained table here: that
+second list cannot participate in either parity guard and will drift from the
+registry again.
 
-The registry is the precise list. This summary tracks roll-up status:
-
-| Issue | Operation | Surfaces | Param           | Status |
-|-------|-----------|----------|-----------------|--------|
-| #159  | save      | CLI/MCP/API/Plugin | project | open |
-| #161  | search    | MCP      | category enum (singular→plural) | **fixed in this commit** |
-| #162  | prompt    | MCP      | duplicate `enum` keys           | **fixed in this commit** |
-| #163  | search    | CLI      | since_days, types, threshold, date_after, date_before, include_daily | open |
-| #163  | search    | MCP      | since_days, types, threshold | open |
-| #163  | search    | Plugin   | threshold, since_days, types, date_after, date_before, include_daily | open |
-| #164  | rollback  | MCP      | file_path (canonical name)      | open |
-| #164  | rollback  | CLI      | dry_run (--execute negation)    | open |
-| #164  | blame     | MCP      | file_path (canonical name)      | open |
-| #165  | trigger.create | CLI | cooldown_hours, trigger_id     | open |
-| #165  | trigger.create | MCP | threshold, cooldown_hours      | open |
-| #166  | save      | CLI/MCP  | metadata, confidence            | open |
-| #166  | save      | CLI      | slug, core                      | open |
-| #166  | save      | MCP/API  | title                           | open |
-| #166  | save      | Plugin   | metadata, confidence, project, title, source | open |
-| #168  | read      | MCP      | meta (frontmatter passthrough)  | open |
-| #169  | consolidate | MCP    | dry_run, nightly                | open |
-
-When an issue closes:
-1. Remove its entry from `Operation.known_drift` in `palinode/core/parity.py`.
-2. Update the row in this table.
-3. Run the parity test — should go from xfail to pass for the affected case.
+The Python suite validates the registry's Python-surface entries and rejects
+dangling drift keys. `plugin/test/parity.test.ts` reads the same registry dump
+and applies the same rule to plugin parameters. When a drift issue is fixed,
+remove its `known_drift` entry and run both suites; each guard deliberately
+fails if a now-present parameter still carries a stale exception.
 
 ## See also
 

@@ -12,9 +12,12 @@ reported as ``xfail`` with a ``reason="drift tracked in #N"`` — the test
 ``known_drift`` entry must be removed (or the test will fail because the
 parameter now appears unexpectedly).
 
-Plugin parity is documented in ``docs/PARITY.md`` but not asserted in v0
-(Python cannot easily introspect TypeBox schemas in ``plugin/index.ts``).
-A plugin-side TypeScript test is a follow-up.
+The parametrized checks in this Python module intentionally skip the plugin:
+Python cannot introspect the TypeBox schemas in ``plugin/index.ts``.  Plugin
+parameter parity is enforced separately by ``plugin/test/parity.test.ts``,
+which reads a generated JSON dump of the same Python registry.  The enum test
+near the end of this module additionally guards the plugin's canonical literal
+sets directly from source.
 
 Run: ``pytest tests/test_surface_parity.py -v``
 """
@@ -291,7 +294,7 @@ def _surface_param_names(op: Operation, surface: Surface) -> set[str]:
         method, path = op.api_endpoint
         return _api_param_names(method, path)
     if surface == "plugin":
-        # Plugin parity is documented in PARITY.md, not asserted in v0.
+        # TypeBox parameter introspection belongs to plugin/test/parity.test.ts.
         return set()
     raise AssertionError(f"unknown surface {surface!r}")
 
@@ -329,7 +332,8 @@ def _surface_param_enum(
 def _flatten_cases() -> list[tuple[Operation, Surface, CanonicalParam]]:
     cases: list[tuple[Operation, Surface, CanonicalParam]] = []
     for op in REGISTRY:
-        # v0: skip plugin parity entirely
+        # Python covers its introspectable surfaces; the TypeScript suite builds
+        # the corresponding plugin cases from the same registry dump.
         for surface in sorted(required_surfaces(op) - {"plugin"}):
             for cp in op.canonical_params:
                 cases.append((op, surface, cp))  # type: ignore[arg-type]
