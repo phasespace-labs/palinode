@@ -398,6 +398,8 @@ The digest is computed from the normalized quote: smart punctuation is folded to
 
 The `quote_hash` field may be omitted when saving through Palinode. Palinode computes and stores the default `sha256:` hash automatically. If a hash is supplied, it must match the normalized `quote`; a mismatched value is rejected as an inconsistent anchor. This hash checks citation integrity and is not a cryptographic signature or attestation.
 
+On save, a valid legacy `md5:` or bare 32-character MD5 anchor is validated with MD5 and then stored as a `sha256:` anchor, upgrading it in place.
+
 ## 7e. Dependency Frontmatter (ProjectSnapshot)
 
 ProjectSnapshot memories can carry optional dependency fields that model milestone and task sequencing:
