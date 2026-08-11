@@ -3,14 +3,14 @@ import click
 from rich.console import Console
 
 from palinode.cli._api import HTTPStatusError, RequestError, api_client
-from palinode.cli._format import emit_json
+from palinode.cli._format import OutputFormat, emit_json, get_default_format
 
 console = Console()
 
 
 @click.command()
 @click.argument("project", required=False)
-@click.option("--format", "fmt", type=click.Choice(["json", "text"]), default="text", help="Output format")
+@click.option("--format", "fmt", type=click.Choice(["json", "text"]), help="Output format")
 def review(project, fmt):
     """Advisory project-memory review.
 
@@ -22,13 +22,14 @@ def review(project, fmt):
         data = api_client.review(project)
     except HTTPStatusError as e:
         console.print(f"[red]Error: API returned {e.response.status_code}[/red]")
-        return
+        raise SystemExit(1)
     except RequestError:
         # Fallback to local in-process review if the API is down.
         from palinode.core.review import run_review
         data = run_review(project=project)
 
-    if fmt == "json":
+    output_fmt = OutputFormat(fmt) if fmt else get_default_format()
+    if output_fmt == OutputFormat.JSON:
         emit_json(data)
         return
 
