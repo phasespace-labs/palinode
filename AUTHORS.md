@@ -13,6 +13,7 @@ Contributions welcome via pull request. Names appear here once a PR is merged.
 - [Aditya Datta](https://github.com/adity982)
 - [Deepak Nayak](https://github.com/deepunyk)
 - [Floze](https://github.com/floze-the-genius)
+- [Sukesh Kumar](https://github.com/SkxOverKill)
 
 ## Acknowledgements
 
