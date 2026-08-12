@@ -136,7 +136,7 @@ Identifier form per surface: MCP = tool name (`palinode_search`); API = `METHOD 
 
 These memory-semantic operations ship on all of MCP/API/CLI today but are not yet promoted into `REGISTRY` with canonical params. They are tracked under #170 (admin/framework surface is in `INVENTORY_INFRA`, not here):
 
-`dedup_suggest`, `diff`, `entities`, `history` (including the deprecated MCP `palinode_timeline` alias), `ingest`/`ingest-url`, `lint`, `orphan_repair`, `prompt` (list/show/activate), `push`, `session_end`, `timeline`, and the trigger `list`/`remove` + `check-triggers` + `search-associative` API endpoints. `depends/_unblocked` is tracked under #97.
+`dedup_suggest`, `diff`, `entities`, `history` (including the deprecated MCP `palinode_timeline` and CLI `timeline` aliases), `ingest`/`ingest-url`, `lint`, `orphan_repair`, `prompt` (list/show/activate), `push`, `session_end`, and the trigger `list`/`remove` + `check-triggers` + `search-associative` API endpoints. `depends/_unblocked` is tracked under #97.
 
 Promoting each (registry `Operation` + canonical params + removing its backlog entry) is the per-op work the issue tracks; this contract makes the gap explicit and prevents *new* unregistered ops from slipping in alongside them.
 

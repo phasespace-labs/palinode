@@ -619,3 +619,13 @@ def test_inventory_alias_does_not_add_a_capability_row() -> None:
     assert "palinode_timeline" not in INVENTORY_BACKLOG["mcp"]
     assert "palinode_timeline" in inventory_backlog_capabilities("mcp")
     assert len(inventory_backlog_capabilities("mcp")) == len(INVENTORY_BACKLOG["mcp"]) + 1
+
+
+def test_cli_inventory_alias_does_not_add_a_capability_row() -> None:
+    """The deprecated CLI alias annotates history instead of inflating inventory."""
+    history = INVENTORY_BACKLOG["cli"]["history"]
+
+    assert history == InventoryBacklogEntry(170, aliases=("timeline",))
+    assert "timeline" not in INVENTORY_BACKLOG["cli"]
+    assert "timeline" in inventory_backlog_capabilities("cli")
+    assert len(inventory_backlog_capabilities("cli")) == len(INVENTORY_BACKLOG["cli"]) + 1
