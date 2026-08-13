@@ -629,3 +629,15 @@ def test_cli_inventory_alias_does_not_add_a_capability_row() -> None:
     assert "timeline" not in INVENTORY_BACKLOG["cli"]
     assert "timeline" in inventory_backlog_capabilities("cli")
     assert len(inventory_backlog_capabilities("cli")) == len(INVENTORY_BACKLOG["cli"]) + 1
+
+
+def test_api_inventory_alias_does_not_add_a_capability_row() -> None:
+    """The deprecated API alias annotates history instead of inflating inventory."""
+    history = INVENTORY_BACKLOG["api"]["GET /history/{file_path:path}"]
+
+    assert history == InventoryBacklogEntry(
+        170, aliases=("GET /timeline/{file_path:path}",)
+    )
+    assert "GET /timeline/{file_path:path}" not in INVENTORY_BACKLOG["api"]
+    assert "GET /timeline/{file_path:path}" in inventory_backlog_capabilities("api")
+    assert len(inventory_backlog_capabilities("api")) == len(INVENTORY_BACKLOG["api"]) + 1

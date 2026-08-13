@@ -17,6 +17,7 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- **API parity inventory counts the deprecated `/timeline` alias once (#122).** The alias now annotates the canonical `/history` backlog entry while remaining available at runtime.
 - **CLI parity inventory counts the deprecated `timeline` alias once (#120).** The alias now annotates the canonical `history` backlog entry while remaining available at runtime.
 - **Parity inventory no longer counts the deprecated `palinode_timeline` alias as a separate capability (#99).** The alias now annotates the canonical `palinode_history` backlog entry while remaining live and deprecated at runtime.
 
