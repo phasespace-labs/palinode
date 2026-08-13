@@ -675,10 +675,11 @@ INVENTORY_BACKLOG: dict[Surface, dict[str, int | InventoryBacklogEntry]] = {
         "GET /diff": 170,
         "GET /entities": 170,
         "GET /entities/{entity_ref:path}": 170,
-        "GET /history/{file_path:path}": 170,
+        "GET /history/{file_path:path}": InventoryBacklogEntry(
+            170, aliases=("GET /timeline/{file_path:path}",)
+        ),
         "GET /prompts": 170,
         "GET /prompts/{name}": 170,
-        "GET /timeline/{file_path:path}": 170,
         "POST /check-triggers": 170,
         "POST /dedup-suggest": 170,
         "POST /ingest": 170,
