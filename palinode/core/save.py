@@ -266,6 +266,13 @@ def save_memory(
         slug = re.sub(r'[^a-z0-9]+', '-', content.split('\n')[0].lower()[:30]).strip('-')
         if not slug:
             slug = str(int(time.time()))
+        # Disambiguate derived slugs to prevent silent overwrites when two
+        # distinct memories share the same opening line (issue #129).
+        # Explicitly-passed slugs intentionally overwrite (documented idempotent
+        # update escape hatch).
+        _derived_slug = True
+    else:
+        _derived_slug = False
 
     # module-level map (shared with the description-eligibility predicate
     # so the writer and the count/worklist derive from one literal).
@@ -385,6 +392,51 @@ def save_memory(
         raise SaveValidationError(f"Security scan failed: {reason}")
 
     file_path = os.path.join(config.palinode_dir, category, f"{slug}.md")
+
+    # Derived-slug collision prevention (issue #129): when the slug was NOT
+    # explicitly provided, check whether the target path already exists with
+    # DIFFERENT content. If so, disambiguate by appending a hash of the full
+    # content. A byte-identical re-save is allowed through (idempotent).
+    if _derived_slug and os.path.exists(file_path):
+        try:
+            import frontmatter as _fm
+
+            with open(file_path, "r", encoding="utf-8") as _existing_f:
+                _existing_post = _fm.loads(_existing_f.read())
+            _existing_body = _existing_post.content
+            if _existing_body.strip() != content.strip():
+                # Different content → disambiguate with full-content hash
+                _content_hash_suffix = hashlib.sha256(
+                    content.encode()
+                ).hexdigest()[:8]
+                slug = f"{slug}-{_content_hash_suffix}"
+                file_path = os.path.join(
+                    config.palinode_dir, category, f"{slug}.md"
+                )
+                # Loop until the candidate is either unused or byte-identical
+                while os.path.exists(file_path):
+                    with open(file_path, "r", encoding="utf-8") as _check_f:
+                        _check_post = _fm.loads(_check_f.read())
+                    if _check_post.content.strip() == content.strip():
+                        break  # same content, allow re-save
+                    # Still colliding (astronomically unlikely with sha256[:8])
+                    _content_hash_suffix = hashlib.sha256(
+                        (content + _content_hash_suffix).encode()
+                    ).hexdigest()[:8]
+                    slug = f"{slug}-{_content_hash_suffix}"
+                    file_path = os.path.join(
+                        config.palinode_dir, category, f"{slug}.md"
+                    )
+        except (OSError, ValueError) as exc:
+            # Unreadable existing file: proceed with the original path
+            # (matches existing fail-open behaviour elsewhere in this function)
+            logger.warning(
+                "Could not read existing file for slug collision check %r (%s); "
+                "proceeding with original path",
+                file_path,
+                exc,
+            )
+
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
     content_hash = hashlib.sha256(content.encode()).hexdigest()
