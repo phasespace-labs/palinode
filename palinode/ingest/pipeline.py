@@ -246,7 +246,7 @@ def ingest_url(url: str, name: str) -> str | None:
 semantic fat strings locally.
 
     Args:
-        url (str): Remote address targeting structured layouts schemas online natively resolving endpoints payload sequences.
+        url (str): HTTP or HTTPS URL to fetch and convert into a research file.
         name (str): Fallback generic slug text explicitly formatting the result paths correctly.
 
     Returns:
@@ -294,14 +294,14 @@ def write_research_file(
 contexts across DB indexes.
 
     Args:
-        name (str): Original target schema label logic strings sequence natively string.
-        content (str): The body content of the payload natively formatted strings safely mapping blocks arrays logic sequences text strings format.
+        name (str): Title used to derive the research file name and heading.
+        content (str): Text written to the body of the research file.
         source_file (str): System path tracking originating sources schema tracking logs.
-        source_url (str): Upstream web payload tracker logic logic domains origin schema footprints urls strings logic URLs footprints schemas natively endpoints.
+        source_url (str): Optional URL from which the research content was fetched.
         file_type (str): Explicit mapping array categories types string.
 
     Returns:
-        str: Created disk storage pathway array payload sequence array explicitly securing strings logic path block schemas natively targets arrays sequences footprints format chunks sequences schemas natively array payload block arrays endpoints URLs.
+        str: Path to the created research file.
     """
     today = time.strftime("%Y-%m-%d")
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower())[:50].strip("-")
