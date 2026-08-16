@@ -1,9 +1,8 @@
 """
 Palinode Indexer Watcher
 
-Daemon instance observing file modifications natively utilizing 
-Watchdog system events. Auto-indexes Markdown memories upon disk write 
-operations enforcing real-time DB synchronization boundaries.
+Watches the palinode directory with Watchdog and indexes Markdown files
+as they are written, keeping the database in sync with disk.
 """
 from __future__ import annotations
 
@@ -45,7 +44,7 @@ def _utc_now() -> datetime:
 
 
 class JsonlFormatter(logging.Formatter):
-    """Logging Formatter dictating a JSONL chronological schema format."""
+    """Logging formatter that emits one JSON object per record (JSONL)."""
     def format(self, record: logging.LogRecord) -> str:
         return json.dumps({
             "timestamp": _utc_now().isoformat().replace("+00:00", "Z"),
@@ -94,10 +93,11 @@ atexit.register(shutdown_handlers)
 
 
 class PalinodeHandler(FileSystemEventHandler):
-    """File Event System Handler wrapping Palinode embedding lifecycle hooks."""
+    """Watchdog event handler that re-indexes changed Markdown files and
+schedules summary and description generation."""
 
     def __init__(self) -> None:
-        """Initialize Palinode handler bounding debounce caches safely."""
+        """Initialise debounce timers and per-file tracking state."""
         super().__init__()
         self.last_processed: dict[str, float] = {}
         self._summary_timer: threading.Timer | None = None
@@ -206,15 +206,13 @@ class PalinodeHandler(FileSystemEventHandler):
         self._description_timer.start()
         
     def is_valid_file(self, path: str) -> bool:
-        """Deduce runtime viability for system memory ingestion boundaries.
-
-        Ignores system/cache directories natively preventing excessive overhead.
+        """Return True if *path* is a Markdown file outside ignored directories.
 
         Args:
-            path (str): Target disk path.
+            path (str): Path to check.
 
         Returns:
-            bool: Validity criteria.
+            bool: Whether the file should be indexed.
         """
         if not path.endswith('.md'):
             return False
@@ -230,10 +228,10 @@ class PalinodeHandler(FileSystemEventHandler):
         return True
 
     def _process_file(self, filepath: str) -> None:
-        """Parses generic filesystem hits driving vector embeddings chunks securely.
+        """Index a Markdown file, then schedule summary/description generation if needed.
 
         Args:
-            filepath (str): Evaluated system path triggering event cycles.
+            filepath (str): Path of the file to index.
         """
         if not os.path.exists(filepath):
             return
@@ -314,10 +312,10 @@ class PalinodeHandler(FileSystemEventHandler):
             self._schedule_description_fill(filepath)
 
     def on_modified(self, event: FileModifiedEvent | DirModifiedEvent) -> None:
-        """Hook triggered implicitly by watchdog native listener.
+        """Re-index the file when it is modified; directories are ignored.
 
         Args:
-            event: Generic OS system notification block.
+            event: Watchdog modification event.
         """
         if not event.is_directory and self.is_valid_file(event.src_path):
             try:
@@ -326,10 +324,10 @@ class PalinodeHandler(FileSystemEventHandler):
                 logger.error(f"Failed to index {event.src_path}: {e}")
 
     def on_created(self, event: FileCreatedEvent | DirCreatedEvent) -> None:
-        """Hook triggered explicitly upon physical file creations natively.
+        """Index newly created files; directories are ignored.
 
         Args:
-            event: Generic OS system notification block.
+            event: Watchdog creation event.
         """
         if not event.is_directory and self.is_valid_file(event.src_path):
             try:
@@ -338,10 +336,10 @@ class PalinodeHandler(FileSystemEventHandler):
                 logger.error(f"Failed to index {event.src_path}: {e}")
 
     def on_deleted(self, event: FileDeletedEvent | DirDeletedEvent) -> None:
-        """Safely remove system traces preventing ghost responses inside API chunks.
+        """Delete the file's chunks from the store when it is removed.
 
         Args:
-            event: Generic OS FileEvent.
+            event: Watchdog deletion event.
         """
         if not event.is_directory and self.is_valid_file(event.src_path):
             try:
@@ -377,7 +375,7 @@ class PalinodeHandler(FileSystemEventHandler):
 
 
 def main() -> None:
-    """Invokes endless watcher queue loop safely preventing application exit."""
+    """Initialise the database, start the observer, and block until interrupted."""
     store.init_db()
     event_handler = PalinodeHandler()
     observer = Observer()
