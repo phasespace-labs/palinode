@@ -10,6 +10,9 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- Preserve the embedding-backend 503 response for `/triggers` and
+  `/check-triggers` instead of converting outages into generic 500 errors.
+
 ### Removed
 
 ### Security
