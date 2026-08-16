@@ -150,14 +150,14 @@ def ingest_pdf(filepath: str, name: str) -> str | None:
 
 
 def ingest_audio(filepath: str, name: str) -> str | None:
-    """Stream audio chunks to the remote transcription service.
+    """Send audio file to the remote transcription service.
 
     Args:
         filepath (str): Path to the media file.
         name (str): Document basename.
 
     Returns:
-        str | None: The resulting context pathway saving to memory if perfectly transcribed.
+        str | None: Path to the saved research file, or None.
     """
     url = config.ingestion.transcriptor.url
     timeout_sec = config.ingestion.transcriptor.timeout_seconds
@@ -189,14 +189,14 @@ def ingest_audio(filepath: str, name: str) -> str | None:
 
 
 def ingest_text(filepath: str, name: str) -> str | None:
-    """Determine if the input string is a URL.
+    """Ingest a text file, delegating to URL ingestion if content is a URL.
 
     Args:
         filepath (str): Path to the input file.
         name (str): Document basename.
 
     Returns:
-        str | None: Active reference resulting memory path.
+        str | None: Path to the saved research file, or None.
     """
     with open(filepath, "r") as f:
         content = f.read()
@@ -221,7 +221,7 @@ def ingest_url_file(filepath: str, name: str) -> str | None:
         name (str): Document basename.
 
     Returns:
-        str | None: Returns target URL extracted from shortcut file.
+        str | None: Path to the saved research file, or None.
     """
     with open(filepath, "r") as f:
         content = f.read()
@@ -248,7 +248,7 @@ def ingest_url(url: str, name: str) -> str | None:
         name (str): Fallback document slug.
 
     Returns:
-        str | None: Successful parsed response local filepath.
+        str | None: Path to the saved research file, or None.
     """
     if not is_safe_url(url):
         logger.error(f"URL fetch blocked by SSRF protection: {url}")
@@ -288,7 +288,7 @@ def write_research_file(
     source_url: str = "",
     file_type: str = "text",
 ) -> str:
-    """Generate YAML frontmatter for chunk metadata.
+    """Write research Markdown file with YAML frontmatter.
 
     Args:
         name (str): Title used to derive the research file name and heading.
