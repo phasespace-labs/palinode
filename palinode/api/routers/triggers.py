@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from palinode.api._util import _safe_500
+from palinode.api._util import _embedding_unavailable_503, _safe_500
 from palinode.core import embedder, store
 
 router = APIRouter()
@@ -43,6 +43,8 @@ def create_trigger_api(req: TriggerRequest) -> dict[str, Any]:
             cooldown_hours=req.cooldown_hours or 24
         )
         return {"id": trigger_id, "status": "created"}
+    except embedder.EmbeddingUnavailable as e:
+        raise _embedding_unavailable_503(e, "Trigger creation") from None
     except Exception as e:
         raise _safe_500(e, "Trigger creation failed")
 
@@ -72,5 +74,7 @@ def check_triggers_api(req: CheckTriggersRequest) -> list[dict[str, Any]]:
             cooldown_bypass=req.cooldown_bypass or False
         )
         return results
+    except embedder.EmbeddingUnavailable as e:
+        raise _embedding_unavailable_503(e, "Trigger check") from None
     except Exception as e:
         raise _safe_500(e, "Trigger check failed")

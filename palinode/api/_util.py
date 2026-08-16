@@ -19,6 +19,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from palinode.core import embedder
 from palinode.core.config import config
 from palinode.core.retrieval_log import RetrievalLogger
 
@@ -41,6 +42,18 @@ def _safe_500(e: Exception, context: str = "Internal error") -> HTTPException:
     """Log full exception, return sanitized 500 to client."""
     logger.exception(f"{context}: {e}")
     return HTTPException(status_code=500, detail=context)
+
+
+def _embedding_unavailable_503(
+    error: embedder.EmbeddingUnavailable,
+    operation: str,
+) -> HTTPException:
+    """Preserve the typed outage message without logging a traceback."""
+    logger.warning(
+        "%s unavailable outcome=embedding_unavailable",
+        operation,
+    )
+    return HTTPException(status_code=503, detail=str(error))
 
 
 def _project_from_cwd(cwd: str | None) -> str | None:
