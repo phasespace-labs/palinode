@@ -57,7 +57,7 @@ def is_safe_url(url: str) -> bool:
 
 
 def process_inbox() -> None:
-    """Scan ingestion inboxes iteratively routing newly seeded payloads safely."""
+    """Scan ingestion directories for new files."""
     raw_dir = os.path.join(config.palinode_dir, config.ingestion.inbox_dir)
     processed_dir = os.path.join(config.palinode_dir, config.ingestion.processed_dir)
     os.makedirs(raw_dir, exist_ok=True)
@@ -82,14 +82,13 @@ def process_inbox() -> None:
 
 
 def process_file(filepath: str) -> str | None:
-    """Invokes explicit parsing algorithms depending heavily on disk extensions.
+    """Invoke parser based on file extension.
 
     Args:
-        filepath (str): Evaluated system path triggering event cycles.
+        filepath (str): Path to the input file.
 
     Returns:
-        str | None: Emits absolute resulting saved context path safely if correctly triggered.
-            None otherwise explicitly failing or skipping safely.
+        str | None: Returns absolute path of the saved file if successful, or None.
     """
     ext = Path(filepath).suffix.lower()
     name = Path(filepath).stem
@@ -99,7 +98,7 @@ def process_file(filepath: str) -> str | None:
     elif ext in (".m4a", ".mp3", ".wav", ".ogg", ".flac"):
         return ingest_audio(filepath, name)
     elif ext in (".mp4", ".mkv", ".mov", ".webm"):
-        return ingest_audio(filepath, name)  # extract audio natively through transcriptor boundaries
+        return ingest_audio(filepath, name) # Extract audio track
     elif ext in (".md", ".txt"):
         return ingest_text(filepath, name)
     elif ext in (".url", ".webloc"):
@@ -110,10 +109,10 @@ def process_file(filepath: str) -> str | None:
 
 
 def ingest_pdf(filepath: str, name: str) -> str | None:
-    """Extract semantic text blocks from unparsed PDF layouts formatting as markdown references.
+    """Extract text blocks from unparsed PDF layouts formatted as Markdown.
 
     Args:
-        filepath (str): Absolute raw OS path string matching input PDF schema formats.
+        filepath (str): Path to input PDF.
         name (str): Document basename.
 
     Returns:
@@ -136,7 +135,7 @@ def ingest_pdf(filepath: str, name: str) -> str | None:
             logger.warning(f"Empty PDF: {filepath}")
             return None
 
-        # Cap for very large PDFs using explicit configuration logic constraints
+        # Cap for very large PDFs
         capped_len = config.ingestion.pdf_max_chars
         
         return write_research_file(
@@ -151,14 +150,14 @@ def ingest_pdf(filepath: str, name: str) -> str | None:
 
 
 def ingest_audio(filepath: str, name: str) -> str | None:
-    """Streams encoded chunks securely into configured remote transcriptor GPU pipelines.
+    """Send audio file to the remote transcription service.
 
     Args:
-        filepath (str): Target physical file footprint mapping active media formats string sequences.
-        name (str): Native system filename.
+        filepath (str): Path to the media file.
+        name (str): Document basename.
 
     Returns:
-        str | None: The resulting context pathway saving to memory if perfectly transcribed.
+        str | None: Path to the saved research file, or None.
     """
     url = config.ingestion.transcriptor.url
     timeout_sec = config.ingestion.transcriptor.timeout_seconds
@@ -190,14 +189,14 @@ def ingest_audio(filepath: str, name: str) -> str | None:
 
 
 def ingest_text(filepath: str, name: str) -> str | None:
-    """Evaluates raw strings determining if parsing redirects logic to URL processors explicitly.
+    """Ingest a text file, delegating to URL ingestion if content is a URL.
 
     Args:
-        filepath (str): Evaluated system path triggering event cycles.
-        name (str): Root file target name.
+        filepath (str): Path to the input file.
+        name (str): Document basename.
 
     Returns:
-        str | None: Active reference resulting memory path.
+        str | None: Path to the saved research file, or None.
     """
     with open(filepath, "r") as f:
         content = f.read()
@@ -215,14 +214,14 @@ def ingest_text(filepath: str, name: str) -> str | None:
 
 
 def ingest_url_file(filepath: str, name: str) -> str | None:
-    """Reads MacOS `.webloc` XML files or explicit Windows `.url` links cleanly fetching targets.
+    """Read macOS .webloc or Windows .url shortcut files.
 
     Args:
-        filepath (str): Standard platform shortcut reference footprint mapping system shortcut paths.
-        name (str): Link target OS base payload schema string sequence names.
+        filepath (str): Path to the shortcut file.
+        name (str): Document basename.
 
     Returns:
-        str | None: Processed semantic node markdown resulting absolute DB disk array links.
+        str | None: Path to the saved research file, or None.
     """
     with open(filepath, "r") as f:
         content = f.read()
@@ -242,15 +241,14 @@ def ingest_url_file(filepath: str, name: str) -> str | None:
 
 
 def ingest_url(url: str, name: str) -> str | None:
-    """Downloads HTTP response targets applying readability algorithms scrubbing out
-semantic fat strings locally.
+    """Fetch web page content and clean main text using readability.
 
     Args:
-        url (str): Remote address targeting structured layouts schemas online natively resolving endpoints payload sequences.
-        name (str): Fallback generic slug text explicitly formatting the result paths correctly.
+        url (str): HTTP or HTTPS URL to fetch and convert into a research file.
+        name (str): Fallback document slug.
 
     Returns:
-        str | None: Successful parsed response local filepath.
+        str | None: Path to the saved research file, or None.
     """
     if not is_safe_url(url):
         logger.error(f"URL fetch blocked by SSRF protection: {url}")
@@ -261,7 +259,7 @@ semantic fat strings locally.
         response.raise_for_status()
         html = response.text
 
-        # Simple readability: strip HTML tags cleanly securing memory
+        # Simple readability: strip HTML tags
         text = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL)
         text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL)
         text = re.sub(r"<[^>]+>", " ", text)
@@ -290,18 +288,17 @@ def write_research_file(
     source_url: str = "",
     file_type: str = "text",
 ) -> str:
-    """Generates a perfectly modeled Frontmatter YAML formatted chunk safely storing
-contexts across DB indexes.
+    """Write research Markdown file with YAML frontmatter.
 
     Args:
-        name (str): Original target schema label logic strings sequence natively string.
-        content (str): The body content of the payload natively formatted strings safely mapping blocks arrays logic sequences text strings format.
-        source_file (str): System path tracking originating sources schema tracking logs.
-        source_url (str): Upstream web payload tracker logic logic domains origin schema footprints urls strings logic URLs footprints schemas natively endpoints.
-        file_type (str): Explicit mapping array categories types string.
+        name (str): Title used to derive the research file name and heading.
+        content (str): Text written to the body of the research file.
+        source_file (str): Path to the source file.
+        source_url (str): Optional URL from which the research content was fetched.
+        file_type (str): Source file extension or type.
 
     Returns:
-        str: Created disk storage pathway array payload sequence array explicitly securing strings logic path block schemas natively targets arrays sequences footprints format chunks sequences schemas natively array payload block arrays endpoints URLs.
+        str: Path to the created research file.
     """
     today = time.strftime("%Y-%m-%d")
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower())[:50].strip("-")

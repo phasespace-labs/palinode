@@ -9,7 +9,11 @@ from palinode.core import store, embedder
 from palinode.core.config import config
 from palinode.core.parity import CATEGORIES, MEMORY_TYPES
 from palinode.core.path_guard import to_rel_path
-from palinode.api._util import _retrieval_logger, _safe_500
+from palinode.api._util import (
+    _embedding_unavailable_503,
+    _retrieval_logger,
+    _safe_500,
+)
 from palinode.api.rate_limit import _RATE_LIMIT_SEARCH, _check_rate_limit
 from palinode.api.search_helpers import (
     _compute_effective_date_after,
@@ -30,18 +34,6 @@ router = APIRouter()
 #: How much wider to re-fetch when visibility filtering starved a result
 #: window. Only paid when a hidden memory actually landed in the window.
 _VISIBILITY_OVERFETCH = 5
-
-
-def _embedding_unavailable_503(
-    error: embedder.EmbeddingUnavailable,
-    operation: str,
-) -> HTTPException:
-    """Preserve the typed outage message without logging a traceback."""
-    logger.warning(
-        "%s unavailable op=search outcome=embedding_unavailable",
-        operation,
-    )
-    return HTTPException(status_code=503, detail=str(error))
 
 
 def _resolve_scope_chain(

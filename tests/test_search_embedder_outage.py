@@ -110,6 +110,33 @@ def test_other_embedding_search_operations_preserve_typed_503(
     assert "palinode doctor" in res.json()["detail"]
 
 
+def test_create_trigger_preserves_typed_embedding_503(client):
+    with patch("palinode.core.embedder.embed", side_effect=_boom):
+        res = client.post(
+            "/triggers",
+            json={
+                "description": "deploy the memory service",
+                "memory_file": "projects/memory.md",
+            },
+        )
+
+    assert res.status_code == 503
+    assert "Embedding backend unavailable" in res.json()["detail"]
+    assert "palinode doctor" in res.json()["detail"]
+
+
+def test_check_triggers_preserves_typed_embedding_503(client):
+    with patch("palinode.core.embedder.embed", side_effect=_boom):
+        res = client.post(
+            "/check-triggers",
+            json={"query": "what should I remember about deployment?"},
+        )
+
+    assert res.status_code == 503
+    assert "Embedding backend unavailable" in res.json()["detail"]
+    assert "palinode doctor" in res.json()["detail"]
+
+
 def test_save_keeps_200_and_index_error_with_same_dead_embedder(client, dead_embedder):
     res = client.post(
         "/save",
