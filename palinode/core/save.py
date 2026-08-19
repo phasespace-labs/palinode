@@ -159,6 +159,26 @@ def _normalize_claims_or_reject(raw: Any, memory_ref: str) -> list[dict[str, Any
         raise SaveValidationError(str(exc))
 
 
+def _holds_this_content(path: str, incoming_hash: str) -> bool:
+    """True when *path* already holds exactly this content.
+
+    Compares against the ``content_hash`` recorded in the file's frontmatter
+    rather than re-deriving a body from it: ``parse_markdown`` returns chunks,
+    not the original text.
+
+    A file that cannot be read or parsed answers False, so the caller suffixes
+    away from it instead of overwriting something it could not inspect.
+    """
+    from palinode.core import parser as _parser
+
+    try:
+        with open(path, "r") as existing:
+            existing_meta, _ = _parser.parse_markdown(existing.read())
+    except (OSError, ValueError, yaml.YAMLError):
+        return False
+    return str(existing_meta.get("content_hash", "")) == incoming_hash
+
+
 def _disambiguate_derived_slug(
     slug: str, file_path: str, content: str
 ) -> tuple[str, str]:
@@ -171,6 +191,9 @@ def _disambiguate_derived_slug(
 
     Re-saving *identical* content is left alone: that is the same memory
     arriving twice, and suffixing it would litter the store with duplicates.
+    That holds at every position, not just the base path -- a memory that was
+    pushed to ``slug-2`` on its first save must land back on ``slug-2`` when it
+    is saved again, or each repeat would claim another suffix.
 
     Only ever called for derived slugs. An explicit slug that collides is an
     update of the same logical memory and keeps its overwrite semantics.
@@ -178,21 +201,9 @@ def _disambiguate_derived_slug(
     if not os.path.exists(file_path):
         return slug, file_path
 
-    # Same content arriving twice is the same memory, not a collision. Compare
-    # against the content_hash already recorded in the file's frontmatter
-    # rather than re-deriving a body: parse_markdown returns chunks, not text.
-    from palinode.core import parser as _parser
-
     incoming_hash = hashlib.sha256(content.encode()).hexdigest()
-    try:
-        with open(file_path, "r") as existing:
-            existing_meta, _ = _parser.parse_markdown(existing.read())
-        if str(existing_meta.get("content_hash", "")) == incoming_hash:
-            return slug, file_path
-    except (OSError, ValueError, yaml.YAMLError):
-        # Unreadable or unparseable: suffix rather than overwrite something
-        # we could not inspect.
-        pass
+    if _holds_this_content(file_path, incoming_hash):
+        return slug, file_path
 
     directory = os.path.dirname(file_path)
     # Bounded so a pathological directory cannot spin here; the timestamp
@@ -200,14 +211,17 @@ def _disambiguate_derived_slug(
     for suffix in range(2, 1000):
         candidate_slug = f"{slug}-{suffix}"
         candidate_path = os.path.join(directory, f"{candidate_slug}.md")
-        if not os.path.exists(candidate_path):
-            logger.info(
-                "derived slug %r already taken; saving as %r to avoid "
-                "overwriting an unrelated memory",
-                slug,
-                candidate_slug,
-            )
-            return candidate_slug, candidate_path
+        if os.path.exists(candidate_path):
+            if _holds_this_content(candidate_path, incoming_hash):
+                return candidate_slug, candidate_path
+            continue
+        logger.info(
+            "derived slug %r already taken; saving as %r to avoid "
+            "overwriting an unrelated memory",
+            slug,
+            candidate_slug,
+        )
+        return candidate_slug, candidate_path
 
     candidate_slug = f"{slug}-{int(time.time() * 1000)}"
     return candidate_slug, os.path.join(directory, f"{candidate_slug}.md")

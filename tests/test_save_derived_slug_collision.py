@@ -69,6 +69,29 @@ def test_identical_content_is_not_duplicated(mock_memory_dir):
     assert len(os.listdir(directory)) == 1
 
 
+def test_resaving_a_suffixed_memory_reuses_its_own_file(mock_memory_dir):
+    """A memory pushed to a suffix stays there on re-save instead of climbing.
+
+    The base path belongs to someone else, so the hash check against it fails
+    every time. Without checking the suffixed candidates too, each re-save
+    would skip the occupied ``-2`` and claim ``-3``, ``-4``, and so on.
+    """
+    first = _save(f"{SHARED_OPENING}\n\nALPHA body text")
+    second = _save(f"{SHARED_OPENING}\n\nBRAVO body text")
+    again = _save(f"{SHARED_OPENING}\n\nBRAVO body text")
+
+    assert second["rel_path"] != first["rel_path"]
+    assert again["rel_path"] == second["rel_path"]
+
+    directory = os.path.dirname(first["file_path"])
+    assert sorted(os.listdir(directory)) == sorted(
+        [
+            os.path.basename(first["file_path"]),
+            os.path.basename(second["file_path"]),
+        ]
+    )
+
+
 def test_explicit_slug_still_overwrites(mock_memory_dir):
     """An explicit slug that collides is an update, and keeps that behaviour."""
     first = _save("first body", slug="pinned-note")
