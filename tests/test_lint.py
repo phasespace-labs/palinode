@@ -1,8 +1,11 @@
 from datetime import datetime, timedelta, timezone
-import pytest
 
-from palinode.core.lint import check_relative_dates, run_lint_pass
+import pytest
+from click.testing import CliRunner
+
+from palinode.cli.lint import api_client, lint as lint_command
 from palinode.core.config import config
+from palinode.core.lint import check_relative_dates, run_lint_pass
 
 
 @pytest.mark.parametrize(
@@ -126,6 +129,14 @@ def test_lint_cli_renders_relative_dates(monkeypatch):
     assert result.exit_code == 0
     assert "Relative Dates (1)" in result.output
     assert "decisions/launch.md:4: next month" in result.output
+
+
+def _run_lint_text(monkeypatch):
+    monkeypatch.setattr(api_client, "lint", run_lint_pass)
+    result = CliRunner().invoke(lint_command, ["--format", "text"])
+    assert result.exit_code == 0, result.output
+    return result.output
+
 
 def test_lint_pass(tmp_path, monkeypatch):
     """Test the lint logic with simulated memory files."""
@@ -360,3 +371,102 @@ def test_lint_wiki_drift_exempts_daily_logs(tmp_path, monkeypatch):
     assert not any(f.startswith("daily/") for f in drifted)
     # Scoped, not a mute: real drift in a real memory is still caught.
     assert any("drifted.md" in f for f in drifted)
+
+
+def test_lint_text_reports_wiki_drift(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    decisions_dir = tmp_path / "decisions"
+    decisions_dir.mkdir()
+    (decisions_dir / "drifter.md").write_text(
+        "---\nid: decisions-drifter\ncategory: decisions\ntype: Decision\n"
+        "priority: 3\ndescription: A drifting memory.\n"
+        "entities:\n- project/alpha\n- person/casey\n---\n"
+        "This body contains no wikilinks.\n",
+        encoding="utf-8",
+    )
+
+    output = _run_lint_text(monkeypatch)
+
+    assert "Wiki Drift (1)" in output
+    assert "drifter.md: [frontmatter_not_in_body]" in output
+    assert "project/alpha" in output
+    assert "person/casey" in output
+
+
+def test_lint_text_reports_clean_wiki_contract(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    insights_dir = tmp_path / "insights"
+    insights_dir.mkdir()
+    (insights_dir / "aligned.md").write_text(
+        "---\nid: insights-aligned\ncategory: insights\ntype: Insight\n"
+        "description: An aligned memory.\nentities:\n- project/alpha\n---\n"
+        "This body links [[project/alpha]].\n",
+        encoding="utf-8",
+    )
+
+    output = _run_lint_text(monkeypatch)
+
+    assert "No wiki drift" in output
+
+
+def test_lint_text_reports_missing_priority(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    decisions_dir = tmp_path / "decisions"
+    decisions_dir.mkdir()
+    (decisions_dir / "unranked.md").write_text(
+        "---\nid: decisions-unranked\ncategory: decisions\ntype: Decision\n"
+        "description: A decision without priority.\n"
+        "entities:\n- project/alpha\n---\n"
+        "This body links [[project/alpha]].\n",
+        encoding="utf-8",
+    )
+
+    output = _run_lint_text(monkeypatch)
+
+    assert "Missing Priority (1)" in output
+    assert "unranked.md" in output
+
+
+def test_lint_text_reports_clean_priority_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    decisions_dir = tmp_path / "decisions"
+    decisions_dir.mkdir()
+    (decisions_dir / "ranked.md").write_text(
+        "---\nid: decisions-ranked\ncategory: decisions\ntype: Decision\n"
+        "priority: 4\ndescription: A prioritized decision.\n"
+        "entities:\n- project/alpha\n---\n"
+        "This body links [[project/alpha]].\n",
+        encoding="utf-8",
+    )
+
+    output = _run_lint_text(monkeypatch)
+
+    assert "All core and Decision memories have priority" in output
+
+
+def test_lint_text_represents_every_lint_result_key(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    data = run_lint_pass()
+    output = _run_lint_text(monkeypatch)
+    output_markers = {
+        "total_files": "Files scanned: 0",
+        "orphaned_files": "No orphaned files",
+        "stale_files": "No stale active files",
+        "missing_fields": "No files missing frontmatter",
+        "contradictions": "No contradictions detected",
+        "missing_entities": "All files have entity refs",
+        "missing_descriptions": "All files have descriptions",
+        "missing_priority": "All core and Decision memories have priority",
+        "wiki_drift": "No wiki drift",
+        "relative_dates": "No relative dates",
+        "source_anchor_issues": "No source-anchor issues",
+        "claim_anchor_issues": "No claim-anchor issues",
+        "stale_open_questions": "No stale open questions",
+        "open_contradictions": "No open contradictions",
+        "entity_aliases": "No entity-alias candidates",
+        "core_count": "No core files found",
+    }
+
+    assert set(data) == set(output_markers)
+    for key, marker in output_markers.items():
+        assert marker in output, f"{key} is absent from text output"

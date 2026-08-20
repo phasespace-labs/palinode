@@ -12,6 +12,11 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 - Preserve the embedding-backend 503 response for `/triggers` and
   `/check-triggers` instead of converting outages into generic 500 errors.
+- **Complete text output for `palinode lint` (#113).** The human-readable report
+  now includes wiki-contract drift and missing human priority findings, including
+  explicit clean-state lines, instead of exposing those checks only through JSON.
+  It also reports the scanned-file total and has a coverage guard that fails when
+  a future `run_lint_pass()` result has no text representation.
 
 ### Removed
 

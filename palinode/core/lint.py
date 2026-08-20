@@ -382,14 +382,7 @@ def check_relative_dates(body: str) -> list[dict[str, str]]:
 
 
 def run_lint_pass() -> dict[str, Any]:
-    """Scan PALINODE_DIR for memory health issues.
-    
-    Checks for:
-    - Orphaned files (no entities, no references from other files)
-    - Stale files (not updated in 90+ days, still marked status: active)
-    - Missing fields (missing 'type', 'id', 'category')
-    - Contradictions (potential contradictions, heuristic check)
-    """
+    """Return every deterministic lint finding and the scanned-file total."""
     base_dir = getattr(config, 'memory_dir', config.palinode_dir)
     pattern = os.path.join(base_dir, "**/*.md")
     

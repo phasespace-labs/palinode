@@ -39,7 +39,7 @@ console = Console()
     help="Cosine similarity floor for candidate pairs in --deep-contradictions (0–1).",
 )
 def lint(fmt, deep_contradictions, max_llm_calls, similarity_threshold):
-    """Scan memory and report orphans, stale files, and contradictions."""
+    """Scan memory and report every deterministic memory-health check."""
     try:
         data = api_client.lint()
     except HTTPStatusError as e:
@@ -55,6 +55,7 @@ def lint(fmt, deep_contradictions, max_llm_calls, similarity_threshold):
         return
 
     console.print("\n[bold green]Palinode Memory Lint Report[/bold green]\n")
+    console.print(f"[dim]Files scanned: {data.get('total_files', 0)}[/dim]\n")
 
     if data["missing_fields"]:
         console.print(f"[bold yellow]Missing Frontmatter ({len(data['missing_fields'])})[/bold yellow]")
@@ -124,6 +125,32 @@ def lint(fmt, deep_contradictions, max_llm_calls, similarity_threshold):
                 )
     else:
         console.print("[green]✓ No relative dates[/green]")
+
+    console.print("")
+
+    missing_priority = data.get("missing_priority", [])
+    if missing_priority:
+        console.print(
+            f"[bold yellow]Missing Priority ({len(missing_priority)})[/bold yellow]"
+        )
+        for path in missing_priority:
+            console.print(f"  - {path}", markup=False)
+    else:
+        console.print("[green]✓ All core and Decision memories have priority[/green]")
+
+    console.print("")
+
+    wiki_drift = data.get("wiki_drift", [])
+    if wiki_drift:
+        console.print(f"[bold yellow]Wiki Drift ({len(wiki_drift)})[/bold yellow]")
+        for drift in wiki_drift:
+            for warning in drift["warnings"]:
+                console.print(
+                    f"  - {drift['file']}: [{warning['kind']}] {warning['detail']}",
+                    markup=False,
+                )
+    else:
+        console.print("[green]✓ No wiki drift[/green]")
 
     console.print("")
 
