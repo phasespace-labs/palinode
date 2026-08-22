@@ -10,6 +10,10 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- **CLI startup no longer imports the FastAPI application (#143).** The
+  Obsidian sync and frontmatter migration commands now use their core-layer
+  helpers directly, avoiding the API router and provenance-UI dependency tree
+  (and its configuration-log side effects) for ordinary CLI invocations.
 - Preserve the embedding-backend 503 response for `/triggers` and
   `/check-triggers` instead of converting outages into generic 500 errors.
 - **Complete text output for `palinode lint` (#113).** The human-readable report

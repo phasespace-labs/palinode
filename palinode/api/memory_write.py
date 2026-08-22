@@ -31,6 +31,7 @@ from palinode.core.defaults import SAVE_SOURCE_HEADER
 # either path — they are the same objects.
 from palinode.core.memory_write import (  # noqa: F401
     _CATEGORY_TO_ENTITY_PREFIX,
+    _MEMORY_CATEGORY_DIRS,
     _SAFE_SLUG_RE,
     _TYPE_TO_CATEGORY,
     _WIKI_FOOTER_MARKER,
@@ -70,15 +71,6 @@ def _resolve_source(req_source: str | None, request: Request | None) -> str:
     from palinode.core.save import default_source
 
     return default_source()
-
-
-#: The memory-category directories `save_api` writes to. A file outside these
-#: (a `daily/` journal, `archive/`, `specs/` incl. `specs/prompts/`, or a
-#: top-level doc like README.md / PROGRAM.md) is structural / non-memory: the
-#: description backfill regenerates a description for it every run but
-#: `_inject_description` never persists one (no memory frontmatter to land it
-#: in), so counting it as "pending" loops the backfill forever.
-_MEMORY_CATEGORY_DIRS: frozenset[str] = frozenset(_TYPE_TO_CATEGORY.values())
 
 
 def _is_description_eligible(relpath: str) -> bool:

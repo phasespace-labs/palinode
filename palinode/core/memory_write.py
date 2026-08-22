@@ -158,3 +158,7 @@ _TYPE_TO_CATEGORY: dict[str, str] = {
     "ResearchRef": "research",
     "ActionItem": "inbox",
 }
+
+#: The memory-category directories the save path writes to. Keep this next to
+#: ``_TYPE_TO_CATEGORY`` so core consumers do not need to import the API layer.
+_MEMORY_CATEGORY_DIRS: frozenset[str] = frozenset(_TYPE_TO_CATEGORY.values())

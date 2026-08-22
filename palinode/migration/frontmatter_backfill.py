@@ -91,9 +91,9 @@ from typing import Any, Literal
 import frontmatter as _frontmatter
 import yaml
 
-from palinode.api.memory_write import _MEMORY_CATEGORY_DIRS, _TYPE_TO_CATEGORY
 from palinode.core import git_tools
 from palinode.core.config import config
+from palinode.core.memory_write import _MEMORY_CATEGORY_DIRS, _TYPE_TO_CATEGORY
 
 logger = logging.getLogger("palinode.migration.frontmatter_backfill")
 

@@ -37,9 +37,9 @@ from typing import Optional
 
 import click
 
-from palinode.api.server import _apply_wiki_footer
 from palinode.core import git_tools
 from palinode.core.config import config
+from palinode.core.memory_write import _apply_wiki_footer
 from palinode.core.parser import parse_markdown
 
 # Directories skipped by all palinode tooling — mirrors lint.py's skip set
