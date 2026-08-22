@@ -22,6 +22,11 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Security
 
+- **Injection scanning blocks five additional `you are now` jailbreak shapes
+  (#126).** The enumerated matcher now covers uncensored, DAN-mode, evil or
+  administrator identities, and claims of bypassing safety rules without
+  widening the ordinary technical-prose cases fixed in #74.
+
 ## [0.13.0] — 2026-08-14
 
 ### Added

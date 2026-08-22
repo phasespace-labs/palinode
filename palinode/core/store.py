@@ -103,8 +103,8 @@ INJECTION_PATTERNS = [
     r'ignore\s+(?:all\s+)?(?:previous|prior|all)\s+instructions',
     (
         r'\byou\s+are\s+now\s+(?:'
-        r'(?:in\s+)?(?:developer|jailbreak|admin(?:istrator)?|god|unrestricted|unfiltered)\s+mode\b'
-        r'|(?:an?\s+)?(?:dan|jailbroken|unrestricted|unfiltered|root)\b'
+        r'(?:in\s+)?(?:dan|developer|jailbreak|admin(?:istrator)?|god|unrestricted|unfiltered)\s+mode\b'
+        r'|(?:an?\s+)?(?:dan|jailbroken|uncensored|unrestricted|unfiltered|root|evil\s+assistant|admin(?:istrator)?)\b'
         r'|(?:the\s+)?system(?:\s+assistant)?\b'
         r'|(?:going\s+to\s+)?act\s+as\s+(?:an?\s+)?'
         r'(?:dan|jailbroken|unrestricted|unfiltered|root|developer|admin(?:istrator)?|god)\b'
@@ -112,6 +112,7 @@ INJECTION_PATTERNS = [
         r'|free\s+of\s+(?:your|all|the)\s+(?:guidelines|rules|restrictions|instructions)\b'
         r'|(?:an?\s+)?(?:helpful|unrestricted|unfiltered)\s+assistant\s+with\s+no\s+'
         r'(?:rules|restrictions|guidelines)\b'
+        r'|able\s+to\s+bypass\s+(?:your\s+)?safety\s+(?:rules|guidelines|restrictions)\b'
         r')'
     ),
     r'disregard\s+(your|all)\s+(previous|prior)',

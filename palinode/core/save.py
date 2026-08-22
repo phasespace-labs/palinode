@@ -159,6 +159,74 @@ def _normalize_claims_or_reject(raw: Any, memory_ref: str) -> list[dict[str, Any
         raise SaveValidationError(str(exc))
 
 
+def _holds_this_content(path: str, incoming_hash: str) -> bool:
+    """True when *path* already holds exactly this content.
+
+    Compares against the ``content_hash`` recorded in the file's frontmatter
+    rather than re-deriving a body from it: ``parse_markdown`` returns chunks,
+    not the original text.
+
+    A file that cannot be read or parsed answers False, so the caller suffixes
+    away from it instead of overwriting something it could not inspect.
+    """
+    from palinode.core import parser as _parser
+
+    try:
+        with open(path, "r") as existing:
+            existing_meta, _ = _parser.parse_markdown(existing.read())
+    except (OSError, ValueError, yaml.YAMLError):
+        return False
+    return str(existing_meta.get("content_hash", "")) == incoming_hash
+
+
+def _disambiguate_derived_slug(
+    slug: str, file_path: str, content: str
+) -> tuple[str, str]:
+    """Give a content-derived slug its own path when one is already taken.
+
+    Two saves whose opening lines agree derive the same slug, and writing both
+    to that path leaves only the last one in the store -- no error, no warning,
+    and a receipt indistinguishable from a fresh create. The earlier memories
+    survive only in git history, which the queryable store never consults.
+
+    Re-saving *identical* content is left alone: that is the same memory
+    arriving twice, and suffixing it would litter the store with duplicates.
+    That holds at every position, not just the base path -- a memory that was
+    pushed to ``slug-2`` on its first save must land back on ``slug-2`` when it
+    is saved again, or each repeat would claim another suffix.
+
+    Only ever called for derived slugs. An explicit slug that collides is an
+    update of the same logical memory and keeps its overwrite semantics.
+    """
+    if not os.path.exists(file_path):
+        return slug, file_path
+
+    incoming_hash = hashlib.sha256(content.encode()).hexdigest()
+    if _holds_this_content(file_path, incoming_hash):
+        return slug, file_path
+
+    directory = os.path.dirname(file_path)
+    # Bounded so a pathological directory cannot spin here; the timestamp
+    # fallback below always terminates.
+    for suffix in range(2, 1000):
+        candidate_slug = f"{slug}-{suffix}"
+        candidate_path = os.path.join(directory, f"{candidate_slug}.md")
+        if os.path.exists(candidate_path):
+            if _holds_this_content(candidate_path, incoming_hash):
+                return candidate_slug, candidate_path
+            continue
+        logger.info(
+            "derived slug %r already taken; saving as %r to avoid "
+            "overwriting an unrelated memory",
+            slug,
+            candidate_slug,
+        )
+        return candidate_slug, candidate_path
+
+    candidate_slug = f"{slug}-{int(time.time() * 1000)}"
+    return candidate_slug, os.path.join(directory, f"{candidate_slug}.md")
+
+
 def save_memory(
     *,
     content: str,
@@ -262,7 +330,13 @@ def save_memory(
         # Prevent any potential JSON escape or traversal exploits if user defines slug
         slug = re.sub(r'[^a-z0-9]+', '-', slug.lower()).strip('-')
 
+    # Whether the slug was chosen by the caller or inferred from the content.
+    # An explicit slug that collides is an update of the same logical memory and
+    # must keep overwriting. A *derived* slug that collides is an accident
+    # between two unrelated memories, and overwriting there loses data silently.
+    slug_was_derived = False
     if not slug:
+        slug_was_derived = True
         slug = re.sub(r'[^a-z0-9]+', '-', content.split('\n')[0].lower()[:30]).strip('-')
         if not slug:
             slug = str(int(time.time()))
@@ -386,6 +460,9 @@ def save_memory(
 
     file_path = os.path.join(config.palinode_dir, category, f"{slug}.md")
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+    if slug_was_derived:
+        slug, file_path = _disambiguate_derived_slug(slug, file_path, content)
 
     content_hash = hashlib.sha256(content.encode()).hexdigest()
 
