@@ -47,6 +47,17 @@ _ALLOWLIST: tuple[tuple[str, str], ...] = (
     ("palinode/migration/mem0_generate.py", "open("),
 )
 
+# Test files whose reads and writes have been swept, listed one area at a time
+# as the native-Windows cleanup works through them. A file joins this tuple in
+# the same PR that sweeps it, so a later edit cannot quietly reintroduce a
+# locale-default call into an area already fixed. The rest of ``tests/`` is
+# deliberately absent: the scope is helpers exchanging files Palinode itself
+# wrote as UTF-8, not every locale-default call in the test tree.
+_SWEPT_TEST_FILES: tuple[str, ...] = (
+    "tests/test_executor.py",
+    "tests/test_executor_replace_guard.py",
+)
+
 _TEXT_MODE_TEMPFILE = {"NamedTemporaryFile", "TemporaryFile", "SpooledTemporaryFile"}
 _SUBPROCESS_TEXT = {"run", "Popen", "check_output", "call", "check_call"}
 
@@ -232,4 +243,22 @@ def test_non_ascii_memory_roundtrips_under_ascii_locale(tmp_path: Path) -> None:
     assert proc.returncode == 0 and out.endswith("OK"), (
         f"non-ASCII memory failed to round-trip under an ASCII locale\n"
         f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
+
+
+def test_swept_test_files_name_their_encoding() -> None:
+    """Test areas already swept for native Windows stay swept."""
+    offenders: list[str] = []
+    missing: list[str] = []
+    for rel in _SWEPT_TEST_FILES:
+        path = REPO_ROOT / rel
+        if not path.exists():
+            missing.append(rel)
+            continue
+        for lineno, segment in _scan(path):
+            offenders.append(f"{rel}:{lineno}: {segment}")
+    assert not missing, f"swept file no longer exists; update _SWEPT_TEST_FILES: {missing}"
+    assert not offenders, (
+        "text-mode I/O without encoding= in a test area already swept for "
+        'native Windows - add encoding="utf-8":\n  ' + "\n  ".join(offenders)
     )
