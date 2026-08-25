@@ -171,7 +171,7 @@ def client(tmp_path, monkeypatch):
 
 def _read_body(file_path: str) -> str:
     """Return the body (everything after the closing frontmatter ---) of a file."""
-    with open(file_path) as f:
+    with open(file_path, encoding="utf-8") as f:
         text = f.read()
     parts = text.split("---", 2)
     assert len(parts) >= 3, f"No frontmatter in {file_path}"
@@ -189,7 +189,7 @@ class TestSaveWikiFooterIntegration:
             res = client.post(
                 "/save",
                 json={
-                    "content": "Decided to adopt BGE-M3 for all embeddings.",
+                    "content": "Decided to adopt BGE-M3 — 日本語 embeddings too.",
                     "type": "Decision",
                     "entities": ["project/palinode", "person/alice"],
                 },
@@ -198,6 +198,9 @@ class TestSaveWikiFooterIntegration:
         body = _read_body(res.json()["file_path"])
         assert "## See also" in body
         assert _WIKI_FOOTER_MARKER in body
+        # The saved body is read back through _read_body. Non-ASCII here is
+        # what makes that read's encoding load-bearing rather than decorative.
+        assert "日本語" in body
         assert "[[palinode]]" in body
         assert "[[alice]]" in body
 

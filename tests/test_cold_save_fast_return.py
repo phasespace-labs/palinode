@@ -53,7 +53,8 @@ def _write_md(tmp_path) -> str:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(
         "---\nid: cold-save\ncategory: insights\n---\n\n"
-        "Zanzibar swordfish memorandum — distinctive FTS bait text.\n"
+        "Zanzibar swordfish memorandum — distinctive FTS bait text.\n",
+        encoding="utf-8",
     )
     return str(p)
 

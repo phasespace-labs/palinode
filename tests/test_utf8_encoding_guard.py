@@ -56,6 +56,12 @@ _ALLOWLIST: tuple[tuple[str, str], ...] = (
 _SWEPT_TEST_FILES: tuple[str, ...] = (
     "tests/test_executor.py",
     "tests/test_executor_replace_guard.py",
+    "tests/test_cold_save_fast_return.py",
+    "tests/test_save_derived_slug_collision.py",
+    "tests/test_save_git_committed.py",
+    "tests/test_save_inline_index.py",
+    "tests/test_save_project.py",
+    "tests/test_save_wiki_footer.py",
 )
 
 _TEXT_MODE_TEMPFILE = {"NamedTemporaryFile", "TemporaryFile", "SpooledTemporaryFile"}

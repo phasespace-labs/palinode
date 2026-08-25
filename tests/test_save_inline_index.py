@@ -273,7 +273,7 @@ class TestIndexFileVerifiesIndexPresence:
             "---\n\n"
             "Watcher defense-in-depth sentinel.\n"
         )
-        file_path.write_text(md)
+        file_path.write_text(md, encoding="utf-8")
 
         # First pass: full embed.
         with _patch_embed_ok():
@@ -334,7 +334,7 @@ class TestIndexFileVerifiesIndexPresence:
             "---\n\n"
             "Fast-path skip sentinel.\n"
         )
-        file_path.write_text(md)
+        file_path.write_text(md, encoding="utf-8")
 
         with _patch_embed_ok():
             index_file(str(file_path))
@@ -407,7 +407,7 @@ partial embed outage.
             "type: Insight\n"
             "created_at: '2026-06-10T00:00:00+00:00'\n"
             "---\n\n"
-            "Section body that will fail to embed.\n"
+            "Section body that will fail to embed.\n", encoding="utf-8"
         )
         return file_path
 
@@ -454,7 +454,7 @@ partial embed outage.
         file_path.write_text(
             "---\nid: insights-two\ncategory: insights\n---\n\n"
             f"## One\n\nFirst section embeds fine. {filler}\n\n"
-            f"## Two\n\nSecond section will fail. {filler}\n"
+            f"## Two\n\nSecond section will fail. {filler}\n", encoding="utf-8"
         )
 
         call = {"n": 0}

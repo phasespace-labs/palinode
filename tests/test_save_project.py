@@ -29,7 +29,7 @@ def mock_memory_dir(tmp_path):
 
 
 def _frontmatter(file_path: str) -> dict:
-    with open(file_path, "r") as f:
+    with open(file_path, "r", encoding="utf-8") as f:
         text = f.read()
     # Frontmatter is between the first two `---` lines.
     parts = text.split("---", 2)

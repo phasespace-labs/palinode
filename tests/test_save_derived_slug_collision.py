@@ -54,7 +54,7 @@ def test_colliding_derived_slugs_do_not_overwrite(mock_memory_dir):
     assert len(set(rel_paths)) == 3, f"expected 3 distinct paths, got {rel_paths}"
 
     for marker, result in zip(markers, results, strict=True):
-        with open(result["file_path"], "r") as fh:
+        with open(result["file_path"], "r", encoding="utf-8") as fh:
             assert marker in fh.read(), f"{marker} was overwritten and is gone"
 
 
@@ -98,7 +98,7 @@ def test_explicit_slug_still_overwrites(mock_memory_dir):
     second = _save("second body", slug="pinned-note")
 
     assert first["rel_path"] == second["rel_path"]
-    with open(second["file_path"], "r") as fh:
+    with open(second["file_path"], "r", encoding="utf-8") as fh:
         body = fh.read()
     assert "second body" in body
     assert "first body" not in body

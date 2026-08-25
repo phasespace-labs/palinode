@@ -35,7 +35,12 @@ _FAKE_VECTOR = [0.01] * 1024
 
 def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", "-C", str(cwd), *args], capture_output=True, text=True, check=False,
+        ["git", "-C", str(cwd), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+        encoding="utf-8",
+        errors="replace",
     )
 
 
@@ -106,7 +111,7 @@ class TestNotARepo:
     def test_choke_point_outcome(self, memory_dir):
         target = memory_dir / "insights"
         target.mkdir()
-        (target / "x.md").write_text("x\n")
+        (target / "x.md").write_text("x\n", encoding="utf-8")
         outcome = git_tools.try_commit_memory_files([str(target / "x.md")], "m")
         assert outcome.committed is False
         assert outcome.error and "not a git repository" in outcome.error
@@ -158,7 +163,7 @@ class TestHealthyRepo:
 
     def test_index_lock_contention_is_reported(self, memory_dir):
         _init_repo(memory_dir, identity=True)
-        (memory_dir / ".git" / "index.lock").write_text("")
+        (memory_dir / ".git" / "index.lock").write_text("", encoding="utf-8")
         result = _save("locked")
 
         assert result["git_committed"] is False
