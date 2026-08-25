@@ -27,16 +27,17 @@ category: project
 - [2024-01-01] The project started today <!-- fact:f1 -->
 - [2024-01-02] An update occurred <!-- fact:f2 -->
 - [2024-01-03] Another update <!-- fact:f3 -->
+- [2024-01-04] Rollout to the café team — 日本語 notes <!-- fact:f4 -->
 """
     path = tmp_path / "project-alpha.md"
-    path.write_text(content)
+    path.write_text(content, encoding="utf-8")
     return str(path)
 
 def test_keep_operation(temp_memory_file):
     ops = [{"op": "KEEP", "id": "f1"}]
     stats = apply_operations(temp_memory_file, ops)
     assert stats["kept"] == 1
-    with open(temp_memory_file) as f:
+    with open(temp_memory_file, encoding="utf-8") as f:
         content = f.read()
     assert "The project started today <!-- fact:f1 -->" in content
 
@@ -44,7 +45,7 @@ def test_update_operation(temp_memory_file):
     ops = [{"op": "UPDATE", "id": "f2", "new_text": "- [2024-01-02] A significant update occurred"}]
     stats = apply_operations(temp_memory_file, ops)
     assert stats["updated"] == 1
-    with open(temp_memory_file) as f:
+    with open(temp_memory_file, encoding="utf-8") as f:
         content = f.read()
     assert "A significant update occurred <!-- fact:f2 -->" in content
     assert "An update occurred" not in content
@@ -53,7 +54,7 @@ def test_merge_operation(temp_memory_file):
     ops = [{"op": "MERGE", "ids": ["f2", "f3"], "new_text": "- [2024-01-02] Important combined updates"}]
     stats = apply_operations(temp_memory_file, ops)
     assert stats["merged"] == 1
-    with open(temp_memory_file) as f:
+    with open(temp_memory_file, encoding="utf-8") as f:
         content = f.read()
     assert "Important combined updates <!-- fact:merged-f2 -->" in content
     assert "<!-- fact:f3 -->" not in content
@@ -62,7 +63,7 @@ def test_supersede_operation(temp_memory_file):
     ops = [{"op": "SUPERSEDE", "id": "f1", "new_text": "- [2024-01-04] The project was restarted", "reason": "Change of plans"}]
     stats = apply_operations(temp_memory_file, ops)
     assert stats["superseded"] == 1
-    with open(temp_memory_file) as f:
+    with open(temp_memory_file, encoding="utf-8") as f:
         content = f.read()
     assert "~~[2024-01-01] The project started today~~" in content
     assert "The project was restarted <!-- fact:supersedes-f1 -->" in content
@@ -70,7 +71,7 @@ def test_supersede_operation(temp_memory_file):
     # Check history file
     history_file = temp_memory_file.replace(".md", "-history.md")
     assert os.path.exists(history_file)
-    with open(history_file) as f:
+    with open(history_file, encoding="utf-8") as f:
         hist = f.read()
     assert "Superseded" in hist
     os.remove(history_file)
@@ -79,13 +80,13 @@ def test_archive_operation(temp_memory_file):
     ops = [{"op": "ARCHIVE", "id": "f2", "reason": "No longer relevant"}]
     stats = apply_operations(temp_memory_file, ops)
     assert stats["archived"] == 1
-    with open(temp_memory_file) as f:
+    with open(temp_memory_file, encoding="utf-8") as f:
         content = f.read()
     assert "An update occurred" not in content
     
     history_file = temp_memory_file.replace(".md", "-history.md")
     assert os.path.exists(history_file)
-    with open(history_file) as f:
+    with open(history_file, encoding="utf-8") as f:
         hist = f.read()
     assert "Archived" in hist
     # the history file must carry `status: archived` so the relocated
@@ -119,17 +120,17 @@ def test_missing_fact_id_is_noop(temp_memory_file):
     assert not os.path.exists(temp_memory_file.replace(".md", "-history.md"))
 
 def test_empty_operations_leave_file_unchanged(temp_memory_file):
-    with open(temp_memory_file) as f:
+    with open(temp_memory_file, encoding="utf-8") as f:
         before = f.read()
     stats = apply_operations(temp_memory_file, [])
-    with open(temp_memory_file) as f:
+    with open(temp_memory_file, encoding="utf-8") as f:
         after = f.read()
     assert before == after
     assert stats == {"kept": 0, "updated": 0, "merged": 0, "superseded": 0, "archived": 0, "retracted": 0, "merge_rejected": 0, "protected_rejected": 0, "contradicts_proposed": 0, "unmatched": 0}
 
 
 def test_atomic_main_write_failure_preserves_original_file(temp_memory_file, monkeypatch):
-    with open(temp_memory_file) as f:
+    with open(temp_memory_file, encoding="utf-8") as f:
         before = f.read()
 
     def fail_replace(src, dst):
@@ -143,7 +144,7 @@ def test_atomic_main_write_failure_preserves_original_file(temp_memory_file, mon
             [{"op": "UPDATE", "id": "f2", "new_text": "- [2024-01-02] A significant update occurred"}],
         )
 
-    with open(temp_memory_file) as f:
+    with open(temp_memory_file, encoding="utf-8") as f:
         after = f.read()
 
     assert after == before
@@ -157,7 +158,7 @@ def test_atomic_main_write_failure_preserves_original_file(temp_memory_file, mon
 
 
 def test_atomic_history_write_failure_preserves_original_file(temp_memory_file, monkeypatch):
-    with open(temp_memory_file) as f:
+    with open(temp_memory_file, encoding="utf-8") as f:
         before = f.read()
 
     history_file = temp_memory_file.replace(".md", "-history.md")
@@ -183,7 +184,7 @@ def test_atomic_history_write_failure_preserves_original_file(temp_memory_file, 
             ],
         )
 
-    with open(temp_memory_file) as f:
+    with open(temp_memory_file, encoding="utf-8") as f:
         after = f.read()
 
     assert after == before
@@ -201,7 +202,7 @@ def test_atomic_history_write_failure_preserves_original_file(temp_memory_file, 
 
 
 def test_atomic_history_new_file_creation_failure_cleans_temp_file(temp_memory_file, monkeypatch):
-    with open(temp_memory_file) as f:
+    with open(temp_memory_file, encoding="utf-8") as f:
         before = f.read()
 
     history_file = temp_memory_file.replace(".md", "-history.md")
@@ -220,7 +221,7 @@ def test_atomic_history_new_file_creation_failure_cleans_temp_file(temp_memory_f
             [{"op": "ARCHIVE", "id": "f2", "reason": "No longer relevant"}],
         )
 
-    with open(temp_memory_file) as f:
+    with open(temp_memory_file, encoding="utf-8") as f:
         after = f.read()
 
     assert after == before
@@ -254,7 +255,7 @@ def test_atomic_write_directory_fsync_failure_propagates_and_cleans_temp(temp_me
             [{"op": "UPDATE", "id": "f2", "new_text": "- [2024-01-02] A significant update occurred"}],
         )
 
-    with open(temp_memory_file) as f:
+    with open(temp_memory_file, encoding="utf-8") as f:
         content = f.read()
 
     assert "A significant update occurred <!-- fact:f2 -->" in content
@@ -272,7 +273,7 @@ def test_replace_policy_parse_exception_warns_and_falls_open(
     monkeypatch,
     caplog,
 ):
-    with open(temp_memory_file, "w") as f:
+    with open(temp_memory_file, "w", encoding="utf-8") as f:
         f.write(
             "---\nid: living-doc\nupdate_policy: replace\n---\n\n"
             "- [2024-01-01] Current living fact <!-- fact:f1 -->\n"
@@ -304,7 +305,7 @@ def test_replace_policy_corrupt_metadata_warning_warns_and_falls_open(
     monkeypatch,
     caplog,
 ):
-    with open(temp_memory_file, "w") as f:
+    with open(temp_memory_file, "w", encoding="utf-8") as f:
         f.write(
             "---\nid: living-doc\nupdate_policy: replace\n---\n\n"
             "- [2024-01-01] Current living fact <!-- fact:f1 -->\n"
@@ -336,7 +337,7 @@ def test_retract_operation(temp_memory_file):
     ops = [{"op": "RETRACT", "id": "f2", "reason": "This was never true"}]
     stats = apply_operations(temp_memory_file, ops)
     assert stats["retracted"] == 1
-    with open(temp_memory_file) as f:
+    with open(temp_memory_file, encoding="utf-8") as f:
         content = f.read()
     # Fact should be struck through with RETRACTED label
     assert "~~[2024-01-02] An update occurred~~" in content
@@ -348,7 +349,7 @@ def test_retract_operation(temp_memory_file):
     # Check history file
     history_file = temp_memory_file.replace(".md", "-history.md")
     assert os.path.exists(history_file)
-    with open(history_file) as f:
+    with open(history_file, encoding="utf-8") as f:
         hist = f.read()
     assert "Retracted" in hist
     assert "This was never true" in hist
@@ -360,7 +361,7 @@ def test_retract_without_reason(temp_memory_file):
     ops = [{"op": "RETRACT", "id": "f1"}]
     stats = apply_operations(temp_memory_file, ops)
     assert stats["retracted"] == 1
-    with open(temp_memory_file) as f:
+    with open(temp_memory_file, encoding="utf-8") as f:
         content = f.read()
     assert "~~[2024-01-01] The project started today~~" in content
     assert "[RETRACTED" in content
@@ -408,7 +409,7 @@ category: project
 - [2026-04-27] Yesterday's note <!-- fact:s3 -->
 """
     path = tmp_path / "project-beta.md"
-    path.write_text(content)
+    path.write_text(content, encoding="utf-8")
     return str(path)
 
 
@@ -418,7 +419,7 @@ def test_nightly_merge_accepts_same_day(temp_same_day_file):
     stats = apply_operations(temp_same_day_file, ops, nightly_policy=True)
     assert stats["merged"] == 1
     assert stats["merge_rejected"] == 0
-    with open(temp_same_day_file) as f:
+    with open(temp_same_day_file, encoding="utf-8") as f:
         content = f.read()
     assert "Combined daily note" in content
     # s2 should be gone after the merge
@@ -432,7 +433,7 @@ def test_nightly_merge_rejects_cross_date(temp_same_day_file):
     assert stats["merged"] == 0
     assert stats["merge_rejected"] == 1
     # File content should be unchanged
-    with open(temp_same_day_file) as f:
+    with open(temp_same_day_file, encoding="utf-8") as f:
         content = f.read()
     assert "Morning session note" in content
     assert "Yesterday's note" in content
@@ -441,7 +442,7 @@ def test_nightly_merge_rejects_cross_date(temp_same_day_file):
 def test_nightly_merge_rejects_undated_fact(temp_same_day_file):
     """nightly_policy=True: MERGE involving a fact without a date is rejected."""
     # Patch in an undated fact
-    with open(temp_same_day_file, "a") as f:
+    with open(temp_same_day_file, "a", encoding="utf-8") as f:
         f.write("- Undated note <!-- fact:s4 -->\n")
     ops = [{"op": "MERGE", "ids": ["s1", "s4"], "new_text": "[2026-04-28] Merged"}]
     stats = apply_operations(temp_same_day_file, ops, nightly_policy=True)

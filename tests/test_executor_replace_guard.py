@@ -33,7 +33,7 @@ def _memory_dir(tmp_path, monkeypatch):
 def _write(content: str, *, _dir=None) -> str:
     directory = _dir if _dir is not None else config.memory_dir
     path = os.path.join(directory, f"{uuid.uuid4().hex}.md")
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(content)
     return path
 
@@ -95,7 +95,7 @@ def test_supersede_refused_on_replace_doc(replace_doc):
     assert stats["superseded"] == 0
     assert stats["protected_rejected"] == 1
 
-    with open(replace_doc) as f:
+    with open(replace_doc, encoding="utf-8") as f:
         content = f.read()
     # Original fact untouched: no strikethrough, no supersedes- sibling.
     assert "~~" not in content
@@ -112,7 +112,7 @@ def test_archive_refused_on_replace_doc(replace_doc):
     assert stats["archived"] == 0
     assert stats["protected_rejected"] == 1
 
-    with open(replace_doc) as f:
+    with open(replace_doc, encoding="utf-8") as f:
         content = f.read()
     # Fact still present — not removed into history.
     assert "uptime-kuma is DOWN (HTTP 502) <!-- fact:f1 -->" in content
@@ -132,7 +132,7 @@ def test_supersede_still_works_on_episodic_doc(episodic_doc):
     assert stats["superseded"] == 1
     assert stats["protected_rejected"] == 0
 
-    with open(episodic_doc) as f:
+    with open(episodic_doc, encoding="utf-8") as f:
         content = f.read()
     assert "~~[2024-01-01] The project started today~~" in content
     assert "The project was restarted <!-- fact:supersedes-f1 -->" in content
@@ -146,7 +146,7 @@ def test_archive_still_works_on_episodic_doc(episodic_doc):
     assert stats["archived"] == 1
     assert stats["protected_rejected"] == 0
 
-    with open(episodic_doc) as f:
+    with open(episodic_doc, encoding="utf-8") as f:
         content = f.read()
     assert "The project started today" not in content
     assert os.path.exists(episodic_doc.replace(".md", "-history.md"))
@@ -165,7 +165,7 @@ def test_update_still_allowed_on_replace_doc(replace_doc):
     assert stats["updated"] == 1
     assert stats["protected_rejected"] == 0
 
-    with open(replace_doc) as f:
+    with open(replace_doc, encoding="utf-8") as f:
         content = f.read()
     assert "uptime-kuma is UP (HTTP 200) <!-- fact:f1 -->" in content
     assert "is DOWN (HTTP 502)" not in content
@@ -188,7 +188,7 @@ def test_retract_refused_on_replace_doc(replace_doc):
     assert stats["retracted"] == 0
     assert stats["protected_rejected"] == 1
 
-    with open(replace_doc) as f:
+    with open(replace_doc, encoding="utf-8") as f:
         content = f.read()
     # Original fact untouched: no strikethrough tombstone in the living doc.
     assert "~~" not in content
@@ -205,6 +205,6 @@ def test_retract_allowed_on_episodic_doc(episodic_doc):
 
     assert stats["retracted"] == 1
     assert stats["protected_rejected"] == 0
-    with open(episodic_doc) as f:
+    with open(episodic_doc, encoding="utf-8") as f:
         content = f.read()
     assert "[RETRACTED" in content
