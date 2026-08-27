@@ -52,7 +52,7 @@ def _run_session_end(tmp_path, monkeypatch, **kwargs):
     projects_dir = os.path.join(memory_dir, "projects")
     os.makedirs(projects_dir, exist_ok=True)
     status_path = os.path.join(projects_dir, "palinode-status.md")
-    with open(status_path, "w") as f:
+    with open(status_path, "w", encoding="utf-8") as f:
         f.write("# palinode status\n")
 
     with mock.patch("palinode.api.routers.session._check_session_end_dedup",
@@ -63,7 +63,7 @@ def _run_session_end(tmp_path, monkeypatch, **kwargs):
         kwargs.setdefault("source", "test")
         result = session_end_api(SessionEndRequest(**kwargs))
 
-    return result, open(status_path).read()
+    return result, open(status_path, encoding="utf-8").read()
 
 
 def _last_status_line(status_text: str) -> str:
@@ -88,11 +88,11 @@ def test_arrays_survive_to_every_writer(tmp_path, monkeypatch):
         blockers=blockers,
     )
 
-    daily = open(os.path.join(str(tmp_path), result["daily_file"])).read()
+    daily = open(os.path.join(str(tmp_path), result["daily_file"]), encoding="utf-8").read()
     for entry in decisions + blockers:
         assert entry in daily, f"daily note lost {entry!r}"
 
-    individual = open(result["individual_file"]).read()
+    individual = open(result["individual_file"], encoding="utf-8").read()
     for entry in decisions + blockers:
         assert entry in individual, f"indexed file lost {entry!r}"
 
@@ -127,7 +127,7 @@ def test_status_line_falls_back_to_daily_when_no_indexed_file(tmp_path, monkeypa
     monkeypatch.setattr(config.git, "auto_commit", False)
     os.makedirs(os.path.join(memory_dir, "projects"), exist_ok=True)
     status_path = os.path.join(memory_dir, "projects", "palinode-status.md")
-    with open(status_path, "w") as f:
+    with open(status_path, "w", encoding="utf-8") as f:
         f.write("# palinode status\n")
 
     with mock.patch("palinode.api.routers.session._check_session_end_dedup",
@@ -140,7 +140,7 @@ def test_status_line_falls_back_to_daily_when_no_indexed_file(tmp_path, monkeypa
         ))
 
     assert result["individual_file"] is None
-    line = _last_status_line(open(status_path).read())
+    line = _last_status_line(open(status_path, encoding="utf-8").read())
     assert result["daily_file"] in line, line
 
 

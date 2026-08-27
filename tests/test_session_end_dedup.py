@@ -63,7 +63,7 @@ def _index_prior_save(
     file and (optionally) backdate it via ``os.utime``.
     """
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
-    with open(file_path, "w") as f:
+    with open(file_path, "w", encoding="utf-8") as f:
         f.write(content)
     if mtime is not None:
         ts = mtime.timestamp()
@@ -161,7 +161,7 @@ def test_above_threshold_skips_individual_file(_isolated_env):
 
     # Pre-create the project status file so we can verify its append still happens
     status_path = os.path.join(memory_dir, "projects", "palinode-status.md")
-    with open(status_path, "w") as f:
+    with open(status_path, "w", encoding="utf-8") as f:
         f.write("# palinode status\n")
 
     with (
@@ -185,9 +185,9 @@ def test_above_threshold_skips_individual_file(_isolated_env):
     # Daily note still appended
     daily_path = os.path.join(memory_dir, result["daily_file"])
     assert os.path.exists(daily_path)
-    assert "Same content, reformatted" in open(daily_path).read()
+    assert "Same content, reformatted" in open(daily_path, encoding="utf-8").read()
     # Project status file still appended
-    status_text = open(status_path).read()
+    status_text = open(status_path, encoding="utf-8").read()
     assert "Same content, reformatted" in status_text
 
 

@@ -245,7 +245,7 @@ def test_l2_daily_note_and_project_status_and_individual_file(
 
     # Pre-create the project status file so the CLI's append path runs
     status_path = os.path.join(memory_dir, "projects", "palinode-status.md")
-    with open(status_path, "w") as f:
+    with open(status_path, "w", encoding="utf-8") as f:
         f.write("# palinode status\n")
 
     summary = "L2 test — wrote daily, status, and indexed individual file"
@@ -268,7 +268,7 @@ def test_l2_daily_note_and_project_status_and_individual_file(
     # --- Daily note ------------------------------------------------------
     daily_path = os.path.join(memory_dir, "daily", f"{_today()}.md")
     assert os.path.exists(daily_path), f"daily note not found at {daily_path}"
-    daily_text = open(daily_path).read()
+    daily_text = open(daily_path, encoding="utf-8").read()
     assert "## Session End" in daily_text
     assert summary in daily_text
     assert "Daily append remains the primary path" in daily_text
@@ -277,7 +277,7 @@ def test_l2_daily_note_and_project_status_and_individual_file(
     assert "**Source:** test" in daily_text
 
     # --- Project status --------------------------------------------------
-    status_text = open(status_path).read()
+    status_text = open(status_path, encoding="utf-8").read()
     assert summary[:80] in status_text, "project-status file did not get the new entry"
     assert f"[{_today()}]" in status_text, "status entry must be date-stamped"
 
@@ -287,7 +287,7 @@ def test_l2_daily_note_and_project_status_and_individual_file(
         f"individual file not at {individual_path}; "
         f"projects/ has {os.listdir(os.path.join(memory_dir, 'projects'))}"
     )
-    ind_text = open(individual_path).read()
+    ind_text = open(individual_path, encoding="utf-8").read()
     # Frontmatter must round-trip type, project entity, and the source
     parts = ind_text.split("---", 2)
     fm = yaml.safe_load(parts[1])
@@ -318,7 +318,7 @@ def test_l2_no_project_lands_in_insights(isolated_memory, cli_with_api_redirect,
         f"individual file not at {individual_path}; "
         f"insights/ has {os.listdir(os.path.join(memory_dir, 'insights'))}"
     )
-    ind_text = open(individual_path).read()
+    ind_text = open(individual_path, encoding="utf-8").read()
     fm = yaml.safe_load(ind_text.split("---", 2)[1])
     assert fm["type"] == "Insight"
     assert fm["category"] == "insights"

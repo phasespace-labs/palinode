@@ -120,7 +120,7 @@ def test_hook_script_uses_hook_timeout_variable():
     """examples/hooks/palinode-session-end.sh must use ${HOOK_TIMEOUT} in curl."""
     hook = REPO_ROOT / "examples" / "hooks" / "palinode-session-end.sh"
     assert hook.exists(), f"Hook not found: {hook}"
-    source = hook.read_text()
+    source = hook.read_text(encoding="utf-8")
     # Must set HOOK_TIMEOUT from env with a default
     assert re.search(r'HOOK_TIMEOUT=.*PALINODE_HOOK_TIMEOUT', source), (
         "Hook must set HOOK_TIMEOUT from PALINODE_HOOK_TIMEOUT env var"
@@ -138,14 +138,14 @@ def test_hook_script_default_is_less_than_runner_timeout():
     kills it, giving the || true a chance to run.
     """
     hook = REPO_ROOT / "examples" / "hooks" / "palinode-session-end.sh"
-    source = hook.read_text()
+    source = hook.read_text(encoding="utf-8")
     # Extract the default from HOOK_TIMEOUT="${PALINODE_HOOK_TIMEOUT:-N}"
     match = re.search(r'HOOK_TIMEOUT=.*:-(\d+)', source)
     assert match, "Could not find HOOK_TIMEOUT default in hook script"
     hook_default = int(match.group(1))
 
     settings = REPO_ROOT / "examples" / "hooks" / "settings.json"
-    runner_timeout = json.loads(settings.read_text())["hooks"]["SessionEnd"][0]["hooks"][0]["timeout"]
+    runner_timeout = json.loads(settings.read_text(encoding="utf-8"))["hooks"]["SessionEnd"][0]["hooks"][0]["timeout"]
 
     assert hook_default < runner_timeout, (
         f"Hook curl default ({hook_default}s) must be < runner timeout ({runner_timeout}s) "
@@ -159,7 +159,7 @@ def test_hook_script_default_is_less_than_runner_timeout():
 def test_init_py_hook_mirrors_canonical_hook():
     """palinode/cli/init.py HOOK_SCRIPT must use ${HOOK_TIMEOUT} (not hardcoded)."""
     init_py = REPO_ROOT / "palinode" / "cli" / "init.py"
-    source = init_py.read_text()
+    source = init_py.read_text(encoding="utf-8")
     # Find the HOOK_SCRIPT string literal block
     assert "PALINODE_HOOK_TIMEOUT" in source, (
         "init.py HOOK_SCRIPT must reference PALINODE_HOOK_TIMEOUT (#377)"
@@ -172,7 +172,7 @@ def test_init_py_hook_mirrors_canonical_hook():
 def test_init_py_settings_timeout_matches_canonical():
     """palinode/cli/init.py SETTINGS_HOOK_BLOCK timeout must match examples/hooks/settings.json."""
     settings = REPO_ROOT / "examples" / "hooks" / "settings.json"
-    canonical_timeout = json.loads(settings.read_text())["hooks"]["SessionEnd"][0]["hooks"][0]["timeout"]
+    canonical_timeout = json.loads(settings.read_text(encoding="utf-8"))["hooks"]["SessionEnd"][0]["hooks"][0]["timeout"]
 
     # Extract from init.py via import
     sys.path.insert(0, str(REPO_ROOT))
@@ -198,7 +198,7 @@ def test_hook_script_byte_identical_to_canonical():
     from palinode.cli.init import HOOK_SCRIPT
 
     canonical = REPO_ROOT / "examples" / "hooks" / "palinode-session-end.sh"
-    assert HOOK_SCRIPT == canonical.read_text(), (
+    assert HOOK_SCRIPT == canonical.read_text(encoding="utf-8"), (
         "palinode/cli/init.py HOOK_SCRIPT has drifted from "
         "examples/hooks/palinode-session-end.sh — re-sync them byte-for-byte."
     )

@@ -121,7 +121,7 @@ def test_rejection_writes_nothing_at_all(tmp_path, monkeypatch):
     half-captured session behind in the daily note or the status file."""
     os.makedirs(os.path.join(str(tmp_path), "projects"))
     status_path = os.path.join(str(tmp_path), "projects", "palinode-status.md")
-    with open(status_path, "w") as f:
+    with open(status_path, "w", encoding="utf-8") as f:
         f.write("# palinode status\n")
 
     with pytest.raises(HTTPException):
@@ -129,7 +129,7 @@ def test_rejection_writes_nothing_at_all(tmp_path, monkeypatch):
               summary="Broken</decisions>", project="palinode")
 
     assert not os.path.exists(os.path.join(str(tmp_path), "daily"))
-    assert open(status_path).read() == "# palinode status\n"
+    assert open(status_path, encoding="utf-8").read() == "# palinode status\n"
 
 
 def test_wire_level_400_carries_the_detail(tmp_path, monkeypatch):
@@ -376,7 +376,8 @@ def _run_hook(tmp_path: Path, transcript: str) -> dict:
 
     env = dict(os.environ, PALINODE_HOOK_DRYRUN="1")
     proc = subprocess.run(["bash", str(HOOK)], input=stdin,
-                          capture_output=True, text=True, env=env)
+                          capture_output=True, text=True, env=env,
+                          encoding="utf-8", errors="replace")
     assert proc.returncode == 0, f"hook must exit 0; got {proc.returncode}: {proc.stderr}"
     body = proc.stdout.split("\n", 1)[1]
     return json.loads(body)
@@ -438,7 +439,7 @@ def test_dry_run_writes_absolutely_nothing(tmp_path, monkeypatch):
     record to do it — twice, in practice."""
     os.makedirs(os.path.join(str(tmp_path), "projects"))
     status_path = os.path.join(str(tmp_path), "projects", "palinode-status.md")
-    with open(status_path, "w") as f:
+    with open(status_path, "w", encoding="utf-8") as f:
         f.write("# palinode status\n")
 
     result = _dry(tmp_path, monkeypatch, summary="A perfectly valid summary",
@@ -448,7 +449,7 @@ def test_dry_run_writes_absolutely_nothing(tmp_path, monkeypatch):
     assert result["committed"] is False and result["pushed"] is False
     # Nothing on disk moved.
     assert not os.path.exists(os.path.join(str(tmp_path), "daily"))
-    assert open(status_path).read() == "# palinode status\n"
+    assert open(status_path, encoding="utf-8").read() == "# palinode status\n"
 
 
 def test_dry_run_renders_the_entry_it_would_write(tmp_path, monkeypatch):
@@ -478,7 +479,7 @@ def test_dry_run_reports_status_file_only_when_it_exists(tmp_path, monkeypatch):
     assert absent["status_file"] is None
 
     os.makedirs(os.path.join(str(tmp_path), "projects"), exist_ok=True)
-    with open(os.path.join(str(tmp_path), "projects", "palinode-status.md"), "w") as f:
+    with open(os.path.join(str(tmp_path), "projects", "palinode-status.md"), "w", encoding="utf-8") as f:
         f.write("# palinode status\n")
     present = _dry(tmp_path, monkeypatch, summary="s", project="palinode")
     assert present["status_file"] == "projects/palinode-status.md"

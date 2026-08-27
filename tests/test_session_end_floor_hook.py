@@ -55,7 +55,13 @@ def _run(tmp_path: Path, transcript_body: str, extra_env: dict | None = None) ->
     if extra_env:
         env.update(extra_env)
     proc = subprocess.run(
-        ["bash", str(HOOK)], input=payload, capture_output=True, text=True, env=env
+        ["bash", str(HOOK)],
+        input=payload,
+        capture_output=True,
+        text=True,
+        env=env,
+        encoding="utf-8",
+        errors="replace",
     )
     assert proc.returncode == 0, f"hook must always exit 0; got {proc.returncode}: {proc.stderr}"
     return proc.stdout

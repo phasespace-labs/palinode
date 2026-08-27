@@ -36,7 +36,7 @@ def test_session_end_creates_daily_and_individual(tmp_path, monkeypatch):
         from palinode.api.server import session_end_api, SessionEndRequest
 
         req = SessionEndRequest(
-            summary="Implemented entity normalization",
+            summary="Implemented entity normalization — café, 日本語",
             decisions=["Use category-based prefix inference"],
             blockers=["Need to test with live Ollama"],
             project="palinode",
@@ -48,8 +48,11 @@ def test_session_end_creates_daily_and_individual(tmp_path, monkeypatch):
     daily_file = result["daily_file"]
     daily_path = os.path.join(memory_dir, daily_file)
     assert os.path.exists(daily_path), f"Daily file not found: {daily_path}"
-    daily_content = open(daily_path).read()
+    daily_content = open(daily_path, encoding="utf-8").read()
     assert "Implemented entity normalization" in daily_content
+    # The daily note is written by Palinode as UTF-8 and read back here. Non-ASCII
+    # in the summary is what makes this read's encoding load-bearing.
+    assert "日本語" in daily_content
 
     # Individual file should exist
     individual_file = result.get("individual_file")
@@ -57,7 +60,7 @@ def test_session_end_creates_daily_and_individual(tmp_path, monkeypatch):
     assert os.path.exists(individual_file), f"Individual file not found: {individual_file}"
 
     # Individual file should have frontmatter with entities
-    ind_content = open(individual_file).read()
+    ind_content = open(individual_file, encoding="utf-8").read()
     assert "project/palinode" in ind_content
     # the auto-description is no longer written inline on save — it is
     # deferred to the watcher-driven /generate-summaries backfill, so the file
@@ -86,7 +89,7 @@ def test_session_end_no_project(tmp_path, monkeypatch):
     assert os.path.exists(individual_file)
 
     # Should be in insights/ category (Insight type)
-    ind_content = open(individual_file).read()
+    ind_content = open(individual_file, encoding="utf-8").read()
     assert "category: insights" in ind_content
 
 
@@ -130,7 +133,7 @@ def test_session_end_with_full_metadata(tmp_path, monkeypatch):
         result = session_end_api(req)
 
     daily_path = os.path.join(memory_dir, result["daily_file"])
-    daily = open(daily_path).read()
+    daily = open(daily_path, encoding="utf-8").read()
     # Daily note should carry all six metadata lines
     assert "**Harness:** claude-code" in daily
     assert "**CWD:** /Users/alice/Code/my-project" in daily
@@ -140,7 +143,7 @@ def test_session_end_with_full_metadata(tmp_path, monkeypatch):
     assert "**Duration:** 4837s" in daily
 
     ind_path = result["individual_file"]
-    ind = open(ind_path).read()
+    ind = open(ind_path, encoding="utf-8").read()
     # Frontmatter should carry the metadata as structured fields
     assert "harness: claude-code" in ind
     assert "model: claude-opus-4-7" in ind
@@ -162,7 +165,7 @@ def test_session_end_without_metadata_keeps_daily_clean(tmp_path, monkeypatch):
         req = SessionEndRequest(summary="No metadata", source="test")
         result = session_end_api(req)
 
-    daily = open(os.path.join(memory_dir, result["daily_file"])).read()
+    daily = open(os.path.join(memory_dir, result["daily_file"]), encoding="utf-8").read()
     for marker in ("**Harness:**", "**CWD:**", "**Model:**",
                    "**Trigger:**", "**Session ID:**", "**Duration:**"):
         assert marker not in daily, f"unexpected metadata line: {marker}"
@@ -180,7 +183,7 @@ def test_session_end_auto_derives_project_from_cwd(tmp_path, monkeypatch):
     projects_dir = os.path.join(memory_dir, "projects")
     os.makedirs(projects_dir)
     status_path = os.path.join(projects_dir, "my-project-status.md")
-    with open(status_path, "w") as f:
+    with open(status_path, "w", encoding="utf-8") as f:
         f.write("# my-project status\n")
 
     with mock.patch("palinode.api.server._generate_description", return_value="Auto-derive"):
@@ -195,7 +198,7 @@ def test_session_end_auto_derives_project_from_cwd(tmp_path, monkeypatch):
 
     # status_file should be set and reference the auto-derived slug
     assert result.get("status_file") == "projects/my-project-status.md"
-    status = open(status_path).read()
+    status = open(status_path, encoding="utf-8").read()
     assert "cwd auto-derivation works" in status
 
     # Individual file's slug should embed the auto-derived project too
@@ -296,7 +299,7 @@ def test_session_end_date_is_wallclock_not_existing_files(tmp_path, monkeypatch)
     os.makedirs(daily_dir, exist_ok=True)
     stale_path = os.path.join(daily_dir, "2020-01-01.md")
     stale_original = "## Session End — 2020-01-01T00:00:00Z\nold entry\n"
-    with open(stale_path, "w") as f:
+    with open(stale_path, "w", encoding="utf-8") as f:
         f.write(stale_original)
 
     # Freeze wall-clock to a fixed instant, distinct from both today and the stale file.
@@ -317,4 +320,4 @@ def test_session_end_date_is_wallclock_not_existing_files(tmp_path, monkeypatch)
     assert os.path.exists(os.path.join(memory_dir, "daily", "2030-06-15.md"))
     assert "## Session End — 2030-06-15T12:00:00Z" in result["entry"]
     # The pre-existing stale file must be untouched (never appended to).
-    assert open(stale_path).read() == stale_original
+    assert open(stale_path, encoding="utf-8").read() == stale_original
