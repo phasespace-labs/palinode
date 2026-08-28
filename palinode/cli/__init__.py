@@ -193,7 +193,7 @@ def stop(watcher, api):
     
     if not shutil.which("systemctl"):
         console.print("[red]Error: 'systemctl' not found. This command requires systemd (Linux).[/red]")
-        return
+        raise click.exceptions.Exit(1)
         
     services = []
     if api:
@@ -204,13 +204,18 @@ def stop(watcher, api):
     if not services:
         return
         
+    failed = False
     for svc in services:
         console.print(f"[yellow]Stopping {svc}...[/yellow]")
         try:
             subprocess.run(["sudo", "systemctl", "stop", svc], check=True)
             console.print(f"[green]✓ {svc} stopped.[/green]")
         except subprocess.CalledProcessError as e:
+            failed = True
             console.print(f"[red]✗ Failed to stop {svc}: {e}[/red]")
+
+    if failed:
+        raise click.exceptions.Exit(1)
 
 @main.group()
 def config_cmd():
