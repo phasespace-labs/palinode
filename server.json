@@ -127,8 +127,8 @@
   "_meta": {
     "io.modelcontextprotocol.registry/publisher-provided": {
       "tool": "mcp-publisher",
-      "release": "v0.13.0",
-      "release_notes_url": "https://github.com/phasespace-labs/palinode/releases/tag/v0.13.0"
+      "release": "v0.14.0",
+      "release_notes_url": "https://github.com/phasespace-labs/palinode/releases/tag/v0.14.0"
     }
   }
 }

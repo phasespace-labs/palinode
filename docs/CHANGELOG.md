@@ -16,6 +16,9 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- MCP Registry release metadata now stays aligned with the package version and
+  links to the current release notes.
+
 ### Removed
 
 ### Security
