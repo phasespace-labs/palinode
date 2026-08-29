@@ -39,3 +39,23 @@ def test_stop_systemctl_failure_exits_nonzero(monkeypatch):
 
     assert result.exit_code != 0
     assert "Failed to stop" in result.output
+
+
+def test_stop_continues_with_remaining_services_after_failure(monkeypatch):
+    """A failed service must not prevent the remaining services from being stopped."""
+    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/systemctl")
+
+    def fake_run(args, check=True):
+        # palinode-api.service is stopped first; make only it fail.
+        if "api" in args[-1]:
+            raise subprocess.CalledProcessError(1, args)
+        return None
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["stop"])
+
+    assert result.exit_code != 0
+    assert "Failed to stop palinode-api.service" in result.output
+    assert "✓ palinode-watcher.service stopped" in result.output

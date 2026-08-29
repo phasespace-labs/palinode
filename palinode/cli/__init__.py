@@ -193,7 +193,7 @@ def stop(watcher, api):
     
     if not shutil.which("systemctl"):
         console.print("[red]Error: 'systemctl' not found. This command requires systemd (Linux).[/red]")
-        raise click.exceptions.Exit(1)
+        raise SystemExit(1)
         
     services = []
     if api:
@@ -215,7 +215,7 @@ def stop(watcher, api):
             console.print(f"[red]✗ Failed to stop {svc}: {e}[/red]")
 
     if failed:
-        raise click.exceptions.Exit(1)
+        raise SystemExit(1)
 
 @main.group()
 def config_cmd():
