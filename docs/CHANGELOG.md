@@ -16,6 +16,9 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- CLI commands that printed a red error and then returned now exit non-zero
+  (`raise SystemExit(1)`), so automation can detect failure. Left alone: the
+  yellow "reindex already running" (HTTP 409) path, which is informational.
 - MCP Registry release metadata now stays aligned with the package version and
   links to the current release notes.
 

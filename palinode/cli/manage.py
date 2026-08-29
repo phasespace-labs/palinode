@@ -14,8 +14,10 @@ def reindex(fmt):
             console.print("[yellow]Reindex already running. Check 'palinode status' for progress.[/yellow]")
         else:
             console.print(f"[red]Error reindexing: {str(e)}[/red]")
+            raise SystemExit(1)
     except Exception as e:
         console.print(f"[red]Error reindexing: {str(e)}[/red]")
+        raise SystemExit(1)
 
 @click.command(name="rebuild-fts")
 @click.option("--format", "fmt", type=click.Choice(["json", "text"]), help="Output format")
@@ -26,6 +28,7 @@ def rebuild_fts(fmt):
         print_result(result, fmt=OutputFormat(fmt) if fmt else get_default_format())
     except Exception as e:
         console.print(f"[red]Error rebuilding FTS: {str(e)}[/red]")
+        raise SystemExit(1)
 
 @click.command(name="split-layers")
 @click.option("--format", "fmt", type=click.Choice(["json", "text"]), help="Output format")
@@ -36,6 +39,7 @@ def split_layers(fmt):
         print_result(result, fmt=OutputFormat(fmt) if fmt else get_default_format())
     except Exception as e:
         console.print(f"[red]Error splitting layers: {str(e)}[/red]")
+        raise SystemExit(1)
 
 @click.command(name="bootstrap-ids")
 @click.option("--format", "fmt", type=click.Choice(["json", "text"]), help="Output format")
@@ -46,3 +50,4 @@ def bootstrap_ids(fmt):
         print_result(result, fmt=OutputFormat(fmt) if fmt else get_default_format())
     except Exception as e:
         console.print(f"[red]Error bootstrapping IDs: {str(e)}[/red]")
+        raise SystemExit(1)

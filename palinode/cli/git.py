@@ -33,6 +33,7 @@ def blame(file_path, search, claims):
             console.print(data)
     except Exception as e:
         console.print(f"[red]Error blaming: {str(e)}[/red]")
+        raise SystemExit(1)
 
 @click.command()
 @click.argument("file_path")
@@ -54,6 +55,7 @@ def history(file_path, limit, detail):
         print_result(data, fmt=get_default_format())
     except Exception as e:
         console.print(f"[red]Error showing history: {str(e)}[/red]")
+        raise SystemExit(1)
 
 
 @click.command()
@@ -77,6 +79,7 @@ def rollback(file_path, commit, dry_run):
         console.print(data)
     except Exception as e:
         console.print(f"[red]Error rolling back: {str(e)}[/red]")
+        raise SystemExit(1)
 
 @click.command()
 def push():
@@ -86,3 +89,4 @@ def push():
         console.print(data)
     except Exception as e:
         console.print(f"[red]Error pushing: {str(e)}[/red]")
+        raise SystemExit(1)

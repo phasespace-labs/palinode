@@ -274,13 +274,14 @@ def config_edit():
         config_file = os.path.join(config.memory_dir, "palinode.config.yaml")
         if not os.path.exists(config_file):
              console.print("[red]Error: Config file not found at default locations.[/red]")
-             return
-             
+             raise SystemExit(1)
+
     editor = os.environ.get("EDITOR", "vi")
     try:
         subprocess.run([editor, config_file], check=True)
     except Exception as e:
         console.print(f"[red]Error opening editor: {e}[/red]")
+        raise SystemExit(1)
 
 main.add_command(config_cmd, name="config")
 

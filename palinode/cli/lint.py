@@ -44,7 +44,7 @@ def lint(fmt, deep_contradictions, max_llm_calls, similarity_threshold):
         data = api_client.lint()
     except HTTPStatusError as e:
         console.print(f"[red]Error: API returned {e.response.status_code}[/red]")
-        return
+        raise SystemExit(1)
     except RequestError:
         # Fallback to local import if API is down
         from palinode.core.lint import run_lint_pass
@@ -277,7 +277,7 @@ def _run_deep_contradictions_output(
         )
     except Exception as exc:
         console.print(f"[red]Deep contradiction check failed: {exc}[/red]")
-        return
+        raise SystemExit(1)
 
     decisions = result["decisions_found"]
     candidates = result["candidate_pairs"]

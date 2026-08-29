@@ -42,5 +42,7 @@ def ingest(url, name, inbox, fmt):
         except Exception:
             pass
         console.print(f"[red]Error:[/red] {detail or e.response.status_code}")
+        raise SystemExit(1)
     except RequestError as e:
         console.print(f"[red]Error:[/red] Cannot reach API — is palinode running? ({e})")
+        raise SystemExit(1)

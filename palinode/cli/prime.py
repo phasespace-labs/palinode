@@ -42,3 +42,4 @@ def prime(cwd, project, fmt):
             console.print(format_context_digest(data), markup=False)
     except Exception as e:
         console.print(f"[red]Error priming context: {str(e)}[/red]")
+        raise SystemExit(1)

@@ -12,3 +12,4 @@ def entities(entity, fmt):
         print_result(data, fmt=OutputFormat(fmt) if fmt else get_default_format())
     except Exception as e:
         console.print(f"[red]Error showing entities: {str(e)}[/red]")
+        raise SystemExit(1)
