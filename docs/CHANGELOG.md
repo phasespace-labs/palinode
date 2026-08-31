@@ -16,6 +16,9 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- Memory-file moves no longer fail on native Windows when directory fsync is
+  unavailable; they now use the same guarded durability fallback as atomic
+  writes.
 - CLI commands that printed a red error and then returned now exit non-zero
   (`raise SystemExit(1)`), so automation can detect failure. Left alone: the
   yellow "reindex already running" (HTTP 409) path, which is informational.

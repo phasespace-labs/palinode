@@ -165,6 +165,24 @@ def test_write_memory_file_skips_directory_fsync_on_windows(tmp_path, monkeypatc
     fsync_directory.assert_not_called()
 
 
+def test_move_memory_file_skips_directory_fsync_on_windows(tmp_path, monkeypatch):
+    """Windows cannot open a directory as a file descriptor for fsync."""
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    source = tmp_path / "daily.md"
+    archive = tmp_path / "archive"
+    destination = archive / "daily.md"
+    source.write_text("daily note\n", encoding="utf-8")
+    archive.mkdir()
+    monkeypatch.setattr(git_tools, "_is_windows", lambda: True)
+
+    with patch.object(git_tools, "_fsync_directory") as fsync_directory:
+        git_tools.move_memory_file(str(source), str(destination))
+
+    assert not source.exists()
+    assert destination.read_text(encoding="utf-8") == "daily note\n"
+    fsync_directory.assert_not_called()
+
+
 def test_write_memory_file_overwrite_works_without_fchmod(tmp_path, monkeypatch):
     """Python 3.11/3.12 Windows needs the path-based chmod fallback."""
     # See the note in the sibling test above: the write target must live under
