@@ -53,6 +53,7 @@ from palinode.core.defaults import (
     _SESSION_END_TIMEOUT_SENTINEL as _SENTINEL,
 )
 from palinode.core.parity import CATEGORIES, MEMORY_TYPES, PROMPT_TASKS
+from palinode.core.scoring import describe_match
 from palinode.core.path_guard import to_rel_path
 from palinode.core.typed_links import parse_link_refs
 from palinode.core.write_input import (
@@ -638,7 +639,7 @@ def _format_results(results: list[dict[str, Any]], full: bool = False) -> str:
     any_truncated = False
     for r in results:
         rel = _rel_path_from(r)
-        score_pct = int(r.get("score", 0) * 100)
+        match_label = describe_match(r)
         freshness = r.get("freshness")
         fresh_label = f" ✓ {freshness}" if freshness == "valid" else (f" ⚠ {freshness}" if freshness == "stale" else "")
         # Render external_refs when present in result metadata.
@@ -710,7 +711,7 @@ def _format_results(results: list[dict[str, Any]], full: bool = False) -> str:
                 any_truncated = True
 
         parts.append(
-            f"[{rel}] ({score_pct}% match){fresh_label}{epi_label}{links_label}{refs_label}\n{(body or '').strip()}"
+            f"[{rel}] ({match_label}){fresh_label}{epi_label}{links_label}{refs_label}\n{(body or '').strip()}"
         )
 
     rendered = "\n\n---\n\n".join(parts)

@@ -4,6 +4,7 @@ from palinode.cli._api import HTTPStatusError, api_client
 from palinode.cli._format import print_result, console, OutputFormat, get_default_format
 from palinode.core.config import config
 from palinode.core.parity import CATEGORIES, MEMORY_TYPES
+from palinode.core.scoring import describe_match
 
 
 def _cli_resolve_context() -> list[str] | None:
@@ -125,7 +126,7 @@ def search(
                 return
             
             for res in results:
-                score_str = f"[{res['score']:.2f}] " if score else ""
+                score_str = f"[{describe_match(res)}] " if score else ""
                 title = res.get("file", "Untitled")
                 # prefer the API-provided snippet — already match-windowed
                 # and bounded. Fall back to the legacy blind-truncation path
