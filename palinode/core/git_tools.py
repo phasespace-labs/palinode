@@ -223,10 +223,11 @@ def move_memory_file(src_path: str, dst_path: str) -> None:
     The move counterpart to :func:`write_memory_file`: both endpoints cross
     the same traversal guard, then the rename happens via ``os.replace``
     (atomic on a single filesystem, which every path under ``memory_dir``
-    is) and the destination directory is fsynced so the rename survives a
-    crash. Does not create the destination directory — callers that need one
-    create it first, same as :func:`write_memory_file` never creates
-    ``os.path.dirname(file_path)``.
+    is). Where the platform supports it, the destination directory is fsynced
+    so the rename survives a crash; Windows cannot open a directory for fsync,
+    so its rename metadata has weaker crash durability. Does not create the
+    destination directory — callers that need one create it first, same as
+    :func:`write_memory_file` never creates ``os.path.dirname(file_path)``.
 
     This function only moves the file; it does not commit. A caller commits
     the result via ``commit_memory_files([src_path, dst_path], message)`` —
@@ -240,7 +241,10 @@ def move_memory_file(src_path: str, dst_path: str) -> None:
     _validate_write_target(dst_path)
     directory = os.path.dirname(dst_path) or "."
     os.replace(src_path, dst_path)
-    _fsync_directory(directory)
+    # Windows cannot open a directory for fsync, so the rename's metadata
+    # durability is weaker there after a crash.
+    if not _is_windows():
+        _fsync_directory(directory)
 
 
 @dataclass(frozen=True)
