@@ -120,10 +120,61 @@ def test_search_hits_injected_as_snippets(tmp_path):
     assert proc.returncode == 0, proc.stderr
     ctx = _context_of(proc)
     assert "decisions/deploy-rollback.md" in ctx
-    assert "(62%)" in ctx, "should render raw_score, the knob's scale"
-    assert "(100%)" not in ctx, "must not render the fused rank score"
+    assert "(62% match)" in ctx, "should render raw_score, the knob's scale"
+    assert "(100% match)" not in ctx, "must not render the fused rank score"
     assert "git revert + reindex" in ctx
     assert "Related memories" in ctx
+
+
+def test_a_keyword_only_hit_claims_no_similarity(tmp_path):
+    """raw_score is present and null: a BM25-only hit the ranker marked.
+
+    There is no cosine to report, so the hook reports none. Falling back to
+    the fused value here is the original bug wearing a fallback.
+    """
+    hits = [{"rel_path": "notes/a.md", "score": 1.0, "raw_score": None,
+             "snippet": "body"}]
+    proc, _ = _run_hook(tmp_path, search_response=hits)
+    assert proc.returncode == 0, proc.stderr
+    ctx = _context_of(proc)
+    assert "(keyword match, rank 1.00)" in ctx
+    assert "%" not in ctx.split("### Related memories")[1]
+
+
+def test_an_absent_raw_score_is_not_the_same_as_a_null_one(tmp_path):
+    """A pre-0.12 server never sent the field, so which arm hit is unknown."""
+    absent = [{"rel_path": "notes/a.md", "score": 1.0, "snippet": "body"}]
+    null = [{"rel_path": "notes/a.md", "score": 1.0, "raw_score": None,
+             "snippet": "body"}]
+    a_dir, n_dir = tmp_path / "absent", tmp_path / "null"
+    a_dir.mkdir()
+    n_dir.mkdir()
+    absent_ctx = _context_of(_run_hook(a_dir, search_response=absent)[0])
+    null_ctx = _context_of(_run_hook(n_dir, search_response=null)[0])
+    assert "(rank 1.00)" in absent_ctx
+    assert absent_ctx != null_ctx
+
+
+def test_the_hook_renders_what_describe_match_would(tmp_path):
+    """The hook is a jq copy of palinode/core/scoring.py and must agree with it.
+
+    Same three cases, same wording. The Python surfaces and the hook drifting
+    apart is how one of them starts lying again.
+    """
+    from palinode.core.scoring import describe_match
+
+    cases = [
+        {"score": 1.0, "raw_score": 0.421},
+        {"score": 1.0, "raw_score": None},
+        {"score": 1.0},
+        {"score": 0.4},
+        {"score": 0.07},
+    ]
+    hits = [dict(c, rel_path=f"notes/{i}.md", snippet="body")
+            for i, c in enumerate(cases)]
+    ctx = _context_of(_run_hook(tmp_path, search_response=hits)[0])
+    for i, case in enumerate(cases):
+        assert f"[notes/{i}.md] ({describe_match(case)})" in ctx
 
 
 def test_envelope_response_shape_also_accepted(tmp_path):

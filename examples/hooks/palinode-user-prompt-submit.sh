@@ -137,18 +137,27 @@ if [ "$MAX_RESULTS" -gt 0 ]; then
     # is a hard jq ERROR (not null), so `.results // .` dies on the real
     # response shape and fail-open turns the crash into permanent silence.
     LINES=$(echo "$HITS" | jq -r '
+      def fmt2: (. * 100 | round) as $c
+        | (($c / 100) | floor | tostring) + "." + ((($c % 100) + 100 | tostring)[1:]);
+      def describe:
+        if (has("raw_score") | not) then "rank " + ((.score // 0) | fmt2)
+        elif .raw_score == null then "keyword match, rank " + ((.score // 0) | fmt2)
+        else ((.raw_score * 100 | round | tostring) + "% match") end;
       (if type == "object" then (.results // []) else . end) as $r
       | if ($r | type) == "array" and ($r | length) > 0 then
           $r | map("- [" + (.rel_path // .file_path // "?") + "] ("
-                   + ((.raw_score // .score // 0) * 100 | floor | tostring) + "%) "
+                   + describe + ") "
                    + ((.snippet // .content // "") | gsub("\n"; " ")))
              | join("\n")
         else empty end' 2>/dev/null) || LINES=""
-  # raw_score, not score: `score` is the post-fusion RANK value — the top hit
-  # reads ~100% even for an irrelevant query — while `raw_score` is the cosine
-  # the THRESHOLD knob filters on. Showing the knob's own scale is what makes
-  # the lever tunable from what the user sees. (`.score` fallback: pre-0.12
-  # servers without raw_score.)
+  # `score` is the post-fusion RANK value: the top hit reads ~100% even for an
+  # irrelevant query. `raw_score` is the cosine the THRESHOLD knob filters on,
+  # so showing the knob's own scale is what makes the lever tunable from what
+  # the user sees. The two missing cases are not the same. A null raw_score is
+  # a BM25-only hit the ranker marked, and it has no similarity to report, so
+  # none is claimed. An absent raw_score is a pre-0.12 server, where the arm is
+  # unknown and the rank is all that can be said. Same three cases as
+  # describe_match in palinode/core/scoring.py.
     if [ -n "$LINES" ]; then
       SECTIONS="${SECTIONS}
 ### Related memories
