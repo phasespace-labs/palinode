@@ -185,6 +185,43 @@ def test_bare_hint_is_reported_even_though_its_value_is_none(tmp_path):
     assert results["layer_hint_ignored"] is None
 
 
+def test_trigger_failure_is_logged_not_printed(tmp_path, monkeypatch, caplog, capsys):
+    """A failed auto-trigger must go through the logger, not stdout.
+
+    The sweep runs inside the API server process, so a ``print`` here never
+    reaches the caller: not the HTTP response, and not the CLI, which talks to
+    this code over HTTP. It also skipped the JSONL operations log and the
+    secret redaction both handlers apply.
+    """
+    projects = tmp_path / "projects"
+    projects.mkdir()
+    _write_source(projects, "alpha", None)
+
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+
+    def _boom(*a, **k):
+        raise RuntimeError("embedder unreachable")
+
+    monkeypatch.setattr("palinode.core.embedder.embed", _boom)
+
+    with caplog.at_level(logging.WARNING, logger="palinode.consolidation.layer_split"):
+        stats = layer_split.split_all_core_files()
+
+    records = [r for r in _layer_split_records(caplog) if "auto-register" in r.getMessage()]
+    assert len(records) == 1, "expected exactly one warning for the failed trigger"
+    record = records[0]
+    assert record.levelno == logging.WARNING, "the record must carry a level"
+    message = record.getMessage()
+    assert "alpha.md" in message, "warning must name the file"
+    assert "embedder unreachable" in message, "warning must carry the failure"
+
+    assert "Failed to auto-register" not in capsys.readouterr().out
+
+    # The trigger is optional enrichment: the sweep still completes.
+    assert stats["files_split"] == 1
+    assert stats["triggers_registered"] == 0
+
+
 def test_sweep_counts_ignored_hints(tmp_path, monkeypatch):
     """A sweep that fell back to heuristics must not report a clean run."""
     projects = tmp_path / "projects"
