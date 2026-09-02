@@ -1,0 +1,4491 @@
+{
+  "meta": {
+    "dataset": "longmemeval_s_cleaned.json",
+    "top_k": 10,
+    "threshold": 0.4,
+    "consolidate": false,
+    "answer_prompt": "v2",
+    "embedder": "reachable",
+    "answer_model": "gemini-3-flash-preview @ https://generativelanguage.googleapis.com/v1beta/openai timeout=120s {'reasoning_effort': 'none'}",
+    "judge_model": "gpt-4o-2024-08-06 @ https://api.openai.com/v1 timeout=120s"
+  },
+  "summary": {
+    "n": 100,
+    "errors": 0,
+    "errors_prepare": 0,
+    "accuracy": 0.75,
+    "accuracy_by_type": {
+      "abstention": 0.6667,
+      "knowledge-update": 0.8571,
+      "multi-session": 0.64,
+      "single-session-assistant": 1.0,
+      "single-session-preference": 0.5,
+      "single-session-user": 0.9231,
+      "temporal-reasoning": 0.68
+    },
+    "evidence_recall_by_type": {
+      "knowledge-update": 1.0,
+      "multi-session": 1.0,
+      "single-session-assistant": 1.0,
+      "single-session-preference": 0.8333,
+      "single-session-user": 0.9231,
+      "temporal-reasoning": 0.96
+    },
+    "evidence_recall": 0.9680851063829787,
+    "retrieval_mode": [
+      "hybrid",
+      "hybrid-reworded"
+    ],
+    "ingest_chat_llm_calls": 0,
+    "prompt_tokens_mean": 21850.4,
+    "context_chars_mean": 96492.8,
+    "ingest_wall_s_mean": 15.56,
+    "retrieval_wall_s_mean": 0.658
+  },
+  "rows": [
+    {
+      "question_id": "e47becba",
+      "question_type": "single-session-user",
+      "abstention": false,
+      "question": "What degree did I graduate with?",
+      "answer": "Business Administration",
+      "num_sessions": 53,
+      "ingest": {
+        "files": 53,
+        "chunks": 53,
+        "embedded": true,
+        "embed_calls": 53,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 13.9
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 6,
+        "session_ids": [
+          "sharegpt_PdnvIns_0",
+          "sharegpt_QZMeA7V_17",
+          "sharegpt_Jcy1CVN_0",
+          "41abc171_4",
+          "sharegpt_UnjngE7_65",
+          "a041cdd4_3"
+        ],
+        "evidence_hit": false,
+        "context_chars": 57849,
+        "wall_s": 0.515
+      },
+      "hypothesis": "Based on the provided excerpts, there is no mention of your education or the specific degree you graduated with. The transcripts focus on your UX design portfolio, a cover letter for a motion designer position, radiation therapy lecture planning, and discussions about sports and running.",
+      "answer_usage": {
+        "prompt_tokens": 12345,
+        "completion_tokens": 51,
+        "prompt_chars": 58473,
+        "latency_s": 1.633
+      },
+      "judge_raw": "No.",
+      "label": false
+    },
+    {
+      "question_id": "c5e8278d",
+      "question_type": "single-session-user",
+      "abstention": false,
+      "question": "What was my last name before I changed it?",
+      "answer": "Johnson",
+      "num_sessions": 44,
+      "ingest": {
+        "files": 44,
+        "chunks": 44,
+        "embedded": true,
+        "embed_calls": 44,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.159
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 6,
+        "session_ids": [
+          "answer_f6168136",
+          "aaf71ce2_2",
+          "2ae4f277_1",
+          "sharegpt_WPGrlAK_0",
+          "0fe848c5_3",
+          "e4881cbd_4"
+        ],
+        "evidence_hit": true,
+        "context_chars": 85044,
+        "wall_s": 0.243
+      },
+      "hypothesis": "Your last name was **Johnson** before you changed it to Winters.",
+      "answer_usage": {
+        "prompt_tokens": 21227,
+        "completion_tokens": 14,
+        "prompt_chars": 85657,
+        "latency_s": 1.354
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "5d3d2817",
+      "question_type": "single-session-user",
+      "abstention": false,
+      "question": "What was my previous occupation?",
+      "answer": "Marketing specialist at a small startup",
+      "num_sessions": 53,
+      "ingest": {
+        "files": 53,
+        "chunks": 54,
+        "embedded": true,
+        "embed_calls": 54,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 16.19
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "sharegpt_BKl952A_23",
+          "sharegpt_ebWP6Hz_0",
+          "sharegpt_bTDMt3m_64",
+          "answer_235eb6fb",
+          "49b78a55_1",
+          "e00298a6_1",
+          "670ca40e",
+          "ultrachat_371333",
+          "sharegpt_Gdrz2qz_15",
+          "f0ecaea5_1"
+        ],
+        "evidence_hit": true,
+        "context_chars": 115853,
+        "wall_s": 0.226
+      },
+      "hypothesis": "Based on the memory excerpts, your previous occupation was a **marketing specialist at a small startup**.\n\nIn excerpt [4], you mentioned: \"I've used Trello in my previous role as a marketing specialist at a small startup...\" and noted that you were responsible for managing a team of interns in that position. You have since moved into a new role as a **senior marketing analyst**.",
+      "answer_usage": {
+        "prompt_tokens": 25176,
+        "completion_tokens": 79,
+        "prompt_chars": 116608,
+        "latency_s": 1.782
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "94f70d80",
+      "question_type": "single-session-user",
+      "abstention": false,
+      "question": "How long did it take me to assemble the IKEA bookshelf?",
+      "answer": "4 hours",
+      "num_sessions": 49,
+      "ingest": {
+        "files": 49,
+        "chunks": 49,
+        "embedded": true,
+        "embed_calls": 49,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 14.511
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_c63c0458",
+          "58ef5080",
+          "9a59023e_1",
+          "sharegpt_PCqCVmR_18",
+          "ec628e8d_2",
+          "b10dce5e",
+          "67045503",
+          "708e39b6_2",
+          "2ae4f277_1",
+          "ba4db050_1"
+        ],
+        "evidence_hit": true,
+        "context_chars": 144749,
+        "wall_s": 0.2
+      },
+      "hypothesis": "It took you **4 hours** to assemble the IKEA bookshelf.",
+      "answer_usage": {
+        "prompt_tokens": 34554,
+        "completion_tokens": 13,
+        "prompt_chars": 145491,
+        "latency_s": 1.436
+      },
+      "judge_raw": "Yes",
+      "label": true
+    },
+    {
+      "question_id": "c8c3f81d",
+      "question_type": "single-session-user",
+      "abstention": false,
+      "question": "What brand are my favorite running shoes?",
+      "answer": "Nike",
+      "num_sessions": 52,
+      "ingest": {
+        "files": 52,
+        "chunks": 58,
+        "embedded": true,
+        "embed_calls": 58,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 17.018
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_761acef8",
+          "19ec83c5_1",
+          "66e94928",
+          "eb403c80_2",
+          "2b16f3d6_1",
+          "eb5d5a93_1",
+          "b818e2a1_1",
+          "sharegpt_pRqHb1o_0",
+          "e89b6be2_2",
+          "sharegpt_JXpIEYh_18"
+        ],
+        "evidence_hit": true,
+        "context_chars": 122575,
+        "wall_s": 0.145
+      },
+      "hypothesis": "Your favorite brand for running shoes is **Nike**.\n\nAccording to the memory excerpts from May 29, 2023, you stated, \"Nike has been my favourite brand so far for running shoes\" [1]. You also mentioned using them for your daily 5K runs [1].",
+      "answer_usage": {
+        "prompt_tokens": 29086,
+        "completion_tokens": 62,
+        "prompt_chars": 123315,
+        "latency_s": 1.855
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "95bcc1c8",
+      "question_type": "single-session-user",
+      "abstention": false,
+      "question": "How many amateur comedians did I watch perform at the open mic night?",
+      "answer": "10",
+      "num_sessions": 46,
+      "ingest": {
+        "files": 46,
+        "chunks": 46,
+        "embedded": true,
+        "embed_calls": 46,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.485
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 2,
+        "session_ids": [
+          "answer_cb742a61",
+          "c00077f5_2"
+        ],
+        "evidence_hit": true,
+        "context_chars": 29958,
+        "wall_s": 0.418
+      },
+      "hypothesis": "You watched **10** amateur comedians perform at the open mic night.",
+      "answer_usage": {
+        "prompt_tokens": 6829,
+        "completion_tokens": 15,
+        "prompt_chars": 30470,
+        "latency_s": 0.961
+      },
+      "judge_raw": "yes",
+      "label": true
+    },
+    {
+      "question_id": "b86304ba",
+      "question_type": "single-session-user",
+      "abstention": false,
+      "question": "How much is the painting of a sunset worth in terms of the amount I paid for it?",
+      "answer": "The painting is worth triple what I paid for it.",
+      "num_sessions": 41,
+      "ingest": {
+        "files": 41,
+        "chunks": 41,
+        "embedded": true,
+        "embed_calls": 41,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.412
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid-reworded",
+        "top_k": 10,
+        "hits": 2,
+        "session_ids": [
+          "answer_645b0329",
+          "8e9425ef_1"
+        ],
+        "evidence_hit": true,
+        "context_chars": 24747,
+        "wall_s": 5.612,
+        "embed_error": "Embedding backend unavailable \u2014 backend=local model='bge-m3' text_len=80 cause=\"Ollama embed failed to reach host (role=embed): Server error '500 Internal Server Error' for url 'http://OLLAMA_HOST:11434"
+      },
+      "hypothesis": "The painting of a sunset is worth **triple** what you paid for it.",
+      "answer_usage": {
+        "prompt_tokens": 5676,
+        "completion_tokens": 16,
+        "prompt_chars": 25270,
+        "latency_s": 0.918
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "60d45044",
+      "question_type": "single-session-user",
+      "abstention": false,
+      "question": "What type of rice is my favorite?",
+      "answer": "Japanese short-grain rice",
+      "num_sessions": 51,
+      "ingest": {
+        "files": 51,
+        "chunks": 65,
+        "embedded": true,
+        "embed_calls": 65,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 19.393
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "446173bb_1",
+          "answer_9cddca88",
+          "025c9e24_1",
+          "a76e7e3c_2",
+          "af4d4ecd_2",
+          "26bc645b_5",
+          "f90c44e6_2",
+          "sharegpt_42tUQ8S_0"
+        ],
+        "evidence_hit": true,
+        "context_chars": 109030,
+        "wall_s": 0.277
+      },
+      "hypothesis": "Your favorite is **Japanese short-grain rice**.\n\nAccording to the excerpt from May 27, 2023, you mentioned this while asking for recipes to pair with it, noting that you were planning to use it to make dishes like onigiri [2].",
+      "answer_usage": {
+        "prompt_tokens": 25170,
+        "completion_tokens": 57,
+        "prompt_chars": 109771,
+        "latency_s": 1.765
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "15745da0",
+      "question_type": "single-session-user",
+      "abstention": false,
+      "question": "How long have I been collecting vintage cameras?",
+      "answer": "three months",
+      "num_sessions": 47,
+      "ingest": {
+        "files": 47,
+        "chunks": 47,
+        "embedded": true,
+        "embed_calls": 47,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.163
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_586de428",
+          "07d33eaa",
+          "39948bcf_5",
+          "ultrachat_446016",
+          "4cbb6dd2",
+          "sharegpt_iF4hlNs_5",
+          "7c338712_1",
+          "1f5370f7_4",
+          "8376624e",
+          "c51583cd_1"
+        ],
+        "evidence_hit": true,
+        "context_chars": 160318,
+        "wall_s": 0.186
+      },
+      "hypothesis": "You have been collecting vintage cameras for **three months** (as of May 21, 2023).\n\nThis is mentioned in excerpt [1], where you stated: \"I've been collecting vintage cameras for three months now, and I've already amassed a pretty impressive collection.\"",
+      "answer_usage": {
+        "prompt_tokens": 35121,
+        "completion_tokens": 62,
+        "prompt_chars": 161058,
+        "latency_s": 1.588
+      },
+      "judge_raw": "Yes",
+      "label": true
+    },
+    {
+      "question_id": "b320f3f8",
+      "question_type": "single-session-user",
+      "abstention": false,
+      "question": "What type of action figure did I buy from a thrift store?",
+      "answer": "a blue Snaggletooth",
+      "num_sessions": 46,
+      "ingest": {
+        "files": 46,
+        "chunks": 46,
+        "embedded": true,
+        "embed_calls": 46,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 14.523
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 5,
+        "session_ids": [
+          "answer_5cc9b056",
+          "sharegpt_7QD86cC_20",
+          "240d7361_1",
+          "1b71c896_2",
+          "5e4bb245_2"
+        ],
+        "evidence_hit": true,
+        "context_chars": 68716,
+        "wall_s": 0.132
+      },
+      "hypothesis": "You bought a rare **blue Snaggletooth** action figure.",
+      "answer_usage": {
+        "prompt_tokens": 15299,
+        "completion_tokens": 14,
+        "prompt_chars": 69315,
+        "latency_s": 1.382
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "76d63226",
+      "question_type": "single-session-user",
+      "abstention": false,
+      "question": "What size is my new Samsung TV?",
+      "answer": "55-inch",
+      "num_sessions": 48,
+      "ingest": {
+        "files": 48,
+        "chunks": 48,
+        "embedded": true,
+        "embed_calls": 48,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.157
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "cb289226_1",
+          "6a2f9452_2",
+          "a5ab6ba7_3",
+          "answer_bbdc7b0a",
+          "11566271_2",
+          "50136b31",
+          "sharegpt_ZA4iwD0_65",
+          "b78242f5_1",
+          "sharegpt_etklNfN_11",
+          "aeb58d86_4"
+        ],
+        "evidence_hit": true,
+        "context_chars": 122052,
+        "wall_s": 0.286
+      },
+      "hypothesis": "Your new Samsung TV is **55 inches**.",
+      "answer_usage": {
+        "prompt_tokens": 29001,
+        "completion_tokens": 10,
+        "prompt_chars": 122783,
+        "latency_s": 1.287
+      },
+      "judge_raw": "Yes",
+      "label": true
+    },
+    {
+      "question_id": "4100d0a0",
+      "question_type": "single-session-user",
+      "abstention": false,
+      "question": "What is my ethnicity?",
+      "answer": "A mix of Irish and Italian",
+      "num_sessions": 50,
+      "ingest": {
+        "files": 50,
+        "chunks": 50,
+        "embedded": true,
+        "embed_calls": 50,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 18.066
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_83c13ff9",
+          "sharegpt_Viy08ou_0",
+          "8d068598",
+          "sharegpt_Jpt7Vv4_0",
+          "7fc9c056",
+          "ultrachat_215071",
+          "9b1d5656_2",
+          "sharegpt_cD2Kgkn_11",
+          "22a97fec",
+          "fbfa105a"
+        ],
+        "evidence_hit": true,
+        "context_chars": 127527,
+        "wall_s": 0.21
+      },
+      "hypothesis": "Based on the memory excerpts, you are **Asian American** (specifically of **Irish and Italian** descent).\n\nIn excerpt [7], you explicitly identify yourself as a \"32-year-old **Asian American** male.\" In excerpt [1], you also mention your \"mixed ethnicity - **Irish and Italian**.\"",
+      "answer_usage": {
+        "prompt_tokens": 27485,
+        "completion_tokens": 66,
+        "prompt_chars": 128255,
+        "latency_s": 1.811
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "c14c00dd",
+      "question_type": "single-session-user",
+      "abstention": false,
+      "question": "What brand of shampoo do I currently use?",
+      "answer": "Trader Joe's",
+      "num_sessions": 51,
+      "ingest": {
+        "files": 51,
+        "chunks": 51,
+        "embedded": true,
+        "embed_calls": 51,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 16.137
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "c77250d2",
+          "answer_304511ce",
+          "5dac7cc2_1",
+          "7cd7c296_3",
+          "f91cac51_1",
+          "d9a145b9",
+          "ffd66315_2",
+          "fbf3449c_1",
+          "sharegpt_vXWOUqx_11",
+          "cd1f5147"
+        ],
+        "evidence_hit": true,
+        "context_chars": 130132,
+        "wall_s": 0.21
+      },
+      "hypothesis": "You currently use a **lavender-scented shampoo from Trader Joe's**.",
+      "answer_usage": {
+        "prompt_tokens": 29240,
+        "completion_tokens": 17,
+        "prompt_chars": 130860,
+        "latency_s": 1.18
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "15745da0_abs",
+      "question_type": "single-session-user",
+      "abstention": true,
+      "question": "How long have I been collecting vintage films?",
+      "answer": "You did not mention this information. You mentioned collecting vintage cameras but not vintage films.",
+      "num_sessions": 50,
+      "ingest": {
+        "files": 50,
+        "chunks": 50,
+        "embedded": true,
+        "embed_calls": 50,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.768
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 8,
+        "session_ids": [
+          "answer_586de428_abs",
+          "e839253d",
+          "9b638f21_4",
+          "375e27b9_2",
+          "565929a2_2",
+          "5e0e1fd8_3",
+          "sharegpt_uGnQJQx_0",
+          "be976c82_1"
+        ],
+        "evidence_hit": false,
+        "context_chars": 119849,
+        "wall_s": 0.241
+      },
+      "hypothesis": "Based on the memory excerpts provided, there is no mention of you collecting vintage films.\n\nHowever, excerpt [1] states that you have been collecting **vintage cameras** for **three months** (as of May 28, 2023). You also mentioned being a \"huge film buff\" in excerpt [5], but did not specify a length of time for a film collection.",
+      "answer_usage": {
+        "prompt_tokens": 26482,
+        "completion_tokens": 81,
+        "prompt_chars": 120528,
+        "latency_s": 2.022
+      },
+      "judge_raw": "Yes",
+      "label": true
+    },
+    {
+      "question_id": "0a995998",
+      "question_type": "multi-session",
+      "abstention": false,
+      "question": "How many items of clothing do I need to pick up or return from a store?",
+      "answer": 3,
+      "num_sessions": 44,
+      "ingest": {
+        "files": 44,
+        "chunks": 44,
+        "embedded": true,
+        "embed_calls": 44,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.306
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_afa9873b_2",
+          "answer_afa9873b_1",
+          "answer_afa9873b_3",
+          "ultrachat_331531",
+          "25091584_1",
+          "e18a6f0b_1",
+          "439f9ed8_3",
+          "afbd7193_2",
+          "85846900_2",
+          "e6790684_1"
+        ],
+        "evidence_hit": true,
+        "context_chars": 131912,
+        "wall_s": 0.177
+      },
+      "hypothesis": "You have **two** items to pick up or return:\n\n1.  **A navy blue blazer:** You need to pick this up from the dry cleaners [1].\n2.  **A pair of boots from Zara:** You exchanged a pair that was too small on February 5th and still need to pick up the new, larger pair [2, 3].",
+      "answer_usage": {
+        "prompt_tokens": 30361,
+        "completion_tokens": 77,
+        "prompt_chars": 132689,
+        "latency_s": 1.607
+      },
+      "judge_raw": "No.",
+      "label": false
+    },
+    {
+      "question_id": "3a704032",
+      "question_type": "multi-session",
+      "abstention": false,
+      "question": "How many plants did I acquire in the last month?",
+      "answer": 3,
+      "num_sessions": 48,
+      "ingest": {
+        "files": 48,
+        "chunks": 48,
+        "embedded": true,
+        "embed_calls": 48,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 16.666
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_c2204106_2",
+          "answer_c2204106_3",
+          "54d06eeb",
+          "answer_c2204106_1",
+          "be24e3db_2",
+          "014a5d36",
+          "a864e7aa_1",
+          "38e81260_5",
+          "0babf5b6_2",
+          "e91e8a2e_1"
+        ],
+        "evidence_hit": true,
+        "context_chars": 150853,
+        "wall_s": 0.228
+      },
+      "hypothesis": "Based on the excerpts, you acquired **three** plants in the last month:\n\n1.  A **peace lily** (purchased two weeks prior to May 20) [1].\n2.  A **succulent** (purchased at the same time as the peace lily) [1].\n3.  A **snake plant** (received from your sister around late April or early May, as you mentioned on May 25 that you got it \"last month\") [4].",
+      "answer_usage": {
+        "prompt_tokens": 34056,
+        "completion_tokens": 104,
+        "prompt_chars": 151597,
+        "latency_s": 1.978
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "c4a1ceb8",
+      "question_type": "multi-session",
+      "abstention": false,
+      "question": "How many different types of citrus fruits have I used in my cocktail recipes?",
+      "answer": 3,
+      "num_sessions": 49,
+      "ingest": {
+        "files": 49,
+        "chunks": 49,
+        "embedded": true,
+        "embed_calls": 49,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 16.859
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_56d02cab_4",
+          "answer_56d02cab_1",
+          "answer_56d02cab_3",
+          "answer_56d02cab_2",
+          "1dc2b670_2",
+          "ba9f938b_2",
+          "sharegpt_ST22P5t_0",
+          "cef33b28_1",
+          "ultrachat_133899",
+          "0b64c6cb_2"
+        ],
+        "evidence_hit": true,
+        "context_chars": 123446,
+        "wall_s": 0.157
+      },
+      "hypothesis": "Based on the excerpts, you have used **4** different types of citrus fruits in your cocktail recipes:\n\n1.  **Lime:** Used in your classic Daiquiri, Cucumber Lime Refresher, Lime-Ginger Fizz, Lime-Mint Collins, Pomegranate Lime Sparkler, Lime-Basil Martini, Watermelon Lime Cooler, and Cucumber Gimlet [1, 2].\n2.  **Lemon:** Used in your Cava Spritz and Whiskey Sour recipes [2, 3].\n3.  **Orange:** Used in your \"Orange You Glad It's a Whiskey Sour\" recipe and your homemade orange bitters [3].\n4.  **Grapefruit:** Mentioned as a potential twist for your Cava Spritz and used as a garnish for your Cucumber Gimlet [2].",
+      "answer_usage": {
+        "prompt_tokens": 28152,
+        "completion_tokens": 165,
+        "prompt_chars": 124244,
+        "latency_s": 2.296
+      },
+      "judge_raw": "No.",
+      "label": false
+    },
+    {
+      "question_id": "28dc39ac",
+      "question_type": "multi-session",
+      "abstention": false,
+      "question": "How many hours have I spent playing games in total?",
+      "answer": "140 hours",
+      "num_sessions": 38,
+      "ingest": {
+        "files": 38,
+        "chunks": 38,
+        "embedded": true,
+        "embed_calls": 38,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.409
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_8d015d9d_1",
+          "answer_8d015d9d_4",
+          "answer_8d015d9d_5",
+          "answer_8d015d9d_2",
+          "answer_8d015d9d_3",
+          "cbd18c72",
+          "42bcee92_2",
+          "96da07f9_1",
+          "53985dc3",
+          "ultrachat_452868"
+        ],
+        "evidence_hit": true,
+        "context_chars": 149118,
+        "wall_s": 0.191
+      },
+      "hypothesis": "Based on the memory excerpts, you have spent a total of **140 hours** playing the specific games you mentioned:\n\n*   **The Last of Us Part II:** 55 hours total (25 hours on Normal difficulty [1] and 30 hours on Hard difficulty [4]).\n*   **Assassin's Creed Odyssey:** 70 hours [5].\n*   **Celeste:** 10 hours [2].\n*   **Hyper Light Drifter:** 5 hours [3].",
+      "answer_usage": {
+        "prompt_tokens": 33899,
+        "completion_tokens": 108,
+        "prompt_chars": 149885,
+        "latency_s": 1.805
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "80ec1f4f",
+      "question_type": "multi-session",
+      "abstention": false,
+      "question": "How many different museums or galleries did I visit in the month of February?",
+      "answer": 2,
+      "num_sessions": 46,
+      "ingest": {
+        "files": 46,
+        "chunks": 46,
+        "embedded": true,
+        "embed_calls": 46,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.179
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid-reworded",
+        "top_k": 10,
+        "hits": 7,
+        "session_ids": [
+          "answer_990c8992_1",
+          "answer_990c8992_2",
+          "answer_990c8992_3",
+          "ultrachat_318441",
+          "a15578b4_1",
+          "b6018747_3",
+          "sharegpt_nzDNOrq_29"
+        ],
+        "evidence_hit": true,
+        "context_chars": 84487,
+        "wall_s": 5.525,
+        "embed_error": "Embedding backend unavailable \u2014 backend=local model='bge-m3' text_len=77 cause=\"Ollama embed failed to reach host (role=embed): Server error '500 Internal Server Error' for url 'http://OLLAMA_HOST:11434"
+      },
+      "hypothesis": "Based on the memory excerpts, you visited **two** different museums or galleries in February:\n\n1.  **The Natural History Museum:** You visited this museum with your niece on **February 8th** to see the dinosaur exhibit [1].\n2.  **The Art Cube:** You attended the opening night of the exhibition \"Disrupting Reality\" at this contemporary art gallery on **February 15th** [2, 3].",
+      "answer_usage": {
+        "prompt_tokens": 17889,
+        "completion_tokens": 92,
+        "prompt_chars": 85188,
+        "latency_s": 1.746
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "gpt4_5501fe77",
+      "question_type": "multi-session",
+      "abstention": false,
+      "question": "Which social media platform did I gain the most followers on over the past month?",
+      "answer": "TikTok",
+      "num_sessions": 45,
+      "ingest": {
+        "files": 45,
+        "chunks": 45,
+        "embedded": true,
+        "embed_calls": 45,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.154
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid-reworded",
+        "top_k": 10,
+        "hits": 7,
+        "session_ids": [
+          "answer_203bf3fa_1",
+          "answer_203bf3fa_2",
+          "021c0d09_2",
+          "answer_203bf3fa_3",
+          "ultrachat_337168",
+          "9b083158_2",
+          "ultrachat_163385"
+        ],
+        "evidence_hit": true,
+        "context_chars": 102512,
+        "wall_s": 5.157,
+        "embed_error": "Embedding backend unavailable \u2014 backend=local model='bge-m3' text_len=81 cause=\"Ollama embed failed to reach host (role=embed): Server error '500 Internal Server Error' for url 'http://OLLAMA_HOST:11434"
+      },
+      "hypothesis": "You gained the most followers on **Twitter**.\n\nAccording to the excerpt from 2023-05-29 [1], you mentioned that your Twitter follower count jumped from 420 to 540 over the past month, which is an increase of **120 followers**. In comparison, you gained around 200 followers on TikTok over a three-week period [4], but for the specific \"past month\" timeframe, the Twitter growth was the primary metric highlighted.",
+      "answer_usage": {
+        "prompt_tokens": 21988,
+        "completion_tokens": 104,
+        "prompt_chars": 103214,
+        "latency_s": 2.137
+      },
+      "judge_raw": "No.",
+      "label": false
+    },
+    {
+      "question_id": "00ca467f",
+      "question_type": "multi-session",
+      "abstention": false,
+      "question": "How many doctor's appointments did I go to in March?",
+      "answer": 2,
+      "num_sessions": 47,
+      "ingest": {
+        "files": 47,
+        "chunks": 47,
+        "embedded": true,
+        "embed_calls": 47,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.272
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_39900a0a_2",
+          "54df03d4_4",
+          "answer_39900a0a_1",
+          "answer_39900a0a_3",
+          "7d1de770_2",
+          "8a70ec05_2",
+          "4951c0b9_1",
+          "36828c66_1",
+          "4a5ee697_1",
+          "d79173aa_2"
+        ],
+        "evidence_hit": true,
+        "context_chars": 172072,
+        "wall_s": 0.422
+      },
+      "hypothesis": "You went to **three** doctor's appointments in March:\n\n1.  **March 3rd:** Primary care physician, Dr. Smith (diagnosed with bronchitis).\n2.  **March 20th:** Orthopedic surgeon, Dr. Thompson (follow-up for your knee/ACL).\n3.  **March 27th:** Primary care physician (to discuss the lingering cough and hand numbness).\n\n(Note: You also have an EMG test scheduled with your neurologist, Dr. Johnson, for April 1st.)",
+      "answer_usage": {
+        "prompt_tokens": 37311,
+        "completion_tokens": 113,
+        "prompt_chars": 172824,
+        "latency_s": 1.691
+      },
+      "judge_raw": "No.",
+      "label": false
+    },
+    {
+      "question_id": "60bf93ed",
+      "question_type": "multi-session",
+      "abstention": false,
+      "question": "How many days did it take for my laptop backpack to arrive after I bought it?",
+      "answer": "5 days. 6 days (including the last day) is also acceptable.",
+      "num_sessions": 51,
+      "ingest": {
+        "files": 51,
+        "chunks": 51,
+        "embedded": true,
+        "embed_calls": 51,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.868
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_e0956e0a_2",
+          "ultrachat_7648",
+          "sharegpt_1jjEIai_173",
+          "4fe27c66_4",
+          "answer_e0956e0a_1",
+          "sharegpt_AEHVEIe_0",
+          "e9590b7d",
+          "6414f676_4",
+          "sharegpt_IHSNXY4_27",
+          "29194fbe_2"
+        ],
+        "evidence_hit": true,
+        "context_chars": 120515,
+        "wall_s": 0.227
+      },
+      "hypothesis": "It took **5 days** for your laptop backpack to arrive. You bought it from Amazon on January 15th and it arrived on January 20th.",
+      "answer_usage": {
+        "prompt_tokens": 27564,
+        "completion_tokens": 34,
+        "prompt_chars": 121314,
+        "latency_s": 1.712
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "a9f6b44c",
+      "question_type": "multi-session",
+      "abstention": false,
+      "question": "How many bikes did I service or plan to service in March?",
+      "answer": 2,
+      "num_sessions": 45,
+      "ingest": {
+        "files": 45,
+        "chunks": 45,
+        "embedded": true,
+        "embed_calls": 45,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 13.904
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_cc021f81_1",
+          "answer_cc021f81_3",
+          "ec8d10c7_2",
+          "ca896bdc_1",
+          "answer_cc021f81_2",
+          "6351589f_1",
+          "837f258b",
+          "a8151fbc",
+          "e10dfffb_1",
+          "e03c71c5_1"
+        ],
+        "evidence_hit": true,
+        "context_chars": 126186,
+        "wall_s": 0.251
+      },
+      "hypothesis": "Based on the excerpts, you serviced or mentioned servicing **two** bikes in March:\n\n1.  **Road Bike:** You had this bike serviced at **Pedal Power on March 10th**, where they replaced the worn-out brake pads and cables [1].\n2.  **Commuter Bike:** You mentioned that you had a flat tire on this bike on February 20th and **planned to replace the front tire in March**, before April [5].\n\nAdditionally, you mentioned cleaning and lubricating your road bike chain on **March 2nd** [2].",
+      "answer_usage": {
+        "prompt_tokens": 29353,
+        "completion_tokens": 120,
+        "prompt_chars": 126939,
+        "latency_s": 1.931
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "gpt4_731e37d7",
+      "question_type": "multi-session",
+      "abstention": false,
+      "question": "How much total money did I spend on attending workshops in the last four months?",
+      "answer": "$720",
+      "num_sessions": 48,
+      "ingest": {
+        "files": 48,
+        "chunks": 48,
+        "embedded": true,
+        "embed_calls": 48,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 14.732
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid-reworded",
+        "top_k": 10,
+        "hits": 6,
+        "session_ids": [
+          "answer_826d51da_1",
+          "answer_826d51da_3",
+          "answer_826d51da_4",
+          "answer_826d51da_2",
+          "sharegpt_Yuw2LhQ_25",
+          "baa5b468_3"
+        ],
+        "evidence_hit": true,
+        "context_chars": 81178,
+        "wall_s": 5.914,
+        "embed_error": "Embedding backend unavailable \u2014 backend=local model='bge-m3' text_len=80 cause=\"Ollama embed failed to reach host (role=embed): Server error '500 Internal Server Error' for url 'http://OLLAMA_HOST:11434"
+      },
+      "hypothesis": "Based on the memory excerpts, you have spent a total of **$720** on workshops in the last four months:\n\n*   **$200:** A two-day writing workshop at a literary festival in November [3, 4].\n*   **$20:** A half-day mindfulness workshop at a yoga studio on December 12 [2].\n*   **$500:** A two-day digital marketing workshop at the city convention center on March 15-16 [4]. (Note: Although you mentioned this workshop in a session dated February 26, you explicitly stated the cost was $500 and the dates were in March [4]).\n\nOther workshops mentioned, such as the photography workshop on February 22, were free [2], or the cost was not specified (e.g., the entrepreneurship workshop in January [2]).",
+      "answer_usage": {
+        "prompt_tokens": 18004,
+        "completion_tokens": 188,
+        "prompt_chars": 81853,
+        "latency_s": 2.151
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "1a8a66a6",
+      "question_type": "multi-session",
+      "abstention": false,
+      "question": "How many magazine subscriptions do I currently have?",
+      "answer": 2,
+      "num_sessions": 51,
+      "ingest": {
+        "files": 51,
+        "chunks": 57,
+        "embedded": true,
+        "embed_calls": 57,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 17.469
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_2bd23659_1",
+          "b01aafcb_2",
+          "answer_2bd23659_3",
+          "5eed6833_2",
+          "sharegpt_lsiJM0Y_0",
+          "6177ea96_2",
+          "02042eab_2",
+          "f829b530_3",
+          "ebb5d262",
+          "answer_2bd23659_4"
+        ],
+        "evidence_hit": true,
+        "context_chars": 135879,
+        "wall_s": 0.254
+      },
+      "hypothesis": "Based on the excerpts, you currently have **one** active magazine subscription.\n\nAccording to the records:\n*   **The New Yorker:** You subscribed in early February and have mentioned enjoying the weekly issues as recently as April 1st [1, 3].\n*   **Forbes:** You canceled this subscription in early March because you did not find the articles interesting [3].\n*   **National Geographic:** While you mentioned buying an issue on March 15th, you described it as a single purchase made on your way back from the gym, rather than a subscription [10].",
+      "answer_usage": {
+        "prompt_tokens": 30094,
+        "completion_tokens": 122,
+        "prompt_chars": 136637,
+        "latency_s": 1.728
+      },
+      "judge_raw": "No.",
+      "label": false
+    },
+    {
+      "question_id": "81507db6",
+      "question_type": "multi-session",
+      "abstention": false,
+      "question": "How many graduation ceremonies have I attended in the past three months?",
+      "answer": 3,
+      "num_sessions": 50,
+      "ingest": {
+        "files": 50,
+        "chunks": 50,
+        "embedded": true,
+        "embed_calls": 50,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.507
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_da3c1266_3",
+          "answer_da3c1266_2",
+          "answer_da3c1266_1",
+          "answer_da3c1266_4",
+          "answer_da3c1266_5",
+          "2ca99347_2",
+          "9071ba70_3",
+          "ultrachat_254248",
+          "090b107f_1",
+          "b818e2a1_2"
+        ],
+        "evidence_hit": true,
+        "context_chars": 133767,
+        "wall_s": 0.147
+      },
+      "hypothesis": "Based on the memory excerpts, you have attended **four** graduation ceremonies in the past three months:\n\n1.  **Emma\u2019s preschool graduation:** Attended approximately two months before July 21, 2023 [3, 11].\n2.  **Jack\u2019s eighth grade graduation:** Attended last month (June 2023) [4].\n3.  **Rachel\u2019s master\u2019s degree graduation:** Attended a couple of weeks before July 21, 2023 [2].\n4.  **Alex\u2019s leadership development program graduation:** Attended a few weeks before July 21, 2023 [5].",
+      "answer_usage": {
+        "prompt_tokens": 29602,
+        "completion_tokens": 147,
+        "prompt_chars": 134559,
+        "latency_s": 1.969
+      },
+      "judge_raw": "No.",
+      "label": false
+    },
+    {
+      "question_id": "edced276_abs",
+      "question_type": "multi-session",
+      "abstention": true,
+      "question": "How many days did I spend in total traveling in Hawaii and in Seattle?",
+      "answer": "The information provided is not enough. You mentioned traveling for 10 days in Hawaii but did not mention abything about the trip to Seattle.",
+      "num_sessions": 47,
+      "ingest": {
+        "files": 47,
+        "chunks": 47,
+        "embedded": true,
+        "embed_calls": 47,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 14.894
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_60e8941a_abs_1",
+          "a7a64da9_3",
+          "ultrachat_296315",
+          "answer_60e8941a_abs_2",
+          "b68a96c0_2",
+          "76a6b5fb_1",
+          "76ba3dcc",
+          "sharegpt_nuYnG53_0",
+          "24b91514_2",
+          "c1a1047f"
+        ],
+        "evidence_hit": false,
+        "context_chars": 123284,
+        "wall_s": 0.266
+      },
+      "hypothesis": "Based on the memory excerpts, you spent **10 days** in Hawaii [1]. There is no mention of a trip to Seattle in the provided transcripts, so the total for both cannot be determined from these records.",
+      "answer_usage": {
+        "prompt_tokens": 28533,
+        "completion_tokens": 44,
+        "prompt_chars": 124065,
+        "latency_s": 1.711
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "0edc2aef",
+      "question_type": "single-session-preference",
+      "abstention": false,
+      "question": "Can you suggest a hotel for my upcoming trip to Miami?",
+      "answer": "The user would prefer suggestions of hotels in Miami that offer great views, possibly of the ocean or the city skyline, and have unique features such as a rooftop pool or a hot tub on the balcony. They may not prefer suggestions of basic or budget hotels without these features.",
+      "num_sessions": 46,
+      "ingest": {
+        "files": 46,
+        "chunks": 46,
+        "embedded": true,
+        "embed_calls": 46,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 14.676
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_d586e9cd",
+          "f20e72e4_1",
+          "08ca1f31_2",
+          "53dc1394",
+          "8464304d_2",
+          "3c3a9042_3",
+          "6a747f2e",
+          "c6c3a982_1",
+          "c3023a45_1",
+          "3692218d_1"
+        ],
+        "evidence_hit": true,
+        "context_chars": 144610,
+        "wall_s": 0.344
+      },
+      "hypothesis": "None of the provided excerpts contain information about hotels in Miami. The transcripts focus on hotel recommendations for Seattle [1], travel tips for Las Vegas [2], cycling in the San Francisco Bay Area [3], and various other topics like book recommendations [4], Arizona tourism [5], and photography [6].",
+      "answer_usage": {
+        "prompt_tokens": 32455,
+        "completion_tokens": 61,
+        "prompt_chars": 145344,
+        "latency_s": 2.2
+      },
+      "judge_raw": "No.",
+      "label": false
+    },
+    {
+      "question_id": "caf03d32",
+      "question_type": "single-session-preference",
+      "abstention": false,
+      "question": "I've been struggling with my slow cooker recipes. Any advice on getting better results?",
+      "answer": "The user would prefer responses that provide tips and advice specifically tailored to their slow cooker experiences, utilizing their recent success with beef stew and interest in making yogurt in the slow cooker. They might not prefer general slow cooker recipes or advice unrelated to their specific experiences and interests.",
+      "num_sessions": 51,
+      "ingest": {
+        "files": 51,
+        "chunks": 51,
+        "embedded": true,
+        "embed_calls": 51,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 16.129
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_2fc6aabb",
+          "sharegpt_3D7Qpuq_14",
+          "147e93c4",
+          "bd6d0687",
+          "sharegpt_kLAPfLd_0",
+          "8567068d_4",
+          "af631aa3_1",
+          "5b39cd66_1",
+          "78369dbb",
+          "ec806228"
+        ],
+        "evidence_hit": true,
+        "context_chars": 129100,
+        "wall_s": 0.257
+      },
+      "hypothesis": "Based on your previous conversations, you recently started using a slow cooker and successfully made a **beef stew** [1].\n\nTo get better results and expand your skills, the assistant provided several tips and recommendations:\n\n*   **Monitor Temperature:** For specific recipes like homemade yogurt, using a **thermometer** is highly recommended to ensure you reach the correct temperature (180\u00b0F\u2013185\u00b0F) to kill bacteria and denature proteins for a better set [1].\n*   **Prevent Scorching:** Use a **low heat setting** to prevent food from scorching or burning [1].\n*   **Preparation:** Prep ingredients in advance, such as chopping vegetables or making sauces, to make the process less stressful [4].\n*   **Recipe Variety:** You have expressed interest in trying more plant-based meals. Recommendations include **Lentil Curry, Roasted Vegetable Stew, Black Bean Chili, and Chickpea and Spinach Curry** [1].\n*   **Customization:** Don't be afraid to adjust ingredients and seasonings to suit your taste preferences [1].\n\nIf you are looking for a specific new project, you recently asked for detailed instructions on making **cashew-based yogurt** in the slow cooker, which involves soaking and blending cashews to a creamy consistency before incubating them for 8\u201312 hours [1].",
+      "answer_usage": {
+        "prompt_tokens": 30739,
+        "completion_tokens": 277,
+        "prompt_chars": 129880,
+        "latency_s": 2.92
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "09d032c9",
+      "question_type": "single-session-preference",
+      "abstention": false,
+      "question": "I've been having trouble with the battery life on my phone lately. Any tips?",
+      "answer": "The user would prefer responses that build upon their previous mention of purchasing a portable power bank, such as suggestions on how to optimize its use, like ensuring it's fully charged before use. They might also appreciate tips on utilizing battery-saving features on their phone. The user may not prefer responses that suggest alternative solutions or unrelated advice.",
+      "num_sessions": 43,
+      "ingest": {
+        "files": 43,
+        "chunks": 43,
+        "embedded": true,
+        "embed_calls": 43,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 13.641
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_b10dce5e",
+          "46bab85b",
+          "e8bfacec_2",
+          "af631aa3_2",
+          "21ef2d05_1",
+          "ultrachat_510971",
+          "sharegpt_2pwdGxJ_1",
+          "69a7ada9_1",
+          "612e23f1",
+          "3fc2244f"
+        ],
+        "evidence_hit": true,
+        "context_chars": 133700,
+        "wall_s": 0.225
+      },
+      "hypothesis": "Based on the excerpts, there is no specific information regarding your phone's battery life or tips to fix it.\n\nHowever, the transcripts do mention a few related items:\n*   **Portable Power Banks:** You recently purchased a new portable power bank [1] and were looking for recommendations for others that fit in travel cases, such as the **Anker PowerCore 5000** or **Mophie Powerstation Mini** [1].\n*   **Travel Packing:** It was suggested that you pack a power bank for your move to Edinburgh to ensure your phone stays charged during travel [10].\n*   **Live Streaming:** You mentioned that you use your smartphone for Instagram Live streams [9], which typically consumes significant battery.",
+      "answer_usage": {
+        "prompt_tokens": 30613,
+        "completion_tokens": 153,
+        "prompt_chars": 134468,
+        "latency_s": 2.172
+      },
+      "judge_raw": "No.",
+      "label": false
+    },
+    {
+      "question_id": "505af2f5",
+      "question_type": "single-session-preference",
+      "abstention": false,
+      "question": "I was thinking of trying a new coffee creamer recipe. Any recommendations?",
+      "answer": "The user would prefer responses that suggest variations on their existing almond milk, vanilla extract, and honey creamer recipe or new ideas that align with their goals of reducing sugar intake and saving money. They might not prefer responses that recommend commercial creamer products or recipes that are high in sugar or expensive.",
+      "num_sessions": 53,
+      "ingest": {
+        "files": 53,
+        "chunks": 59,
+        "embedded": true,
+        "embed_calls": 59,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 14.13
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_f3164f2c",
+          "4f2d6be4_2",
+          "0e193841_8",
+          "sharegpt_kjeGJvK_11",
+          "af631aa3_1",
+          "7d52ca48_2",
+          "078db67b",
+          "sharegpt_A3DTUI4_28",
+          "baf33acc",
+          "9f8fa5e4_1"
+        ],
+        "evidence_hit": true,
+        "context_chars": 125570,
+        "wall_s": 0.22
+      },
+      "hypothesis": "Based on your earlier conversations, you have already started making a healthy, budget-friendly creamer using **almond milk, vanilla extract, and honey**.\n\nTo take it to the next level or try something new, here are the specific recommendations previously discussed:\n\n*   **Change the Milk Base:** For a creamier texture, try using **cashew milk** or **oat milk**.\n*   **Swap the Sweetener:** To further reduce sugar, consider **stevia, monk fruit sweetener, or yacon syrup**.\n*   **Add Spices:** Use **cinnamon, nutmeg, or cardamom** to add flavor without extra calories.\n*   **Flavor Extracts:** Experiment with **almond, coconut, or hazelnut extracts** in addition to vanilla.\n*   **Nutritional Boosts:** You can add a teaspoon of **collagen peptides, protein powder, or MCT oil** for extra energy and nutrition.\n*   **Probiotic Version:** Add a scoop of **probiotic powder** or a spoonful of **probiotic-rich yogurt** to support gut health.\n*   **Flavor Balance:** Add a small pinch of **Himalayan pink salt or sea salt** to balance the sweetness.",
+      "answer_usage": {
+        "prompt_tokens": 29619,
+        "completion_tokens": 251,
+        "prompt_chars": 126342,
+        "latency_s": 2.483
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "b6025781",
+      "question_type": "single-session-preference",
+      "abstention": false,
+      "question": "I'm planning my meal prep next week, any suggestions for new recipes?",
+      "answer": "The user would prefer responses that suggest healthy meal prep recipes, especially those that incorporate quinoa and roasted vegetables, and offer variations in protein sources. They might appreciate suggestions that build upon their existing preferences, such as new twists on chicken Caesar salads or turkey and avocado wraps. The user may not prefer responses that suggest unhealthy or high-calorie meal prep options, or those that deviate significantly from their established healthy eating habits.",
+      "num_sessions": 47,
+      "ingest": {
+        "files": 47,
+        "chunks": 47,
+        "embedded": true,
+        "embed_calls": 47,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 16.229
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_8414cc57",
+          "1a693999_4",
+          "f20c73f5_3",
+          "612c8368_2",
+          "d6956a2e_1",
+          "d15d2899_5",
+          "e1220dda_2",
+          "c886e128_1",
+          "705b5399_2",
+          "6446f6e6"
+        ],
+        "evidence_hit": true,
+        "context_chars": 137052,
+        "wall_s": 0.327
+      },
+      "hypothesis": "Based on your previous conversations, here are some protein sources and recipes you have discussed or expressed interest in for your meal prep:\n\n*   **Lentil Bolognese:** You were specifically interested in this plant-based option. It includes lentils, mushrooms, carrots, and celery, and pairs well with quinoa and roasted vegetables [1].\n*   **Roasted Sweet Potatoes with Fresh Rosemary:** You recently planned to make these as a side for your meal prep, seasoned with olive oil, salt, pepper, and fresh rosemary [1].\n*   **Chicken Fajitas:** You planned to make these using marinated chicken breast (with lime juice, garlic, and spices) and saut\u00e9ed bell peppers and onions [3].\n*   **Texas-Style Brisket:** Inspired by a sandwich you had at \"Bubba's BBQ,\" you were interested in making a tender, slow-cooked brisket using a savory Texas-style sauce [4].\n*   **Other Protein Ideas:** You have previously received suggestions for grilled chicken, pan-seared salmon, roasted turkey breast, tofu, shrimp, chickpeas, grilled steak, edamame, and tempeh to go with your quinoa [1].\n\nIf you are looking for something new, you also mentioned an interest in **Mexican-inspired dishes** like roasted vegetable quesadillas or grilled chicken tacos with mango salsa [3].",
+      "answer_usage": {
+        "prompt_tokens": 31797,
+        "completion_tokens": 280,
+        "prompt_chars": 137803,
+        "latency_s": 2.99
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "1c0ddc50",
+      "question_type": "single-session-preference",
+      "abstention": false,
+      "question": "Can you suggest some activities I can do during my commute to work?",
+      "answer": "The user would prefer suggestions related to listening to new podcasts or audiobooks, especially the genre beyond true crime or self-improvement, such as history. They may not be interested in activities that require visual attention, such as reading or watching videos, as they are commuting. The user would not prefer general podcast topics such as true crime or self-improvement, as the user wants to explore other topics.",
+      "num_sessions": 51,
+      "ingest": {
+        "files": 51,
+        "chunks": 51,
+        "embedded": true,
+        "embed_calls": 51,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 16.834
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "2aa70c9c_1",
+          "99883f38_1",
+          "b33e89b5_1",
+          "c7ca6dff",
+          "ebc1319b",
+          "2566382f_2",
+          "a0aa5035",
+          "2f0c1f4e",
+          "sharegpt_ikJXzOG_0",
+          "bf626a44"
+        ],
+        "evidence_hit": false,
+        "context_chars": 120705,
+        "wall_s": 0.277
+      },
+      "hypothesis": "Based on the excerpts, you have mentioned several activities you currently do or are considering for your commute:\n\n*   **Listening to Podcasts:** You already listen to podcasts during your bus ride and find them inspiring. Specifically, you mentioned enjoying **\"How I Built This\"** [1, 3].\n*   **Audiobooks:** A suggestion you liked for staying entertained while biking [1].\n*   **Language Learning:** Using apps like Duolingo or Babbel [1].\n*   **Productive Tasks:** Mentally preparing for the day, prioritizing your workload, or catching up on industry news [1].\n*   **Relaxation:** Listening to music, nature sounds, or guided meditations [1].\n*   **Physical Activity:** You have been planning to switch from the bus to **biking** to work to avoid Monday crowds and get exercise [1].\n\nYou also noted that you want to avoid wasting time on **email and social media** during your commute [1].",
+      "answer_usage": {
+        "prompt_tokens": 28678,
+        "completion_tokens": 204,
+        "prompt_chars": 121449,
+        "latency_s": 2.543
+      },
+      "judge_raw": "No.",
+      "label": false
+    },
+    {
+      "question_id": "a11281a2",
+      "question_type": "multi-session",
+      "abstention": false,
+      "question": "What was the approximate increase in Instagram followers I experienced in two weeks?",
+      "answer": "100",
+      "num_sessions": 50,
+      "ingest": {
+        "files": 50,
+        "chunks": 61,
+        "embedded": true,
+        "embed_calls": 61,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 21.115
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 5,
+        "session_ids": [
+          "answer_c69ee1f9_2",
+          "answer_c69ee1f9_1",
+          "bb2180e9_3",
+          "sharegpt_u3MVGYG_3",
+          "ultrachat_103691"
+        ],
+        "evidence_hit": true,
+        "context_chars": 64823,
+        "wall_s": 0.161
+      },
+      "hypothesis": "You experienced an increase of approximately **350 followers** in two weeks.",
+      "answer_usage": {
+        "prompt_tokens": 14163,
+        "completion_tokens": 16,
+        "prompt_chars": 65463,
+        "latency_s": 1.739
+      },
+      "judge_raw": "No.",
+      "label": false
+    },
+    {
+      "question_id": "e6041065",
+      "question_type": "multi-session",
+      "abstention": false,
+      "question": "What percentage of packed shoes did I wear on my last trip?",
+      "answer": "40%",
+      "num_sessions": 45,
+      "ingest": {
+        "files": 45,
+        "chunks": 48,
+        "embedded": true,
+        "embed_calls": 48,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 14.335
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_4eb6d671_2",
+          "answer_4eb6d671_1",
+          "bdcee74e_3",
+          "4c053e7e_1",
+          "sharegpt_GXDi9WQ_0",
+          "4a006b77",
+          "2a86d0da_2",
+          "59b8f503",
+          "b7dca8f1_1",
+          "12be262f_1"
+        ],
+        "evidence_hit": true,
+        "context_chars": 125692,
+        "wall_s": 0.395
+      },
+      "hypothesis": "You wore **40%** of the shoes you packed.\n\nAccording to the excerpts, you packed **five pairs** of shoes for your last trip but only ended up wearing **two** (your sneakers and sandals).",
+      "answer_usage": {
+        "prompt_tokens": 28852,
+        "completion_tokens": 45,
+        "prompt_chars": 126448,
+        "latency_s": 1.656
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "6456829e",
+      "question_type": "multi-session",
+      "abstention": false,
+      "question": "How many plants did I initially plant for tomatoes and cucumbers?",
+      "answer": "8",
+      "num_sessions": 47,
+      "ingest": {
+        "files": 47,
+        "chunks": 47,
+        "embedded": true,
+        "embed_calls": 47,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 14.737
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 6,
+        "session_ids": [
+          "answer_743f03a1_1",
+          "c44d1533_2",
+          "answer_743f03a1_2",
+          "5bed6828",
+          "47b924c1_1",
+          "898cfd46_2"
+        ],
+        "evidence_hit": true,
+        "context_chars": 93622,
+        "wall_s": 0.164
+      },
+      "hypothesis": "You initially planted **5 tomato plants** and **3 cucumber plants**.",
+      "answer_usage": {
+        "prompt_tokens": 21653,
+        "completion_tokens": 14,
+        "prompt_chars": 94257,
+        "latency_s": 1.409
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "e25c3b8d",
+      "question_type": "multi-session",
+      "abstention": false,
+      "question": "How much did I save on the designer handbag at TK Maxx?",
+      "answer": "$300",
+      "num_sessions": 48,
+      "ingest": {
+        "files": 48,
+        "chunks": 48,
+        "embedded": true,
+        "embed_calls": 48,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 14.994
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 6,
+        "session_ids": [
+          "answer_6702277b_2",
+          "answer_6702277b_1",
+          "sharegpt_DdJZrTY_7",
+          "099c1b6c_3",
+          "824634d9_1",
+          "c04c626c_1"
+        ],
+        "evidence_hit": true,
+        "context_chars": 74467,
+        "wall_s": 0.338
+      },
+      "hypothesis": "You saved **$300**.\n\nAccording to the excerpts, the handbag was originally **$500** [2] and you purchased it for **$200** [1].",
+      "answer_usage": {
+        "prompt_tokens": 16156,
+        "completion_tokens": 41,
+        "prompt_chars": 75102,
+        "latency_s": 1.502
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "a1cc6108",
+      "question_type": "multi-session",
+      "abstention": false,
+      "question": "How old was I when Alex was born?",
+      "answer": "11",
+      "num_sessions": 43,
+      "ingest": {
+        "files": 43,
+        "chunks": 43,
+        "embedded": true,
+        "embed_calls": 43,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 14.344
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 3,
+        "session_ids": [
+          "answer_17dc2f5b_2",
+          "answer_17dc2f5b_1",
+          "fb328ace_1"
+        ],
+        "evidence_hit": true,
+        "context_chars": 44791,
+        "wall_s": 0.247
+      },
+      "hypothesis": "Based on the memory excerpts, you were **11 years old** when Alex was born.\n\nThe transcripts provide the following information to calculate this:\n*   **Your age:** In May 2023, you stated you \"just turned 32 last month\" [2], making your birth year **1991**.\n*   **Alex's age:** In May 2023, you mentioned your intern Alex is **21** [1], making his birth year **2002**.\n*   **The difference:** 2002 - 1991 = 11.",
+      "answer_usage": {
+        "prompt_tokens": 10048,
+        "completion_tokens": 133,
+        "prompt_chars": 45306,
+        "latency_s": 1.808
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "720133ac",
+      "question_type": "multi-session",
+      "abstention": false,
+      "question": "What is the total cost of Lola's vet visit and flea medication?",
+      "answer": "$75",
+      "num_sessions": 47,
+      "ingest": {
+        "files": 47,
+        "chunks": 47,
+        "embedded": true,
+        "embed_calls": 47,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.184
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 4,
+        "session_ids": [
+          "answer_c9dfeaea_1",
+          "answer_c9dfeaea_2",
+          "sharegpt_sG53ibg_116",
+          "7c4431e2_2"
+        ],
+        "evidence_hit": true,
+        "context_chars": 45687,
+        "wall_s": 0.124
+      },
+      "hypothesis": "The total cost was **$75**.\n\nAccording to the excerpts:\n*   **Vet visit:** The consultation fee for Lola was **$50** (a discounted price for regular customers) [1, 2].\n*   **Flea medication:** The flea and tick prevention medication cost **$25** for a 3-month supply [2].",
+      "answer_usage": {
+        "prompt_tokens": 10692,
+        "completion_tokens": 77,
+        "prompt_chars": 46272,
+        "latency_s": 1.818
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "92a0aa75",
+      "question_type": "multi-session",
+      "abstention": false,
+      "question": "How long have I been working in my current role?",
+      "answer": "1 year and 5 months",
+      "num_sessions": 42,
+      "ingest": {
+        "files": 42,
+        "chunks": 42,
+        "embedded": true,
+        "embed_calls": 42,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 16.279
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "sharegpt_9l7gjYP_17",
+          "ultrachat_61473",
+          "answer_6cb8f792_2",
+          "ultrachat_178564",
+          "2bdd78cb_1",
+          "6da0bba2_1",
+          "dbefb778_1",
+          "sharegpt_roJFoSr_0",
+          "fdf7e3e7",
+          "1c0921ee_3"
+        ],
+        "evidence_hit": true,
+        "context_chars": 129063,
+        "wall_s": 0.202
+      },
+      "hypothesis": "Based on the memory excerpts, you have been working in your current role as a **Senior Marketing Specialist** for **3 years and 9 months**.\n\nThis information is found in excerpt [3], where you mentioned: *\"I've been thinking about my 3 years and 9 months experience in the company and I've realized that I've built a strong understanding of our target audience.\"*",
+      "answer_usage": {
+        "prompt_tokens": 27525,
+        "completion_tokens": 82,
+        "prompt_chars": 129823,
+        "latency_s": 1.81
+      },
+      "judge_raw": "No.",
+      "label": false
+    },
+    {
+      "question_id": "0ea62687",
+      "question_type": "multi-session",
+      "abstention": false,
+      "question": "How much more miles per gallon was my car getting a few months ago compared to now?",
+      "answer": "2",
+      "num_sessions": 43,
+      "ingest": {
+        "files": 43,
+        "chunks": 43,
+        "embedded": true,
+        "embed_calls": 43,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 13.57
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid-reworded",
+        "top_k": 10,
+        "hits": 5,
+        "session_ids": [
+          "answer_dc5e537d_1",
+          "answer_dc5e537d_2",
+          "e22fd738_5",
+          "b9e47a0f_2",
+          "d1ea55c0_1"
+        ],
+        "evidence_hit": true,
+        "context_chars": 72869,
+        "wall_s": 5.239,
+        "embed_error": "Embedding backend unavailable \u2014 backend=local model='bge-m3' text_len=83 cause=\"Ollama embed failed to reach host (role=embed): Server error '500 Internal Server Error' for url 'http://OLLAMA_HOST:11434"
+      },
+      "hypothesis": "A few months ago, your car was getting **30 miles per gallon** in the city, whereas it has recently been getting **28 miles per gallon**. This is a difference of **2 miles per gallon**.",
+      "answer_usage": {
+        "prompt_tokens": 16411,
+        "completion_tokens": 44,
+        "prompt_chars": 73494,
+        "latency_s": 1.384
+      },
+      "judge_raw": "Yes",
+      "label": true
+    },
+    {
+      "question_id": "60159905",
+      "question_type": "multi-session",
+      "abstention": false,
+      "question": "How many dinner parties have I attended in the past month?",
+      "answer": "three",
+      "num_sessions": 44,
+      "ingest": {
+        "files": 44,
+        "chunks": 44,
+        "embedded": true,
+        "embed_calls": 44,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.178
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_75eca223_2",
+          "6ade84f0",
+          "eb6737c0_1",
+          "answer_75eca223_1",
+          "21f8f481_3",
+          "e08bf81f_3",
+          "43f16b2b_1",
+          "c351fa3b_1",
+          "454fd51b_2",
+          "c36f4196"
+        ],
+        "evidence_hit": true,
+        "context_chars": 129523,
+        "wall_s": 0.315
+      },
+      "hypothesis": "Based on the excerpts, you have attended **three** dinner parties or similar food-focused gatherings in the past month:\n\n1.  **An Italian feast at Sarah's place** (mentioned on 2023-05-22 as having occurred \"last week\"). [4]\n2.  **A BBQ at Mike's place** where you watched a football game (mentioned on 2023-05-21 as having occurred \"two weeks ago\"). [1]\n3.  **A global cuisine potluck at Alex's place** (mentioned on 2023-05-21 as having occurred \"yesterday\"). [1]\n\n(Note: You also mentioned attending a birthday party for your colleague David \"last week\" in a transcript dated 2023-05-20, which involved laser tag and karaoke, but it was not specifically described as a dinner party. [5])",
+      "answer_usage": {
+        "prompt_tokens": 30063,
+        "completion_tokens": 202,
+        "prompt_chars": 130270,
+        "latency_s": 2.386
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "09ba9854",
+      "question_type": "multi-session",
+      "abstention": false,
+      "question": "How much will I save by taking the train from the airport to my hotel instead of a taxi?",
+      "answer": "$50",
+      "num_sessions": 44,
+      "ingest": {
+        "files": 44,
+        "chunks": 44,
+        "embedded": true,
+        "embed_calls": 44,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.365
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 5,
+        "session_ids": [
+          "answer_96c743d0_1",
+          "answer_96c743d0_2",
+          "69a42467_2",
+          "8e3887c3_2",
+          "dcc287e5"
+        ],
+        "evidence_hit": true,
+        "context_chars": 69519,
+        "wall_s": 0.128
+      },
+      "hypothesis": "Based on the memory excerpts, you will save approximately **$110 to $150** by taking the train instead of a taxi.\n\nThe estimated costs provided in the transcripts are:\n*   **Taxi:** Approximately **$140 to $180** (\u00a515,000\u2013\u00a520,000) for a daytime trip from Narita Airport to Tokyo [1].\n*   **Train:** Approximately **$28** (\u00a53,020) for the Narita Express (N'EX) or about **$30** for the Keisei Skyliner plus subway [2].\n\nWhile you mentioned a friend told you the train could be as cheap as **$10** (which would increase your savings to around $130\u2013$170), the assistant noted that this price usually refers to slower commuter trains that require multiple transfers [2].",
+      "answer_usage": {
+        "prompt_tokens": 16310,
+        "completion_tokens": 193,
+        "prompt_chars": 70147,
+        "latency_s": 2.544
+      },
+      "judge_raw": "No.",
+      "label": false
+    },
+    {
+      "question_id": "55241a1f",
+      "question_type": "multi-session",
+      "abstention": false,
+      "question": "What is the total number of comments on my recent Facebook Live session and my most popular YouTube video?",
+      "answer": "33",
+      "num_sessions": 49,
+      "ingest": {
+        "files": 49,
+        "chunks": 49,
+        "embedded": true,
+        "embed_calls": 49,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 16.108
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_fa08bf49_1",
+          "answer_fa08bf49_2",
+          "60153a02_4",
+          "46e4a8eb_2",
+          "9c9a22d8",
+          "sharegpt_Wgna1F5_0",
+          "d117e2da",
+          "2aeb1268",
+          "76491ee4_1",
+          "sharegpt_dUoAhvI_71"
+        ],
+        "evidence_hit": true,
+        "context_chars": 150119,
+        "wall_s": 0.247
+      },
+      "hypothesis": "The total number of comments is **33**.\n\nAccording to the excerpts:\n*   Your recent **Facebook Live** session about cooking vegan recipes got **12 comments** [1].\n*   Your most popular **YouTube video** (on social media analytics) has **21 comments** [2].",
+      "answer_usage": {
+        "prompt_tokens": 32134,
+        "completion_tokens": 64,
+        "prompt_chars": 150929,
+        "latency_s": 1.497
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "a346bb18",
+      "question_type": "multi-session",
+      "abstention": false,
+      "question": "How many minutes did I exceed my target time by in the marathon?",
+      "answer": "12",
+      "num_sessions": 49,
+      "ingest": {
+        "files": 49,
+        "chunks": 49,
+        "embedded": true,
+        "embed_calls": 49,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 16.659
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_4934b2d7_2",
+          "771ba1d5",
+          "sharegpt_ooEuxDg_0",
+          "answer_4934b2d7_1",
+          "5726dc37_2",
+          "feb5f98a_1",
+          "53949711_2",
+          "2655efcc_1",
+          "fd5448f0",
+          "sharegpt_VeexfGM_0"
+        ],
+        "evidence_hit": true,
+        "context_chars": 128474,
+        "wall_s": 0.144
+      },
+      "hypothesis": "You exceeded your target time by **12 minutes**.\n\nAccording to the excerpts, your target time for the marathon was **4 hours and 10 minutes** [1], and you completed your first full marathon in **4 hours and 22 minutes** [4].",
+      "answer_usage": {
+        "prompt_tokens": 29085,
+        "completion_tokens": 56,
+        "prompt_chars": 129243,
+        "latency_s": 1.364
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "efc3f7c2",
+      "question_type": "multi-session",
+      "abstention": false,
+      "question": "How much earlier do I wake up on Fridays compared to other weekdays?",
+      "answer": "30 minutes",
+      "num_sessions": 48,
+      "ingest": {
+        "files": 48,
+        "chunks": 48,
+        "embedded": true,
+        "embed_calls": 48,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 16.297
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid-reworded",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_fc81d1a2_2",
+          "answer_fc81d1a2_1",
+          "ultrachat_38938",
+          "fc005760",
+          "0f013a55",
+          "bbdc7b0a",
+          "afa0c2e7_3",
+          "sharegpt_MD0BL69_99",
+          "88a7faa7_1",
+          "d3cc5bdc_1"
+        ],
+        "evidence_hit": true,
+        "context_chars": 112731,
+        "wall_s": 5.894,
+        "embed_error": "Embedding backend unavailable \u2014 backend=local model='bge-m3' text_len=68 cause=\"Ollama embed failed to reach host (role=embed): Server error '500 Internal Server Error' for url 'http://OLLAMA_HOST:11434"
+      },
+      "hypothesis": "You wake up **30 minutes earlier** on Fridays.\n\nAccording to the excerpts, you wake up at **6:00 AM** on Fridays [1] and at **6:30 AM** on other weekdays [2].",
+      "answer_usage": {
+        "prompt_tokens": 26308,
+        "completion_tokens": 49,
+        "prompt_chars": 113500,
+        "latency_s": 1.239
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "a96c20ee_abs",
+      "question_type": "multi-session",
+      "abstention": true,
+      "question": "At which university did I present a poster for my undergrad course research project?",
+      "answer": "The information provided is not enough. You did not mention presenting a poster for your undergrad course research project.",
+      "num_sessions": 53,
+      "ingest": {
+        "files": 53,
+        "chunks": 54,
+        "embedded": true,
+        "embed_calls": 54,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 17.217
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 3,
+        "session_ids": [
+          "answer_ef84b994_abs_2",
+          "sharegpt_jM9e92F_0",
+          "answer_ef84b994_abs_1"
+        ],
+        "evidence_hit": false,
+        "context_chars": 44309,
+        "wall_s": 0.148
+      },
+      "hypothesis": "You presented your research poster at **Harvard University**.\n\nAccording to the excerpts, you attended your first research conference there to present your thesis research on the impact of AI on education technology (specifically regarding adaptive learning systems in math and reading comprehension).",
+      "answer_usage": {
+        "prompt_tokens": 8935,
+        "completion_tokens": 48,
+        "prompt_chars": 44891,
+        "latency_s": 1.288
+      },
+      "judge_raw": "No.",
+      "label": false
+    },
+    {
+      "question_id": "71017276",
+      "question_type": "temporal-reasoning",
+      "abstention": false,
+      "question": "How many weeks ago did I meet up with my aunt and receive the crystal chandelier?",
+      "answer": 4,
+      "num_sessions": 49,
+      "ingest": {
+        "files": 49,
+        "chunks": 49,
+        "embedded": true,
+        "embed_calls": 49,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 16.69
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_0b4a8adc_1",
+          "f78a22b6_4",
+          "58ec258f_2",
+          "6c7fea68_2",
+          "sharegpt_jZOf9E5_21",
+          "sharegpt_tCLMKZY_0",
+          "sharegpt_11WxPMZ_0",
+          "sharegpt_5pIFvuH_0",
+          "44e4ae7e",
+          "10889cf0_1"
+        ],
+        "evidence_hit": true,
+        "context_chars": 122029,
+        "wall_s": 0.451
+      },
+      "hypothesis": "You received the crystal chandelier from your aunt **four weeks ago** (on March 4, 2023).\n\nAccording to the transcript from March 4, 2023, you mentioned that you got the chandelier \"today.\" Since today's date is April 1, 2023, exactly four weeks have passed since that session.",
+      "answer_usage": {
+        "prompt_tokens": 28334,
+        "completion_tokens": 76,
+        "prompt_chars": 122827,
+        "latency_s": 1.57
+      },
+      "judge_raw": "Yes",
+      "label": true
+    },
+    {
+      "question_id": "gpt4_4929293a",
+      "question_type": "temporal-reasoning",
+      "abstention": false,
+      "question": "Which event happened first, my cousin's wedding or Michael's engagement party?",
+      "answer": "Michael's engagement party",
+      "num_sessions": 44,
+      "ingest": {
+        "files": 44,
+        "chunks": 44,
+        "embedded": true,
+        "embed_calls": 44,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 14.023
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid-reworded",
+        "top_k": 10,
+        "hits": 2,
+        "session_ids": [
+          "answer_add9b012_1",
+          "answer_add9b012_2"
+        ],
+        "evidence_hit": true,
+        "context_chars": 30906,
+        "wall_s": 5.378,
+        "embed_error": "Embedding backend unavailable \u2014 backend=local model='bge-m3' text_len=78 cause=\"Ollama embed failed to reach host (role=embed): Server error '500 Internal Server Error' for url 'http://OLLAMA_HOST:11434"
+      },
+      "hypothesis": "Based on the memory excerpts, **Michael's engagement party** happened first.\n\n*   **Michael's engagement party:** Mentioned on **2023/05/06** [2].\n*   **Cousin's wedding:** Mentioned on **2023/06/15** [1].",
+      "answer_usage": {
+        "prompt_tokens": 6674,
+        "completion_tokens": 73,
+        "prompt_chars": 31436,
+        "latency_s": 1.426
+      },
+      "judge_raw": "Yes",
+      "label": true
+    },
+    {
+      "question_id": "0db4c65d",
+      "question_type": "temporal-reasoning",
+      "abstention": false,
+      "question": "How many days had passed since I finished reading 'The Seven Husbands of Evelyn Hugo' when I attended the book reading event at the local library, where the author of 'The Silent Patient' is discussing her latest thriller novel?",
+      "answer": "18 days. 19 days (including the last day) is also acceptable.",
+      "num_sessions": 44,
+      "ingest": {
+        "files": 44,
+        "chunks": 44,
+        "embedded": true,
+        "embed_calls": 44,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 14.088
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 7,
+        "session_ids": [
+          "answer_b9e32ff8_2",
+          "answer_b9e32ff8_1",
+          "sharegpt_S0mG9La_54",
+          "d36d11b9_2",
+          "b22a2540",
+          "e9e19917_1",
+          "f78a22b6_3"
+        ],
+        "evidence_hit": true,
+        "context_chars": 89124,
+        "wall_s": 0.109
+      },
+      "hypothesis": "18 days.\n\nAccording to the transcripts:\n*   You finished reading **\"The Seven Husbands of Evelyn Hugo\"** on **December 28, 2022** [2].\n*   You attended the book reading event for the author of **\"The Silent Patient\"** on **January 15, 2023** [1].",
+      "answer_usage": {
+        "prompt_tokens": 20469,
+        "completion_tokens": 79,
+        "prompt_chars": 89961,
+        "latency_s": 1.348
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "gpt4_18c2b244",
+      "question_type": "temporal-reasoning",
+      "abstention": false,
+      "question": "What is the order of the three events: 'I signed up for the rewards program at ShopRite', 'I used a Buy One Get One Free coupon on Luvs diapers at Walmart', and 'I redeemed $12 cashback for a $10 Amazon gift card from Ibotta'?",
+      "answer": "First, I used a Buy One Get One Free coupon on Luvs diapers at Walmart. Then, I redeemed $12 cashback for a $10 Amazon gift card from Ibotta. Finally, I signed up for the rewards program at ShopRite.",
+      "num_sessions": 44,
+      "ingest": {
+        "files": 44,
+        "chunks": 44,
+        "embedded": true,
+        "embed_calls": 44,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 14.848
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_c862f65a_2",
+          "answer_c862f65a_1",
+          "answer_c862f65a_3",
+          "dfbc46bd_1",
+          "1961100c_2",
+          "7e2c6065",
+          "aeb58d86_4",
+          "sharegpt_aYHsXy8_0",
+          "0dc509ba_3",
+          "81354f67_2"
+        ],
+        "evidence_hit": true,
+        "context_chars": 144735,
+        "wall_s": 0.232
+      },
+      "hypothesis": "Based on the memory excerpts, the chronological order of the three events is as follows:\n\n1.  **I used a Buy One Get One Free coupon on Luvs diapers at Walmart**: This occurred on or before **April 1, 2023** [1].\n2.  **I redeemed $12 cashback for a $10 Amazon gift card from Ibotta**: This occurred on **April 10, 2023** [3].\n3.  **I signed up for the rewards program at ShopRite**: This occurred on **April 15, 2023** [2].",
+      "answer_usage": {
+        "prompt_tokens": 31538,
+        "completion_tokens": 134,
+        "prompt_chars": 145667,
+        "latency_s": 2.176
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "gpt4_7abb270c",
+      "question_type": "temporal-reasoning",
+      "abstention": false,
+      "question": "What is the order of the six museums I visited from earliest to latest?",
+      "answer": "Science Museum, Museum of Contemporary Art, Metropolitan Museum of Art, Museum of History, Modern Art Museum, Natural History Museum",
+      "num_sessions": 48,
+      "ingest": {
+        "files": 48,
+        "chunks": 48,
+        "embedded": true,
+        "embed_calls": 48,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 14.811
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_7093d898_6",
+          "answer_7093d898_1",
+          "answer_7093d898_5",
+          "1bfd5a8b_2",
+          "087d2b0a_2",
+          "answer_7093d898_2",
+          "ultrachat_253954",
+          "sharegpt_W6t3Ck0_0",
+          "bfae8d20",
+          "answer_7093d898_4"
+        ],
+        "evidence_hit": true,
+        "context_chars": 115596,
+        "wall_s": 0.158
+      },
+      "hypothesis": "Based on the excerpts, here is the chronological order of the six museums you visited:\n\n1.  **Science Museum** (Visited on or before Jan 15, 2023) \u2014 You explored the \"Space Exploration\" exhibition with your colleague, David [2].\n2.  **Museum of Contemporary Art** (Visited on or before Jan 22, 2023) \u2014 You attended a lecture series by Dr. Maria Rodriguez on 1970s feminist art [6, 2].\n3.  **Museum of History** (Visited Feb 15, 2023) \u2014 You took a behind-the-scenes tour of the conservation lab [10].\n4.  **Modern Art Museum** (Visited Feb 17, 2023) \u2014 You attended a guided tour of \"The Evolution of Abstract Expressionism\" led by Dr. Patel [4, 3].\n5.  **Natural History Museum** (Visited Mar 4, 2023) \u2014 You took your niece to see the \"Dinosaur Fossils\" exhibition [1].\n6.  **Metropolitan Museum of Art** (Visited between Mar 4 and Mar 10, 2023) \u2014 You mentioned visiting \"recently\" to see the Ancient Egyptian Artifacts exhibition [1].",
+      "answer_usage": {
+        "prompt_tokens": 25393,
+        "completion_tokens": 284,
+        "prompt_chars": 116393,
+        "latency_s": 2.78
+      },
+      "judge_raw": "No.",
+      "label": false
+    },
+    {
+      "question_id": "gpt4_45189cb4",
+      "question_type": "temporal-reasoning",
+      "abstention": false,
+      "question": "What is the order of the sports events I watched in January?",
+      "answer": "First, I attended a NBA game at the Staples Center, then I watched the College Football National Championship game, and finally, I watched the NFL playoffs.",
+      "num_sessions": 45,
+      "ingest": {
+        "files": 45,
+        "chunks": 45,
+        "embedded": true,
+        "embed_calls": 45,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 14.413
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 5,
+        "session_ids": [
+          "answer_e6c20e52_2",
+          "ebf5b3bc_2",
+          "answer_e6c20e52_3",
+          "6593cb8b_1",
+          "5c16fe0b_1"
+        ],
+        "evidence_hit": true,
+        "context_chars": 68622,
+        "wall_s": 0.218
+      },
+      "hypothesis": "Based on the memory excerpts, here is the order of the sports events you watched in January:\n\n1.  **NBA Game (Lakers vs. Chicago Bulls):** You watched this at the Staples Center on or before **January 5, 2023** [3].\n2.  **College Football National Championship (Georgia vs. Alabama):** You watched this at home with your family on **January 14, 2023** (referenced as \"yesterday\" in a transcript from Jan 15) [1].\n3.  **Autocross Event:** You participated in this at the San Bernardino County Fairgrounds on or before **January 22, 2023**, where you broke the 60-second barrier in your Honda Civic Si [4].",
+      "answer_usage": {
+        "prompt_tokens": 15689,
+        "completion_tokens": 168,
+        "prompt_chars": 69224,
+        "latency_s": 1.816
+      },
+      "judge_raw": "No.",
+      "label": false
+    },
+    {
+      "question_id": "gpt4_4ef30696",
+      "question_type": "temporal-reasoning",
+      "abstention": false,
+      "question": "How many days passed between the day I finished reading 'The Nightingale' and the day I started reading 'The Hitchhiker's Guide to the Galaxy'?",
+      "answer": "1 day. 2 days (including the last day) is also acceptable.",
+      "num_sessions": 49,
+      "ingest": {
+        "files": 49,
+        "chunks": 49,
+        "embedded": true,
+        "embed_calls": 49,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 16.311
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 4,
+        "session_ids": [
+          "answer_f964cea3_2",
+          "answer_f964cea3_1",
+          "80b3f093",
+          "d9868305_2"
+        ],
+        "evidence_hit": true,
+        "context_chars": 61951,
+        "wall_s": 0.191
+      },
+      "hypothesis": "One day passed between these two events.\n\nAccording to the excerpts:\n*   You finished reading **'The Nightingale'** on **2022/01/15** (Saturday) [2].\n*   You started reading **'The Hitchhiker's Guide to the Galaxy'** on **2022/01/16** (Sunday) [1].",
+      "answer_usage": {
+        "prompt_tokens": 13903,
+        "completion_tokens": 84,
+        "prompt_chars": 62604,
+        "latency_s": 1.721
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "gpt4_8e165409",
+      "question_type": "temporal-reasoning",
+      "abstention": false,
+      "question": "How many days passed between the day I repotted the previous spider plant and the day I gave my neighbor, Mrs. Johnson, a few cuttings from my spider plant?",
+      "answer": "14 days. 15 days (including the last day) is also acceptable.",
+      "num_sessions": 47,
+      "ingest": {
+        "files": 47,
+        "chunks": 47,
+        "embedded": true,
+        "embed_calls": 47,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 16.501
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 4,
+        "session_ids": [
+          "answer_d97db962_2",
+          "answer_d97db962_1",
+          "sharegpt_JRQtEcd_115",
+          "58ab5fc5"
+        ],
+        "evidence_hit": true,
+        "context_chars": 46109,
+        "wall_s": 0.197
+      },
+      "hypothesis": "Exactly 14 days passed. You repotted the spider plant on March 4, 2023, and gave the cuttings to Mrs. Johnson on March 18, 2023.",
+      "answer_usage": {
+        "prompt_tokens": 10795,
+        "completion_tokens": 44,
+        "prompt_chars": 46785,
+        "latency_s": 1.398
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "gpt4_98f46fc6",
+      "question_type": "temporal-reasoning",
+      "abstention": false,
+      "question": "Which event did I participate in first, the charity gala or the charity bake sale?",
+      "answer": "I participated in the charity bake sale first.",
+      "num_sessions": 49,
+      "ingest": {
+        "files": 49,
+        "chunks": 49,
+        "embedded": true,
+        "embed_calls": 49,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 16.269
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 4,
+        "session_ids": [
+          "answer_5850de18_2",
+          "answer_5850de18_1",
+          "sharegpt_hPTUZia_0",
+          "32e292f2"
+        ],
+        "evidence_hit": true,
+        "context_chars": 48738,
+        "wall_s": 0.114
+      },
+      "hypothesis": "Based on the excerpts, you participated in the **charity bake sale** first.\n\nAccording to the transcripts:\n*   **Charity Bake Sale:** You mentioned organizing and attending this on **March 15, 2023** [1].\n*   **Charity Gala:** You mentioned attending this on the evening of **March 28, 2023** [2].",
+      "answer_usage": {
+        "prompt_tokens": 11168,
+        "completion_tokens": 85,
+        "prompt_chars": 49338,
+        "latency_s": 1.442
+      },
+      "judge_raw": "Yes",
+      "label": true
+    },
+    {
+      "question_id": "gpt4_85da3956",
+      "question_type": "temporal-reasoning",
+      "abstention": false,
+      "question": "How many weeks ago did I attend the 'Summer Nights' festival at Universal Studios Hollywood?",
+      "answer": "3 weeks ago",
+      "num_sessions": 53,
+      "ingest": {
+        "files": 53,
+        "chunks": 53,
+        "embedded": true,
+        "embed_calls": 53,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 17.554
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_581ab834_1",
+          "3e6b6802_3",
+          "14b000d9_1",
+          "sharegpt_i59HUGf_0",
+          "sharegpt_ewad5Sr_0",
+          "2fd445a2_4",
+          "3a4012a5_4",
+          "a27b7aa4_2",
+          "deb6dd25",
+          "c00077f5_2"
+        ],
+        "evidence_hit": true,
+        "context_chars": 133319,
+        "wall_s": 0.204
+      },
+      "hypothesis": "You attended the \"Summer Nights\" festival at Universal Studios Hollywood **three weeks** prior to July 15, 2023.\n\nAccording to the memory excerpt from July 15, 2023 [1], the assistant noted: \"...I didn't know you went to Universal Studios Hollywood three weeks ago.\"",
+      "answer_usage": {
+        "prompt_tokens": 30426,
+        "completion_tokens": 69,
+        "prompt_chars": 134111,
+        "latency_s": 1.46
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "gpt4_7bc6cf22",
+      "question_type": "temporal-reasoning",
+      "abstention": false,
+      "question": "How many days ago did I read the March 15th issue of The New Yorker?",
+      "answer": "12 days ago. 13 days (including the last day) is also acceptable.",
+      "num_sessions": 48,
+      "ingest": {
+        "files": 48,
+        "chunks": 48,
+        "embedded": true,
+        "embed_calls": 48,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.662
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 2,
+        "session_ids": [
+          "answer_e22d6aef_1",
+          "sharegpt_xiDADcv_0"
+        ],
+        "evidence_hit": true,
+        "context_chars": 31370,
+        "wall_s": 0.247
+      },
+      "hypothesis": "You read that issue **12 days ago**.\n\nAccording to the transcript from March 20, 2023, you mentioned that you had read the March 15th issue \"today.\" Given that today's date is April 1, 2023, it has been 12 days since that conversation.",
+      "answer_usage": {
+        "prompt_tokens": 6586,
+        "completion_tokens": 71,
+        "prompt_chars": 31891,
+        "latency_s": 1.387
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "gpt4_d6585ce9",
+      "question_type": "temporal-reasoning",
+      "abstention": false,
+      "question": "Who did I go with to the music event last Saturday?",
+      "answer": "my parents",
+      "num_sessions": 42,
+      "ingest": {
+        "files": 42,
+        "chunks": 42,
+        "embedded": true,
+        "embed_calls": 42,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 14.312
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_f999b05c_4",
+          "answer_f999b05c_3",
+          "answer_f999b05c_2",
+          "58dd3f35",
+          "answer_f999b05c_1",
+          "answer_f999b05c_5",
+          "a554ed79_4",
+          "sharegpt_rUJditl_73",
+          "17a561cb_2",
+          "a15fa6eb"
+        ],
+        "evidence_hit": true,
+        "context_chars": 147671,
+        "wall_s": 0.269
+      },
+      "hypothesis": "You went to the music event last Saturday with **your parents**.\n\nAccording to the memory excerpt from April 15, 2023 [2], you mentioned that you saw **Queen with Adam Lambert** at the Prudential Center in Newark, NJ, with your parents. Since the transcript is dated Saturday, April 15, \"last Saturday\" refers to April 8, 2023. Another excerpt from April 8 [6] confirms you attended a **jazz night at a local bar** that day, though it does not explicitly name your companions for that specific outing; however, your earlier mention of the Queen concert (which took place around that time) specifically notes your parents were with you.",
+      "answer_usage": {
+        "prompt_tokens": 34526,
+        "completion_tokens": 147,
+        "prompt_chars": 148441,
+        "latency_s": 2.084
+      },
+      "judge_raw": "Yes",
+      "label": true
+    },
+    {
+      "question_id": "gpt4_4929293b",
+      "question_type": "temporal-reasoning",
+      "abstention": false,
+      "question": "What was the the life event of one of my relatives that I participated in a week ago?",
+      "answer": "my cousin's wedding",
+      "num_sessions": 49,
+      "ingest": {
+        "files": 49,
+        "chunks": 49,
+        "embedded": true,
+        "embed_calls": 49,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.106
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 3,
+        "session_ids": [
+          "4090cbea",
+          "bda611f6_3",
+          "answer_add9b013_1"
+        ],
+        "evidence_hit": true,
+        "context_chars": 40297,
+        "wall_s": 0.303
+      },
+      "hypothesis": "Based on the memory excerpts, you participated in your **niece's kindergarten graduation ceremony**.\n\nIn a conversation dated April 15, 2023 [1], you mentioned that the ceremony took place \"last week\" (specifically on June 10th, according to your later recollection in the same transcript). You also noted that your sister held a small reception afterward with cupcakes and juice boxes.",
+      "answer_usage": {
+        "prompt_tokens": 8865,
+        "completion_tokens": 84,
+        "prompt_chars": 40855,
+        "latency_s": 1.443
+      },
+      "judge_raw": "No.",
+      "label": false
+    },
+    {
+      "question_id": "4dfccbf8",
+      "question_type": "temporal-reasoning",
+      "abstention": false,
+      "question": "What did I do with Rachel on the Wednesday two months ago?",
+      "answer": "I started taking ukulele lessons with Rachel.",
+      "num_sessions": 43,
+      "ingest": {
+        "files": 43,
+        "chunks": 43,
+        "embedded": true,
+        "embed_calls": 43,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 12.016
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 7,
+        "session_ids": [
+          "sharegpt_oXgiN7q_131",
+          "953aaad5_3",
+          "88841f26_2",
+          "1c177942_4",
+          "b4f63a70_3",
+          "87317e05_1",
+          "1bc87711_1"
+        ],
+        "evidence_hit": false,
+        "context_chars": 97441,
+        "wall_s": 0.141
+      },
+      "hypothesis": "Based on the memory excerpts, there is no mention of a person named Rachel or any specific activity you did with her on a Wednesday two months ago. The transcripts primarily focus on your interest in art, your dog Max, and planning a family trip.",
+      "answer_usage": {
+        "prompt_tokens": 21663,
+        "completion_tokens": 50,
+        "prompt_chars": 98097,
+        "latency_s": 2.384
+      },
+      "judge_raw": "No.",
+      "label": false
+    },
+    {
+      "question_id": "gpt4_68e94288",
+      "question_type": "temporal-reasoning",
+      "abstention": false,
+      "question": "What was the social media activity I participated 5 days ago?",
+      "answer": "You participated in a social media challenge called #PlankChallenge.",
+      "num_sessions": 44,
+      "ingest": {
+        "files": 44,
+        "chunks": 44,
+        "embedded": true,
+        "embed_calls": 44,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 14.89
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "c99dcd81",
+          "ba80721c",
+          "128f4e4d_2",
+          "sharegpt_wWUI4SO_7",
+          "sharegpt_RD37kJL_31",
+          "answer_9793daa4_1",
+          "2a2c0a7e_3",
+          "4c49e37f",
+          "ultrachat_396489",
+          "ultrachat_74747"
+        ],
+        "evidence_hit": true,
+        "context_chars": 115981,
+        "wall_s": 0.143
+      },
+      "hypothesis": "Based on the memory excerpts, 5 days ago (on 2023/03/15), you participated in a social media challenge called the **#PlankChallenge**.",
+      "answer_usage": {
+        "prompt_tokens": 25812,
+        "completion_tokens": 39,
+        "prompt_chars": 116750,
+        "latency_s": 1.401
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "0bb5a684",
+      "question_type": "temporal-reasoning",
+      "abstention": false,
+      "question": "How many days before the team meeting I was preparing for did I attend the workshop on 'Effective Communication in the Workplace'?",
+      "answer": "7 days. 8 days (including the last day) is also acceptable.",
+      "num_sessions": 42,
+      "ingest": {
+        "files": 42,
+        "chunks": 42,
+        "embedded": true,
+        "embed_calls": 42,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.541
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_e936197f_1",
+          "answer_e936197f_2",
+          "826d51da_3",
+          "3c8e7c0e_3",
+          "1a14d6cb_1",
+          "b2d46bf2",
+          "sharegpt_6dPUCcK_13",
+          "565929a2_2",
+          "fce8bb8a_2",
+          "sharegpt_CIPQtDW_0"
+        ],
+        "evidence_hit": true,
+        "context_chars": 147338,
+        "wall_s": 0.222
+      },
+      "hypothesis": "You attended the workshop **7 days** before your team meeting.\n\nAccording to the excerpts, you attended the \"Effective Communication in the Workplace\" workshop on **January 10th** [1] and were preparing for a team meeting scheduled for **January 17th** [2].",
+      "answer_usage": {
+        "prompt_tokens": 30948,
+        "completion_tokens": 60,
+        "prompt_chars": 148176,
+        "latency_s": 2.185
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "bbf86515",
+      "question_type": "temporal-reasoning",
+      "abstention": false,
+      "question": "How many days before the 'Rack Fest' did I participate in the 'Turbocharged Tuesdays' event?",
+      "answer": "4 days.",
+      "num_sessions": 45,
+      "ingest": {
+        "files": 45,
+        "chunks": 45,
+        "embedded": true,
+        "embed_calls": 45,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.509
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_b3763b6b_1",
+          "592cb8d2",
+          "sharegpt_d1Rh99l_63",
+          "df003c93_2",
+          "answer_b3763b6b_2",
+          "sharegpt_6ObOZhW_0",
+          "29194fbe_1",
+          "75b98d2a_1",
+          "sharegpt_Wi7Op1u_50",
+          "6cd203f7_2"
+        ],
+        "evidence_hit": true,
+        "context_chars": 133797,
+        "wall_s": 0.219
+      },
+      "hypothesis": "You participated in the \"Turbocharged Tuesdays\" event **4 days** before \"Rack Fest.\"\n\nAccording to the excerpts:\n*   **Turbocharged Tuesdays** took place on **June 14th** [1].\n*   **Rack Fest** took place on **June 18th** [5].",
+      "answer_usage": {
+        "prompt_tokens": 31762,
+        "completion_tokens": 66,
+        "prompt_chars": 134606,
+        "latency_s": 2.32
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "gpt4_70e84552",
+      "question_type": "temporal-reasoning",
+      "abstention": false,
+      "question": "Which task did I complete first, fixing the fence or trimming the goats' hooves?",
+      "answer": "Fixing the fence",
+      "num_sessions": 48,
+      "ingest": {
+        "files": 48,
+        "chunks": 48,
+        "embedded": true,
+        "embed_calls": 48,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.775
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 5,
+        "session_ids": [
+          "answer_b3070ec4_1",
+          "answer_b3070ec4_2",
+          "sharegpt_Y2Di7vX_0",
+          "67a8ef5f",
+          "sharegpt_d7bP5fb_0"
+        ],
+        "evidence_hit": true,
+        "context_chars": 58411,
+        "wall_s": 0.334
+      },
+      "hypothesis": "You fixed the fence first.\n\nAccording to the excerpts:\n*   **Fixing the fence:** On May 25, 2023, you mentioned you fixed the fence **three weeks ago** [1].\n*   **Trimming the hooves:** On May 25, 2023, you mentioned you completed this **two weeks ago** [2].",
+      "answer_usage": {
+        "prompt_tokens": 13580,
+        "completion_tokens": 82,
+        "prompt_chars": 59047,
+        "latency_s": 1.666
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "982b5123",
+      "question_type": "temporal-reasoning",
+      "abstention": false,
+      "question": "How many months ago did I book the Airbnb in San Francisco?",
+      "answer": "Five months ago",
+      "num_sessions": 47,
+      "ingest": {
+        "files": 47,
+        "chunks": 47,
+        "embedded": true,
+        "embed_calls": 47,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.665
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_ab603dd5_1",
+          "e36b0031",
+          "answer_ab603dd5_2",
+          "07ba9acd_2",
+          "a916670f_1",
+          "37c3726a_1",
+          "bf8ab267",
+          "f89f184e_1",
+          "69a42467_1",
+          "1bfd5a8b_3"
+        ],
+        "evidence_hit": true,
+        "context_chars": 137996,
+        "wall_s": 0.394
+      },
+      "hypothesis": "You booked that Airbnb **three months** in advance.\n\nAccording to your memory from May 21, 2023, you mentioned that you had to book the Airbnb in Haight-Ashbury three months in advance for your best friend's wedding [1].",
+      "answer_usage": {
+        "prompt_tokens": 31608,
+        "completion_tokens": 57,
+        "prompt_chars": 138744,
+        "latency_s": 1.534
+      },
+      "judge_raw": "No.",
+      "label": false
+    },
+    {
+      "question_id": "e4e14d04",
+      "question_type": "temporal-reasoning",
+      "abstention": false,
+      "question": "How long had I been a member of 'Book Lovers Unite' when I attended the meetup?",
+      "answer": "Two weeks",
+      "num_sessions": 45,
+      "ingest": {
+        "files": 45,
+        "chunks": 45,
+        "embedded": true,
+        "embed_calls": 45,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 14.63
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 5,
+        "session_ids": [
+          "answer_cf425855_2",
+          "answer_cf425855_1",
+          "f8de4e92_2",
+          "ffc627f2",
+          "d64a0896"
+        ],
+        "evidence_hit": true,
+        "context_chars": 68815,
+        "wall_s": 0.332
+      },
+      "hypothesis": "You had been a member of \"Book Lovers Unite\" for **two weeks** when you attended the meetup.\n\nAccording to excerpt [2], you mentioned on May 28, 2023, that you had joined the group **three weeks ago**. In excerpt [1], also dated May 28, 2023, you stated that you had attended the meetup **\"last week.\"** Therefore, you had been a member for two weeks at the time of the event.",
+      "answer_usage": {
+        "prompt_tokens": 15418,
+        "completion_tokens": 103,
+        "prompt_chars": 69432,
+        "latency_s": 2.062
+      },
+      "judge_raw": "Yes",
+      "label": true
+    },
+    {
+      "question_id": "gpt4_9a159967",
+      "question_type": "temporal-reasoning",
+      "abstention": false,
+      "question": "Which airline did I fly with the most in March and April?",
+      "answer": "United Airlines",
+      "num_sessions": 46,
+      "ingest": {
+        "files": 46,
+        "chunks": 46,
+        "embedded": true,
+        "embed_calls": 46,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 14.356
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 6,
+        "session_ids": [
+          "answer_8a42fedf_1",
+          "answer_8a42fedf_3",
+          "answer_8a42fedf_2",
+          "75671e3f_1",
+          "4ea94f85",
+          "faa98b68_1"
+        ],
+        "evidence_hit": true,
+        "context_chars": 80189,
+        "wall_s": 0.192
+      },
+      "hypothesis": "Based on the excerpts, you flew with **American Airlines** the most during March and April, totaling at least **11 flights**.\n\nHere is the breakdown of your travel:\n*   **American Airlines:** 11 flights. You took 1 round-trip with a connecting flight (4 flights total) to Hawaii from April 20th to 27th [3], and you mentioned taking at least 10 Uber rides during that week [3]. Additionally, you just returned from a friend's wedding in Chicago (April 2023) [6], and you previously mentioned having accumulated miles with American Airlines [1, 2].\n*   **United Airlines:** 4 flights. You took a business trip to Chicago from March 10th to 12th, which consisted of two flights each way [1].\n*   **Southwest Airlines:** 1 flight. You took a direct flight to Las Vegas for a conference from March 15th to 18th [2].",
+      "answer_usage": {
+        "prompt_tokens": 17979,
+        "completion_tokens": 214,
+        "prompt_chars": 80823,
+        "latency_s": 2.474
+      },
+      "judge_raw": "No.",
+      "label": false
+    },
+    {
+      "question_id": "d01c6aa8",
+      "question_type": "temporal-reasoning",
+      "abstention": false,
+      "question": "How old was I when I moved to the United States?",
+      "answer": "27",
+      "num_sessions": 42,
+      "ingest": {
+        "files": 42,
+        "chunks": 42,
+        "embedded": true,
+        "embed_calls": 42,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 14.607
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 5,
+        "session_ids": [
+          "sharegpt_xd1G5uV_0",
+          "answer_991d55e5_1",
+          "sharegpt_3v69R59_0",
+          "answer_991d55e5_2",
+          "bddebd14"
+        ],
+        "evidence_hit": true,
+        "context_chars": 62777,
+        "wall_s": 0.119
+      },
+      "hypothesis": "Based on the memory excerpts, you moved to the United States when you were **27 years old**.\n\nIn excerpt [4], dated May 27, 2023, you stated that you are a **32-year-old male** and that you have been living in the United States for the past **five years** on a work visa.",
+      "answer_usage": {
+        "prompt_tokens": 13473,
+        "completion_tokens": 76,
+        "prompt_chars": 63381,
+        "latency_s": 1.752
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "gpt4_88806d6e",
+      "question_type": "temporal-reasoning",
+      "abstention": false,
+      "question": "Who did I meet first, Mark and Sarah or Tom?",
+      "answer": "Tom",
+      "num_sessions": 49,
+      "ingest": {
+        "files": 49,
+        "chunks": 49,
+        "embedded": true,
+        "embed_calls": 49,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.936
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 1,
+        "session_ids": [
+          "answer_e60a93ff_1"
+        ],
+        "evidence_hit": true,
+        "context_chars": 12857,
+        "wall_s": 0.128
+      },
+      "hypothesis": "Based on the memory excerpts provided, you met **Mark and Sarah** about a month ago on a beach trip. There is no mention of a person named Tom in these transcripts, so it is not possible to determine who you met first.",
+      "answer_usage": {
+        "prompt_tokens": 2929,
+        "completion_tokens": 48,
+        "prompt_chars": 13316,
+        "latency_s": 1.037
+      },
+      "judge_raw": "No",
+      "label": false
+    },
+    {
+      "question_id": "6613b389",
+      "question_type": "temporal-reasoning",
+      "abstention": false,
+      "question": "How many months before my anniversary did Rachel get engaged?",
+      "answer": "2",
+      "num_sessions": 41,
+      "ingest": {
+        "files": 41,
+        "chunks": 41,
+        "embedded": true,
+        "embed_calls": 41,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 13.636
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 3,
+        "session_ids": [
+          "answer_aaf71ce2_2",
+          "f1cc1ddb_1",
+          "answer_aaf71ce2_3"
+        ],
+        "evidence_hit": true,
+        "context_chars": 43693,
+        "wall_s": 0.116
+      },
+      "hypothesis": "Rachel got engaged **two months** before your anniversary.\n\nAccording to the excerpts, Rachel got engaged on **May 15th**, and your anniversary is on **July 22nd**.",
+      "answer_usage": {
+        "prompt_tokens": 9875,
+        "completion_tokens": 40,
+        "prompt_chars": 44236,
+        "latency_s": 1.197
+      },
+      "judge_raw": "Yes",
+      "label": true
+    },
+    {
+      "question_id": "gpt4_213fd887",
+      "question_type": "temporal-reasoning",
+      "abstention": false,
+      "question": "Which event did I participate in first, the volleyball league or the charity 5K run to raise money for a local children's hospital?",
+      "answer": "volleyball league",
+      "num_sessions": 45,
+      "ingest": {
+        "files": 45,
+        "chunks": 45,
+        "embedded": true,
+        "embed_calls": 45,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 14.622
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 3,
+        "session_ids": [
+          "answer_53582e7e_2",
+          "answer_53582e7e_1",
+          "9bdbfc62_2"
+        ],
+        "evidence_hit": true,
+        "context_chars": 51996,
+        "wall_s": 0.106
+      },
+      "hypothesis": "Based on the excerpts, you participated in the **charity 5K run** first.\n\nAccording to the transcripts:\n*   **Volleyball league:** You mentioned on May 24, 2023, that you joined the recreational volleyball league \"about 2 months ago\" [2].\n*   **Charity 5K run:** You mentioned on the same day that you did the charity 5K \"about a month ago\" [1].\n\nHowever, in a separate conversation on May 24, you clarified that your interest in fitness \"all started about 2 months ago when I joined a recreational volleyball league\" [2]. Later in that same session, you noted that the charity 5K helped you build endurance for your upcoming cycling event [1]. \n\nWait, looking closer at the specific phrasing in excerpt [2]: \"I think it all started about 2 months ago when I joined a recreational volleyball league... I've noticed that my endurance has improved significantly... I'm glad I got some experience with the charity 5K, which helped me build some endurance.\" This indicates the volleyball league was the starting point of your fitness journey two months prior, while the 5K occurred more recently (one month prior).",
+      "answer_usage": {
+        "prompt_tokens": 11775,
+        "completion_tokens": 260,
+        "prompt_chars": 52609,
+        "latency_s": 2.853
+      },
+      "judge_raw": "No",
+      "label": false
+    },
+    {
+      "question_id": "gpt4_70e84552_abs",
+      "question_type": "temporal-reasoning",
+      "abstention": true,
+      "question": "Which task did I complete first, fixing the fence or purchasing three cows from Peter?",
+      "answer": "The information provided is not enough. You mentioned fixing the fence but did not mention purchasing cows from Peter.",
+      "num_sessions": 50,
+      "ingest": {
+        "files": 50,
+        "chunks": 50,
+        "embedded": true,
+        "embed_calls": 50,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 16.484
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 2,
+        "session_ids": [
+          "answer_b3070ec4_abs_1",
+          "answer_b3070ec4_abs_2"
+        ],
+        "evidence_hit": false,
+        "context_chars": 33190,
+        "wall_s": 0.209
+      },
+      "hypothesis": "Based on the excerpts, you fixed the fence on the east side of your property approximately **three weeks prior to May 21, 2023**.\n\nThere is **no mention** in the provided transcripts of you purchasing three cows from Peter; the records only indicate that you were researching breeds (like Brown Swiss or Jersey) and felt ready to make an investment soon. Therefore, fixing the fence is the only completed task of the two mentioned in the records.",
+      "answer_usage": {
+        "prompt_tokens": 7521,
+        "completion_tokens": 95,
+        "prompt_chars": 33736,
+        "latency_s": 1.384
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "gpt4_fe651585_abs",
+      "question_type": "temporal-reasoning",
+      "abstention": true,
+      "question": "Who became a parent first, Tom or Alex?",
+      "answer": "The information provided is not enough. You mentioned Alex becoming a parent in January, but you didn't mention anything about Tom.",
+      "num_sessions": 49,
+      "ingest": {
+        "files": 49,
+        "chunks": 49,
+        "embedded": true,
+        "embed_calls": 49,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 14.201
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 1,
+        "session_ids": [
+          "answer_65600ff6_abs_2"
+        ],
+        "evidence_hit": false,
+        "context_chars": 15843,
+        "wall_s": 0.12
+      },
+      "hypothesis": "Based on the excerpts, **Alex** became a parent first.\n\nThe transcripts mention that Alex adopted a baby girl in January 2023, whereas the user (Tom) is currently \"considering adopting\" and asking for information on the process as of March 2023.",
+      "answer_usage": {
+        "prompt_tokens": 3443,
+        "completion_tokens": 59,
+        "prompt_chars": 16301,
+        "latency_s": 1.222
+      },
+      "judge_raw": "No",
+      "label": false
+    },
+    {
+      "question_id": "945e3d21",
+      "question_type": "knowledge-update",
+      "abstention": false,
+      "question": "How often do I attend yoga classes to help with my anxiety?",
+      "answer": "Three times a week.",
+      "num_sessions": 48,
+      "ingest": {
+        "files": 48,
+        "chunks": 57,
+        "embedded": true,
+        "embed_calls": 57,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 16.966
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_6a4f8626_1",
+          "sharegpt_E7VUcfj_0",
+          "sharegpt_zn81iL6_9",
+          "answer_6a4f8626_2",
+          "ef0341d4_2",
+          "9bbd38a6",
+          "ultrachat_518638",
+          "5fcca8bc_1"
+        ],
+        "evidence_hit": true,
+        "context_chars": 99625,
+        "wall_s": 0.297
+      },
+      "hypothesis": "You attend yoga classes **three times a week**.\n\nAccording to the excerpts, you mentioned that you are more focused on days when you attend these classes and that the practice helps you clear your head and feel more grounded and centered when you are feeling anxious.",
+      "answer_usage": {
+        "prompt_tokens": 21979,
+        "completion_tokens": 51,
+        "prompt_chars": 100413,
+        "latency_s": 2.353
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "9ea5eabc",
+      "question_type": "knowledge-update",
+      "abstention": false,
+      "question": "Where did I go on my most recent family trip?",
+      "answer": "Paris",
+      "num_sessions": 53,
+      "ingest": {
+        "files": 53,
+        "chunks": 53,
+        "embedded": true,
+        "embed_calls": 53,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 16.611
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_02e66dec_2",
+          "answer_02e66dec_1",
+          "418c27fa",
+          "9bf5da2d",
+          "29695e1c_2",
+          "66cffcc7",
+          "8c8b180e",
+          "232dba46_1",
+          "sharegpt_FDDY7hu_7",
+          "6519afa8"
+        ],
+        "evidence_hit": true,
+        "context_chars": 131482,
+        "wall_s": 0.22
+      },
+      "hypothesis": "Based on the memory excerpts, your most recent family trip was to **Paris**.\n\nIn a conversation dated May 28, 2023 [1], you mentioned that you \"just went there as a family last month\" (April 2023) and that your kids loved it. You also referenced this trip in other sessions, noting that it was a 10-day trip preceded by island-hopping in Hawaii [3], and that you had a \"disastrous experience with lost luggage\" on your way there [5].",
+      "answer_usage": {
+        "prompt_tokens": 30663,
+        "completion_tokens": 113,
+        "prompt_chars": 132218,
+        "latency_s": 1.663
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "4d6b87c8",
+      "question_type": "knowledge-update",
+      "abstention": false,
+      "question": "How many titles are currently on my to-watch list?",
+      "answer": "25",
+      "num_sessions": 52,
+      "ingest": {
+        "files": 52,
+        "chunks": 52,
+        "embedded": true,
+        "embed_calls": 52,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.65
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_766ab8da_2",
+          "answer_766ab8da_1",
+          "a0201607_3",
+          "6c51fa7e_3",
+          "60d4332d",
+          "d87e86f6_1",
+          "4dd737a9_1",
+          "4cbe4e20_1",
+          "85da7827",
+          "ultrachat_40253"
+        ],
+        "evidence_hit": true,
+        "context_chars": 130883,
+        "wall_s": 0.129
+      },
+      "hypothesis": "There are currently **25 titles** on your to-watch list.\n\nAccording to the transcript from 2023-05-22 (excerpt [1]), you mentioned having 25 titles on your list while discussing historical drama recommendations. This was an increase from the 20 titles you mentioned having on 2023-05-20 (excerpt [2]).",
+      "answer_usage": {
+        "prompt_tokens": 29632,
+        "completion_tokens": 83,
+        "prompt_chars": 131627,
+        "latency_s": 1.953
+      },
+      "judge_raw": "Yes",
+      "label": true
+    },
+    {
+      "question_id": "2698e78f",
+      "question_type": "knowledge-update",
+      "abstention": false,
+      "question": "How often do I see my therapist, Dr. Smith?",
+      "answer": "every week",
+      "num_sessions": 48,
+      "ingest": {
+        "files": 48,
+        "chunks": 48,
+        "embedded": true,
+        "embed_calls": 48,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 16.271
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_9282283d_2",
+          "answer_9282283d_1",
+          "0fffb38f_2",
+          "a0fcf806",
+          "862218f3_2",
+          "d31c3ec8_4",
+          "69674f25",
+          "619e96bc",
+          "af3eb3e6",
+          "7ca763c3_2"
+        ],
+        "evidence_hit": true,
+        "context_chars": 134653,
+        "wall_s": 0.179
+      },
+      "hypothesis": "You see Dr. Smith every week.\n\nAccording to the memory excerpts, you mentioned in a session on November 3, 2023, that you see her \"every week\" [1]. While an earlier transcript from April 3, 2023, noted that your sessions were \"every two weeks\" [2], your most recent update confirms the frequency is now weekly.",
+      "answer_usage": {
+        "prompt_tokens": 31346,
+        "completion_tokens": 81,
+        "prompt_chars": 135381,
+        "latency_s": 2.584
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "e493bb7c",
+      "question_type": "knowledge-update",
+      "abstention": false,
+      "question": "Where is the painting 'Ethereal Dreams' by Emma Taylor currently hanging?",
+      "answer": "in my bedroom",
+      "num_sessions": 51,
+      "ingest": {
+        "files": 51,
+        "chunks": 51,
+        "embedded": true,
+        "embed_calls": 51,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 17.001
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 1,
+        "session_ids": [
+          "answer_1a374afa_2"
+        ],
+        "evidence_hit": true,
+        "context_chars": 15590,
+        "wall_s": 0.189
+      },
+      "hypothesis": "The painting \"Ethereal Dreams\" by Emma Taylor is currently hanging in the user's **bedroom**, specifically **above the bed**.",
+      "answer_usage": {
+        "prompt_tokens": 3428,
+        "completion_tokens": 28,
+        "prompt_chars": 16078,
+        "latency_s": 1.074
+      },
+      "judge_raw": "yes",
+      "label": true
+    },
+    {
+      "question_id": "6a27ffc2",
+      "question_type": "knowledge-update",
+      "abstention": false,
+      "question": "How many videos of Corey Schafer's Python programming series have I completed so far?",
+      "answer": "30",
+      "num_sessions": 51,
+      "ingest": {
+        "files": 51,
+        "chunks": 51,
+        "embedded": true,
+        "embed_calls": 51,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 16.015
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 7,
+        "session_ids": [
+          "answer_77f32504_1",
+          "answer_77f32504_2",
+          "sharegpt_kkqlRlo_13",
+          "ae00973d_5",
+          "6ae451d1_2",
+          "0651f7bd_2",
+          "d55bc17d_1"
+        ],
+        "evidence_hit": true,
+        "context_chars": 107424,
+        "wall_s": 0.213
+      },
+      "hypothesis": "You have completed **30 videos** of Corey Schafer's Python programming series.\n\nAccording to the memory excerpts, you mentioned having completed 20 videos on May 24, 2023 [1], and then updated that you had completed 30 videos as of May 26, 2023 [2].",
+      "answer_usage": {
+        "prompt_tokens": 23899,
+        "completion_tokens": 73,
+        "prompt_chars": 108120,
+        "latency_s": 1.611
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "e61a7584",
+      "question_type": "knowledge-update",
+      "abstention": false,
+      "question": "How long have I had my cat, Luna?",
+      "answer": "9 months",
+      "num_sessions": 50,
+      "ingest": {
+        "files": 50,
+        "chunks": 50,
+        "embedded": true,
+        "embed_calls": 50,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.289
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_f25c32f5_1",
+          "answer_f25c32f5_2",
+          "6a4b4b7e_2",
+          "e7aa3f51_2",
+          "0320f558_3",
+          "ultrachat_74005",
+          "6155addd_2",
+          "sharegpt_XWqXdom_19",
+          "sharegpt_o0MporM_0",
+          "285525b2_1"
+        ],
+        "evidence_hit": true,
+        "context_chars": 106427,
+        "wall_s": 0.201
+      },
+      "hypothesis": "You have had Luna for approximately **9 months**.\n\nAccording to the transcript from November 30, 2023 [2], you stated, \"I've had my cat, Luna, for about 9 months now.\" Earlier, on August 11, 2023 [1], you mentioned you had owned her for about 6 months at that time.",
+      "answer_usage": {
+        "prompt_tokens": 24377,
+        "completion_tokens": 80,
+        "prompt_chars": 107175,
+        "latency_s": 1.577
+      },
+      "judge_raw": "Yes",
+      "label": true
+    },
+    {
+      "question_id": "22d2cb42",
+      "question_type": "knowledge-update",
+      "abstention": false,
+      "question": "Where did I get my guitar serviced?",
+      "answer": "The music shop on Main St.",
+      "num_sessions": 48,
+      "ingest": {
+        "files": 48,
+        "chunks": 48,
+        "embedded": true,
+        "embed_calls": 48,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.279
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_bcce0b73_1",
+          "answer_bcce0b73_2",
+          "060aeced",
+          "d1e4ee27_1",
+          "74932466_1",
+          "ultrachat_500605",
+          "674afd2f",
+          "20fa75e8_1",
+          "5a76fadb_2",
+          "d74e8a57_1"
+        ],
+        "evidence_hit": true,
+        "context_chars": 135059,
+        "wall_s": 0.292
+      },
+      "hypothesis": "You got your guitar serviced at a music shop on Main St called **Rhythm Central**.",
+      "answer_usage": {
+        "prompt_tokens": 30480,
+        "completion_tokens": 18,
+        "prompt_chars": 135789,
+        "latency_s": 1.45
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "59524333",
+      "question_type": "knowledge-update",
+      "abstention": false,
+      "question": "What time do I usually go to the gym?",
+      "answer": "6:00 pm",
+      "num_sessions": 44,
+      "ingest": {
+        "files": 44,
+        "chunks": 44,
+        "embedded": true,
+        "embed_calls": 44,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.92
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "2d5d1c10",
+          "answer_b28f2c7a_2",
+          "638e7094_1",
+          "answer_b28f2c7a_1",
+          "sharegpt_RtTJZF3_29",
+          "4507b423",
+          "9b9ff448_1",
+          "ultrachat_458180",
+          "8953c8c8_2",
+          "f535d93b_2"
+        ],
+        "evidence_hit": true,
+        "context_chars": 122809,
+        "wall_s": 0.248
+      },
+      "hypothesis": "You usually go to the gym at **7:00 pm** on Mondays, Wednesdays, and Fridays.\n\nAccording to the excerpts, you also aim to be finished with meetings by **6:00 pm** on those days to allow yourself time to get ready for your workout.",
+      "answer_usage": {
+        "prompt_tokens": 27750,
+        "completion_tokens": 58,
+        "prompt_chars": 123550,
+        "latency_s": 1.45
+      },
+      "judge_raw": "No.",
+      "label": false
+    },
+    {
+      "question_id": "e66b632c",
+      "question_type": "knowledge-update",
+      "abstention": false,
+      "question": "What was my previous personal best time for the charity 5K run?",
+      "answer": "27 minutes and 45 seconds",
+      "num_sessions": 47,
+      "ingest": {
+        "files": 47,
+        "chunks": 47,
+        "embedded": true,
+        "embed_calls": 47,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.477
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_ac0140ce_2",
+          "answer_ac0140ce_1",
+          "259d58da_2",
+          "9b820206",
+          "49b1d93f_2",
+          "47d18b61_1",
+          "49b1d93f_1",
+          "sharegpt_m58t82U_11",
+          "92f1ea4d_1",
+          "ultrachat_306973"
+        ],
+        "evidence_hit": true,
+        "context_chars": 113597,
+        "wall_s": 0.145
+      },
+      "hypothesis": "Your previous personal best time for the charity 5K run was **27 minutes and 45 seconds**.\n\nAccording to the excerpt from April 11, 2023 [2], you mentioned this record while planning a training schedule. In a later session on July 30, 2023 [1], you shared that you had just beaten that record by shaving off about a minute and a half, resulting in a new personal best of **26 minutes and 30 seconds**.",
+      "answer_usage": {
+        "prompt_tokens": 27183,
+        "completion_tokens": 106,
+        "prompt_chars": 114366,
+        "latency_s": 2.185
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "69fee5aa",
+      "question_type": "knowledge-update",
+      "abstention": false,
+      "question": "How many pre-1920 American coins do I have in my collection?",
+      "answer": "38",
+      "num_sessions": 49,
+      "ingest": {
+        "files": 49,
+        "chunks": 49,
+        "embedded": true,
+        "embed_calls": 49,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 16.419
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 7,
+        "session_ids": [
+          "answer_d6028d6e_1",
+          "answer_d6028d6e_2",
+          "9d11d844",
+          "2af27403_2",
+          "f3881d05",
+          "ultrachat_15909",
+          "a554ed79_2"
+        ],
+        "evidence_hit": true,
+        "context_chars": 83340,
+        "wall_s": 0.41
+      },
+      "hypothesis": "You have a total of **38** pre-1920 American coins in your collection.\n\nIn your conversation on 2023/05/27, you mentioned having **37** coins in that collection [1]. On 2023/05/29, you noted that you added a new coin to that specific collection: a **1915-S Barber quarter** [2].",
+      "answer_usage": {
+        "prompt_tokens": 19124,
+        "completion_tokens": 92,
+        "prompt_chars": 84003,
+        "latency_s": 1.649
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "06db6396",
+      "question_type": "knowledge-update",
+      "abstention": false,
+      "question": "How many projects have I completed since starting painting classes?",
+      "answer": "5",
+      "num_sessions": 51,
+      "ingest": {
+        "files": 51,
+        "chunks": 51,
+        "embedded": true,
+        "embed_calls": 51,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.21
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 8,
+        "session_ids": [
+          "answer_da72b1b4_1",
+          "answer_da72b1b4_2",
+          "sharegpt_SwdaeDm_15",
+          "5bd9f1e6_1",
+          "824634d9_2",
+          "6ebdc1fe_2",
+          "8235b87d",
+          "sharegpt_2pwdGxJ_16"
+        ],
+        "evidence_hit": true,
+        "context_chars": 126740,
+        "wall_s": 0.27
+      },
+      "hypothesis": "You have completed **5 projects** since starting your painting classes.\n\nAccording to the memory excerpts, you mentioned on August 16, 2023, that you had completed 4 projects [1], and then on October 9, 2023, you updated that you had just finished your 5th project [2].",
+      "answer_usage": {
+        "prompt_tokens": 28787,
+        "completion_tokens": 72,
+        "prompt_chars": 127455,
+        "latency_s": 2.219
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "ba61f0b9",
+      "question_type": "knowledge-update",
+      "abstention": false,
+      "question": "How many women are on the team led by my former manager Rachel?",
+      "answer": "6",
+      "num_sessions": 45,
+      "ingest": {
+        "files": 45,
+        "chunks": 68,
+        "embedded": true,
+        "embed_calls": 68,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 20.47
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 3,
+        "session_ids": [
+          "answer_f377cda7_1",
+          "answer_f377cda7_2",
+          "sharegpt_s8Opwwu_0"
+        ],
+        "evidence_hit": true,
+        "context_chars": 42973,
+        "wall_s": 0.364
+      },
+      "hypothesis": "Based on the memory excerpts, there are **5 women** on Rachel's team of 10 people.\n\nAccording to the transcript from 2023-01-18 [1], the specific roles of these five women are:\n1. **Sarah**: Project Manager\n2. **Emily**: Software Developer\n3. **Maya**: Data Analyst\n4. **Sofia**: Marketing Specialist\n5. **Leila**: UX Designer\n\n(Note: While a later excerpt from 2023-07-20 [2] mentions \"6 women out of 10 people\" in passing, the detailed breakdown provided in the earlier session specifically identifies and names the roles for 5 women.)",
+      "answer_usage": {
+        "prompt_tokens": 8704,
+        "completion_tokens": 149,
+        "prompt_chars": 43526,
+        "latency_s": 1.886
+      },
+      "judge_raw": "No.",
+      "label": false
+    },
+    {
+      "question_id": "0977f2af",
+      "question_type": "knowledge-update",
+      "abstention": false,
+      "question": "What new kitchen gadget did I invest in before getting the Air Fryer?",
+      "answer": "Instant Pot",
+      "num_sessions": 44,
+      "ingest": {
+        "files": 44,
+        "chunks": 44,
+        "embedded": true,
+        "embed_calls": 44,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 13.931
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "e0bfe67a_2",
+          "b3642bd9_3",
+          "809cbce9_3",
+          "answer_3bf5b73b_2",
+          "9b083158_1",
+          "answer_3bf5b73b_1",
+          "b1d9eb66_4",
+          "1692563c_1",
+          "c6a93cd9_2",
+          "f115a3db_1"
+        ],
+        "evidence_hit": true,
+        "context_chars": 140124,
+        "wall_s": 0.204
+      },
+      "hypothesis": "Based on the memory excerpts, you invested in an **Instant Pot** before getting your Air Fryer.\n\nIn a conversation on May 21, 2023 (Session 809cbce9_3), you mentioned using your \"new Instant Pot\" to make soups and stews. Later that same day (Session answer_3bf5b73b_2), you mentioned having bought an Air Fryer \"yesterday.\"",
+      "answer_usage": {
+        "prompt_tokens": 32133,
+        "completion_tokens": 94,
+        "prompt_chars": 140886,
+        "latency_s": 1.681
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "0ddfec37_abs",
+      "question_type": "knowledge-update",
+      "abstention": true,
+      "question": "How many autographed football have I added to my collection in the first three months of collection?",
+      "answer": "The information provided is not enough. You mentioned collecting autographed baseball but not football.",
+      "num_sessions": 45,
+      "ingest": {
+        "files": 45,
+        "chunks": 45,
+        "embedded": true,
+        "embed_calls": 45,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 14.156
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid-reworded",
+        "top_k": 10,
+        "hits": 2,
+        "session_ids": [
+          "answer_a22b654d_abs_2",
+          "answer_a22b654d_abs_1"
+        ],
+        "evidence_hit": false,
+        "context_chars": 26886,
+        "wall_s": 5.427,
+        "embed_error": "Embedding backend unavailable \u2014 backend=local model='bge-m3' text_len=100 cause=\"Ollama embed failed to reach host (role=embed): Server error '500 Internal Server Error' for url 'http://INTERNAL_HOST:1143"
+      },
+      "hypothesis": "Based on the memory excerpts, you have not mentioned adding any autographed **footballs** to your collection.\n\nHowever, you did mention your progress with autographed **baseballs**:\n* As of May 20, 2023, you stated you had collected **15 autographed baseballs** since you started collecting three months prior.\n* By May 22, 2023, you noted that you had added a total of **20 autographed baseballs** to your collection in the past few months.",
+      "answer_usage": {
+        "prompt_tokens": 5876,
+        "completion_tokens": 113,
+        "prompt_chars": 27446,
+        "latency_s": 1.382
+      },
+      "judge_raw": "Yes",
+      "label": true
+    },
+    {
+      "question_id": "c4f10528",
+      "question_type": "single-session-assistant",
+      "abstention": false,
+      "question": "I'm planning to visit Bandung again and I was wondering if you could remind me of the name of that restaurant in Cihampelas Walk that serves a great Nasi Goreng?",
+      "answer": "Miss Bee Providore",
+      "num_sessions": 44,
+      "ingest": {
+        "files": 44,
+        "chunks": 44,
+        "embedded": true,
+        "embed_calls": 44,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 13.57
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 2,
+        "session_ids": [
+          "answer_ultrachat_234453",
+          "107d40f0"
+        ],
+        "evidence_hit": true,
+        "context_chars": 19284,
+        "wall_s": 0.219
+      },
+      "hypothesis": "The restaurant you are thinking of is **Miss Bee Providore**.\n\nAccording to the transcript from May 30, 2023, you were interested in trying their signature **Miss Bee's Nasi Goreng**, which is served with prawn crackers and topped with a fried egg.",
+      "answer_usage": {
+        "prompt_tokens": 4690,
+        "completion_tokens": 61,
+        "prompt_chars": 19894,
+        "latency_s": 1.269
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "7e00a6cb",
+      "question_type": "single-session-assistant",
+      "abstention": false,
+      "question": "I'm planning my trip to Amsterdam again and I was wondering, what was the name of that hostel near the Red Light District that you recommended last time?",
+      "answer": "International Budget Hostel",
+      "num_sessions": 62,
+      "ingest": {
+        "files": 62,
+        "chunks": 62,
+        "embedded": true,
+        "embed_calls": 62,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 17.895
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 3,
+        "session_ids": [
+          "answer_ultrachat_370515",
+          "24f78a31_2",
+          "4dd1ba8d_2"
+        ],
+        "evidence_hit": true,
+        "context_chars": 31107,
+        "wall_s": 0.233
+      },
+      "hypothesis": "The hostel near the Red Light District mentioned in the previous recommendations is the **International Budget Hostel**.",
+      "answer_usage": {
+        "prompt_tokens": 7423,
+        "completion_tokens": 19,
+        "prompt_chars": 31741,
+        "latency_s": 1.184
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "fea54f57",
+      "question_type": "single-session-assistant",
+      "abstention": false,
+      "question": "I was thinking about our previous conversation about the Fifth Album, and I was wondering if you could remind me what song you said best exemplified the band's growth and development as artists?",
+      "answer": "Evolution",
+      "num_sessions": 50,
+      "ingest": {
+        "files": 50,
+        "chunks": 50,
+        "embedded": true,
+        "embed_calls": 50,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.746
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 5,
+        "session_ids": [
+          "answer_ultrachat_187684",
+          "ultrachat_129340",
+          "sharegpt_p9YcIKu_0",
+          "sharegpt_VLn3Y3v_0",
+          "d81c92cb"
+        ],
+        "evidence_hit": true,
+        "context_chars": 27665,
+        "wall_s": 0.157
+      },
+      "hypothesis": "In our previous conversation, you mentioned that the song **\"Evolution\"** best exemplifies the band's growth and development as artists.",
+      "answer_usage": {
+        "prompt_tokens": 6550,
+        "completion_tokens": 27,
+        "prompt_chars": 28420,
+        "latency_s": 1.036
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "58470ed2",
+      "question_type": "single-session-assistant",
+      "abstention": false,
+      "question": "I was going through our previous conversation about The Library of Babel, and I wanted to confirm - what did Borges say about the center and circumference of the Library?",
+      "answer": "According to Borges, 'The Library is a sphere whose exact center is any one of its hexagons and whose circumference is inaccessible.'",
+      "num_sessions": 50,
+      "ingest": {
+        "files": 50,
+        "chunks": 50,
+        "embedded": true,
+        "embed_calls": 50,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.827
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 3,
+        "session_ids": [
+          "answer_sharegpt_U4oCSfU_7",
+          "2f2884ad_3",
+          "b6018747_4"
+        ],
+        "evidence_hit": true,
+        "context_chars": 35408,
+        "wall_s": 0.375
+      },
+      "hypothesis": "Borges wrote that the Library is a sphere whose **exact center is any one of its hexagons** and whose **circumference is inaccessible**.",
+      "answer_usage": {
+        "prompt_tokens": 7493,
+        "completion_tokens": 28,
+        "prompt_chars": 36061,
+        "latency_s": 1.071
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "71a3fd6b",
+      "question_type": "single-session-assistant",
+      "abstention": false,
+      "question": "I'm planning my trip to Speyer again and I wanted to confirm, what's the phone number of the Speyer tourism board that you provided me earlier?",
+      "answer": "+49 (0) 62 32 / 14 23 - 0",
+      "num_sessions": 44,
+      "ingest": {
+        "files": 44,
+        "chunks": 44,
+        "embedded": true,
+        "embed_calls": 44,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 13.331
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 6,
+        "session_ids": [
+          "answer_ultrachat_417348",
+          "36743359_3",
+          "f21fc078_1",
+          "8419b385_3",
+          "12c28d3f_1",
+          "7f7e26d2_2"
+        ],
+        "evidence_hit": true,
+        "context_chars": 73784,
+        "wall_s": 0.29
+      },
+      "hypothesis": "The phone number for the Speyer Tourismus Marketing GmbH is **+49 (0) 62 32 / 14 23 - 0**.",
+      "answer_usage": {
+        "prompt_tokens": 17192,
+        "completion_tokens": 36,
+        "prompt_chars": 74498,
+        "latency_s": 1.424
+      },
+      "judge_raw": "Yes",
+      "label": true
+    },
+    {
+      "question_id": "1b9b7252",
+      "question_type": "single-session-assistant",
+      "abstention": false,
+      "question": "I wanted to follow up on our previous conversation about mindfulness techniques. You mentioned some great resources for guided imagery exercises, can you remind me of the website that had free exercises like 'The Mountain Meditation' and 'The Body Scan Meditation'?",
+      "answer": "Mindful.org.",
+      "num_sessions": 46,
+      "ingest": {
+        "files": 46,
+        "chunks": 46,
+        "embedded": true,
+        "embed_calls": 46,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 14.924
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_ultrachat_115151",
+          "sharegpt_1AhFMpw_5",
+          "3829d412_2",
+          "53ab4734",
+          "330c05e7_1",
+          "f7796d96_1",
+          "0e726047",
+          "d3cc5bdc_4",
+          "b2e5a019",
+          "af4d4ecd_6"
+        ],
+        "evidence_hit": true,
+        "context_chars": 141764,
+        "wall_s": 0.377
+      },
+      "hypothesis": "The website you are looking for is **Mindful.org**.\n\nAccording to the memory excerpts from May 25, 2023, this site includes free guided imagery exercises such as \"The Mountain Meditation\" and \"The Body Scan Meditation.\"",
+      "answer_usage": {
+        "prompt_tokens": 31552,
+        "completion_tokens": 52,
+        "prompt_chars": 142723,
+        "latency_s": 1.696
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "e3fc4d6e",
+      "question_type": "single-session-assistant",
+      "abstention": false,
+      "question": "I wanted to follow up on our previous conversation about the fusion breakthrough at Lawrence Livermore National Laboratory. Can you remind me who is the President's Chief Advisor for Science and Technology mentioned in the article?",
+      "answer": "Dr. Arati Prabhakar",
+      "num_sessions": 53,
+      "ingest": {
+        "files": 53,
+        "chunks": 53,
+        "embedded": true,
+        "embed_calls": 53,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 17.268
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 8,
+        "session_ids": [
+          "answer_sharegpt_5m7gg5F_0",
+          "ultrachat_325941",
+          "fc6549b2",
+          "d31c3ec8_1",
+          "ultrachat_161238",
+          "ultrachat_478030",
+          "sharegpt_TVK4gjw_24",
+          "sharegpt_ySGu6N8_0"
+        ],
+        "evidence_hit": true,
+        "context_chars": 80410,
+        "wall_s": 0.315
+      },
+      "hypothesis": "According to the article, the President\u2019s Chief Advisor for Science and Technology is **Dr. Arati Prabhakar**.\n\nShe also serves as the Director of the White House Office of Science and Technology Policy.",
+      "answer_usage": {
+        "prompt_tokens": 17040,
+        "completion_tokens": 42,
+        "prompt_chars": 81307,
+        "latency_s": 1.721
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "fca762bc",
+      "question_type": "single-session-assistant",
+      "abstention": false,
+      "question": "I wanted to follow up on our previous conversation about language learning apps. You mentioned a few options, and I was wondering if you could remind me of the one that uses mnemonics to help learners memorize words and phrases?",
+      "answer": "Memrise",
+      "num_sessions": 42,
+      "ingest": {
+        "files": 42,
+        "chunks": 42,
+        "embedded": true,
+        "embed_calls": 42,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 14.02
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_ultrachat_39395",
+          "16866313_1",
+          "06a34d82_1",
+          "99eec551",
+          "sharegpt_u5bsykF_69",
+          "42d9467c_1",
+          "9beab022_1",
+          "a8bb9614_2",
+          "sharegpt_tBlHDoT_13",
+          "119532b2"
+        ],
+        "evidence_hit": true,
+        "context_chars": 133246,
+        "wall_s": 0.172
+      },
+      "hypothesis": "The language learning app you are thinking of is **Memrise**.\n\nAccording to the memory excerpts from May 25, 2023 [1], Memrise was recommended because it \"uses mnemonics to help learners memorize words, phrases, and grammatical concepts.\"",
+      "answer_usage": {
+        "prompt_tokens": 30661,
+        "completion_tokens": 56,
+        "prompt_chars": 134179,
+        "latency_s": 1.611
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "41275add",
+      "question_type": "single-session-assistant",
+      "abstention": false,
+      "question": "I wanted to follow up on our previous conversation about YouTube videos for workplace posture. Can you remind me of the Mayo Clinic video you recommended?",
+      "answer": "The video is 'How to Sit Properly at a Desk to Avoid Back Pain' and the link is https://www.youtube.com/watch?v=UfOvNlX9Hh0.",
+      "num_sessions": 53,
+      "ingest": {
+        "files": 53,
+        "chunks": 53,
+        "embedded": true,
+        "embed_calls": 53,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.39
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_sharegpt_81riySf_0",
+          "b3619c2c",
+          "53fe2138",
+          "9345f7dc_1",
+          "4d84cbfa",
+          "eee803c7",
+          "2e0ff38d_2",
+          "sharegpt_fV5wNsl_0",
+          "ea67b29e_2",
+          "ultrachat_30360"
+        ],
+        "evidence_hit": true,
+        "context_chars": 102092,
+        "wall_s": 0.137
+      },
+      "hypothesis": "The Mayo Clinic video I recommended is titled **\"How to Sit Properly at a Desk to Avoid Back Pain.\"**\n\nYou can find it at this link: <https://www.youtube.com/watch?v=UfOvNlX9Hh0>",
+      "answer_usage": {
+        "prompt_tokens": 23678,
+        "completion_tokens": 56,
+        "prompt_chars": 102945,
+        "latency_s": 2.191
+      },
+      "judge_raw": "yes",
+      "label": true
+    },
+    {
+      "question_id": "ac031881",
+      "question_type": "single-session-assistant",
+      "abstention": false,
+      "question": "I'm trying to recall what the designation on my jumpsuit was that helped me find the file number in the records room?",
+      "answer": "The designation on your jumpsuit was 'LIV'.",
+      "num_sessions": 47,
+      "ingest": {
+        "files": 47,
+        "chunks": 47,
+        "embedded": true,
+        "embed_calls": 47,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 16.102
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_sharegpt_GYqnAhC_190",
+          "2dbe975c",
+          "6608c1da",
+          "c986f83a",
+          "sharegpt_nE62dqp_79",
+          "sharegpt_RWoA8C4_0",
+          "19c24c11",
+          "ultrachat_498827",
+          "f43d9ae5",
+          "ed23300b"
+        ],
+        "evidence_hit": true,
+        "context_chars": 106372,
+        "wall_s": 0.291
+      },
+      "hypothesis": "The designation on your jumpsuit was **\"LIV\"** with a square around it.\n\nAccording to the memory excerpts, you realized that LIV is the Roman numeral for **54**, which led you to search for file number 54 in the records room.",
+      "answer_usage": {
+        "prompt_tokens": 25037,
+        "completion_tokens": 54,
+        "prompt_chars": 107196,
+        "latency_s": 1.348
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    },
+    {
+      "question_id": "c7cf7dfd",
+      "question_type": "single-session-assistant",
+      "abstention": false,
+      "question": "I'm going back to our previous conversation about traditional Indian embroidery and tailoring techniques. Can you remind me of the name of that online store based in India that sells traditional Indian fabrics, threads, and embellishments?",
+      "answer": "Nostalgia",
+      "num_sessions": 51,
+      "ingest": {
+        "files": 51,
+        "chunks": 51,
+        "embedded": true,
+        "embed_calls": 51,
+        "chat_llm_calls": 0,
+        "fts_only_files": 0,
+        "wall_s": 15.421
+      },
+      "consolidation": null,
+      "retrieval": {
+        "mode": "hybrid",
+        "top_k": 10,
+        "hits": 10,
+        "session_ids": [
+          "answer_ultrachat_456407",
+          "ultrachat_419371",
+          "ultrachat_42916",
+          "e27fe923_5",
+          "b90109d2_1",
+          "95cec590_1",
+          "d3e3f069",
+          "780b6c7c_1",
+          "1341f0b9",
+          "cf99a5df_1"
+        ],
+        "evidence_hit": true,
+        "context_chars": 109714,
+        "wall_s": 0.354
+      },
+      "hypothesis": "The name of the online store based in India is **Nostalgia**.",
+      "answer_usage": {
+        "prompt_tokens": 24479,
+        "completion_tokens": 15,
+        "prompt_chars": 110652,
+        "latency_s": 1.231
+      },
+      "judge_raw": "Yes.",
+      "label": true
+    }
+  ]
+}

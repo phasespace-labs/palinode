@@ -2687,6 +2687,7 @@ def main_http(argv: list[str] | None = None) -> None:
     import uvicorn
     from palinode.core.auth import (
         allow_unauth_opt_out,
+        bind_host_phrasing,
         is_loopback_host,
         validate_auth_config,
         validate_bind_auth,
@@ -2694,12 +2695,20 @@ def main_http(argv: list[str] | None = None) -> None:
 
     args = _parse_http_args(argv)
 
-    host = (
-        args.host
-        or os.environ.get("PALINODE_MCP_HTTP_HOST")
-        or os.environ.get("PALINODE_MCP_SSE_HOST")  # deprecated alias
-        or "127.0.0.1"
-    )
+    # Resolve the bind host AND remember which knob set it. The gate below
+    # and the token-less startup warning both name a knob for the operator
+    # to change; naming the canonical env var when the bind came from
+    # ``--host`` sends them to a variable they never set.
+    if args.host:
+        host, host_var, host_var_kind = args.host, "--host", "flag"
+    elif os.environ.get("PALINODE_MCP_HTTP_HOST"):
+        host = os.environ["PALINODE_MCP_HTTP_HOST"]
+        host_var, host_var_kind = "PALINODE_MCP_HTTP_HOST", "env"
+    elif os.environ.get("PALINODE_MCP_SSE_HOST"):  # deprecated alias
+        host = os.environ["PALINODE_MCP_SSE_HOST"]
+        host_var, host_var_kind = "PALINODE_MCP_SSE_HOST", "env"
+    else:
+        host, host_var, host_var_kind = "127.0.0.1", "PALINODE_MCP_HTTP_HOST", "env"
     port = (
         args.port
         if args.port is not None
@@ -2748,7 +2757,8 @@ def main_http(argv: list[str] | None = None) -> None:
         host,
         token,
         allow_unauth=allow_unauth,
-        host_var="PALINODE_MCP_HTTP_HOST",
+        host_var=host_var,
+        host_var_kind=host_var_kind,
         exposure="every Palinode MCP tool (save/search/read/...) unauthenticated",
         detail=(
             "The MCP HTTP transport has no token of its own: PALINODE_API_TOKEN "
@@ -2772,9 +2782,10 @@ def main_http(argv: list[str] | None = None) -> None:
             logger.warning(
                 "MCP HTTP binding to %s — accessible from any network. "
                 "No authentication is configured (PALINODE_API_ALLOW_UNAUTH=1 "
-                "set). Set PALINODE_MCP_HTTP_HOST=127.0.0.1 for local-only "
-                "access, or set PALINODE_API_TOKEN to require bearer auth.",
+                "set). Use %s for local-only access, or set "
+                "PALINODE_API_TOKEN to require bearer auth.",
                 host,
+                bind_host_phrasing(host_var, host, host_var_kind)[1],
             )
         elif mcp_bind_intent_public:
             logger.debug(

@@ -187,6 +187,17 @@ VALID_EPISTEMICS: tuple[str, ...] = (
     "unverified",
 )
 
+#: The Auditable Memory Records (AMR) specification version every record the
+#: save path writes declares in its ``auditable_memory`` frontmatter field.
+#: The declaration is REQUIRED by the spec (§4.1) and is what makes a
+#: conforming record distinguishable from one that merely looks similar — an
+#: implementation that emits no declaration conforms at no level (§7).
+AMR_SPEC_VERSION: str = "0.1"
+
+#: Versions the save surface recognises. A caller-supplied
+#: ``auditable_memory`` outside this set is rejected, never guessed at (§4.1).
+VALID_AMR_VERSIONS: tuple[str, ...] = (AMR_SPEC_VERSION,)
+
 #: The canonical prompt-task enum.  Single source replacing the duplicate
 #: ``"enum"`` keys at ``palinode/mcp.py:624-625``. ADR-010, finding.
 PROMPT_TASKS: tuple[str, ...] = (

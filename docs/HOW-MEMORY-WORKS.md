@@ -80,7 +80,13 @@ Core memory persists in the model's context window from turn 1 until OpenClaw co
 
 After core injection, Palinode searches for context relevant to **what you just said**.
 
-- Uses hybrid search: BM25 keyword matching + BGE-M3 vector similarity + RRF merge
+- Uses hybrid search: BM25 keyword matching + BGE-M3 vector similarity + RRF merge. In
+  practice the arms split the work by query shape: a full-sentence question is retrieved
+  almost entirely by the vector arm (FTS5's implicit AND requires every query token to
+  co-occur in a document, which natural-language questions rarely satisfy), while BM25
+  carries exact terms and identifiers that embeddings blur. The combined system measures
+  0.981 evidence recall@10 on LongMemEval_S — see [BENCHMARKS](BENCHMARKS.md). If the
+  keyword arm errors, search degrades to vector-only and logs a warning rather than failing.
 - Results are adjusted by **Temporal Decay**, bumping up scores for recently updated and highly important memories.
 - Returns top 5 results, 700 chars each
 - **Skipped for trivial messages** (< 15 chars, or acks like "ok", "sure", "thanks")

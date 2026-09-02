@@ -42,7 +42,7 @@ from typing import Any
 
 from palinode.core import embedder as _embedder
 from palinode.core import parser, store
-from palinode.core.embedder import EmbeddingUnavailable
+from palinode.core.embedder import EmbeddingInputError, EmbeddingUnavailable
 from palinode.core.hashing import stable_md5_hexdigest
 from palinode.core.ollama_client import get_ollama_client
 
@@ -271,8 +271,14 @@ def apply(p: Plan, embedder: Any = _embedder) -> Diff:
     """Embed and write a plan in one transaction. Fail-closed on embed outage.
 
     In embedding mode, every section in ``to_index`` must embed; the first
-    failure rolls the whole transaction back so the on-disk file is retried
-    intact and the index is never left half-applied. In cold-defer mode no
+    *backend* failure (``EmbeddingUnavailable``) rolls the whole transaction
+    back so the on-disk file is retried intact and the index is never left
+    half-applied. A typed *per-input* rejection (``EmbeddingInputError``,
+    e.g. a NaN vector for one pathological string) does not abort: that
+    section alone is written FTS-only — the same keyword-searchable shape the
+    deferred path writes — and the rest of the file indexes normally. The
+    vector-less chunk is re-planned as REEMBED on later passes, so it heals
+    itself if the model stops rejecting the input. In cold-defer mode no
     embed is attempted — all sections are written FTS-only and the pass
     commits, which is the designed keyword-searchable-now degradation, not a
     failure.
@@ -299,6 +305,23 @@ def apply(p: Plan, embedder: Any = _embedder) -> Diff:
                 for pw in p.to_index:
                     try:
                         emb = embedder.embed(pw.section.content)
+                    except EmbeddingInputError as e:
+                        # Per-input failure on a healthy backend (e.g. bge-m3
+                        # NaN vector for this exact string). Aborting the
+                        # whole file here made the note vanish from recall
+                        # entirely — not even FTS. Degrade just this section
+                        # to the FTS-only shape the deferred path already
+                        # writes; the rest of the file indexes normally.
+                        logger.warning(
+                            "embed rejected this input; section written "
+                            "FTS-only op=index file_path=%s section_id=%s "
+                            "text_len=%d error=%r",
+                            state.file_path, pw.section.section_id,
+                            len(pw.section.content), e.ollama_message,
+                        )
+                        diff.embed_failures += 1
+                        diff.vec_ok = False
+                        continue
                     except EmbeddingUnavailable as e:
                         # Backend failure, typed at the embedder boundary. The
                         # watcher/indexer path wants retry-and-continue, not a

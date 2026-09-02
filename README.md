@@ -87,7 +87,7 @@ That's the entire client config. Works with Claude Code, Claude Desktop, Cursor,
 
 **Index** — A file watcher embeds with BGE-M3 and indexes with FTS5 as you save. Content-hash dedup skips re-embedding unchanged files (~90% savings). Single SQLite file, zero external services.
 
-**Search** — Hybrid BM25 + vector search merged with Reciprocal Rank Fusion. Keyword precision when you need exact terms, semantic recall when you don't. Optional associative entity graph and prospective triggers.
+**Search** — Hybrid BM25 + vector search merged with Reciprocal Rank Fusion. The two arms have different jobs: on full-sentence questions the vector arm does nearly all the retrieval (FTS5 requires every query token to co-occur, which questions rarely satisfy), while BM25 catches the exact terms and identifiers embeddings blur. Measured together: 0.981 evidence recall@10 on LongMemEval_S ([benchmarks](docs/BENCHMARKS.md)). Optional associative entity graph and prospective triggers.
 
 **Compact** — Weekly consolidation where an LLM returns structured operations and Palinode validates and applies them. Every compaction is a git commit you can review, blame, or revert.
 
@@ -428,6 +428,9 @@ When exposing the API beyond loopback (`PALINODE_API_HOST` other than `127.0.0.1
 - **4-phase injection** — Core (always) + Topic (per-turn search) + Associative (entity graph) + Triggered (prospective recall).
 - **Multi-transport MCP** — stdio for local, Streamable HTTP for remote. One server, any IDE on any machine.
 - **If everything crashes, `cat` still works.**
+
+Measured, not asserted: [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) has LongMemEval results
+with methodology, cost, and the losses.
 
 ---
 

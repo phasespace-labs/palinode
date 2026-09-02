@@ -43,6 +43,8 @@ def create_trigger_api(req: TriggerRequest) -> dict[str, Any]:
             cooldown_hours=req.cooldown_hours or 24
         )
         return {"id": trigger_id, "status": "created"}
+    except embedder.EmbeddingInputError:
+        raise  # typed 422 via the app-level handler in server.py
     except embedder.EmbeddingUnavailable:
         raise  # typed 503 via the app-level handler in server.py
     except Exception as e:
@@ -74,6 +76,8 @@ def check_triggers_api(req: CheckTriggersRequest) -> list[dict[str, Any]]:
             cooldown_bypass=req.cooldown_bypass or False
         )
         return results
+    except embedder.EmbeddingInputError:
+        raise  # typed 422 via the app-level handler in server.py
     except embedder.EmbeddingUnavailable:
         raise  # typed 503 via the app-level handler in server.py
     except Exception as e:

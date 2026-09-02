@@ -33,7 +33,7 @@ from palinode.core.auth import (
     validate_bind_auth as _core_validate_bind_auth,
 )
 from palinode.core.config import config
-from palinode.core.embedder import EmbeddingUnavailable
+from palinode.core.embedder import EmbeddingInputError, EmbeddingUnavailable
 
 # Re-exported so the health/status routers can reach the client factory via
 # `palinode.api.server.get_ollama_client` (late `_srv.get_ollama_client()`
@@ -316,6 +316,27 @@ async def _embedding_unavailable_handler(
         request.url.path,
     )
     return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
+@app.exception_handler(EmbeddingInputError)
+async def _embedding_input_error_handler(
+    request: Request, exc: EmbeddingInputError
+) -> JSONResponse:
+    """Map a per-input embed rejection to a typed 422, not a 503 or 500.
+
+    The backend is healthy — only this input deterministically fails to embed
+    (e.g. a bge-m3 NaN vector). 503 would misreport an outage and 500 would
+    bury the typed diagnostics; 422 tells the caller the input, not the
+    service, is the problem. ``/search`` catches this class before it gets
+    here and degrades to the keyword arm; endpoints without a keyword
+    fallback land in this handler. The message carries model and text length,
+    never raw content.
+    """
+    logger.warning(
+        "embedding rejected input op=%s outcome=embedding_input_error",
+        request.url.path,
+    )
+    return JSONResponse(status_code=422, content={"detail": str(exc)})
 
 # Reindex concurrency guard and auto_summary observability state
 # live in palinode/api/_util.py so the handlers that read them — now in

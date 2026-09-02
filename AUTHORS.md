@@ -21,6 +21,11 @@ Contributions welcome via pull request. Names appear here once a PR is merged.
 - [Hermes_011](https://github.com/JodVarun)
 - [Abhinav](https://github.com/kratos0718)
 - [Siddharth](https://github.com/sidsri14)
+- [Chirag Gupta](https://github.com/chiruu12)
+- [Walter Gaalswyk](https://github.com/Manny7717)
+- [nightcityblade](https://github.com/nightcityblade)
+- [usmamalik345](https://github.com/usmamalik345)
+- [TLNing260310](https://github.com/TLNing260310)
 
 ## Acknowledgements
 

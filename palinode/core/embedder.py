@@ -10,6 +10,7 @@ from typing import Optional
 from palinode.core.config import config
 from palinode.core.ollama_client import (
     EmbeddingContextError,
+    EmbeddingInputError,
     OllamaError,
     OllamaRole,
     _is_ctx_overflow_message,  # noqa: F401  — deliberate re-export, see below
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 # EmbeddingContextError` imports keep working (Phase 3).
 __all__ = [
     "EmbeddingContextError",
+    "EmbeddingInputError",
     "EmbeddingUnavailable",
     "embed",
     "check_model_context",
@@ -201,6 +203,10 @@ def embed(text: str) -> list[float]:
         EmbeddingContextError: When Ollama explicitly rejects the input due to
             context-window overflow. Callers that want to handle truncation
             specially should catch this specifically.
+        EmbeddingInputError: When the backend deterministically rejects this
+            one input (e.g. a NaN vector it cannot serialise) while remaining
+            healthy for every other input. Callers should degrade per-input
+            (FTS-only index, keyword-only answer), not per-backend.
         EmbeddingUnavailable: When the local backend cannot be reached, times
             out, or errors (connectivity/HTTP/circuit-open). Replaces the old
             silent-``[]`` contract — callers that want graceful degradation
@@ -256,6 +262,12 @@ def _embed_local(text: str) -> list[float]:
         return get_ollama_client().embed(text)
     except EmbeddingContextError:
         # Typed signal — propagate so callers can truncate / split.
+        raise
+    except EmbeddingInputError:
+        # Typed per-input signal (e.g. bge-m3 NaN vector) — propagate so
+        # callers can degrade this one input (FTS-only index, keyword-only
+        # answer). Deliberately NOT wrapped as EmbeddingUnavailable and NOT
+        # triggering the keyword-only-mode notice: the backend is healthy.
         raise
     except OllamaError as e:
         # Connect/timeout/HTTP/circuit-open/unexpected-shape. text_len, not

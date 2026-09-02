@@ -145,6 +145,62 @@ def _is_ctx_overflow_message(message: str) -> bool:
     return any(p in msg_lower for p in _CTX_OVERFLOW_PATTERNS)
 
 
+class OllamaInputError(OllamaError):
+    """A per-input failure on a healthy backend — permanent for this input.
+
+    Raised when the response body proves the request reached the model and the
+    model choked on *this specific input* (e.g. bge-m3 emitting a NaN vector
+    that Ollama then fails to JSON-serialise, an HTTP 500 that is
+    deterministic per input string). Unlike a connectivity 5xx it is not
+    retried and does not trip the circuit breaker: the backend is up, and
+    counting it toward the breaker would put a healthy host into keyword-only
+    mode over one pathological string.
+    """
+
+
+class EmbeddingInputError(RuntimeError):
+    """Raised when the embed backend deterministically rejects one input.
+
+    Sibling of :class:`EmbeddingContextError` — typed so callers can degrade
+    per-input (index the chunk FTS-only, answer the query keyword-only)
+    instead of treating the failure as a backend outage. Known trigger:
+    Ollama's bge-m3 producing a NaN vector for certain strings, which the
+    server fails to serialise ("json: unsupported value: NaN", HTTP 500),
+    deterministically for that input while every other input embeds fine.
+
+    Attributes:
+        model: The Ollama model name.
+        text_len: Character length of the rejected input (never the text).
+        ollama_message: The raw error string from Ollama's response body.
+    """
+
+    def __init__(self, model: str, text_len: int, ollama_message: str) -> None:
+        self.model = model
+        self.text_len = text_len
+        self.ollama_message = ollama_message
+        super().__init__(
+            f"Embed backend rejected this input — model={model!r} "
+            f"text_len={text_len} error={ollama_message!r}. The backend is "
+            f"healthy; the failure is deterministic for this input. "
+            f"Recovery: the chunk stays keyword-searchable (FTS-only); "
+            f"rewording the text usually embeds cleanly."
+        )
+
+
+# Response-body signatures that prove a 5xx is a per-input model failure, not
+# a backend outage. Ollama returns the NaN-vector case as HTTP 500 with
+# 'failed to encode response: json: unsupported value: NaN'.
+_INPUT_ERROR_PATTERNS = (
+    "unsupported value: nan",
+)
+
+
+def _is_input_error_message(message: str) -> bool:
+    """Return True if a 5xx body names a deterministic per-input failure."""
+    msg_lower = (message or "").lower()
+    return any(p in msg_lower for p in _INPUT_ERROR_PATTERNS)
+
+
 def _extract_embedding_vector(data: Any) -> list[float] | None:
     """Pull the embedding vector from either Ollama response shape.
 
@@ -532,6 +588,29 @@ class OllamaClient:
                         f"Ollama returned HTTP {status} for {op} (role={role.value}): {e}",
                         role=role.value, model=model, status_code=status,
                     ) from e
+                # A 5xx whose body names a per-input model failure (bge-m3
+                # NaN vector the server cannot serialise) is deterministic for
+                # this input: retrying wastes the backoff, and tripping the
+                # breaker would punish a healthy backend. Treat like a 4xx —
+                # permanent, no retry, no trip — but typed so the embed path
+                # can degrade per-input.
+                try:
+                    body_text = e.response.text or ""
+                except Exception:
+                    body_text = ""
+                if _is_input_error_message(body_text):
+                    self._on_failure(role, (self._monotonic() - t0) * 1000.0, trip=False)
+                    self._emit(
+                        "request", role, path, model,
+                        latency_ms=(self._monotonic() - t0) * 1000.0,
+                        retry_count=attempt, circuit_state=cb.state.value,
+                        outcome=f"http_{status}_input", op=op, level=logging.WARNING,
+                    )
+                    raise OllamaInputError(
+                        f"Ollama {op} failed for this input (role={role.value}, "
+                        f"HTTP {status}): {body_text.strip()}",
+                        role=role.value, model=model, status_code=status,
+                    ) from e
                 # 5xx is transient — fall through to retry handling.
                 if attempt < max_retries:
                     self._backoff_sleep(attempt)
@@ -631,6 +710,10 @@ class OllamaClient:
                 (HTTP 200 with an error body) — re-raised immediately, not retried
                 against the other endpoint (the overflow is the model's, not the
                 endpoint's).
+            EmbeddingInputError: when the backend deterministically rejects this
+                one input (e.g. a NaN vector it cannot serialise, HTTP 500) —
+                raised immediately, no legacy-endpoint fallback (same model,
+                same input), no retry, no circuit-breaker hit.
             OllamaTimeout / OllamaUnreachable / OllamaError: on transient failure
                 after the retry/circuit policy, or an unexpected response shape.
         """
@@ -646,6 +729,13 @@ class OllamaClient:
                     OllamaRole.EMBED, endpoint, {"model": mdl, payload_key: text},
                     timeout=tmo, retries=retries, model=mdl, op="embed",
                 )
+            except OllamaInputError as e:
+                # Deterministic per-input failure (NaN vector): the legacy
+                # endpoint runs the same model on the same input, so no
+                # fallback — surface the typed per-input signal immediately.
+                raise EmbeddingInputError(
+                    model=mdl, text_len=len(text), ollama_message=str(e)
+                ) from e
             except OllamaError as e:
                 last_exc = e
                 # Old Ollama lacks /api/embed → 404. Fall back to the legacy

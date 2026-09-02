@@ -6,6 +6,63 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Added
 
+- `docs/BENCHMARKS.md` row E: the production write path measured on a 100-question stratified
+  subset — session-end extraction alone beats raw-transcript reading (E0 0.810 vs 0.750);
+  consolidation's ARCHIVE op costs that gain back (E1 0.750) and filtering it via the
+  production `allowed_ops` config recovers and exceeds it (E1noarch 0.820); a fully local
+  pipeline (extraction + recall + reader on one RTX 5090) reaches 0.860 with a ledger-style
+  extraction prompt whose gain is reader-dependent (+12 local, −4 under Gemini). All at
+  ~2.7–3.8k reader tokens/answer vs ~22k raw.
+- `bench/longmemeval/pipeline.py` + `run.py --pipeline session-end|session-end+consolidate`
+  (`--keep-raw`): the production write path as a benchmark row — an extraction model produces
+  the session-end payload per haystack session, written through the real `session_end`
+  function into dated daily notes + a fact-tagged `projects/user.md` profile, then the real
+  `run_consolidation` with an injected `llm_fn` applies LLM-proposed ops via the deterministic
+  executor. Reports extraction calls/tokens per question, a consolidation-ops histogram,
+  `answer_in_context`, and evidence recall traced through session-end's `Session ID` line.
+
+### Changed
+
+### Fixed
+
+### Removed
+
+### Security
+
+## [0.15.0] — 2026-09-01
+
+**Compatibility:** every memory written by this release carries a new
+`auditable_memory: "0.1"` frontmatter field — the Auditable Memory Records
+conformance declaration. Readers that ignore unknown frontmatter are unaffected,
+and files written by earlier releases are not rewritten. Separately, `confidence`
+outside `[0.0, 1.0]` is now rejected with a validation error on every surface,
+including a value supplied through `metadata`, where earlier releases wrote it
+verbatim; a caller that relied on an out-of-range value landing in frontmatter
+must send a value in range.
+
+### Added
+
+- Every memory the save path writes now carries `auditable_memory: "0.1"` — the
+  [Auditable Memory Records 0.1](https://github.com/phasespace-labs/auditable-memory-records)
+  conformance declaration the specification requires (§4.1), on all four surfaces
+  (MCP, REST, CLI, plugins) since they share one writer. A caller-supplied value the
+  implementation does not recognise is rejected rather than guessed at. `confidence`
+  is now validated to `[0.0, 1.0]` whether it arrives as a parameter or through
+  `metadata` (an out-of-range value was previously written verbatim). The
+  specification's conformance suite is vendored under `tests/amr_conformance/` and
+  runs in CI against the implementation: normalization, Level 1 (Marked), Level 2
+  (Linked), and Level 3 (Cited) all pass — the honest claim is Level 3, with the
+  spec's own caveat that the suite demonstrates conformance on its vectors, not
+  across a private corpus.
+- `docs/BENCHMARKS.md`: LongMemEval_S results with methodology and losses — evidence recall@10
+  0.981 from LLM-free save + hybrid recall; accuracy 0.482 / 0.812 / 0.882 / 0.758 with a local
+  30B, Gemini 3 Flash, GPT-5.5, and GPT-4o reader under upstream's gpt-4o judge; comparison
+  against published Zep / Supermemory rows; judge-agreement, reader-prompt sensitivity, and cost
+  figures.
+- `bench/longmemeval/`: LongMemEval (Wu et al., ICLR 2025) adapter — one fresh store per
+  question, haystack sessions as dated daily notes through the canonical indexer, hybrid or
+  keyword recall, pluggable OpenAI-compatible answerer and judge on separate endpoints, upstream
+  judge prompts verbatim, evidence-recall@k, upstream-compatible `hypotheses.jsonl`.
 - Standalone `bench.abstention` evaluation for search abstention: a real
   SQLite-vec + FTS5 threshold sweep across multiple seeded corpora, with
   no-answer false-positive rates, answer-present controls, and both fused and
@@ -14,8 +71,52 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Changed
 
+- README and `docs/HOW-MEMORY-WORKS.md` now describe hybrid retrieval accurately: the vector
+  arm carries full-sentence questions (FTS5's implicit AND requires every query token to
+  co-occur), BM25 carries exact terms and identifiers, and the combined system's measured
+  0.981 evidence recall@10 backs the retrieval claim. Re-weighting the BM25 arm is deferred as
+  unwarranted at that recall.
+- README and ROADMAP now point at `docs/BENCHMARKS.md`; the ROADMAP's "external benchmark
+  evidence" item is updated from "current priority" to first results plus what's next.
+
 ### Fixed
 
+- The Claude Code recall hook and the copy `palinode init` embeds no longer present a fused rank as a similarity: a BM25-only hit now reports `keyword match, rank N.NN` and a pre-0.12 response reports `rank N.NN`, matching `describe_match`. A cross-language test pins the hook's output to the Python implementation ([#174](https://github.com/phasespace-labs/palinode/pull/174), thanks [@chiruu12](https://github.com/chiruu12)).
+- A per-input embedding failure (Ollama bge-m3 returning HTTP 500 `unsupported value: NaN` for
+  specific strings) is no longer treated as a backend outage. It is now a typed
+  `EmbeddingInputError`: no retries, no circuit-breaker hit, no keyword-only-mode notice.
+  Indexing writes just the affected section FTS-only and commits the rest of the file —
+  previously the whole file was aborted and the note silently vanished from recall entirely,
+  not even keyword-searchable. `/search` degrades such a query to the BM25 arm with hits marked
+  `mode: keyword-fallback` instead of failing, and embed-dependent endpoints without a fallback
+  return a typed 422 instead of a misleading 503.
+- FTS5 syntax characters (`?`, `:`, `(`, `)`, `*`, `^`, `.`, …) in a search query no longer
+  raise from the keyword arm: `sanitize_fts_query` now strips all non-word punctuation, so a
+  question-shaped query like `What breed is the user's dog?` keeps its BM25 arm instead of
+  erroring — previously hybrid search misread the error as index corruption, ran a full FTS
+  rebuild per query, and silently returned vector-only results. Dropping the BM25 arm now logs a
+  warning, and the empty-query fallback is a valid empty phrase instead of the erroring `*`.
+- MCP and CLI search output now presents raw cosine similarity as the match
+  percentage and labels keyword-only or legacy fused values as rank instead of
+  presenting RRF rank as confidence
+  ([#171](https://github.com/phasespace-labs/palinode/pull/171), thanks
+  [@chiruu12](https://github.com/chiruu12)).
+- `palinode stop` now exits non-zero when `systemctl` is unavailable or any
+  selected service fails to stop, while still attempting the remaining services.
+- Corrected three public docs that pointed at things which do not exist. `ROADMAP.md` announced
+  "Current version: 0.10.x" four minor releases after the fact; `docs/OBSIDIAN.md` offered
+  `palinode log` and `docs/LAUNCH-CHECKLIST.md` offered `palinode deploy-systemd`, neither of
+  which is a registered command — they are `palinode history <file>` and
+  `deploy/systemd/install.sh`.
+- The MCP HTTP bind-gate refusal now names the knob that actually set the bind. It previously
+  always blamed `PALINODE_MCP_HTTP_HOST`, so an operator who bound with `--host 0.0.0.0` was told
+  to change an environment variable they had never set; the refusal and the token-less startup
+  warning now say `--host 127.0.0.1`, `export PALINODE_MCP_HTTP_HOST=...`, or the deprecated
+  `PALINODE_MCP_SSE_HOST` alias, matching the documented flag > env > default precedence.
+- Executor test fixtures and assertions now read and write Palinode-generated files explicitly as
+  UTF-8, with a ratcheting guard that prevents swept test areas from reintroducing locale-default
+  text I/O ([#149](https://github.com/phasespace-labs/palinode/pull/149),
+  thanks [@chiruu12](https://github.com/chiruu12)).
 - Memory-file moves no longer fail on native Windows when directory fsync is
   unavailable; they now use the same guarded durability fallback as atomic
   writes.
@@ -24,6 +125,10 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
   yellow "reindex already running" (HTTP 409) path, which is informational.
 - MCP Registry release metadata now stays aligned with the package version and
   links to the current release notes.
+- Archive-history test fixtures and assertions now read and write Palinode-generated files
+  explicitly as UTF-8, including the `_git` helper's `subprocess.run`, with all three files joining
+  the ratcheting guard ([#167](https://github.com/phasespace-labs/palinode/pull/167), thanks
+  [@chiruu12](https://github.com/chiruu12)).
 
 ### Removed
 

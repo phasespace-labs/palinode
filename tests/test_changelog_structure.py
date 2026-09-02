@@ -108,11 +108,15 @@ def test_every_unreleased_bullet_sits_under_a_heading() -> None:
 # freezes it here) updates this constant as part of the release roll.
 
 _FROZEN_RELEASED = {
+    "0.15.0": "d55d3207c1b139720afd9a59bab463cc63ae21a9fec54c5d13d04051d4fec0a9",
     "0.14.0": "5c07098de48e83869cbd71e7f27eeca52e8c4d827c6a26ef3db0366347dd6af6",
     "0.13.0": "732c148b864059d3f531e688497533a6d8136523f9bdc6666e1c4aedeebc2a49",
     "0.12.0": "e9ccd8d718a12d5966ac5c6c180d1539568b0055f39181ff9b953f97f45a0d59",
     "0.11.0": "351e7fb515ef0e475bb799774627c8878df89f742a7df6b05e77a3b9cd5595e0",
     "0.10.1": "8378af087cdf738d0ff1e15afc325e36531e06f1e97bba695aa630d45b9bd50b",
+    # Re-frozen once after publication (dev issue 823): the private section lacked the
+    # `**Compatibility:**` paragraph the public release body shipped with, so
+    # this is a reconciliation *toward* the published notes, not a divergence.
     "0.10.0": "aeff282e906646ecd99578eee3350f4b1fada01dc107e9b7131e80241f35f5e2",
 }
 

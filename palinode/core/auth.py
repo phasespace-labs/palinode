@@ -201,12 +201,30 @@ def allow_unauth_opt_out() -> bool:
     )
 
 
+def bind_host_phrasing(
+    host_var: str, host: str, host_var_kind: str = "env"
+) -> tuple[str, str]:
+    """Render a bind host as the operator spelled it, plus its loopback remedy.
+
+    Returns ``(stated, remedy)``. An env var reads ``NAME=value`` and is
+    fixed with ``export NAME=127.0.0.1``; a flag reads ``--host value`` and
+    is fixed with ``--host 127.0.0.1``. Callers that resolve a host from
+    several sources pass the one that actually won, so refusal and warning
+    text point at the knob the operator turned rather than at the canonical
+    env var they may never have set.
+    """
+    if host_var_kind == "flag":
+        return f"{host_var} {host}", f"{host_var} 127.0.0.1"
+    return f"{host_var}={host}", f"export {host_var}=127.0.0.1"
+
+
 def validate_bind_auth(
     host: str,
     token: str | None,
     *,
     allow_unauth: bool,
     host_var: str = "PALINODE_API_HOST",
+    host_var_kind: str = "env",
     allow_unauth_var: str = "PALINODE_API_ALLOW_UNAUTH",
     exposure: str = "an unauthenticated API",
     detail: str = "",
@@ -227,7 +245,15 @@ def validate_bind_auth(
     allow_unauth:
         ``True`` when the operator set the explicit opt-out env var.
     host_var, allow_unauth_var:
-        Names of the env vars named in the error message.
+        Names of the knobs named in the error message.
+    host_var_kind:
+        How ``host_var`` is spelled by the operator: ``"env"`` for an
+        environment variable (``NAME=value`` / ``export NAME=...``) or
+        ``"flag"`` for a command-line flag (``--host value``). The caller
+        passes whichever source actually resolved ``host``, so the
+        remediation names the knob the operator really turned — an
+        operator who set ``--host`` must not be sent to an env var they
+        never set.
     exposure:
         What the refusal would otherwise have served, for the message —
         the MCP HTTP transport names its tool surface here.
@@ -237,14 +263,15 @@ def validate_bind_auth(
     """
     if token is not None or allow_unauth or is_loopback_host(host):
         return
+    stated, remedy = bind_host_phrasing(host_var, host, host_var_kind)
     raise SystemExit(
-        f"REFUSING TO START: {host_var}={host} is not a loopback address and no "
+        f"REFUSING TO START: {stated} is not a loopback address and no "
         "PALINODE_API_TOKEN (or PALINODE_API_TOKEN_FILE) is set — this would "
         f"serve {exposure} to the network."
         + (f" {detail}" if detail else "")
         + "\n\n"
         "Either bind loopback-only:\n"
-        f"  export {host_var}=127.0.0.1\n\n"
+        f"  {remedy}\n\n"
         "or generate a token:\n"
         "  python -c 'import secrets; print(secrets.token_urlsafe(32))'\n"
         "  export PALINODE_API_TOKEN=<value>\n\n"

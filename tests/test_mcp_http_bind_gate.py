@@ -78,10 +78,25 @@ def test_default_bind_is_loopback(clean_env: None, monkeypatch: pytest.MonkeyPat
 # ---------------------------------------------------------------------------
 
 
-def _assert_refusal(exc: SystemExit) -> None:
+def _assert_refusal(
+    exc: SystemExit,
+    *,
+    stated: str = "PALINODE_MCP_HTTP_HOST=0.0.0.0",
+    absent: tuple[str, ...] = (),
+) -> None:
+    """``stated`` is how the refusal must spell the offending bind.
+
+    The gate names a knob so the operator knows what to change, so the knob
+    it names has to be the one that actually resolved the host — flag,
+    canonical env var, or deprecated alias. ``absent`` pins the
+    other sources out of the message: naming a variable the operator never
+    set is the one failure a remediation line cannot afford.
+    """
     msg = str(exc)
     assert "REFUSING TO START" in msg
-    assert "PALINODE_MCP_HTTP_HOST=0.0.0.0" in msg, msg
+    assert stated in msg, msg
+    for needle in absent:
+        assert needle not in msg, f"{needle!r} must not appear: {msg}"
     assert "PALINODE_API_TOKEN" in msg
     assert "PALINODE_API_ALLOW_UNAUTH=1" in msg, "the shared opt-out must be named"
     assert "no token of its own" in msg, (
@@ -100,7 +115,7 @@ def test_env_non_loopback_no_token_refuses(
     captured = _capture_uvicorn(monkeypatch)
     with pytest.raises(SystemExit) as exc:
         mcp_mod.main_http([])
-    _assert_refusal(exc.value)
+    _assert_refusal(exc.value, absent=("--host",))
     assert not captured, "uvicorn must not be reached"
 
 
@@ -108,13 +123,22 @@ def test_flag_non_loopback_no_token_refuses(
     clean_env: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The gate keys on the *resolved* host — ``--host 0.0.0.0`` is exactly as
-    refused as the env var; the flag path cannot sneak past it."""
+    refused as the env var; the flag path cannot sneak past it.
+
+    It must also *attribute* the bind to the flag: an operator who never set
+    ``PALINODE_MCP_HTTP_HOST`` cannot act on advice to change it.
+    """
     import palinode.mcp as mcp_mod
 
     captured = _capture_uvicorn(monkeypatch)
     with pytest.raises(SystemExit) as exc:
         mcp_mod.main_http(["--host", "0.0.0.0"])
-    _assert_refusal(exc.value)
+    _assert_refusal(
+        exc.value,
+        stated="--host 0.0.0.0",
+        absent=("PALINODE_MCP_HTTP_HOST",),
+    )
+    assert "--host 127.0.0.1" in str(exc.value), "remedy must be spelled as a flag"
     assert not captured
 
 
@@ -127,7 +151,7 @@ def test_legacy_sse_host_env_is_gated_too(
     _capture_uvicorn(monkeypatch)
     with pytest.raises(SystemExit) as exc:
         mcp_mod.main_http([])
-    assert "REFUSING TO START" in str(exc.value)
+    _assert_refusal(exc.value, stated="PALINODE_MCP_SSE_HOST=0.0.0.0")
 
 
 def test_mcp_twin_opt_out_does_not_exist(
@@ -182,6 +206,26 @@ def test_opt_out_starts_and_warns_every_start(
         and "PALINODE_API_ALLOW_UNAUTH=1 set" in m
         for m in msgs
     ), msgs
+
+
+def test_opt_out_warning_names_the_source_that_set_the_bind(
+    clean_env: None, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The token-less start warning carries the same remediation line as the
+    refusal, so it misattributes the same way if left alone."""
+    with caplog.at_level("WARNING", logger="palinode.mcp"):
+        captured = _run(
+            monkeypatch,
+            ["--host", "0.0.0.0"],
+            PALINODE_API_ALLOW_UNAUTH="1",
+        )
+    assert captured["host"] == "0.0.0.0"
+    warnings = [
+        r.getMessage() for r in caplog.records if "accessible from any network" in r.getMessage()
+    ]
+    assert warnings, [r.getMessage() for r in caplog.records]
+    assert any("--host 127.0.0.1" in m for m in warnings), warnings
+    assert not any("PALINODE_MCP_HTTP_HOST" in m for m in warnings), warnings
 
 
 def test_token_starts_without_exposure_warning(

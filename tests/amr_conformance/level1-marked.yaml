@@ -1,0 +1,107 @@
+# Auditable Memory (AMR) conformance — Level 1, Marked (SPEC §4.1, §4.2, §7)
+#
+# Level 1 is: the `auditable_memory` declaration, a closed vocabulary preserved through
+# round-trip, and the rule that absence is not `fact`.
+#
+# Two cases carry the weight. l1-000b is the non-vacuity check — an
+# implementation that does nothing must NOT pass Level 1. l1-008 is the
+# absent-is-not-fact check, which is the rule implementations get wrong.
+spec_version: "0.1.0"
+suite: level1-marked
+
+cases:
+  - id: l1-000
+    why: "The conformance declaration is REQUIRED and must round-trip verbatim (§4.1)."
+    input: { auditable_memory: "0.1", epistemic: "fact" }
+    expect: { valid: true, auditable_memory: "0.1", conforms_level_1: true }
+
+  - id: l1-000b
+    why: >
+      NON-VACUITY. An implementation that stores nothing and declares nothing
+      conforms at NO level. Level 1 must not be satisfiable by inaction — if a
+      record carries no `auditable_memory` field, the implementation cannot claim
+      Level 1 on the strength of merely not misbehaving.
+    input: { text: "a record with no auditable_memory field" }
+    expect:
+      valid: true
+      conforms_level_1: false
+      why_not: "no auditable_memory declaration; nothing identifies this as an AMR record"
+
+  - id: l1-000c
+    why: "An unrecognized spec version is rejected, not guessed at (§4.1)."
+    input: { auditable_memory: "0.9", epistemic: "fact" }
+    expect: { valid: false, error: "unrecognized auditable_memory version" }
+
+  - id: l1-000d
+    why: >
+      The declaration is what makes adoption findable. A conforming corpus must
+      be discoverable by scanning for the field — this is the property the whole
+      specification's ecosystem depends on.
+    input: { corpus: ["rec-a", "rec-b"], all_carry: "auditable_memory" }
+    expect: { discoverable_by_field_scan: true }
+
+  - id: l1-001
+    why: "Each of the four vocabulary values is accepted and round-trips unchanged."
+    input: { epistemic: "fact" }
+    expect: { valid: true, epistemic: "fact" }
+
+  - id: l1-002
+    input: { epistemic: "inference" }
+    expect: { valid: true, epistemic: "inference" }
+
+  - id: l1-003
+    input: { epistemic: "open_question" }
+    expect: { valid: true, epistemic: "open_question" }
+
+  - id: l1-004
+    input: { epistemic: "unverified" }
+    expect: { valid: true, epistemic: "unverified" }
+
+  - id: l1-005
+    why: "The vocabulary is closed at 0.1. Values outside it are rejected, not coerced."
+    input: { epistemic: "hypothesis" }
+    expect: { valid: false, error: "epistemic value not in closed vocabulary" }
+
+  - id: l1-006
+    why: "Values are case-sensitive. `Fact` is not `fact`."
+    input: { epistemic: "Fact" }
+    expect: { valid: false, error: "epistemic value not in closed vocabulary" }
+
+  - id: l1-007
+    why: "Empty string is not a value. Omit the field instead."
+    input: { epistemic: "" }
+    expect: { valid: false, error: "epistemic value not in closed vocabulary" }
+
+  - id: l1-008
+    why: >
+      THE LOAD-BEARING CASE. A record with no epistemic field is valid and is
+      UNMARKED. An implementation that reports this record as `fact`, displays it
+      as asserted, or ranks it as verified fails Level 1 — regardless of how the
+      rest of the suite scores.
+    input: { text: "the deployment succeeded" }
+    expect:
+      valid: true
+      epistemic: null
+      must_not_equal: "fact"
+      note: "unmarked is a third state, distinct from both `fact` and invalid"
+
+  - id: l1-009
+    why: >
+      Null is equivalent to absent, not to a value. Serializers that write an
+      explicit null must round-trip it as unmarked.
+    input: { epistemic: null }
+    expect: { valid: true, epistemic: null, must_not_equal: "fact" }
+
+  - id: l1-010
+    why: "`confidence` is orthogonal to `epistemic` and must not be derived from it (§4.6)."
+    input: { epistemic: "inference", confidence: 0.9 }
+    expect:
+      valid: true
+      epistemic: "inference"
+      confidence: 0.9
+      note: "high confidence does NOT promote an inference to a fact"
+
+  - id: l1-011
+    why: "Confidence outside [0.0, 1.0] is invalid."
+    input: { confidence: 1.4 }
+    expect: { valid: false, error: "confidence out of range" }

@@ -352,6 +352,8 @@ def save_memory(
     # policy ("repalce") must not quietly fall back to append and leave a
     # living document mis-declared.
     from palinode.core.parser import (
+        AMR_SPEC_VERSION as _AMR_SPEC_VERSION,
+        VALID_AMR_VERSIONS as _VALID_AMR_VERSIONS,
         VALID_EPISTEMICS as _VALID_EPISTEMICS,
         VALID_STATUSES as _VALID_STATUSES,
         VALID_UPDATE_POLICIES as _VALID_UPDATE_POLICIES,
@@ -455,6 +457,43 @@ def save_memory(
             f"expected one of {list(_VALID_EPISTEMICS)}"
         )
 
+    # AMR §4.1: every record this path writes declares the spec version it
+    # conforms to. The value is authoritative — written from the constant, not
+    # the caller — but a caller-supplied value tunneled through `metadata` is
+    # still checked: an unrecognized version is rejected rather than guessed at
+    # or silently overwritten, so a record claiming "0.9" cannot be laundered
+    # into a "0.1" declaration by the save.
+    _meta_amr = None
+    if metadata and isinstance(metadata, dict):
+        _meta_amr = metadata.get("auditable_memory")
+    if _meta_amr is not None and str(_meta_amr) not in _VALID_AMR_VERSIONS:
+        raise SaveValidationError(
+            f"unrecognized auditable_memory version {_meta_amr!r}; "
+            f"this implementation writes {_AMR_SPEC_VERSION!r}"
+        )
+
+    # AMR §4.6 / conformance l1-011: confidence is a number in [0.0, 1.0].
+    # Resolved param-or-metadata like epistemic (the param wins) so a value
+    # tunneled through `metadata` cannot land unvalidated. Rejected, not
+    # clamped — a clamped 1.4 would read as certainty the caller never stated.
+    _meta_confidence = None
+    if metadata and isinstance(metadata, dict):
+        _meta_confidence = metadata.get("confidence")
+    _effective_confidence = (
+        confidence if confidence is not None else _meta_confidence
+    )
+    if _effective_confidence is not None:
+        if (
+            isinstance(_effective_confidence, bool)
+            or not isinstance(_effective_confidence, (int, float))
+            or not (0.0 <= float(_effective_confidence) <= 1.0)
+        ):
+            raise SaveValidationError(
+                f"confidence out of range: {_effective_confidence!r}; "
+                "expected a number in [0.0, 1.0]"
+            )
+        _effective_confidence = float(_effective_confidence)
+
     # Security scan: reject prompt injection and exfiltration attempts
     is_safe, reason = store.scan_memory_content(content)
     if not is_safe:
@@ -537,6 +576,11 @@ def save_memory(
                 exc,
             )
     frontmatter_dict = {
+        # AMR §4.1: the conformance declaration, REQUIRED on every record
+        # written under the spec. Constant-sourced (validated above if the
+        # caller also supplied one) so the field is never absent and never
+        # a value this implementation does not actually implement.
+        "auditable_memory": _AMR_SPEC_VERSION,
         "id": f"{category}-{slug}",
         "category": category,
         "type": type,
@@ -560,7 +604,10 @@ def save_memory(
         # link fields `contradicts`/`backed_by` are each resolved +
         # validated above/below and written from their own normalized values, so a
         # malformed value tunneled through metadata still gets a clean 400.
-        _verbatim_excluded = {"update_policy", "epistemic", "contradicts", "backed_by", "claims"}
+        _verbatim_excluded = {
+            "update_policy", "epistemic", "contradicts", "backed_by", "claims",
+            "auditable_memory", "confidence",
+        }
         frontmatter_dict.update(
             {k: v for k, v in metadata.items() if k not in _verbatim_excluded}
         )
@@ -575,8 +622,8 @@ def save_memory(
         raise SaveValidationError(_expiry_err)
     if core is not None:
         frontmatter_dict["core"] = core
-    if confidence is not None:
-        frontmatter_dict["confidence"] = confidence
+    if _effective_confidence is not None:
+        frontmatter_dict["confidence"] = _effective_confidence
     if priority is not None:
         frontmatter_dict["priority"] = priority
     # (ADR-018): persist the epistemic marker only when one is in effect —

@@ -59,7 +59,7 @@ is checked AND `mcp-tool-coverage` CI is green on the release SHA.**
 
 ## Distribution
 - [ ] `palinode init` idempotent on all supported platforms (macOS, Linux)
-- [ ] `palinode deploy-systemd` smoke-tested on Ubuntu 22.04+
+- [ ] `deploy/systemd/install.sh` smoke-tested on Ubuntu 22.04+
 - [ ] Homebrew formula (M6) or documented manual install as fallback
 - [ ] `palinode --version` returns a clean semver string
 

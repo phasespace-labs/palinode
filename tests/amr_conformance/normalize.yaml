@@ -1,0 +1,60 @@
+# Auditable Memory (AMR) conformance — quote normalization (SPEC §5)
+#
+# Normalization must be byte-identical across implementations or no hash
+# interoperates. Every case here is `normalize(input) == expect`.
+spec_version: "0.1.0"
+suite: normalize
+
+cases:
+  - id: norm-001
+    why: "Curly single quotes fold to ASCII apostrophes."
+    input: "the patient’s chart"
+    expect: "the patient's chart"
+
+  - id: norm-002
+    why: "Curly double quotes fold to ASCII."
+    input: "the “price” rose"
+    expect: 'the "price" rose'
+
+  - id: norm-003
+    why: "En dash and em dash both fold to hyphen."
+    input: "2024–2026 and then—sharply"
+    expect: "2024-2026 and then-sharply"
+
+  - id: norm-004
+    why: "Ellipsis character folds to three periods."
+    input: "and so on…"
+    expect: "and so on..."
+
+  - id: norm-005
+    why: "All whitespace runs collapse to one space, including newlines and tabs."
+    input: "a   b\n\tc  "
+    expect: "a b c"
+
+  - id: norm-006
+    why: "Leading and trailing whitespace is stripped."
+    input: "   padded   "
+    expect: "padded"
+
+  - id: norm-007
+    why: "Normalization is idempotent — normalize(normalize(x)) == normalize(x)."
+    input: "the “price”   rose—sharply…"
+    expect: 'the "price" rose-sharply...'
+    also_assert: idempotent
+
+  - id: norm-008
+    why: "Interior single spaces are preserved; normalization is not aggressive."
+    input: "one two three"
+    expect: "one two three"
+
+  - id: norm-009
+    why: >
+      Non-ASCII that is NOT in the punctuation fold table is preserved. Normalization
+      folds punctuation only; it is not a transliteration or an ASCII filter.
+    input: "the café closed"
+    expect: "the café closed"
+
+  - id: norm-010
+    why: "Empty and whitespace-only input normalize to the empty string."
+    input: "   \n\t "
+    expect: ""

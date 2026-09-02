@@ -979,16 +979,21 @@ def sanitize_fts_query(query: str) -> str:
     Returns:
         A sanitized query string safe for FTS5 MATCH expressions.
     """
-    # Remove quotes (FTS5 phrase search with unmatched quotes causes errors)
-    query = re.sub(r'["\']', ' ', query)
     # Remove boolean operators that FTS5 would misinterpret
     query = re.sub(r'\b(AND|OR|NOT)\b', ' ', query, flags=re.IGNORECASE)
-    # Convert hyphens to spaces (FTS5 treats hyphen as NOT operator)
-    query = re.sub(r'-(?=\w)', ' ', query)
+    # Replace every remaining non-word, non-whitespace character with a space.
+    # FTS5 barewords admit only [A-Za-z0-9_] and non-ASCII, so anything else —
+    # quotes, hyphens, and syntax/operator characters like ? : ( ) * ^ { } . —
+    # is an operator or a MATCH syntax error when it reaches the parser. A
+    # trailing '?' alone raised "fts5: syntax error", which cost hybrid search
+    # its BM25 arm on every question-shaped query. Subsumes the former
+    # quote-stripping and hyphen-to-space rules.
+    query = re.sub(r'[^\w\s]', ' ', query)
     # Normalize whitespace
     query = ' '.join(query.split())
-    # Ensure non-empty
-    return query if query.strip() else '*'
+    # Ensure non-empty. '""' is the empty phrase: valid FTS5 that matches
+    # nothing. (The old fallback '*' was itself a MATCH syntax error.)
+    return query if query else '""'
 
 
 def search_fts(query: str, category: str | None = None, top_k: int = 10,
@@ -1666,16 +1671,22 @@ def search_hybrid(
         try:
             fts_results = search_fts(query_text, category=category, top_k=top_k * 2,
                                      kind_exclude_list=kind_exclude_list)
-        except Exception:
+        except Exception as first_exc:
             # FTS5 corrupted — rebuild and retry once
             import logging
-            logging.getLogger("palinode.store").warning("FTS5 corrupted, rebuilding...")
+            logging.getLogger("palinode.store").warning(
+                "FTS5 query failed (%s), rebuilding index and retrying...", first_exc)
             rebuild_fts()
             try:
                 fts_results = search_fts(query_text, category=category, top_k=top_k * 2,
                                          kind_exclude_list=kind_exclude_list)
-            except Exception:
-                fts_results = []  # Give up on BM25, return vector-only
+            except Exception as exc:
+                # Give up on BM25 — but never silently: an invisible
+                # degradation to vector-only is how a sanitizer gap went
+                # unnoticed while every question-shaped query lost this arm.
+                logging.getLogger("palinode.store").warning(
+                    "BM25 arm dropped, returning vector-only results: %s", exc)
+                fts_results = []
     else:
         # No BM25 arm at all — force vec_weight = 1.0 (see docstring).
         effective_hybrid_weight = 0.0
