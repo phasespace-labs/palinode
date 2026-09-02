@@ -14,7 +14,6 @@ import os
 import re
 import shutil
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any
 
 from bench import harness
@@ -113,9 +112,11 @@ def index_with_fallback(palinode_dir: str) -> Ingest:
 
     result = harness.index_all(palinode_dir)
     fts_only = 0
-    if result.num_facts < result.num_files:
-        indexed = _indexed_paths()
-        missing = [fp for fp in harness._glob_md(palinode_dir) if os.path.abspath(fp) not in indexed]
+    # Always diff paths: ``chunks < files`` missed a dropped file whenever other
+    # files carried several sections each (row E's profile, 2026-08-30).
+    indexed = _indexed_paths()
+    missing = [fp for fp in harness._glob_md(palinode_dir) if os.path.abspath(fp) not in indexed]
+    if missing:
         orig = reconcile_mod._embeds_deferred
         reconcile_mod._embeds_deferred = lambda client: True  # type: ignore[assignment]
         try:
@@ -144,6 +145,45 @@ class Retrieval:
     session_ids: list[str]     # session ids seen in hits, in rank order
     context_chars: int
     embed_error: str | None = None
+    dup_hits: int = 0          # exact-duplicate chunks dropped (session-end dual-writes daily + indexed file)
+    profile_hit: bool = False  # ``projects/user.md`` (the consolidated profile) was among the hits
+
+
+_SESSION_ID_IN_ENTRY_RE = re.compile(r"\*\*Session ID:\*\*\s*(\S+)|^##\s+\[\d{4}-\d{2}-\d{2}\] session (\S+)", re.M)
+
+
+def hit_session_id(h: dict[str, Any]) -> str | None:
+    """Which haystack session a hit came from: the raw-transcript filename
+    (rows A–D), the ``Session ID`` line session-end stamps into its entry
+    (row E's daily notes and their indexed twins), or the per-session heading
+    of a profile section."""
+    sid = session_id_of(h.get("file_path", ""))
+    if sid:
+        return sid
+    m = _SESSION_ID_IN_ENTRY_RE.search(h.get("content", ""))
+    return (m.group(1) or m.group(2)) if m else None
+
+
+def is_profile_hit(h: dict[str, Any]) -> bool:
+    return os.path.basename(h.get("file_path", "")) == "user.md" and os.path.basename(os.path.dirname(h.get("file_path", ""))) == "projects"
+
+
+_AUTO_FOOTER_RE = re.compile(r"\n## See also\s*\n<!-- palinode-auto-footer -->[\s\S]*$")
+
+
+def dedupe_hits(hits: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """Drop hits whose text duplicates an earlier hit. Session-end writes the
+    same entry to ``daily/`` and to an indexed twin, which ``save_memory``
+    suffixes with an auto ``## See also`` footer — ignored for the comparison."""
+    seen: set[str] = set()
+    out = []
+    for h in hits:
+        key = " ".join(_AUTO_FOOTER_RE.sub("", h.get("content", "")).split())
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(h)
+    return out, len(hits) - len(out)
 
 
 _NONWORD_RE = re.compile(r"[^\w\s]+", re.UNICODE)
@@ -191,27 +231,47 @@ def retrieve(question: str, *, top_k: int, threshold: float, hybrid: bool) -> Re
                 break
             except Exception as e:  # noqa: BLE001 - per-input embed failure (e.g. NaN 500): degrade, don't abort
                 embed_error = str(e)[:200]
+    # Over-fetch so the reader still sees top_k *distinct* excerpts after the
+    # session-end daily/indexed-twin duplicates are dropped (row E); with no
+    # duplicates (rows A–D) the first top_k of 2×top_k are exactly the old top_k.
     if vec:
-        hits = store.search_hybrid(kw, vec, top_k=top_k, threshold=threshold,
+        hits = store.search_hybrid(kw, vec, top_k=2 * top_k, threshold=threshold,
                                    include_daily=True, record_access=False)
     else:
-        hits = store.search_fts(kw, top_k=top_k)
+        hits = store.search_fts(kw, top_k=2 * top_k)
         mode = "keyword-fallback" if embed_error else "keyword"
+    hits, dups = dedupe_hits(hits)
+    hits = hits[:top_k]
     sids: list[str] = []
     for h in hits:
-        sid = session_id_of(h.get("file_path", ""))
+        sid = hit_session_id(h)
         if sid and sid not in sids:
             sids.append(sid)
     return Retrieval(hits=hits, mode=mode, session_ids=sids,
                      context_chars=sum(len(h.get("content", "")) for h in hits),
-                     embed_error=embed_error)
+                     embed_error=embed_error, dup_hits=dups,
+                     profile_hit=any(is_profile_hit(h) for h in hits))
+
+
+_DATE_IN_STEM_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def context_label(file_path: str) -> str:
+    """The date-ish label the reader sees on an excerpt: the file stem for a raw
+    transcript (``2023-05-20-<sid>``), the date alone for a session-end daily
+    note's indexed twin (``session-end-2023-05-20-user-<hash>``), the stem
+    (``2023-05-20`` / ``user``) otherwise."""
+    stem = os.path.splitext(os.path.basename(file_path))[0]
+    if stem.startswith("session-end-"):
+        m = _DATE_IN_STEM_RE.search(stem)
+        return m.group(0) if m else stem
+    return stem
 
 
 def format_context(hits: list[dict[str, Any]]) -> str:
     out = []
     for i, h in enumerate(hits, 1):
-        date = os.path.splitext(os.path.basename(h.get("file_path", "")))[0]
-        out.append(f"[{i}] ({date})\n{h.get('content', '').strip()}")
+        out.append(f"[{i}] ({context_label(h.get('file_path', ''))})\n{h.get('content', '').strip()}")
     return "\n\n".join(out)
 
 
@@ -250,12 +310,3 @@ def answer_messages(question: str, question_date: str, context: str) -> list[dic
             f"Question: {question}"
         )},
     ]
-
-
-def consolidate_all(item: dict[str, Any]) -> dict[str, Any]:
-    """Run the real consolidation pass over every haystack date."""
-    from palinode.consolidation.runner import run_consolidation
-
-    earliest = min(_date_of(ts) for ts in item["haystack_dates"])
-    days = (datetime.now(timezone.utc).date() - datetime.strptime(earliest, "%Y-%m-%d").date()).days + 2
-    return run_consolidation(lookback_days=days)

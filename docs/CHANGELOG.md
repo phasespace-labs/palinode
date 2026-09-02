@@ -6,6 +6,21 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Added
 
+- `docs/BENCHMARKS.md` row E: the production write path measured on a 100-question stratified
+  subset — session-end extraction alone beats raw-transcript reading (E0 0.810 vs 0.750);
+  consolidation's ARCHIVE op costs that gain back (E1 0.750) and filtering it via the
+  production `allowed_ops` config recovers and exceeds it (E1noarch 0.820); a fully local
+  pipeline (extraction + recall + reader on one RTX 5090) reaches 0.860 with a ledger-style
+  extraction prompt whose gain is reader-dependent (+12 local, −4 under Gemini). All at
+  ~2.7–3.8k reader tokens/answer vs ~22k raw.
+- `bench/longmemeval/pipeline.py` + `run.py --pipeline session-end|session-end+consolidate`
+  (`--keep-raw`): the production write path as a benchmark row — an extraction model produces
+  the session-end payload per haystack session, written through the real `session_end`
+  function into dated daily notes + a fact-tagged `projects/user.md` profile, then the real
+  `run_consolidation` with an injected `llm_fn` applies LLM-proposed ops via the deterministic
+  executor. Reports extraction calls/tokens per question, a consolidation-ops histogram,
+  `answer_in_context`, and evidence recall traced through session-end's `Session ID` line.
+
 ### Changed
 
 ### Fixed

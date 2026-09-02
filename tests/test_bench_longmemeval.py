@@ -103,7 +103,7 @@ def test_end_to_end_keyword_only(tmp_path, keyword_only):
         return "Yes"
 
     rows = run.run_items([_item(), _item("q2_abs")], store_dir=store_dir, top_k=5, threshold=0.4,
-                         consolidate=False, answer_fn=fake_answer, judge_fn=fake_judge)
+                         answer_fn=fake_answer, judge_fn=fake_judge)
 
     r = rows[0]
     assert r["retrieval"]["mode"] == "keyword"
@@ -294,11 +294,11 @@ def test_judge_prompts_match_upstream_dispatch():
 def test_progress_jsonl_and_resume(tmp_path, keyword_only):
     progress = tmp_path / "rows.jsonl"
     rows = run.run_items([_item("a")], store_dir=str(tmp_path / "s"), top_k=5, threshold=0.4,
-                         consolidate=False, answer_fn=None, judge_fn=None, progress_path=progress)
+                         answer_fn=None, judge_fn=None, progress_path=progress)
     assert len(rows) == 1 and progress.read_text().count("\n") == 1
     calls = []
     rows2 = run.run_items([_item("a"), _item("b")], store_dir=str(tmp_path / "s"), top_k=5, threshold=0.4,
-                          consolidate=False, answer_fn=None, judge_fn=None, progress_path=progress,
+                          answer_fn=None, judge_fn=None, progress_path=progress,
                           log=calls.append)
     assert [r["question_id"] for r in rows2] == ["a", "b"]           # "a" reloaded, "b" run
     assert progress.read_text().count("\n") == 2 and calls[0].startswith("resuming: 1")
@@ -376,7 +376,7 @@ def test_deterministic_failures_are_not_retried():
 def test_heartbeat_written_per_question(tmp_path, keyword_only):
     progress = tmp_path / "rows.jsonl"
     run.run_items([_item("a")], store_dir=str(tmp_path / "s"), top_k=5, threshold=0.4,
-                  consolidate=False, answer_fn=None, judge_fn=None, progress_path=progress)
+                  answer_fn=None, judge_fn=None, progress_path=progress)
     hb = json.loads((tmp_path / "status.json").read_text())
     assert hb["phase"] == "done" and hb["done"] == 1 and hb["total"] == 1 and hb["updated_at"] > 0
 
@@ -409,7 +409,7 @@ def test_prepare_outage_is_recorded_not_fatal(tmp_path, keyword_only, monkeypatc
     monkeypatch.setattr(run.adapter, "retrieve", boom)
     progress = tmp_path / "rows.jsonl"
     rows = run.run_items([_item("a")], store_dir=str(tmp_path / "s"), top_k=5, threshold=0.4,
-                         consolidate=False, answer_fn=None, judge_fn=None, progress_path=progress)
+                         answer_fn=None, judge_fn=None, progress_path=progress)
     assert rows[0]["error"].startswith("prepare:") and "retrieval" not in rows[0]
     assert progress.read_text().count("\n") == 1
     s = run.summarize(rows)

@@ -1,7 +1,7 @@
 """Minimal OpenAI-compatible chat client (stdlib only).
 
 Two roles, each configured independently so the answerer and the judge can be
-different vendors — the benchmark's methodological contract:
+different vendors — the methodological point:
 
     LME_ANSWER_BASE_URL / LME_ANSWER_MODEL / LME_ANSWER_API_KEY / LME_ANSWER_EXTRA_JSON
     LME_JUDGE_BASE_URL  / LME_JUDGE_MODEL  / LME_JUDGE_API_KEY  / LME_JUDGE_EXTRA_JSON
@@ -107,11 +107,18 @@ def chat(ep: Endpoint, messages: list[dict[str, str]], *, temperature: float = 0
         timeout = ep.timeout_s
     if ep.base_url.startswith(CODEX_SCHEME):
         return codex_exec(ep, messages, timeout=timeout)
-    body = json.dumps({
+    payload = {
         "model": ep.model, "messages": messages,
         "temperature": temperature, "max_tokens": max_tokens,
         **dict(ep.extra),
-    }).encode()
+    }
+    if "max_completion_tokens" in payload:
+        # OpenAI reasoning-line models (gpt-5.x) reject max_tokens outright; an
+        # endpoint that declares max_completion_tokens via *_EXTRA_JSON owns the
+        # budget, and temperature is likewise unsupported there.
+        payload.pop("max_tokens", None)
+        payload.pop("temperature", None)
+    body = json.dumps(payload).encode()
     headers = {"Content-Type": "application/json"}
     if ep.api_key:
         headers["Authorization"] = f"Bearer {ep.api_key}"
@@ -126,7 +133,16 @@ def chat(ep: Endpoint, messages: list[dict[str, str]], *, temperature: float = 0
             with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
                 data = json.load(resp)
             usage = data.get("usage") or {}
-            msg = data["choices"][0]["message"]
+            choice = (data.get("choices") or [{}])[0]
+            if "message" not in choice:
+                # Gemini returns a choice with only finish_reason (e.g.
+                # "content_filter: PROHIBITED_CONTENT") when it refuses the
+                # input. Deterministic per input — surface it as such, not as a
+                # KeyError the caller mistakes for a transient outage.
+                raise RuntimeError(
+                    f"blocked by {ep.model}: finish_reason={choice.get('finish_reason')!r} (no message in choice; usage={usage})"
+                )
+            msg = choice["message"]
             text = (msg.get("content") or "").strip()
             if not text:
                 # Thinking models return null content when reasoning eats max_tokens.

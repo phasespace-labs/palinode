@@ -6,13 +6,33 @@ its own haystack (~40 sessions / ~115k tokens for `_s`), so **each question gets
 sessions → dated `daily/` notes → canonical `index_file` → hybrid recall → external answerer →
 upstream judge prompt, verbatim.
 
-## Configuration rows (report all three)
+## Configuration rows
 
 | row | flag | what it measures |
 |---|---|---|
-| save-only | *(default)* | LLM-free ingest + hybrid search. Zero chat-LLM calls before the answerer. |
-| consolidated | `--consolidate` | Real `run_consolidation` over the haystack, then search. Needs the consolidation model configured in `palinode.config.yaml`. |
+| save-only | *(default, `--pipeline raw`)* | LLM-free ingest + hybrid search. Zero chat-LLM calls before the answerer. Rows A–D. |
 | retrieval-only | `--no-answer` | No LLM at all. Reports **evidence recall@k** (was any `answer_session_id` in the top-k?) — the retrieval ceiling. |
+| session-end (E0) | `--pipeline session-end` | The production write path: an extraction model plays the agent at every session end (`LME_EXTRACT_*`), and the payload goes through Palinode's real `session_end` — dated `daily/` note tagged `project/user` + indexed twin — with the facts appended to a seeded `projects/user.md` profile and tagged by the real fact-id bootstrap. Chat-LLM calls at ingest, reported per question. |
+| session-end + consolidate (E1) | `--pipeline session-end+consolidate` | E0, then the real `run_consolidation` (`LME_CONSOLIDATE_*` via the runner's `llm_fn` seam): LLM-proposed KEEP/UPDATE/MERGE/SUPERSEDE/ARCHIVE/RETRACT ops applied by the deterministic executor to `projects/user.md`; compacted daily notes archived (still indexed). Ops histogram per question. |
+| … + raw (E1+raw) | `… --keep-raw` | E1 with the raw transcripts indexed as well — does anything get lost in extraction? |
+
+Row E is the apples-to-apples row against systems that report after an
+extraction + consolidation step. Things `pipeline.py` does that production leaves to the
+agent, stated so the row is honest: the clock session-end stamps a note with is patched to the
+haystack session's date; the fact bullets are appended to the profile by the harness (session-end
+itself appends only a one-line index entry to `projects/<p>-status.md`, which is deliberately
+not seeded so consolidation targets `user.md`); `config.consolidation.keyword_map` is set to
+group the session-end entries under `project/user` for the pass.
+
+Retrieval over-fetches `2 × top_k` and keeps the first `top_k` *distinct* excerpts — session-end
+writes each entry to `daily/` and to an indexed twin, and without this the duplicates took four
+of the ten slots. Rows A–D have no duplicates, so their top-k is unchanged.
+
+Evidence recall in row E: a hit is traced to a haystack session through the `Session ID` line
+session-end stamps into every entry (daily note or indexed twin), or a raw transcript's filename.
+Profile facts carry no session id, so `evidence_recall` is a lower bound there; every row also
+reports **`answer_in_context`** — the gold answer string, case/punctuation-folded, appears verbatim
+in the reader's context.
 
 ## Models — different vendors, on purpose
 
@@ -55,6 +75,12 @@ python -m bench.longmemeval.run --variant s --limit 20 --no-answer --out bench/r
 
 # full _s, save-only row
 python -m bench.longmemeval.run --variant s --out bench/results/lme-s-save-only
+
+# row E: production write path (extraction + session-end + consolidation), 100-question subset
+export LME_EXTRACT_BASE_URL=… LME_EXTRACT_MODEL=gemini-3-flash-preview LME_EXTRACT_API_KEY=… \
+       LME_EXTRACT_EXTRA_JSON='{"reasoning_effort":"none"}' LME_EXTRACT_WORKERS=8
+export LME_CONSOLIDATE_BASE_URL=… LME_CONSOLIDATE_MODEL=gemini-3-flash-preview LME_CONSOLIDATE_API_KEY=… LME_CONSOLIDATE_TIMEOUT_S=300
+python -m bench.longmemeval.run --variant s --pipeline session-end+consolidate --ids "$(cat subset100.ids)" --out bench/results/lme-s-rowE1
 
 # hypotheses only, judge with the upstream script instead
 python -m bench.longmemeval.run --variant s --no-judge --out bench/results/lme-s
