@@ -25,6 +25,9 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- `GET /prompts` now logs a warning naming any prompt file it cannot read while
+  continuing to return healthy prompts, making partial listings diagnosable
+  ([#179](https://github.com/phasespace-labs/palinode/issues/179)).
 - The Pi/Cline shared plugin core and the OpenClaw plugin no longer present a fused rank as
   similarity: vector hits show raw cosine as a match percentage, BM25-only hits show
   `keyword match, rank N.NN`, and legacy responses without `raw_score` show `rank N.NN`
