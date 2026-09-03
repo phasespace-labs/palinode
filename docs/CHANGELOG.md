@@ -25,6 +25,13 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- `git_tools.history()` now reports diff stats and, under `detail="full"`, diffs for commits
+  older than a rename, and for the repository's root commit. Both were computed by a
+  per-commit `git diff --stat` / `git show` that passed the file's current path without
+  `--follow`, so git was asked about a path that did not exist at those commits and returned
+  a misleading figure or nothing at all. A single `git log --follow --shortstat` walk now
+  produces them, which also drops the subprocess count from one or two per commit to one per
+  call ([#158](https://github.com/phasespace-labs/palinode/issues/158)).
 - The Pi/Cline shared plugin core and the OpenClaw plugin no longer present a fused rank as
   similarity: vector hits show raw cosine as a match percentage, BM25-only hits show
   `keyword match, rank N.NN`, and legacy responses without `raw_score` show `rank N.NN`

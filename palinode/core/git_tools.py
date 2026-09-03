@@ -587,6 +587,17 @@ def blame(file_path: str, search: str | None = None) -> str:
     return header + blame_output
 
 
+# A ``git log --format=%h|%aI|%s`` header line. Anchored on the hash and the
+# ISO-8601 date so a patch line can never be mistaken for one; the message is
+# the remainder and may itself contain "|".
+_HISTORY_ENTRY_RE = re.compile(
+    r"^(?P<hash>[0-9a-f]{7,40})\|(?P<date>\d{4}-\d{2}-\d{2}T[^|]*)\|(?P<message>.*)$"
+)
+
+# A ``--shortstat`` summary line, e.g. " 1 file changed, 2 insertions(+)".
+_SHORTSTAT_RE = re.compile(r"^\s+\d+ files? changed")
+
+
 def history(
     file_path: str,
     limit: int = 20,
@@ -614,36 +625,58 @@ def history(
     if not os.path.exists(os.path.join(config.memory_dir, file_path)):
         return []
 
-    # Get commits that touched this file (--follow tracks renames)
-    result = _run_git(
-        "log", f"-{limit}", "--format=%h|%aI|%s",
-        "--follow", "--", file_path
-    )
+    # One walk, not one spawn per commit: --shortstat yields the same summary
+    # line the per-commit ``diff --stat`` tail used to, and -p yields what the
+    # per-commit ``show`` did. Both are computed by the same --follow walk, so
+    # they hold across renames -- a pathspec passed to a separate ``diff``/
+    # ``show`` names the current path, which did not exist before the rename.
+    args = ["log", f"-{limit}", "--format=%h|%aI|%s", "--shortstat"]
+    if detail == "full":
+        args += ["-p", "--unified=3"]
+    args += ["--follow", "--", file_path]
+    result = _run_git(*args)
 
     if not result.stdout.strip():
         return []
 
-    commits = []
-    for entry in result.stdout.strip().split("\n"):
-        parts = entry.split("|", 2)
-        if len(parts) == 3:
-            hash_short, date, message = parts
-            # Get the diff stat for this specific commit
-            stat = _run_git("diff", "--stat", f"{hash_short}^..{hash_short}", "--", file_path)
-            stat_line = stat.stdout.strip().split("\n")[-1] if stat.stdout.strip() else ""
-            stats = stat_line.strip() if stat_line and "changed" in stat_line else ""
-            commit: dict[str, str] = {
-                "hash": hash_short,
-                "date": date,
-                "message": message,
-                "stats": stats,
+    commits: list[dict[str, str]] = []
+    current: dict[str, str] | None = None
+    diff_lines: list[str] = []
+    in_diff = False
+
+    for line in result.stdout.split("\n"):
+        header = _HISTORY_ENTRY_RE.match(line)
+        if header:
+            if current is not None:
+                if detail == "full":
+                    current["diff"] = "\n".join(diff_lines).strip()
+                commits.append(current)
+            current = {
+                "hash": header.group("hash"),
+                "date": header.group("date"),
+                "message": header.group("message"),
+                "stats": "",
             }
-            if detail == "full":
-                diff_result = _run_git(
-                    "show", "--unified=3", f"{hash_short}", "--", file_path
-                )
-                commit["diff"] = diff_result.stdout.strip()
-            commits.append(commit)
+            diff_lines = []
+            in_diff = False
+            continue
+        if current is None:
+            continue
+        if line.startswith("diff --git "):
+            in_diff = True
+        # Only before the patch body: a file's own content can contain a line
+        # that reads like a shortstat, and under detail="full" that content is
+        # in this same stream.
+        elif not in_diff and _SHORTSTAT_RE.match(line):
+            current["stats"] = line.strip()
+            continue
+        if detail == "full":
+            diff_lines.append(line)
+
+    if current is not None:
+        if detail == "full":
+            current["diff"] = "\n".join(diff_lines).strip()
+        commits.append(current)
 
     return commits
 
