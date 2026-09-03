@@ -143,3 +143,71 @@ def test_history_does_not_read_file_content_as_a_stat_line(tmp_path, monkeypatch
     # parser exactly as a shortstat line would be.
     assert lookalike.rstrip("\n") in commits[0]["diff"]
     assert commits[0]["stats"] == "1 file changed, 1 insertion(+)"
+
+
+def test_history_survives_color_ui_always(tmp_path, monkeypatch):
+    """``color.ui=always`` paints "diff --git", which the stat guard keys on.
+
+    git honours that setting down a pipe, so without ``--no-color`` the guard
+    never latches, and the stat-lookalike context line then overwrites the real
+    summary. Both conditions are needed: the paint alone corrupts nothing.
+    """
+    repo = str(tmp_path)
+    _git(repo, "init", "-q", ".")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "test")
+    _git(repo, "config", "color.ui", "always")
+    monkeypatch.setattr(config, "memory_dir", repo)
+
+    lookalike = " 99 files changed, 99 insertions(+)\n"
+    note = os.path.join(repo, "note.md")
+    with open(note, "w", encoding="utf-8") as handle:
+        handle.write("quoting git output:\n" + lookalike)
+    _git(repo, "add", "note.md")
+    _git(repo, "commit", "-qm", "add note.md")
+
+    with open(note, "w", encoding="utf-8") as handle:
+        handle.write("quoting git output:\n" + lookalike + "and one more line\n")
+    _git(repo, "commit", "-qam", "append a line below the lookalike")
+
+    commits = git_tools.history("note.md", detail="full")
+
+    assert commits[0]["stats"] == "1 file changed, 1 insertion(+)"
+
+
+def test_history_reads_a_short_abbreviated_hash(renamed_store):
+    """``core.abbrev`` goes down to 4, and ``%h`` honours it."""
+    _git(renamed_store, "config", "core.abbrev", "4")
+
+    commits = git_tools.history("after.md")
+
+    assert len(commits) == 4
+    assert "changed" in commits[0]["stats"]
+
+
+def test_history_keeps_a_pipe_in_the_commit_message(tmp_path, monkeypatch):
+    """``%s`` is the last field, so a message may contain the delimiter."""
+    repo = str(tmp_path)
+    _git(repo, "init", "-q", ".")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "test")
+    monkeypatch.setattr(config, "memory_dir", repo)
+
+    note = os.path.join(repo, "piped.md")
+    with open(note, "w", encoding="utf-8") as handle:
+        handle.write("body\n")
+    _git(repo, "add", "piped.md")
+    _git(repo, "commit", "-qm", "save: a | b")
+
+    commits = git_tools.history("piped.md")
+
+    assert [entry["message"] for entry in commits] == ["save: a | b"]
+
+
+def test_history_honours_the_limit(renamed_store):
+    commits = git_tools.history("after.md", limit=2)
+
+    assert [entry["message"] for entry in commits] == [
+        "edit after the rename",
+        "rename to after.md",
+    ]

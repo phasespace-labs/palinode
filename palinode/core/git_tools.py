@@ -589,9 +589,12 @@ def blame(file_path: str, search: str | None = None) -> str:
 
 # A ``git log --format=%h|%aI|%s`` header line. Anchored on the hash and the
 # ISO-8601 date so a patch line can never be mistaken for one; the message is
-# the remainder and may itself contain "|".
+# the remainder and may itself contain "|". The hash width spans what %h can
+# actually produce -- core.abbrev goes down to 4, and an unabbreviated SHA-256
+# is 64 -- because the old positional split accepted any width and narrowing
+# it here would silently return no history at all.
 _HISTORY_ENTRY_RE = re.compile(
-    r"^(?P<hash>[0-9a-f]{7,40})\|(?P<date>\d{4}-\d{2}-\d{2}T[^|]*)\|(?P<message>.*)$"
+    r"^(?P<hash>[0-9a-f]{4,64})\|(?P<date>\d{4}-\d{2}-\d{2}T[^|]*)\|(?P<message>.*)$"
 )
 
 # A ``--shortstat`` summary line, e.g. " 1 file changed, 2 insertions(+)".
@@ -630,7 +633,10 @@ def history(
     # per-commit ``show`` did. Both are computed by the same --follow walk, so
     # they hold across renames -- a pathspec passed to a separate ``diff``/
     # ``show`` names the current path, which did not exist before the rename.
-    args = ["log", f"-{limit}", "--format=%h|%aI|%s", "--shortstat"]
+    # --no-color for the same reason diff() passes it: git honours
+    # color.ui=always even down a pipe, and a painted "diff --git" line no
+    # longer matches the prefix the shortstat guard keys on.
+    args = ["log", "--no-color", f"-{limit}", "--format=%h|%aI|%s", "--shortstat"]
     if detail == "full":
         args += ["-p", "--unified=3"]
     args += ["--follow", "--", file_path]
@@ -716,8 +722,7 @@ def last_commit(file_path: str) -> dict[str, str] | None:
     The newest-end counterpart to :func:`first_commit`: "when did this file last
     change on disk", as recorded by git. Same return shape (``hash``, ``date``,
     ``author``, ``message``) and the same ``None`` for an absent file or a path
-    with no git history. Single ``git log`` call — unlike :func:`history`, which
-    also shells out for a per-commit ``--stat``.
+    with no git history. Single ``git log`` call, as :func:`history` now is.
     """
     file_path = _resolve_memory_path(file_path)
     if not os.path.exists(os.path.join(config.memory_dir, file_path)):
