@@ -149,7 +149,7 @@ def search(
         except Exception:
             pass
         console.print(f"[red]Error searching memory:[/red] {detail or str(e)}")
-        click.Abort()
+        raise click.Abort()
     except Exception as e:
         console.print(f"[red]Error searching memory: {str(e)}[/red]")
-        click.Abort()
+        raise click.Abort()
