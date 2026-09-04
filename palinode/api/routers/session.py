@@ -480,8 +480,8 @@ def list_prompts_api(
             if task and info["task"] != task:
                 continue
             results.append(info)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Skipping prompt file %s: %s", filepath, e)
 
     results.sort(key=lambda x: (x["task"], x["name"]))
     return results

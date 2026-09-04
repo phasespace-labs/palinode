@@ -470,3 +470,101 @@ def test_lint_text_represents_every_lint_result_key(tmp_path, monkeypatch):
     assert set(data) == set(output_markers)
     for key, marker in output_markers.items():
         assert marker in output, f"{key} is absent from text output"
+
+
+# ---------------------------------------------------------------------------
+# Staleness date parsing
+# https://github.com/phasespace-labs/palinode/issues/180
+#
+# Both staleness blocks in run_lint_pass used to wrap the whole parse-and-check
+# in `except Exception: pass`. That skipped files with an unparseable date, as
+# intended, but it also swallowed genuine bugs in the block (an AttributeError
+# from a typo, say) and dropped the file from the report with no signal. The
+# guarded step is now only the `fromisoformat` parse: a bad date string or a
+# non-date value is skipped, anything else propagates.
+# ---------------------------------------------------------------------------
+
+_STALE_AGE_DAYS = 200
+
+
+def _write_dated(path, name, *, marker, last_updated, quote=False):
+    value = f'"{last_updated}"' if quote else last_updated
+    (path / name).write_text(
+        f"---\nid: people-{name[:-3]}\ncategory: people\ntype: Person\n"
+        f"{marker}\nlast_updated: {value}\n---\nBody",
+        encoding="utf-8",
+    )
+
+
+def _old_date():
+    return (datetime.now(timezone.utc) - timedelta(days=_STALE_AGE_DAYS)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+
+
+@pytest.mark.parametrize(
+    ("marker", "bucket"),
+    [
+        ("status: active", "stale_files"),
+        ("epistemic: open_question", "stale_open_questions"),
+    ],
+)
+def test_stale_check_reports_a_well_formed_old_date(tmp_path, monkeypatch, marker, bucket):
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    people = tmp_path / "people"
+    people.mkdir()
+    _write_dated(people, "old.md", marker=marker, last_updated=_old_date())
+
+    result = run_lint_pass()
+
+    assert any(entry["file"].endswith("old.md") for entry in result[bucket])
+
+
+@pytest.mark.parametrize(
+    ("marker", "bucket"),
+    [
+        ("status: active", "stale_files"),
+        ("epistemic: open_question", "stale_open_questions"),
+    ],
+)
+def test_stale_check_skips_unparseable_and_non_date_values(tmp_path, monkeypatch, marker, bucket):
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    people = tmp_path / "people"
+    people.mkdir()
+    _write_dated(people, "old.md", marker=marker, last_updated=_old_date())
+    _write_dated(people, "malformed.md", marker=marker, last_updated="not-a-date")
+    _write_dated(people, "numeric.md", marker=marker, last_updated="12345")
+
+    result = run_lint_pass()
+
+    flagged = [entry["file"] for entry in result[bucket]]
+    assert any(f.endswith("old.md") for f in flagged)
+    assert not any(f.endswith("malformed.md") for f in flagged)
+    assert not any(f.endswith("numeric.md") for f in flagged)
+
+
+@pytest.mark.parametrize(
+    ("marker", "bucket"),
+    [
+        ("status: active", "stale_files"),
+        ("epistemic: open_question", "stale_open_questions"),
+    ],
+)
+def test_stale_check_does_not_swallow_unexpected_errors(tmp_path, monkeypatch, marker, bucket):
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    people = tmp_path / "people"
+    people.mkdir()
+    # Quoted so the value stays a string and reaches the fromisoformat call.
+    _write_dated(people, "old.md", marker=marker, last_updated=_old_date(), quote=True)
+
+    import palinode.core.lint as lint_module
+
+    class _ExplodingDatetime(lint_module.datetime):
+        @classmethod
+        def fromisoformat(cls, value):
+            raise AttributeError("simulated bug in the staleness block")
+
+    monkeypatch.setattr(lint_module, "datetime", _ExplodingDatetime)
+
+    with pytest.raises(AttributeError):
+        run_lint_pass()

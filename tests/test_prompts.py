@@ -1,12 +1,14 @@
 """Tests for the prompt versioning system (API endpoints + consolidation exclusion)."""
 from __future__ import annotations
 
+import logging
 import os
 
 import pytest
 import yaml
 from fastapi.testclient import TestClient
 
+from palinode.api.routers import session
 from palinode.api.server import app
 from palinode.core.config import config
 
@@ -68,6 +70,32 @@ def test_list_prompts_returns_all(mock_memory_dir):
     assert len(data) == 2
     names = {p["name"] for p in data}
     assert names == {"compaction-v1", "extraction-v1"}
+
+
+def test_list_prompts_logs_unreadable_file(mock_memory_dir, monkeypatch, caplog):
+    prompts_dir = os.path.join(mock_memory_dir, "prompts")
+    broken_path = _write_prompt(prompts_dir, "broken")
+    _write_prompt(prompts_dir, "healthy")
+    read_prompt_file = session._read_prompt_file
+
+    def read_with_one_failure(filepath):
+        if filepath == broken_path:
+            raise PermissionError("permission denied")
+        return read_prompt_file(filepath)
+
+    monkeypatch.setattr(session, "_read_prompt_file", read_with_one_failure)
+    with caplog.at_level(logging.WARNING, logger="palinode.api"):
+        resp = client.get("/prompts")
+
+    assert resp.status_code == 200
+    assert [prompt["name"] for prompt in resp.json()] == ["healthy"]
+    warnings = [
+        record for record in caplog.records
+        if record.name == "palinode.api" and record.levelno == logging.WARNING
+        and broken_path in record.getMessage()
+    ]
+    assert len(warnings) == 1
+    assert "permission denied" in warnings[0].getMessage()
 
 
 def test_list_prompts_filter_by_task(mock_memory_dir):

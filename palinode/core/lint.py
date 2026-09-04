@@ -505,19 +505,22 @@ def run_lint_pass() -> dict[str, Any]:
         if meta.get("status") == "active":
             last_updated = meta.get("last_updated") or meta.get("created_at")
             if last_updated:
-                try:
-                    if isinstance(last_updated, str):
+                if isinstance(last_updated, str):
+                    try:
                         dt = datetime.fromisoformat(last_updated.replace('Z', '+00:00'))
-                    else:
-                        dt = last_updated
-                        if dt.tzinfo is None:
-                            dt = dt.replace(tzinfo=timezone.utc)
+                    except ValueError:
+                        dt = None  # malformed date string — skip this file
+                elif isinstance(last_updated, datetime):
+                    dt = last_updated
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                else:
+                    dt = None  # frontmatter held something that is not a date
 
+                if dt is not None:
                     days_old = (now - dt).days
                     if days_old > 90:
                         stale_files.append({"file": path, "days_old": days_old})
-                except Exception:
-                    pass
 
         # 6b. Stale open questions — an unresolved open_question that's
         # months old wants attention. Independent of `status` (an open question
@@ -526,18 +529,22 @@ def run_lint_pass() -> dict[str, Any]:
         if meta.get("epistemic") == "open_question":
             oq_updated = meta.get("last_updated") or meta.get("created_at")
             if oq_updated:
-                try:
-                    if isinstance(oq_updated, str):
+                if isinstance(oq_updated, str):
+                    try:
                         oq_dt = datetime.fromisoformat(oq_updated.replace('Z', '+00:00'))
-                    else:
-                        oq_dt = oq_updated
-                        if oq_dt.tzinfo is None:
-                            oq_dt = oq_dt.replace(tzinfo=timezone.utc)
+                    except ValueError:
+                        oq_dt = None  # malformed date string — skip this file
+                elif isinstance(oq_updated, datetime):
+                    oq_dt = oq_updated
+                    if oq_dt.tzinfo is None:
+                        oq_dt = oq_dt.replace(tzinfo=timezone.utc)
+                else:
+                    oq_dt = None  # frontmatter held something that is not a date
+
+                if oq_dt is not None:
                     oq_age = (now - oq_dt).days
                     if oq_age > 90:
                         stale_open_questions.append({"file": path, "days_old": oq_age})
-                except Exception:
-                    pass
 
         # 7. Wiki drift — frontmatter entities vs. body wikilinks.
         # Skipped for daily/ logs, the second outlier found in this pass: they

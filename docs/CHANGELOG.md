@@ -35,6 +35,15 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
   20-commit history from 21 (41 under `detail="full"`) to 1. The `diff` string under
   `detail="full"` now starts at `diff --git` rather than at the `git show` commit header
   ([#158](https://github.com/phasespace-labs/palinode/issues/158)).
+- `lint`'s two staleness checks no longer wrap their whole date-parse-and-compare
+  block in `except Exception: pass`. Only the `datetime.fromisoformat` call is
+  guarded now (against `ValueError`), and a non-date frontmatter value is handled
+  explicitly; any other error in the block propagates instead of silently dropping
+  the file from the staleness report
+  ([#180](https://github.com/phasespace-labs/palinode/issues/180)).
+- `GET /prompts` now logs a warning naming any prompt file it cannot read while
+  continuing to return healthy prompts, making partial listings diagnosable
+  ([#179](https://github.com/phasespace-labs/palinode/issues/179)).
 - The Pi/Cline shared plugin core and the OpenClaw plugin no longer present a fused rank as
   similarity: vector hits show raw cosine as a match percentage, BM25-only hits show
   `keyword match, rank N.NN`, and legacy responses without `raw_score` show `rank N.NN`
