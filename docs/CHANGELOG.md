@@ -25,6 +25,12 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- `lint`'s two staleness checks no longer wrap their whole date-parse-and-compare
+  block in `except Exception: pass`. Only the `datetime.fromisoformat` call is
+  guarded now (against `ValueError`), and a non-date frontmatter value is handled
+  explicitly; any other error in the block propagates instead of silently dropping
+  the file from the staleness report
+  ([#180](https://github.com/phasespace-labs/palinode/issues/180)).
 - `GET /prompts` now logs a warning naming any prompt file it cannot read while
   continuing to return healthy prompts, making partial listings diagnosable
   ([#179](https://github.com/phasespace-labs/palinode/issues/179)).
