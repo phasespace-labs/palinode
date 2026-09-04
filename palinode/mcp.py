@@ -1981,9 +1981,25 @@ async def _tool_save(arguments: dict[str, Any]) -> list[types.TextContent]:
             "git auto-commit failed (file on disk, not versioned)"
             + (f": {reason}" if reason else "")
         )
+    save_outcome = data.get("save_outcome")
+    if save_outcome == "disambiguated":
+        original_slug = data.get("disambiguated_from")
+        outcome_text = (
+            f"disambiguated from {original_slug}"
+            if original_slug
+            else "disambiguated"
+        )
+    elif save_outcome in {"created", "resaved", "replaced"}:
+        outcome_text = save_outcome
+    else:
+        # Graceful compatibility with an older API server.
+        outcome_text = None
+    confirmation = f"Saved to {rel}"
+    if outcome_text:
+        confirmation += f" ({outcome_text})"
     if warnings:
-        return _text(f"Saved to {rel} [warnings: {'; '.join(warnings)}]")
-    return _text(f"Saved to {rel}")
+        confirmation += f" [warnings: {'; '.join(warnings)}]"
+    return _text(confirmation)
 
 
 # ── ingest ────────────────────────────────────────────────────────

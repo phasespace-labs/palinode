@@ -293,12 +293,14 @@ def save_memory(
             already pushes explicitly afterward.
 
     Returns:
-        A dict carrying ``file_path``, ``rel_path``, ``id``, the index health
-        flags (``indexed``/``embedded``/``indexed_vec``/``indexed_fts``), and
+        A dict carrying ``file_path``, ``rel_path``, ``id``, ``save_outcome``
+        (one of ``created``, ``resaved``, ``disambiguated``, or ``replaced``),
+        ``disambiguated_from``, the index health flags
+        (``indexed``/``embedded``/``indexed_vec``/``indexed_fts``), and
         ``git_committed`` — plus ``git_error`` (why the auto-commit did not
         land: not a repo, missing identity, lock held), ``index_error``,
-        ``description_pending``, ``summary_pending``, ``write_time_check``
-        and ``forget`` when they apply.
+        ``description_pending``, ``summary_pending``, ``write_time_check`` and
+        ``forget`` when they apply.
 
     Raises:
         SaveValidationError: any input rejection — malformed envelope, unknown
@@ -499,11 +501,30 @@ def save_memory(
     if not is_safe:
         raise SaveValidationError(f"Security scan failed: {reason}")
 
+    original_slug = slug
     file_path = os.path.join(config.palinode_dir, category, f"{slug}.md")
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
     if slug_was_derived:
         slug, file_path = _disambiguate_derived_slug(slug, file_path, content)
+
+    # Classify the save after derived-slug resolution but before the write.
+    # Looking only at the base path would mislabel a repeat save of an existing
+    # suffixed memory as disambiguated; the selected target's prior existence
+    # is what separates a normal re-save from creation at a new suffix.
+    target_existed = os.path.exists(file_path)
+    if slug_was_derived:
+        if target_existed:
+            save_outcome = "resaved"
+        elif slug != original_slug:
+            save_outcome = "disambiguated"
+        else:
+            save_outcome = "created"
+    else:
+        save_outcome = "replaced" if target_existed else "created"
+    disambiguated_from = (
+        original_slug if save_outcome == "disambiguated" else None
+    )
 
     content_hash = hashlib.sha256(content.encode()).hexdigest()
 
@@ -799,8 +820,9 @@ def save_memory(
             logger.warning("reciprocal contradicts back-link skipped: %s", exc)
 
     logger.info(
-        "Saved memory op=save file_path=%s id=%s category=%s git_committed=%s%s",
-        file_path, frontmatter_dict["id"], category, git_committed,
+        "Saved memory op=save file_path=%s id=%s category=%s "
+        "save_outcome=%s git_committed=%s%s",
+        file_path, frontmatter_dict["id"], category, save_outcome, git_committed,
         f" git_error={git_error!r}" if git_error else "",
     )
 
@@ -845,6 +867,8 @@ def save_memory(
         "file_path": file_path,
         "rel_path": to_rel_path(file_path),
         "id": frontmatter_dict["id"],
+        "save_outcome": save_outcome,
+        "disambiguated_from": disambiguated_from,
         "indexed": indexed,
         "embedded": indexed,
         # Per-index health flags. vec/FTS failures are non-fatal

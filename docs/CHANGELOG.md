@@ -6,6 +6,11 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Added
 
+- Save receipts now report a closed `save_outcome` (`created`, `resaved`,
+  `disambiguated`, or `replaced`) plus the original slug when disambiguation
+  occurs. The raw API/JSON response, human CLI, and MCP confirmation all expose
+  the outcome so callers can distinguish new files from rewrites and explicit
+  replacements.
 - `docs/BENCHMARKS.md` row E: the production write path measured on a 100-question stratified
   subset — session-end extraction alone beats raw-transcript reading (E0 0.810 vs 0.750);
   consolidation's ARCHIVE op costs that gain back (E1 0.750) and filtering it via the
