@@ -43,6 +43,7 @@ from palinode.core.parity import (
     InventoryBacklogEntry,
     MEMORY_TYPES,
     REGISTRY,
+    TIERS,
     CanonicalParam,
     Operation,
     Surface,
@@ -423,6 +424,7 @@ def test_prompt_task_enum_matches(surface: Surface) -> None:
     [
         ("PALINODE_CATEGORIES", CATEGORIES),
         ("PALINODE_MEMORY_TYPES", MEMORY_TYPES),
+        ("PALINODE_TIERS", TIERS),
     ],
 )
 def test_plugin_enum_matches(

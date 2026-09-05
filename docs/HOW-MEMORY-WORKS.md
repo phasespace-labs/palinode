@@ -91,6 +91,16 @@ After core injection, Palinode searches for context relevant to **what you just 
 - Returns top 5 results, 700 chars each
 - **Skipped for trivial messages** (< 15 chars, or acks like "ok", "sure", "thanks")
 - Searches across all memory types: projects, decisions, insights, daily notes, research
+- **Tiered views** — `read` and `search` take a `tier` of `abstract`, `overview`, or
+  `full` on every surface (CLI `--tier`, MCP `tier`, REST `tier`). `abstract` is the
+  file's `summary:` frontmatter, falling back to `canonical_question:` and then the
+  first paragraph, capped at ~300 characters — enough to decide whether a hit is worth
+  opening. `overview` is the frontmatter block plus the head of the body, capped at
+  4,000 characters (`read.abstract_max_chars` / `read.overview_max_chars` in
+  `palinode.config.yaml`). `full` is the whole record. Tiers are computed
+  deterministically at read time from content already in hand — no LLM, and no second
+  content store: the markdown file remains the only place content lives. Omitting
+  `tier` returns exactly what the surface returned before tiers existed.
 
 ### Phase 3: Associative Context (Spreading Activation)
 

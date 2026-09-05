@@ -302,40 +302,86 @@ def apply(p: Plan, embedder: Any = _embedder) -> Diff:
             # vector is in hand (or we are deferring embeds entirely).
             embeddings: dict[str, list[float]] = {}
             if not deferred:
-                for pw in p.to_index:
+                use_scalar_fallback = True
+                embed_many = getattr(embedder, "embed_many", None)
+                if p.to_index and callable(embed_many):
                     try:
-                        emb = embedder.embed(pw.section.content)
-                    except EmbeddingInputError as e:
-                        # Per-input failure on a healthy backend (e.g. bge-m3
-                        # NaN vector for this exact string). Aborting the
-                        # whole file here made the note vanish from recall
-                        # entirely — not even FTS. Degrade just this section
-                        # to the FTS-only shape the deferred path already
-                        # writes; the rest of the file indexes normally.
-                        logger.warning(
-                            "embed rejected this input; section written "
-                            "FTS-only op=index file_path=%s section_id=%s "
-                            "text_len=%d error=%r",
-                            state.file_path, pw.section.section_id,
-                            len(pw.section.content), e.ollama_message,
+                        batch = embed_many([
+                            pw.section.content for pw in p.to_index
+                        ])
+                    except EmbeddingInputError:
+                        # A batch rejection proves at least one deterministic
+                        # per-input failure but cannot identify which section.
+                        # Retry individually so only the poisoned section loses
+                        # its vector and healthy sections still index normally.
+                        logger.info(
+                            "batch embed rejected an input; retrying sections "
+                            "individually op=index file_path=%s sections=%d",
+                            state.file_path, len(p.to_index),
                         )
-                        diff.embed_failures += 1
-                        diff.vec_ok = False
-                        continue
                     except EmbeddingUnavailable as e:
-                        # Backend failure, typed at the embedder boundary. The
-                        # watcher/indexer path wants retry-and-continue, not a
-                        # crash: fold it into the same fail-closed abort a
-                        # falsy `[]` used to trigger, so the file is retried
-                        # intact on the next pass.
                         raise _EmbedOutage(
-                            diff.embed_failures + 1, pw.section.section_id
+                            diff.embed_failures + 1,
+                            p.to_index[0].section.section_id,
                         ) from e
-                    if not emb:
-                        raise _EmbedOutage(
-                            diff.embed_failures + 1, pw.section.section_id
+                    else:
+                        valid_batch = (
+                            isinstance(batch, list)
+                            and len(batch) == len(p.to_index)
+                            and all(isinstance(vector, list) and vector for vector in batch)
                         )
-                    embeddings[pw.section.chunk_id] = emb
+                        if not valid_batch:
+                            actual = len(batch) if isinstance(batch, list) else None
+                            logger.warning(
+                                "batch embed returned an invalid response "
+                                "op=index file_path=%s expected=%d actual=%s",
+                                state.file_path, len(p.to_index), actual,
+                            )
+                            raise _EmbedOutage(
+                                diff.embed_failures + 1,
+                                p.to_index[0].section.section_id,
+                            )
+                        embeddings.update({
+                            pw.section.chunk_id: vector
+                            for pw, vector in zip(p.to_index, batch, strict=True)
+                        })
+                        use_scalar_fallback = False
+
+                if use_scalar_fallback:
+                    for pw in p.to_index:
+                        try:
+                            emb = embedder.embed(pw.section.content)
+                        except EmbeddingInputError as e:
+                            # Per-input failure on a healthy backend (e.g. bge-m3
+                            # NaN vector for this exact string). Aborting the
+                            # whole file here made the note vanish from recall
+                            # entirely — not even FTS. Degrade just this section
+                            # to the FTS-only shape the deferred path already
+                            # writes; the rest of the file indexes normally.
+                            logger.warning(
+                                "embed rejected this input; section written "
+                                "FTS-only op=index file_path=%s section_id=%s "
+                                "text_len=%d error=%r",
+                                state.file_path, pw.section.section_id,
+                                len(pw.section.content), e.ollama_message,
+                            )
+                            diff.embed_failures += 1
+                            diff.vec_ok = False
+                            continue
+                        except EmbeddingUnavailable as e:
+                            # Backend failure, typed at the embedder boundary. The
+                            # watcher/indexer path wants retry-and-continue, not a
+                            # crash: fold it into the same fail-closed abort a
+                            # falsy `[]` used to trigger, so the file is retried
+                            # intact on the next pass.
+                            raise _EmbedOutage(
+                                diff.embed_failures + 1, pw.section.section_id
+                            ) from e
+                        if not emb:
+                            raise _EmbedOutage(
+                                diff.embed_failures + 1, pw.section.section_id
+                            )
+                        embeddings[pw.section.chunk_id] = emb
 
             for pw in p.to_index:
                 vec_ok, fts_ok = store.write_chunk_row(

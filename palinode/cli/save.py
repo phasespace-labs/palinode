@@ -308,7 +308,21 @@ def save(
             # filesystem path.
             filename = result.get("rel_path") or result.get("file_path", result.get("file", "unknown"))
             id_str = result.get("id", "unknown")
-            console.print(f"[green]Saved:[/green] {filename} (id: {id_str})")
+            save_outcome = result.get("save_outcome")
+            if save_outcome == "disambiguated":
+                original_slug = result.get("disambiguated_from")
+                outcome_text = (
+                    f"disambiguated from {original_slug}"
+                    if original_slug
+                    else "disambiguated"
+                )
+            elif save_outcome in {"created", "resaved", "replaced"}:
+                outcome_text = save_outcome
+            else:
+                # Graceful compatibility with an older API server.
+                outcome_text = None
+            label = f"Saved ({outcome_text})" if outcome_text else "Saved"
+            console.print(f"[green]{label}:[/green] {filename} (id: {id_str})")
             # The file is persisted (and git-committed) regardless of embedding.
             # If the inline embed didn't complete — cold/absent Ollama — say so
             # plainly instead of leaving the user thinking the save half-failed:

@@ -198,6 +198,16 @@ AMR_SPEC_VERSION: str = "0.1"
 #: ``auditable_memory`` outside this set is rejected, never guessed at (§4.1).
 VALID_AMR_VERSIONS: tuple[str, ...] = (AMR_SPEC_VERSION,)
 
+#: The canonical read-tier enum — how much of a memory a caller wants
+#: back. Tiers are deterministic views computed at read time, never a second
+#: content store; ``full`` is the content unchanged and is what every surface
+#: returns when the caller says nothing.
+TIERS: tuple[str, ...] = (
+    "abstract",
+    "overview",
+    "full",
+)
+
 #: The canonical prompt-task enum.  Single source replacing the duplicate
 #: ``"enum"`` keys at ``palinode/mcp.py:624-625``. ADR-010, finding.
 PROMPT_TASKS: tuple[str, ...] = (
@@ -240,6 +250,7 @@ REGISTRY: tuple[Operation, ...] = (
         canonical_params=(
             CanonicalParam(name="file_path", type="string", required=True),
             CanonicalParam(name="meta", type="boolean"),
+            CanonicalParam(name="tier", type="string", enum=TIERS),
         ),
         cli_command="read",
         mcp_tool="palinode_read",
@@ -269,6 +280,9 @@ REGISTRY: tuple[Operation, ...] = (
             # ADR-015 §5: telemetry-exclusion override; default false so
             # monitoring writes don't pollute recall. First-class on all surfaces.
             CanonicalParam(name="include_telemetry", type="boolean"),
+            # How much of each hit to render. Omitted → unchanged
+            # behaviour (snippet + content), so tiering is opt-in.
+            CanonicalParam(name="tier", type="string", enum=TIERS),
         ),
         cli_command="search",
         mcp_tool="palinode_search",

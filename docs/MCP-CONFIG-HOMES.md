@@ -67,7 +67,7 @@ to take effect.
 >
 > One-line repro: add a `"url"` key to a server entry, keep Claude Desktop open,
 > edit the file to fix it, then quit — the fixed entry is gone on next open.
-> (#373)
+
 
 ### Claude Desktop 3p variant (macOS only)
 
@@ -176,7 +176,7 @@ Servers > View raw config.
 > **Note:** Antigravity is new (2026) and the config path structure may
 > evolve. If `~/.gemini/antigravity/mcp_config.json` does not exist,
 > check `~/.gemini/settings/mcp_config.json` as a fallback. See
-> issue #345 for updates.
+> the internal tracker for updates.
 
 ### Other clients
 
@@ -242,7 +242,7 @@ MCP HTTP port). The trailing slash on `/mcp/` is required.
 
 > **Auth (forward-compat):** the HTTP endpoint is currently token-less and is
 > protected by network isolation (e.g. a private/Tailscale network). When bearer
-> auth lands (#289), add it as an `Authorization` header:
+> auth lands, add it as an `Authorization` header:
 >
 > ```json
 > { "type": "http", "url": "http://<palinode-host>:6341/mcp/",

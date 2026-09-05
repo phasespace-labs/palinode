@@ -8,7 +8,7 @@ the team has weighed the tradeoffs below.
 The fourth layer of the four-layer validation model in
 [`docs/VALIDATION-STRATEGY.md`](./VALIDATION-STRATEGY.md). L1-L3 are
 scriptable and ship in `tests/integration/test_session_end_e2e_l1_l3.py`
-(issue #139). L4 is the layer that asserts a *real LLM session*, given a
+(the behavioural-testing work). L4 is the layer that asserts a *real LLM session*, given a
 fresh context, calls `palinode_search` on its own and surfaces the prior
 record in its response.
 
@@ -18,7 +18,7 @@ L4 is the only layer that catches:
   surfaces because the CLAUDE.md session-start instructions are too vague.
 - A model that calls the wrong tool despite a deterministic prompt
   (the `/wrap` and `/ps` slash commands rely on the model honouring
-  "always call X, never Y" — see ADR-010 and issue #140).
+  "always call X, never Y" — see ADR-010 and the planned LLM-in-the-loop prompt tests).
 - Search-query phrasing mismatches between what the agent forms and what
   the indexer stored.
 
@@ -105,14 +105,14 @@ Concrete data points the team should sanity-check before picking option A:
 
 ## Relationship to other work
 
-- **Issue #139** (this work) — covers L1-L3. L4 is the deferred remainder.
-- **Issue #140** — LLM-in-the-loop tests for the slash command prompts
+- **This work** — covers L1-L3. L4 is the deferred remainder.
+- **Planned follow-up** — LLM-in-the-loop tests for the slash command prompts
   themselves (assert that `/wrap` fires `palinode_session_end` and
   `/ps` fires `palinode_save`, against a real model). Heavy overlap with
-  L4 of #139: a shared LLM-test harness would serve both. Probably the
+  L4 here: a shared LLM-test harness would serve both. Probably the
   right thing to design once and apply twice.
 - **`docs/VALIDATION-STRATEGY.md`** — the four-layer model. L4's
-  current status there is "Gap — see #42" (the now-renumbered #140).
+  current status there is "Gap" (the planned follow-up above).
 - **ADR-010** — the principle that `/wrap` and `/ps` are deterministic.
   L4 is the test that validates the principle holds end-to-end against
   a real model, not just at the prompt-text level.
@@ -120,7 +120,7 @@ Concrete data points the team should sanity-check before picking option A:
 ## Recommendation (not a decision)
 
 Lean toward **option B** (snapshots + cron) once the L4 harness is
-designed alongside #140. Per-PR live-LLM costs and flakiness compound
+designed alongside that follow-up. Per-PR live-LLM costs and flakiness compound
 faster than they look on a single feature; pinning a snapshot makes the
 expected behaviour explicit and reviewable, while cron catches model
 drift before it lands in user hands. But this is a recommendation, not

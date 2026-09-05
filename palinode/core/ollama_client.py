@@ -220,6 +220,45 @@ def _extract_embedding_vector(data: Any) -> list[float] | None:
     return None
 
 
+def _extract_embedding_batch(
+    data: Any,
+    *,
+    expected_count: int,
+) -> list[list[float]] | None:
+    """Return a complete, ordered ``/api/embed`` batch or ``None``.
+
+    Ollama promises one non-empty numeric vector per input, in input order.
+    Validate that contract for the *whole* response before exposing any vector
+    to callers: a partial response, an empty/malformed vector, or inconsistent
+    dimensions must fail closed rather than letting reconciliation write only
+    part of a file.
+    """
+    if not isinstance(data, dict):
+        return None
+    embeddings = data.get("embeddings")
+    if not isinstance(embeddings, list) or len(embeddings) != expected_count:
+        return None
+
+    normalized: list[list[float]] = []
+    dimensions: int | None = None
+    for vector in embeddings:
+        if (
+            not isinstance(vector, list)
+            or not vector
+            or any(
+                isinstance(value, bool) or not isinstance(value, (int, float))
+                for value in vector
+            )
+        ):
+            return None
+        if dimensions is None:
+            dimensions = len(vector)
+        elif len(vector) != dimensions:
+            return None
+        normalized.append([float(value) for value in vector])
+    return normalized
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Roles — the per-endpoint routing that makes misroutes impossible
 # ──────────────────────────────────────────────────────────────────────────
@@ -768,6 +807,85 @@ class OllamaClient:
         # Both endpoints exhausted without a vector.
         raise last_exc or OllamaUnreachable(
             "embed: all endpoints exhausted", role="embed", model=mdl
+        )
+
+    def embed_many(
+        self, texts: list[str], *, model: str | None = None,
+        timeout: float | httpx.Timeout | None = None, retries: int | None = None,
+    ) -> list[list[float]]:
+        """Return one ordered embedding per input using one ``/api/embed`` call.
+
+        The modern Ollama endpoint accepts a list in ``input``. The response is
+        accepted only when its cardinality, vector shapes, and dimensions are
+        valid for the entire batch. Older Ollama versions that return 404 for
+        ``/api/embed`` retain compatibility through the scalar legacy fallback.
+
+        An empty input is a no-op and performs no network request.
+        """
+        if not texts:
+            return []
+
+        mdl = model or config.embeddings.primary.model
+        tmo = timeout if timeout is not None else httpx.Timeout(
+            config.embeddings.primary.timeout_seconds,
+            connect=config.embeddings.primary.connect_timeout_seconds,
+        )
+        try:
+            data = self._request_json(
+                OllamaRole.EMBED,
+                "/api/embed",
+                {"model": mdl, "input": texts},
+                timeout=tmo,
+                retries=retries,
+                model=mdl,
+                op="embed_many",
+            )
+        except OllamaInputError as e:
+            raise EmbeddingInputError(
+                model=mdl,
+                text_len=sum(len(text) for text in texts),
+                ollama_message=str(e),
+            ) from e
+        except OllamaError as e:
+            if e.status_code == 404:
+                return [
+                    self.embed(text, model=mdl, timeout=tmo, retries=retries)
+                    for text in texts
+                ]
+            raise
+
+        embeddings = _extract_embedding_batch(data, expected_count=len(texts))
+        if embeddings is not None:
+            self._embed_ok_once = True
+            return embeddings
+
+        err_msg = data.get("error", "") if isinstance(data, dict) else ""
+        if err_msg and _is_ctx_overflow_message(err_msg):
+            raise EmbeddingContextError(
+                model=mdl,
+                text_len=sum(len(text) for text in texts),
+                ollama_message=err_msg,
+            )
+
+        keys = sorted(data.keys()) if isinstance(data, dict) else []
+        raw_embeddings = data.get("embeddings") if isinstance(data, dict) else None
+        returned_count = len(raw_embeddings) if isinstance(raw_embeddings, list) else None
+        event_logger.warning(json.dumps({
+            "event": "embed_unexpected_shape",
+            "op": "embed_many",
+            "role": "embed",
+            "endpoint": "/api/embed",
+            "model": mdl,
+            "response_keys": keys,
+            "expected_count": len(texts),
+            "returned_count": returned_count,
+        }, sort_keys=True))
+        raise OllamaError(
+            "unexpected embed batch response shape from /api/embed "
+            f"(response_keys={keys}, expected_count={len(texts)}, "
+            f"returned_count={returned_count})",
+            role="embed",
+            model=mdl,
         )
 
     def generate(

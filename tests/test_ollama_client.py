@@ -26,6 +26,7 @@ from palinode.core.ollama_client import (
     CircuitBreaker,
     CircuitState,
     EmbeddingContextError,
+    EmbeddingInputError,
     OllamaCircuitOpen,
     OllamaClient,
     OllamaError,
@@ -503,6 +504,77 @@ def test_embed_unexpected_shape_exhausts_both_then_raises():
     with pytest.raises(OllamaError):
         client.embed("hi")
     assert paths == ["/api/embed", "/api/embeddings"]  # tried both on unexpected shape
+
+
+def test_embed_many_uses_one_ordered_batch_request(monkeypatch):
+    monkeypatch.setattr(config.embeddings.primary, "url", "http://embed-host:11434")
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json={"embeddings": [[1, 2], [3, 4]]})
+
+    client, _, _ = make_client(handler, retries=0)
+    assert client.embed_many(["alpha", "beta"]) == [[1.0, 2.0], [3.0, 4.0]]
+    assert requests == [{"model": config.embeddings.primary.model,
+                         "input": ["alpha", "beta"]}]
+
+
+def test_embed_many_empty_input_performs_no_request():
+    def handler(request):  # pragma: no cover - a request is the failure
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    client, _, _ = make_client(handler, retries=0)
+    assert client.embed_many([]) == []
+
+
+@pytest.mark.parametrize("body", [
+    {"embeddings": [[0.1, 0.2]]},  # partial response
+    {"embeddings": [[0.1, 0.2], []]},
+    {"embeddings": [[0.1, 0.2], ["not-a-number", 0.3]]},
+    {"embeddings": [[0.1, 0.2], [0.3]]},  # inconsistent dimensions
+    {"embedding": [0.1, 0.2]},  # scalar legacy shape is invalid for a batch
+])
+def test_embed_many_rejects_incomplete_or_malformed_whole_response(body):
+    calls = 0
+
+    def handler(request):
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json=body)
+
+    client, _, _ = make_client(handler, retries=0)
+    with pytest.raises(OllamaError, match="unexpected embed batch response shape"):
+        client.embed_many(["alpha", "beta"])
+    assert calls == 1
+
+
+def test_embed_many_context_overflow_reports_aggregate_input_length():
+    def handler(request):
+        return httpx.Response(200, json={"error": "prompt is too long for max context"})
+
+    client, _, _ = make_client(handler, retries=0)
+    with pytest.raises(EmbeddingContextError) as exc_info:
+        client.embed_many(["alpha", "beta"])
+    assert exc_info.value.text_len == len("alpha") + len("beta")
+
+
+def test_embed_many_input_error_is_typed_and_not_retried():
+    calls = 0
+
+    def handler(request):
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            500,
+            text="failed to encode response: json: unsupported value: NaN",
+        )
+
+    client, _, _ = make_client(handler, retries=3)
+    with pytest.raises(EmbeddingInputError) as exc_info:
+        client.embed_many(["alpha", "beta"])
+    assert exc_info.value.text_len == len("alpha") + len("beta")
+    assert calls == 1
 
 
 # ──────────────────────────────────────────────────────────────────────────

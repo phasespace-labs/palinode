@@ -29,6 +29,7 @@ __all__ = [
     "EmbeddingInputError",
     "EmbeddingUnavailable",
     "embed",
+    "embed_many",
     "check_model_context",
 ]
 
@@ -216,6 +217,17 @@ def embed(text: str) -> list[float]:
     return _embed_local(text)
 
 
+def embed_many(texts: list[str]) -> list[list[float]]:
+    """Generate one ordered embedding per input in a single backend call.
+
+    The whole result is validated by :class:`OllamaClient` before it is
+    returned. Typed context and per-input failures propagate unchanged;
+    backend failures become :class:`EmbeddingUnavailable`, matching
+    :func:`embed`.
+    """
+    return _embed_many_local(texts)
+
+
 def _run_preflight_once() -> None:
     """Run the context preflight check exactly once per process."""
     global _preflight_done
@@ -284,4 +296,30 @@ def _embed_local(text: str) -> list[float]:
         _notice_keyword_only_once()
         raise EmbeddingUnavailable(
             backend="local", model=model, text_len=len(text), cause=str(e)
+        ) from e
+
+
+def _embed_many_local(texts: list[str]) -> list[list[float]]:
+    """Embed ``texts`` through the local provider's ordered batch boundary."""
+    if not texts:
+        return []
+
+    _run_preflight_once()
+    model = config.embeddings.primary.model
+    text_len = sum(len(text) for text in texts)
+    try:
+        return get_ollama_client().embed_many(texts)
+    except EmbeddingContextError:
+        raise
+    except EmbeddingInputError:
+        raise
+    except OllamaError as e:
+        logger.warning(
+            "batch embed failed; raising EmbeddingUnavailable "
+            "op=embed_many model=%s inputs=%d text_len=%d outcome=error error=%r",
+            model, len(texts), text_len, str(e),
+        )
+        _notice_keyword_only_once()
+        raise EmbeddingUnavailable(
+            backend="local", model=model, text_len=text_len, cause=str(e)
         ) from e

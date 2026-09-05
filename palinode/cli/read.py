@@ -16,6 +16,7 @@ import click
 
 from palinode.cli._api import HTTPStatusError, api_client
 from palinode.cli._format import OutputFormat, get_default_format
+from palinode.core.parity import TIERS
 from palinode.core.parser import split_frontmatter
 
 
@@ -33,7 +34,16 @@ from palinode.core.parser import split_frontmatter
     default=False,
     help="Include YAML frontmatter as structured data",
 )
-def read(file_path, fmt, meta):
+@click.option(
+    "--tier",
+    type=click.Choice(list(TIERS)),
+    default=None,
+    help=(
+        "How much to return: abstract (summary, ~300 chars), overview "
+        "(frontmatter + head of body), or full. Default full."
+    ),
+)
+def read(file_path, fmt, meta, tier):
     """Read a specific memory file.
 
     FILE_PATH is relative to the memory directory (e.g., "people/peter.md",
@@ -46,7 +56,7 @@ def read(file_path, fmt, meta):
         palinode read projects/palinode-status.md --meta --format json
     """
     try:
-        result = api_client.read(file_path, meta=meta)
+        result = api_client.read(file_path, meta=meta, tier=tier)
     except HTTPStatusError as e:
         if e.response.status_code == 404:
             raise click.ClickException(f"File not found: {file_path}") from e

@@ -93,9 +93,8 @@ Row E below puts Palinode's own extraction + consolidation into the comparison.
 
 Rows A–D measure the memory layer *before* any write-time intelligence. Zep and Supermemory
 report *after* an extraction + consolidation step. Row E is the apples-to-apples row: it replays
-what an agent does in production at the end of every session, and it is the only row that
-exercises the thing Palinode claims to be different at — LLM-*proposed* operations applied by a
-deterministic executor.
+what an agent does in production at the end of every session, including Palinode's real
+session-end and consolidation paths.
 
 **Write path, per question, sessions in chronological order.** (1) An extraction model
 (`gemini-3-flash-preview`, thinking off) plays the agent at session end and produces the
@@ -301,3 +300,145 @@ python -m bench.longmemeval.rejudge bench/results/<name> --out bench/results/<na
 
 See `bench/longmemeval/README.md` for endpoints, the supervisor for multi-hour runs, and the
 fallbacks the harness applies when the embedder misbehaves.
+
+## LongMemEval-V2 (small tier)
+
+[LongMemEval-V2](https://github.com/xiaowu0162/LongMemEval-V2) (Wu et al., 2026) is not V1 with
+more questions. The haystack is **web-agent trajectories** — accessibility trees, actions and agent
+thoughts from customized shopping / forum sites (`web`, 240 questions) and a ServiceNow-style
+portal (`enterprise`, 211) — and the questions test static state recall, dynamic state tracking,
+workflow knowledge, environment gotchas and premise awareness (`-abs` abstention traps). The small
+tier gives every question in a domain the same 100-trajectory haystack (~18M tokens per domain).
+
+### What was measured
+
+- **Harness, reader, judge: upstream's.** The evaluation harness, the pinned reader
+  (`Qwen3.5-9B`, thinking on, 20k completion budget) and the judge (`gpt-5.2`, medium
+  reasoning) are LongMemEval-V2's own. Palinode is a `memory_modules` backend
+  (`bench/longmemeval_v2/`); nothing upstream is modified.
+- **Same conditions for every row, including the baseline.** Every row below ran on the same
+  reader, the same judge and the same **40k-token memory-context budget**. Upstream's
+  `rag_query_to_slice` baseline was rerun by us under exactly those conditions rather than
+  copied from the paper (whose reader setup and 200k budget we could not reproduce on one 32 GB
+  GPU — see *Caveats*).
+- **Palinode rows.** *Raw slices*: every trajectory saved as one markdown file, one chunk per
+  state (the accessibility tree, fenced), indexed by Palinode's normal indexer with no LLM
+  call, recalled by hybrid search (BM25 + `bge-m3`, RRF). *Notes*: an extraction LLM
+  (`Qwen3.8-27B`, local, thinking off) proposes fact / transition / procedure / gotcha notes per
+  trajectory at insert time (`specs/prompts/trajectory-extraction.md`); the adapter validates
+  them and writes each through `save_memory` as an `Insight`. Notes are recalled from their own
+  pool and placed ahead of the slices. *+r1*: each retrieved state is returned with its
+  neighbouring states (upstream's slice radius). Everything at query time is LLM-free.
+- **Query latency** is what the leaderboard's LAFS metric scores. Ours is one embed call plus
+  two SQLite queries.
+
+### Results
+
+Small tier, all 451 questions, `overall_full_set` (abstention questions included).
+
+| | both (451) | web (240) | enterprise (211) | query s | ctx tokens |
+|---|---|---|---|---|---|
+| upstream `rag_query_to_slice` — 6 hits ±1, with screenshots | 38.4 | 36.2 | 40.8 | 0.98 | 29k |
+| Palinode raw slices, top-10 (LLM-free save) | 36.1 | 37.1 | 35.1 | 0.35 | 25k |
+| Palinode raw slices, top-6 ±1 | — | 38.8 | 31.3 | 0.18 | 35k |
+| Palinode notes 6 + slices 6 | 40.6 | 44.2 | 36.5 | 0.21 | 15k |
+| Palinode notes 10 + slices 4 | 42.6 | 44.6 | 40.3 | 0.22 | 11k |
+| **Palinode notes 6 + slices 6 ±1** | **44.8** | **48.3** | **40.8** | 0.25 | 34k |
+
+Per type, web, the four rows that matter:
+
+| web | static | dynamic | procedure | gotchas | abstention (72) |
+|---|---|---|---|---|---|
+| upstream slice baseline | 38.5 | 38.9 | 32.3 | 26.7 | 15.3 |
+| raw slices top-10 | 41.8 | 31.9 | 40.3 | 20.0 | 19.4 |
+| notes 6 + slices 6 | 46.2 | 37.5 | 51.6 | 33.3 | 27.8 |
+| notes 6 + slices 6 ±1 | 49.5 | 45.8 | 54.8 | 26.7 | 34.7 |
+
+Per type, enterprise:
+
+| enterprise | static | dynamic | procedure | gotchas | abstention (56) |
+|---|---|---|---|---|---|
+| upstream slice baseline | 43.9 | 38.2 | 40.9 | 28.6 | 17.9 |
+| raw slices top-10 | 33.7 | 29.1 | 47.7 | 28.6 | 5.4 |
+| notes 6 + slices 6 | 38.8 | 25.5 | 45.5 | 35.7 | 3.6 |
+| notes 10 + slices 4 | 41.8 | 27.3 | 54.5 | 35.7 | 10.7 |
+| notes 6 + slices 6 ±1 | 42.9 | 34.5 | 45.5 | 35.7 | 8.9 |
+
+### Reading the table
+
+- **The raw store is at parity with a purpose-built slice RAG.** Palinode's LLM-free store,
+  text only, scores 36.1 against the baseline's 38.4 with screenshots, at a third of the query
+  latency. Slightly ahead on web, behind on enterprise.
+- **Notes are worth +12 on web and +1 on enterprise.** At an identical 32k budget, identical
+  slices and identical reader, putting six extracted notes ahead of the slices moves web from
+  38.8 to 48.3. Procedure questions are where it shows most (32 → 55): with the evidence in
+  context the reader answers a written procedure 89 % of the time and never says UNKNOWN,
+  where it hedged on raw trees. Abstention doubles (15 → 35): a note that says what a page
+  contains lets the reader say what it doesn't.
+- **Neighbouring states are the dynamic-tracking lever — once the budget allows them.** "What
+  happens after X" is answered by the state *after* the retrieved action: ±1 takes web dynamic
+  from 31.9 to 44.4–45.8. On raw enterprise slices the same expansion *hurts* (35.1 → 31.3):
+  ServiceNow trees run ~8k tokens a state and at 40k the expansion crowds out distinct hits.
+  With notes carrying the static facts, the neighbours fit and enterprise recovers to 40.8 —
+  level with the baseline. Ten notes and four slices reach 40.3 at a third of the tokens: on
+  enterprise, more notes are the cheaper route to the same place.
+- **Enterprise is a compression problem the notes don't solve yet.** On enterprise static
+  questions the gold string is in the retrieved context 91 % of the time, yet the reader
+  answers only 48 % and returns UNKNOWN 37 %. Seven notes per trajectory cannot enumerate a
+  ServiceNow page's hundreds of labels, and the slices are too large for a 9B reader to search.
+  Finer-grained facts (per field, per option list) are the next write-time row, not more
+  retrieval.
+- **What the reader does with what it's given dominates.** Raw-slice rows differing only in
+  context cap (60k vs 40k) moved 43.3 → 38.8 on web. The 9B reader with a 20k thinking budget
+  is the constant every system in the table shares, and it is the largest source of variance.
+
+### Against the leaderboard
+
+LME-V2's leaderboard scores LAFS gain over a fixed reference frontier — accuracy integrated
+over log-scaled *query* latency (1–200 s), insert cost unmeasured. The frontier's fast point is
+upstream's slice + notes RAG at 51.0 % / 0.2 s; everything above it pays 27–177 s of LLM per
+query. Palinode's best both-domain point is 44.8 % at 0.25 s: on the frontier's latency, below
+its accuracy, so ΔLAFS = 0 and **no leaderboard submission** — the gate this program set for
+itself (≥55 % on the small tier). The per-type table is the deliverable: against the same baseline
+under the same conditions the write path is worth **+6.4 overall** (+12 on web, level on
+enterprise), and the per-type rows say where the next points are.
+
+### Cost
+
+Per domain: slice indexing ~30–40 min (`bge-m3` on a 5060 Ti); extraction 3.5 h (web) /
+12.8 h (enterprise, 100-state trajectories) on an M-series box, 743 / 666 notes; reader
+~30–60 min per 240-question row; judge ≈ $2 per row (156 of 451 questions are LLM-judged,
+the rest deterministic).
+
+### Caveats
+
+- Single run per row, no confidence intervals. Two raw-slice rows differing only in context
+  cap swung gotchas (15 questions) by 7 points — treat per-type deltas under ±5 as noise and
+  overall under ±2–3 as noise.
+- Reader window. Our reader served 262k context at the end but 131k for most rows; the Palinode
+  rows are capped at 40k and unaffected. The baseline's first run at its 200k default overflowed
+  on 63/240 questions and was discarded; the 40k rerun is the number reported. The paper's own
+  slice baseline (42.8 % both domains, 200k budget) is the reference for what that method does
+  with more room.
+- Baseline embedder: `Qwen3-Embedding-8B` served as Ollama's 4-bit `qwen3-embedding:8b`; its
+  0.98 s query latency is that endpoint, not the method.
+- Extraction quality was not tuned: one prompt, one pass, one model. 1 of 100 web and 2 of 100
+  enterprise trajectories have no notes (the extractor never answered; bounded drain).
+- Palinode's stock BM25 arm returns nothing for question-shaped queries (FTS5 implicit AND;
+  a known, documented limitation). The adapter runs an OR-joined BM25 arm through the store's own ranker; `fts_mode:
+  "and"` is retained for measuring the difference, which was not run in this round.
+
+### Reproduce
+
+```bash
+# upstream checkout + venv, data, reader/judge endpoints: bench/longmemeval_v2/README.md
+python -m bench.longmemeval_v2.run --domain web --tier small --method palinode \
+    --output-dir runs/web --save-memory --skip-evaluation --palinode-extract      # build + notes
+python -m bench.longmemeval_v2.run --domain web --tier small --method palinode \
+    --output-dir runs/web-eval --load-memory-dir runs/web/memory_state \
+    --palinode-extract --palinode-notes-top-k 6 --palinode-top-k 6 --palinode-neighbor-radius 1 \
+    --memory-context-max-tokens 40000
+python -m bench.longmemeval_v2.report runs/web-eval …                              # the tables above
+```
+
+Run artifacts: `bench/results/longmemeval-v2-*-2026-09-04/`.

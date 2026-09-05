@@ -212,7 +212,7 @@ This check is also load-bearing as context for `chunks_match_md_count`: a low ch
 Read-only probe of the auto-commit precondition: `git -C ${memory_dir} rev-parse --is-inside-work-tree` plus `git var GIT_COMMITTER_IDENT` (the same identity predicate `git commit` applies, so it honours `user.useConfigOnly` and the hostname-derived fallback). Tagged `fast`.
 
 - Pass: `memory_dir` is a git repository and a committer identity resolves.
-- Warn: `git.auto_commit` is enabled but `memory_dir` was never `git init`-ed, or no identity resolves (git would fail with `Author identity unknown`). In both cases the file lands on disk but the git-persistence guarantee is silently not in force — the save response carries `git_committed: false` with the reason in `git_error` (#1025).
+- Warn: `git.auto_commit` is enabled but `memory_dir` was never `git init`-ed, or no identity resolves (git would fail with `Author identity unknown`). In both cases the file lands on disk but the git-persistence guarantee is silently not in force — the save response carries `git_committed: false` with the reason in `git_error`.
 - Info: `git.auto_commit` is disabled — nothing to check.
 
 #### `git_remote_health`

@@ -60,6 +60,14 @@ source venv/bin/activate
 python3 -m palinode.indexer.watcher
 ```
 
+### Open the local inspector
+
+Once the API is running, open <http://127.0.0.1:6340/ui/> to browse memory
+health, files, search results, Git changes, compaction history, quality queues,
+and per-memory provenance. The inspector is read-only and loopback-only; see
+the [Local provenance UI guide](UI.md) for its views, access boundary, and
+troubleshooting.
+
 ## Usage
 
 ### Create a memory file

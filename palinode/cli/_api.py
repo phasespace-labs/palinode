@@ -84,10 +84,13 @@ class PalinodeAPI:
         date_before: str | None = None,
         include_daily: bool | None = None,
         include_telemetry: bool | None = None,
+        tier: str | None = None,
     ):
         # ADR-010: forward the full canonical search surface.
         # Non-None params land in the body verbatim; None means "API default".
         payload: dict = {"query": query, "limit": limit}
+        if tier:
+            payload["tier"] = tier
         if category:
             payload["category"] = category
         if context:
@@ -180,7 +183,7 @@ class PalinodeAPI:
         response.raise_for_status()
         return response.json()
 
-    def read(self, file_path: str, meta: bool = False):
+    def read(self, file_path: str, meta: bool = False, tier: str | None = None):
         """Read a memory file via the API.
 
         Returns ``{file, content, size_bytes, [frontmatter]}``.  When
@@ -189,6 +192,8 @@ class PalinodeAPI:
         params: dict = {"file_path": file_path}
         if meta:
             params["meta"] = "true"
+        if tier:
+            params["tier"] = tier
         response = self.client.get("/read", params=params)
         response.raise_for_status()
         return response.json()

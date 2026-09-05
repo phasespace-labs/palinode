@@ -26,6 +26,7 @@ import pytest
 from palinode.core import embedder
 from palinode.core.embedder import (
     EmbeddingContextError,
+    EmbeddingInputError,
     EmbeddingUnavailable,
     _is_ctx_overflow_message,
     check_model_context,
@@ -39,6 +40,15 @@ def _client_with_embed(*, embed_return=None, embed_side_effect=None):
         fake.embed.side_effect = embed_side_effect
     else:
         fake.embed.return_value = embed_return
+    return patch("palinode.core.embedder.get_ollama_client", return_value=fake)
+
+
+def _client_with_embed_many(*, embed_return=None, embed_side_effect=None):
+    fake = MagicMock(name="OllamaClient")
+    if embed_side_effect is not None:
+        fake.embed_many.side_effect = embed_side_effect
+    else:
+        fake.embed_many.return_value = embed_return
     return patch("palinode.core.embedder.get_ollama_client", return_value=fake)
 
 
@@ -120,6 +130,33 @@ def test_embed_public_propagates_embedding_unavailable():
             _client_with_embed(embed_side_effect=OllamaUnreachable("offline", role="embed")):
         with pytest.raises(EmbeddingUnavailable):
             embedder.embed("test text")
+
+
+def test_embed_many_public_returns_ordered_batch():
+    expected = [[0.1, 0.2], [0.3, 0.4]]
+    with patch("palinode.core.embedder._run_preflight_once"), \
+            _client_with_embed_many(embed_return=expected):
+        assert embedder.embed_many(["alpha", "beta"]) == expected
+
+
+def test_embed_many_propagates_typed_input_error():
+    error = EmbeddingInputError(
+        model="bge-m3", text_len=9, ollama_message="unsupported value: NaN"
+    )
+    with patch("palinode.core.embedder._run_preflight_once"), \
+            _client_with_embed_many(embed_side_effect=error):
+        with pytest.raises(EmbeddingInputError):
+            embedder.embed_many(["alpha", "beta"])
+
+
+def test_embed_many_wraps_backend_error_with_aggregate_length():
+    error = OllamaUnreachable("offline", role="embed")
+    with patch("palinode.core.embedder._run_preflight_once"), \
+            _client_with_embed_many(embed_side_effect=error):
+        with pytest.raises(EmbeddingUnavailable) as exc_info:
+            embedder.embed_many(["alpha", "beta"])
+    assert exc_info.value.text_len == len("alpha") + len("beta")
+    assert exc_info.value.cause == "offline"
 
 
 # ---------------------------------------------------------------------------

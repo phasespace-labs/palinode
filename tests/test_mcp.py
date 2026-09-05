@@ -284,6 +284,38 @@ async def test_dispatch_save_renders_server_rel_path(monkeypatch):
     assert _NO_PALINODE_ABS_PATH not in text
 
 
+@pytest.mark.parametrize(
+    ("save_outcome", "disambiguated_from", "expected"),
+    [
+        ("replaced", None, "Saved to decisions/target.md (replaced)"),
+        (
+            "disambiguated",
+            "target",
+            "Saved to decisions/target.md (disambiguated from target)",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_dispatch_save_reports_outcome(
+    monkeypatch, save_outcome, disambiguated_from, expected
+):
+    async def fake_post(path, json=None, timeout=30.0):
+        return _FakeResponse({
+            "file_path": _NO_PALINODE_ABS_PATH,
+            "rel_path": _NO_PALINODE_REL_PATH,
+            "id": "decisions-target",
+            "save_outcome": save_outcome,
+            "disambiguated_from": disambiguated_from,
+        })
+
+    monkeypatch.setattr(mcp, "_post", fake_post)
+    result = await _dispatch_tool(
+        "palinode_save", {"content": "body", "type": "Decision"}
+    )
+
+    assert result[0].text == expected
+
+
 @pytest.mark.asyncio
 async def test_dispatch_ingest_renders_server_rel_path(monkeypatch):
     async def fake_post(path, json=None, timeout=60.0):

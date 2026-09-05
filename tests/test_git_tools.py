@@ -39,13 +39,14 @@ def test_rollback_creates_new_commit():
 
 def test_history_returns_structured_data():
     with patch("palinode.core.git_tools._run_git") as mock_run:
-        # First call: git log
+        # One call now: the log carries its own --shortstat summary.
         log_res = MagicMock()
-        log_res.stdout = "abc1234|2026-04-10T12:00:00+00:00|palinode: update file\n"
-        # Second call: git diff --stat
-        stat_res = MagicMock()
-        stat_res.stdout = " some/file.md | 3 ++-\n 1 file changed, 2 insertions(+), 1 deletion(-)\n"
-        mock_run.side_effect = [log_res, stat_res]
+        log_res.stdout = (
+            "abc1234|2026-04-10T12:00:00+00:00|palinode: update file\n"
+            "\n"
+            " 1 file changed, 2 insertions(+), 1 deletion(-)\n"
+        )
+        mock_run.return_value = log_res
 
         with patch("os.path.exists", return_value=True):
             result = git_tools.history("some/file.md", limit=10)

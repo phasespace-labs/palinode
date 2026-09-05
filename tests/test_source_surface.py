@@ -87,6 +87,41 @@ def test_save_defaults_source_to_cli(mock_memory_dir):
         assert mock_save.call_args[1]["source"] is None
 
 
+@pytest.mark.parametrize(
+    ("save_outcome", "disambiguated_from", "expected"),
+    [
+        ("replaced", None, "Saved (replaced): insights/pinned-note.md"),
+        (
+            "disambiguated",
+            "shared-opening",
+            "Saved (disambiguated from shared-opening): insights/shared-opening-2.md",
+        ),
+    ],
+)
+def test_save_human_output_reports_outcome(
+    save_outcome, disambiguated_from, expected
+):
+    runner = CliRunner()
+    with patch("palinode.cli.save.api_client.save") as mock_save:
+        mock_save.return_value = {
+            "file_path": "/tmp/result.md",
+            "rel_path": (
+                "insights/pinned-note.md"
+                if save_outcome == "replaced"
+                else "insights/shared-opening-2.md"
+            ),
+            "id": "insights-result",
+            "save_outcome": save_outcome,
+            "disambiguated_from": disambiguated_from,
+        }
+        result = runner.invoke(
+            save, ["body", "--type", "Insight", "--format", "text"]
+        )
+
+    assert result.exit_code == 0
+    assert expected in result.output
+
+
 def test_cli_client_sends_source_header():
     """ADR-010: the CLI httpx Client must carry X-Palinode-Source: cli
     so saves without explicit body `source` are still attributed correctly.
