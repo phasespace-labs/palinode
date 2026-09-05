@@ -55,6 +55,23 @@ The pinned query shapes are natural-language questions, short keywords, absent i
 exact-topic controls, and natural-language paraphrase controls. Each false-positive observation
 records both the fused score exposed to callers and the underlying raw cosine when available.
 
+## Operating-numbers sweep
+
+`perf.py` measures what `docs/PERFORMANCE.md` publishes: search latency p50/p95,
+index throughput, RAM and disk across chunk-count targets.
+
+```bash
+python -m bench.perf --sizes 1000,10000,50000 \
+  --label "your box, stated plainly" --synthetic-vectors --markdown
+```
+
+`--synthetic-vectors` swaps the embedder for deterministic hash vectors. The write
+path, the vector table and the search path stay real, so latency and throughput are
+valid; only vector *content* is fake, so **recall quality is not measured** and the
+module never reports one. Omit the flag to run against a real embedder — the rig
+refuses rather than silently degrading if none is reachable, and aborts if any scale
+point indexes zero vectors.
+
 ## Layout
 
 | File | Purpose |
@@ -64,10 +81,12 @@ records both the fused score exposed to callers and the underlying raw cosine wh
 | `run.py` | End-to-end orchestrator (the four axes) + CLI. |
 | `report.py` | Renders a results JSON object as a Markdown report. |
 | `abstention.py` | Standalone no-answer/control threshold sweep + JSON/Markdown output. |
+| `perf.py` | Scale sweep behind `docs/PERFORMANCE.md` — latency, throughput, RAM, disk at 1k/10k/50k chunks. |
 
 ## Tests
 
 ```bash
 python -m pytest tests/test_bench_harness.py -q
 python -m pytest tests/test_bench_abstention.py -q
+python -m pytest tests/test_bench_perf.py -q
 ```

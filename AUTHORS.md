@@ -26,6 +26,8 @@ Contributions welcome via pull request. Names appear here once a PR is merged.
 - [nightcityblade](https://github.com/nightcityblade)
 - [usmamalik345](https://github.com/usmamalik345)
 - [TLNing260310](https://github.com/TLNing260310)
+- [Kudala Bharani Kumar Reddy](https://github.com/kudala-bharani)
+- [Rehan30g](https://github.com/Rehan30g)
 
 ## Acknowledgements
 

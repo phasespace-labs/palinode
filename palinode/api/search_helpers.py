@@ -18,6 +18,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from palinode.core import embedder, store
+from palinode.core.tiers import apply_tier
 from palinode.core.config import config
 from palinode.core.defaults import (
     SESSION_END_DEDUP_THRESHOLD,
@@ -160,6 +161,29 @@ def _enrich_with_snippets(
         else:
             r["snippet"] = _windowed_snippet(content, query, max_chars)
             r["content_truncated"] = True
+
+
+def _apply_tier(results: list[dict[str, Any]], tier: str | None) -> None:
+    """In-place render each hit at ``tier``.
+
+    ``None`` and ``"full"`` are no-ops, so a caller that says nothing keeps the
+    snippet-plus-content shape search has always returned. For the two cheaper
+    tiers both ``content`` and ``snippet`` become the view — a caller that asked
+    for an abstract does not want the full chunk arriving under another key —
+    and ``content_truncated`` reports whether anything was dropped.
+
+    Search hits are chunks, not whole files, so the view is computed over the
+    chunk body: the abstract of a hit is the abstract of the part that matched.
+    """
+    if tier is None or tier == "full":
+        return
+    for r in results:
+        content = r.get("content") or ""
+        view = apply_tier(tier, content, r.get("metadata"))
+        r["content"] = view
+        r["snippet"] = view
+        r["content_truncated"] = len(view) < len(content)
+        r["tier"] = tier
 
 
 def _enrich_with_rel_path(results: list[dict[str, Any]]) -> None:

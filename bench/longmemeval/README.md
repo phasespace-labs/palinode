@@ -13,8 +13,32 @@ upstream judge prompt, verbatim.
 | save-only | *(default, `--pipeline raw`)* | LLM-free ingest + hybrid search. Zero chat-LLM calls before the answerer. Rows A–D. |
 | retrieval-only | `--no-answer` | No LLM at all. Reports **evidence recall@k** (was any `answer_session_id` in the top-k?) — the retrieval ceiling. |
 | session-end (E0) | `--pipeline session-end` | The production write path: an extraction model plays the agent at every session end (`LME_EXTRACT_*`), and the payload goes through Palinode's real `session_end` — dated `daily/` note tagged `project/user` + indexed twin — with the facts appended to a seeded `projects/user.md` profile and tagged by the real fact-id bootstrap. Chat-LLM calls at ingest, reported per question. |
-| session-end + consolidate (E1) | `--pipeline session-end+consolidate` | E0, then the real `run_consolidation` (`LME_CONSOLIDATE_*` via the runner's `llm_fn` seam): LLM-proposed KEEP/UPDATE/MERGE/SUPERSEDE/ARCHIVE/RETRACT ops applied by the deterministic executor to `projects/user.md`; compacted daily notes archived (still indexed). Ops histogram per question. |
+| session-end + consolidate (E1) | `--pipeline session-end+consolidate` | E0, then the real `run_consolidation` (`LME_CONSOLIDATE_*` via the runner's `llm_fn` seam) updates `projects/user.md`; compacted daily notes are archived but remain indexed. Operations histogram per question. |
 | … + raw (E1+raw) | `… --keep-raw` | E1 with the raw transcripts indexed as well — does anything get lost in extraction? |
+
+### Extraction prompt (row E only)
+
+`LME_EXTRACT_PROMPT_VERSION` selects the prompt the extraction model runs;
+`v1` is the default. **Choose it for the reader that will consume the notes** —
+the effect is reader-dependent, not a general improvement:
+
+| prompt | shape | local reader (RTX 5090) | `gemini-3-flash-preview` |
+|---|---|---|---|
+| `v1` | summary + facts | 0.740 (E0-local) | **0.820** (E1noarch) |
+| `v2` | exhaustive event ledger | **0.860** | 0.780 (E1xv2) |
+| `v1t` | v1, terse output | — | — |
+
+`v2` is worth +12 points to a small local model that was dropping countable
+events and collapsing recommended lists, and costs a strong reader 4 points at
+3,803 prompt tokens per answer against 2,731 — roughly 485 facts per question is
+more noise than signal once extraction was already good enough. `v1` therefore
+stays the default: the published rows all use the Gemini-family reader, and a
+default that makes them worse is the wrong default.
+
+Selecting automatically per reader was considered and rejected — it would make
+two runs incomparable without reading their meta. **Any published cross-row
+comparison must state which extraction prompt each row used**; every run records
+it in its meta.
 
 Row E is the apples-to-apples row against systems that report after an
 extraction + consolidation step. Things `pipeline.py` does that production leaves to the

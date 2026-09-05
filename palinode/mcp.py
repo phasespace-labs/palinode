@@ -52,7 +52,7 @@ from palinode.core.defaults import (
     SESSION_END_TIMEOUT_SECONDS as _SESSION_END_TIMEOUT,
     _SESSION_END_TIMEOUT_SENTINEL as _SENTINEL,
 )
-from palinode.core.parity import CATEGORIES, MEMORY_TYPES, PROMPT_TASKS
+from palinode.core.parity import CATEGORIES, MEMORY_TYPES, PROMPT_TASKS, TIERS
 from palinode.core.scoring import describe_match
 from palinode.core.path_guard import to_rel_path
 from palinode.core.typed_links import parse_link_refs
@@ -848,6 +848,17 @@ def _all_tools() -> list[types.Tool]:
                         ),
                         "default": False,
                     },
+                    "tier": {
+                        "type": "string",
+                        "enum": list(TIERS),
+                        "description": (
+                            "How much of the file to return. 'abstract' is the "
+                            "summary line (~300 chars) — enough to judge "
+                            "relevance; 'overview' is frontmatter plus the head "
+                            "of the body; 'full' is the whole file. Omit for "
+                            "'full'."
+                        ),
+                    },
                 },
                 "required": ["file_path"],
             },
@@ -943,6 +954,17 @@ def _all_tools() -> list[types.Tool]:
                         # budget; full=True still caps rendered content.
                         "description": "Return full chunk content instead of snippets.",
                         "default": False,
+                    },
+                    "tier": {
+                        "type": "string",
+                        "enum": list(TIERS),
+                        "description": (
+                            "How much of each hit to return. 'abstract' caps "
+                            "every hit at ~300 chars (summary first) for cheap "
+                            "relevance checks; 'overview' returns frontmatter "
+                            "plus the head of the body; 'full' is the chunk "
+                            "body. Omit to keep the default snippet view."
+                        ),
                     },
                 },
                 "required": ["query"],
@@ -1880,10 +1902,11 @@ async def _tool_list(arguments: dict[str, Any]) -> list[types.TextContent]:
 @_handles("palinode_read")
 async def _tool_read(arguments: dict[str, Any]) -> list[types.TextContent]:
     include_meta = bool(arguments.get("meta", False))
-    resp = await _get(
-        "/read",
-        params={"file_path": arguments["file_path"], "meta": "true"},
-    )
+    params: dict[str, Any] = {"file_path": arguments["file_path"], "meta": "true"}
+    tier = arguments.get("tier")
+    if tier:
+        params["tier"] = tier
+    resp = await _get("/read", params=params)
     if resp.status_code != 200:
         return _text(f"Error reading file: {resp.text}")
     data = resp.json()
@@ -1902,6 +1925,8 @@ async def _tool_read(arguments: dict[str, Any]) -> list[types.TextContent]:
 @_handles("palinode_search")
 async def _tool_search(arguments: dict[str, Any]) -> list[types.TextContent]:
     body: dict[str, Any] = {"query": arguments["query"]}
+    if arguments.get("tier"):
+        body["tier"] = arguments["tier"]
     if arguments.get("category"):
         body["category"] = arguments["category"]
     if arguments.get("limit"):

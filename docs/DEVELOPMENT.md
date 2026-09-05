@@ -52,8 +52,8 @@ registered in the **main** repo's `.venv`:
 
 Result: code changes in the worktree are silently invisible to the test suite.
 Tests can pass on broken code (and fail on correct code) without any error.
-This was independently flagged by two M1-Wave-1 agents implementing #201 and
-#200, and is tracked as #207.
+This was independently flagged by two M1-Wave-1 agents working on parallel
+issues, and is tracked internally.
 
 The `pythonpath = ["."]` setting in `pyproject.toml` mitigates this for most
 pytest invocations — pytest prepends the worktree root to `sys.path`, so the
