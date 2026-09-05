@@ -52,7 +52,7 @@ def trigger_add(description, memory_file, threshold, cooldown_hours, trigger_id,
             console.print(f"[green]Trigger added (id: {result['id']})[/green]")
     except Exception as e:
         console.print(f"[red]Error adding trigger: {str(e)}[/red]")
-        click.Abort()
+        raise click.Abort()
 
 @trigger.command(name="list")
 @click.option("--format", "fmt", type=click.Choice(["json", "text"]), help="Output format")
@@ -86,7 +86,7 @@ def trigger_list(fmt):
             console.print(table)
     except Exception as e:
         console.print(f"[red]Error listing triggers: {str(e)}[/red]")
-        click.Abort()
+        raise click.Abort()
 
 @trigger.command(name="remove")
 @click.argument("trigger_id")
@@ -103,4 +103,4 @@ def trigger_remove(trigger_id, fmt):
             console.print("[green]Trigger removed.[/green]")
     except Exception as e:
         console.print(f"[red]Error removing trigger: {str(e)}[/red]")
-        click.Abort()
+        raise click.Abort()

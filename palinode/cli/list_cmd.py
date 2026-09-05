@@ -46,4 +46,4 @@ def list_cmd(category, core_only, fmt):
 
     except Exception as e:
         console.print(f"[red]Error listing files: {str(e)}[/red]")
-        click.Abort()
+        raise click.Abort()

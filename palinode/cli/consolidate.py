@@ -47,4 +47,4 @@ def consolidate(nightly, dry_run, sources, fmt):
         ) from e
     except Exception as e:
         console.print(f"[red]Error consolidating: {str(e)}[/red]")
-        click.Abort()
+        raise click.Abort()

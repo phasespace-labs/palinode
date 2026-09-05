@@ -26,4 +26,4 @@ def diff(days, paths, fmt):
             
     except Exception as e:
         console.print(f"[red]Error getting diff: {str(e)}[/red]")
-        click.Abort()
+        raise click.Abort()
