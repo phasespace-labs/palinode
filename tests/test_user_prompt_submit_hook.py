@@ -165,6 +165,7 @@ def test_the_hook_renders_what_describe_match_would(tmp_path):
 
     cases = [
         {"score": 1.0, "raw_score": 0.421},
+        {"score": 1.0, "raw_score": 0.425},
         {"score": 1.0, "raw_score": None},
         {"score": 1.0},
         {"score": 0.4},
