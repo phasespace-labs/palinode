@@ -14,6 +14,12 @@ from typing import Any
 _RAW_SCORE = "raw_score"
 
 
+def _percent(raw: float) -> int:
+    # Half-up, matching the jq hook and both TypeScript renderers
+    # (Math.round); Python's round() does banker's rounding instead.
+    return int(raw * 100 + 0.5)
+
+
 def describe_match(result: Mapping[str, Any]) -> str:
     """A short phrase for how well ``result`` matched.
 
@@ -32,4 +38,4 @@ def describe_match(result: Mapping[str, Any]) -> str:
     raw = result.get(_RAW_SCORE)
     if raw is None:
         return f"keyword match, rank {fused:.2f}"
-    return f"{round(raw * 100)}% match"
+    return f"{_percent(raw)}% match"
