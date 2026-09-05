@@ -38,6 +38,20 @@ def test_the_whole_measured_range_renders_below_half(raw_score: float) -> None:
     assert percent < 50
 
 
+@pytest.mark.parametrize(
+    ("raw_score", "expected"),
+    [
+        (0.005, "1% match"),  # 0.5 rounds up; round() would give 0
+        (0.025, "3% match"),  # 2.5 rounds up; round() would give 2
+        (0.125, "13% match"),  # 12.5 rounds up; round() would give 12
+        (0.425, "43% match"),  # the half in the issue's measured band
+        (0.421, "42% match"),  # below the half, unchanged
+    ],
+)
+def test_match_percent_rounds_half_up(raw_score: float, expected: str) -> None:
+    assert describe_match({"score": 1.0, "raw_score": raw_score}) == expected
+
+
 def test_the_mcp_surface_stops_calling_a_fused_rank_a_match() -> None:
     rendered = _format_results(
         [{"file": "notes/a.md", "score": 1.0, "raw_score": ABSENT_ANSWER_COSINE, "snippet": "body"}]
