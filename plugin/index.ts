@@ -30,6 +30,11 @@ const PALINODE_MEMORY_TYPES = [
   "ResearchRef",
   "ActionItem",
 ] as const;
+const PALINODE_TIERS = [
+  "abstract",
+  "overview",
+  "full",
+] as const;
 
 function literalUnion(
   values: readonly string[],
@@ -388,6 +393,14 @@ const palinodePlugin = {
                 "churn does not pollute results (ADR-015 §5).",
             }),
           ),
+          tier: Type.Optional(
+            literalUnion(PALINODE_TIERS, {
+              description:
+                "How much of each hit to return: abstract (~300 chars, summary " +
+                "first), overview (frontmatter + head of body), or full. Omit " +
+                "for the default snippet view.",
+            }),
+          ),
         }),
         async execute(_toolCallId: string, params: any) {
           try {
@@ -404,6 +417,7 @@ const palinodePlugin = {
             if (params.include_daily !== undefined) body.include_daily = params.include_daily;
             if (params.min_priority !== undefined) body.min_priority = params.min_priority;
             if (params.include_telemetry !== undefined) body.include_telemetry = params.include_telemetry;
+            if (params.tier !== undefined) body.tier = params.tier;
             const results = await palinodeFetch(
               cfg.palinodeApiUrl,
               "/search",

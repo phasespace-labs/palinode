@@ -35,7 +35,7 @@ It has roughly doubled since; the README's tool reference is the current list.
 - `palinode_lint` — structural health checks
 - `palinode_ingest` — capture from URLs
 - `palinode_status` — system health
-- Deterministic executor (validates LLM output, applies ops)
+- Validation and application of consolidation operations
 - Markdown files as source of truth
 - Git versioning
 - Security scanning (business rule)
@@ -70,7 +70,7 @@ the pipeline became configurable scaffolding while the tool surface grew.
 ### What stays regardless of version
 - MCP tool interface (the API contract)
 - File-based storage (markdown + git)
-- Deterministic executor (LLM proposes, executor disposes)
+- Validated consolidation operations
 - Security guardrails
 - `core: true` flagging (user intent, not model workaround)
 

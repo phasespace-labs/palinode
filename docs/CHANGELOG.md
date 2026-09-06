@@ -6,11 +6,54 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+### Security
+
+## [0.16.0] — 2026-09-05
+
+### Added
+
+- `docs/PERFORMANCE.md` — published operating numbers on named boxes: search
+  latency p50/p95, index throughput, RAM and disk at 1k / 10k / 50k indexed chunks,
+  measured on an ordinary 4-vCPU / 4 GB Ubuntu container against a real GPU-resident
+  `bge-m3`. Keyword search stays under 10 ms across a 50× corpus increase and resident
+  memory is flat at 56–65 MiB, but the headline is that **vector-search latency is
+  dominated by the embedding round trip, not by the store**: 153 ms at 1k chunks and
+  149 ms at 10k, of which 125 ms is the query embedding itself. A second sweep with
+  embedding removed isolates sqlite-vec's brute-force scan at ~1.23 ms per 1,000 chunks,
+  reaching 200 ms at an extrapolated ~160k chunks — the real ceiling, and one most
+  self-hosters will not reach before their embedder becomes the constraint. Ingest is
+  embedder-bound at 7–8 chunks/s serial against a ~125 ms round trip; recall quality is
+  a different axis, measured in `docs/BENCHMARKS.md`.
+- `bench/perf.py` — the scale sweep behind that page, reusing the existing
+  `bench/corpus.py` generator and `bench/harness.py` pipeline. `--synthetic-vectors`
+  swaps the embedder for deterministic hash vectors so latency and throughput stay real
+  while the embedding bill goes to zero; the mode is stamped in the results JSON, never
+  reports a quality metric, and the rig aborts if a scale point indexes zero vectors so
+  vector-search latency can never be published for a store holding none.
+- `tier: abstract | overview | full` on `read` and `search`, across CLI (`--tier`), MCP,
+  REST and the plugin.
+  `abstract` returns the `summary:` frontmatter — falling back to `canonical_question:`,
+  then the first paragraph — capped at ~300 characters, so an agent can judge relevance
+  without pulling a record; `overview` returns the frontmatter block plus the head of the
+  body under a 4,000-character cap; `full` is unchanged content. Both caps are
+  configurable (`read.abstract_max_chars`, `read.overview_max_chars`). Views are computed
+  deterministically at read time — no LLM, and no second content store, so the markdown
+  file stays the single source of truth. Omitting `tier` preserves the previous response
+  shape on every surface.
 - Save receipts now report a closed `save_outcome` (`created`, `resaved`,
   `disambiguated`, or `replaced`) plus the original slug when disambiguation
   occurs. The raw API/JSON response, human CLI, and MCP confirmation all expose
   the outcome so callers can distinguish new files from rewrites and explicit
-  replacements.
+  replacements
+  ([#187](https://github.com/phasespace-labs/palinode/pull/187), thanks [@WilliamK112](https://github.com/WilliamK112)).
+- `docs/UI.md` documents the local provenance inspector, and the quickstart links it
+  ([#188](https://github.com/phasespace-labs/palinode/pull/188), thanks [@WilliamK112](https://github.com/WilliamK112)).
 - `docs/BENCHMARKS.md` row E: the production write path measured on a 100-question stratified
   subset — session-end extraction alone beats raw-transcript reading (E0 0.810 vs 0.750);
   consolidation's ARCHIVE op costs that gain back (E1 0.750) and filtering it via the
@@ -22,19 +65,57 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
   (`--keep-raw`): the production write path as a benchmark row — an extraction model produces
   the session-end payload per haystack session, written through the real `session_end`
   function into dated daily notes + a fact-tagged `projects/user.md` profile, then the real
-  `run_consolidation` with an injected `llm_fn` applies LLM-proposed ops via the deterministic
-  executor. Reports extraction calls/tokens per question, a consolidation-ops histogram,
+  `run_consolidation` applies the returned consolidation operations. Reports extraction
+  calls/tokens per question, a consolidation-ops histogram,
   `answer_in_context`, and evidence recall traced through session-end's `Session ID` line.
+- `bench/longmemeval_v2/` — Palinode as a `memory_modules` backend for the
+  LongMemEval-V2 harness (web-agent trajectory memory): trajectory → markdown
+  state-slice pool, save-only LLM-free ingest through the canonical indexer,
+  hybrid recall with an OR-joined BM25 arm (`--palinode-fts-mode and` runs the
+  store's stock implicit-AND path for comparison), optional insert-time note
+  extraction (`specs/prompts/trajectory-extraction.md`), saved-store reuse across
+  runs, and a runner that supersets upstream `run_eval.py`. Stage 1 of the V2 program.
 
 ### Changed
 
+- **PROGRAM.md now requires absolute dates and complete enumeration of options** in
+  extracted memories. Both are losses no later reader can repair: "last Tuesday"
+  cannot be resolved months on, and a decision recorded as "picked the second approach"
+  cannot recover the options that were dropped. Measured on the row-E benchmark as the
+  extraction losses no amount of retrieval quality could fix. The `/wrap` bodies that
+  `palinode init` installs carry the same two requirements. Deliberately *not* adopted:
+  the exhaustive event-ledger note shape, whose benefit proved reader-dependent.
+- **The LongMemEval extraction prompt default stays `v1`, now with the reasoning
+  recorded**. The ledger prompt `v2` is +12 points for a small local reader and
+  −4 for the Gemini-family reader the published rows use, at 40% more prompt tokens, so
+  it stays a documented per-reader choice via `LME_EXTRACT_PROMPT_VERSION` rather than
+  becoming the default. Selecting automatically per reader was rejected: it would make
+  two runs incomparable without reading their meta.
+- PROGRAM.md: "keep the source, not the takeaway" — extraction guidance and the ResearchRef template now ask for the basis a conclusion rests on, since a bare conclusion cannot be corrected later (Kwon, arXiv:2606.25449).
+- PROGRAM.md: state the trajectory principle — correctness is a property of the memory's state trajectory, not of individual records — so transitions preserve supersession, evidence relationships, and useful signal (Orogat & Mansour, arXiv:2605.26252).
 - File reconciliation now sends every section awaiting an embedding in one ordered
   Ollama `/api/embed` batch, validates the complete response before writing, and
   preserves per-input FTS-only degradation and whole-file outage rollback
-  ([#159](https://github.com/phasespace-labs/palinode/issues/159)).
+  ([#186](https://github.com/phasespace-labs/palinode/pull/186), thanks [@WilliamK112](https://github.com/WilliamK112)).
+- `docs/BENCHMARKS.md` gains *LongMemEval-V2 (small tier)*: 13 rows under identical
+  reader, judge and 40k context budget — upstream's own slice-RAG baseline rerun,
+  Palinode's LLM-free store, and the write path (extracted notes + slices). The
+  LLM-free store matches the purpose-built baseline; the write path adds +6 overall
+  and +12 on web, and is level on enterprise. Per-type tables, the losses, the noise
+  floor, and the per-question artifacts under `bench/results/longmemeval-v2-*/`.
+  No leaderboard submission (stage-1 gate not met).
 
 ### Fixed
 
+- A failed auto-trigger registration during the layer-split sweep is now logged as a warning instead of printed to the API server's stdout, so it carries a level, reaches the JSONL operations log, and passes through `SecretRedactingFilter` like every other diagnostic in the package ([#176](https://github.com/phasespace-labs/palinode/pull/176), thanks [@chiruu12](https://github.com/chiruu12)).
+- `GET /prompts` now logs a warning naming any prompt file it cannot read, while continuing to
+  return the prompts it could, so a partial listing is diagnosable instead of silent
+  ([#181](https://github.com/phasespace-labs/palinode/pull/181), thanks [@kudala-bharani](https://github.com/kudala-bharani)).
+- `lint`'s two staleness checks no longer wrap the whole date-parse-and-compare block in
+  `except Exception: pass`. Only the `datetime.fromisoformat` call is guarded, against
+  `ValueError`; a non-date frontmatter value is handled explicitly; and any other error in the
+  block propagates instead of silently dropping the file from the staleness report
+  ([#182](https://github.com/phasespace-labs/palinode/pull/182), thanks [@Rehan30g](https://github.com/Rehan30g)).
 - `git_tools.history()` now reports diff stats and, under `detail="full"`, diffs for commits
   older than a rename, and for the repository's root commit. Both were computed by a
   per-commit `git diff --stat` / `git show`. For commits older than a rename those passed the
@@ -44,20 +125,12 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
   `git log --follow --shortstat` walk now produces both, dropping the subprocess count for a
   20-commit history from 21 (41 under `detail="full"`) to 1. The `diff` string under
   `detail="full"` now starts at `diff --git` rather than at the `git show` commit header
-  ([#158](https://github.com/phasespace-labs/palinode/issues/158)).
-- `lint`'s two staleness checks no longer wrap their whole date-parse-and-compare
-  block in `except Exception: pass`. Only the `datetime.fromisoformat` call is
-  guarded now (against `ValueError`), and a non-date frontmatter value is handled
-  explicitly; any other error in the block propagates instead of silently dropping
-  the file from the staleness report
-  ([#180](https://github.com/phasespace-labs/palinode/issues/180)).
-- `GET /prompts` now logs a warning naming any prompt file it cannot read while
-  continuing to return healthy prompts, making partial listings diagnosable
-  ([#179](https://github.com/phasespace-labs/palinode/issues/179)).
+  ([#183](https://github.com/phasespace-labs/palinode/pull/183), thanks [@chiruu12](https://github.com/chiruu12)).
 - The Pi/Cline shared plugin core and the OpenClaw plugin no longer present a fused rank as
   similarity: vector hits show raw cosine as a match percentage, BM25-only hits show
-  `keyword match, rank N.NN`, and legacy responses without `raw_score` show `rank N.NN`
-  ([#175](https://github.com/phasespace-labs/palinode/issues/175)).
+  `keyword match, rank N.NN`, and legacy responses without `raw_score` show `rank N.NN`.
+  This completes the five renderer surfaces across six files
+  ([#178](https://github.com/phasespace-labs/palinode/pull/178), thanks [@WilliamK112](https://github.com/WilliamK112)).
 
 ### Removed
 

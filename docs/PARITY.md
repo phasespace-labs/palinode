@@ -99,7 +99,7 @@ cross-language parity test guarding against drift.
 compaction, extraction, update, classification, nightly-consolidation
 ```
 
-Stored at `palinode/core/parity.py:PROMPT_TASKS`. ADR-010 #162 fixed the duplicate-`enum` bug at `palinode/mcp.py:624-625`; the canonical list now lives in `parity.py`.
+Stored at `palinode/core/parity.py:PROMPT_TASKS`. The ADR-010 parity pass fixed the duplicate-`enum` bug at `palinode/mcp.py:624-625`; the canonical list now lives in `parity.py`.
 
 ## Surface sugar — opt-in convenience, not parity
 
@@ -134,7 +134,7 @@ The param checks above walk `REGISTRY` and verify each surface (registry→surfa
 
 1. **`REGISTRY`** — a parity-bound memory operation (mapped via its `mcp_tool` / `api_endpoint` / `cli_command`).
 2. **`INVENTORY_INFRA`** (`palinode/core/parity.py`) — framework/admin/observability surface that is *not* a memory operation: Swagger/Redoc/OpenAPI, the HTML inspector under `/ui`, liveness probes, and the DB-maintenance + importer endpoints (the surface-identifier form of `ADMIN_EXEMPT_OPERATIONS`).
-3. **`INVENTORY_BACKLOG`** (`palinode/core/parity.py`) — a memory-semantic operation that already ships on the surface but has **not yet** been promoted into `REGISTRY` with canonical params. Each entry maps to its tracking issue (the ADR-010 implementation backlog, mostly #170), and alternate names annotate the canonical entry instead of counting as additional capabilities. These are acknowledged, not silently ignored.
+3. **`INVENTORY_BACKLOG`** (`palinode/core/parity.py`) — a memory-semantic operation that already ships on the surface but has **not yet** been promoted into `REGISTRY` with canonical params. Each entry maps to its tracking issue (the ADR-010 implementation backlog), and alternate names annotate the canonical entry instead of counting as additional capabilities. These are acknowledged, not silently ignored.
 
 A live capability in none of the three buckets **fails the guard** — that is an operation that skipped the contract. Stale buckets also fail (`test_inventory_accounting_is_not_stale`): an entry whose capability was renamed or removed must be cleaned up, mirroring the `known_drift` hygiene rule. `test_inventory_buckets_are_disjoint` keeps each capability classified exactly once.
 
@@ -142,9 +142,9 @@ A live capability in none of the three buckets **fails the guard** — that is a
 
 Identifier form per surface: MCP = tool name (`palinode_search`); API = `METHOD /path` (`POST /search`); CLI = command path (`trigger add`).
 
-### Registration backlog — memory ops not yet in the registry (#170)
+### Registration backlog — memory ops not yet in the registry
 
-These memory-semantic operations ship on all of MCP/API/CLI today but are not yet promoted into `REGISTRY` with canonical params. They are tracked under #170 (admin/framework surface is in `INVENTORY_INFRA`, not here):
+These memory-semantic operations ship on all of MCP/API/CLI today but are not yet promoted into `REGISTRY` with canonical params. They are tracked in the internal registration backlog (admin/framework surface is in `INVENTORY_INFRA`, not here):
 
 `dedup_suggest`, `diff`, `entities`, `history`, `ingest`/`ingest-url`, `lint`, `orphan_repair`, `prompt` (list/show/activate), `push`, `session_end`, and the trigger `list`/`remove` + `check-triggers` + `search-associative` API endpoints. `depends/_unblocked` is tracked under #97.
 
@@ -185,4 +185,3 @@ fails if a now-present parameter still carries a stale exception.
 - `palinode/core/parity.py` — the registry (source of truth).
 - `palinode/core/defaults.py` — shared defaults.
 - `tests/test_surface_parity.py` — the forcing function.
-- Issue #170 — implementation tracking.

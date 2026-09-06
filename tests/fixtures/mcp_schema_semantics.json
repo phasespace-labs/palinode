@@ -184,7 +184,14 @@
     "description": "Read the full contents of a memory file. Use after palinode_list or palinode_search to see the complete content of a specific file.",
     "params": {
       "file_path": {},
-      "meta": {}
+      "meta": {},
+      "tier": {
+        "enum": [
+          "abstract",
+          "overview",
+          "full"
+        ]
+      }
     },
     "required": [
       "file_path"
@@ -278,6 +285,13 @@
       "query": {},
       "since_days": {},
       "threshold": {},
+      "tier": {
+        "enum": [
+          "abstract",
+          "overview",
+          "full"
+        ]
+      },
       "types": {
         "items_enum": [
           "PersonMemory",

@@ -19,9 +19,8 @@ the end of every session in production, in chronological order:
    store — so the profile append is the harness's, not session-end's, and the
    status file is deliberately not seeded so consolidation targets ``user.md``.
 4. **consolidate** (E1) — the real ``run_consolidation`` with an injected
-   ``llm_fn``: LLM-proposed KEEP/UPDATE/MERGE/SUPERSEDE/ARCHIVE/RETRACT ops
-   applied by the deterministic executor to ``projects/user.md``; compacted
-   daily notes move to ``archive/<year>/`` (still indexed).
+   ``llm_fn`` updates ``projects/user.md``; compacted daily notes move to
+   ``archive/<year>/`` (still indexed).
 """
 from __future__ import annotations
 
@@ -91,7 +90,7 @@ EXTRACT_PROMPTS = {
         "Write nothing the transcript does not support. Empty lists are fine. No markdown fences."
     ),
     # v1t: v1's content, terse output — for a local extractor where output tokens are the
-    # whole cost (37 tok/s single-stream on lightship vs ~2 s per call on Gemini). Facts only,
+    # whole cost (37 tok/s single-stream on the local extraction host vs ~2 s per call on Gemini). Facts only,
     # no prose summary (the summary is the first fact), preferences folded into facts.
     "v1t": (
         "You are an AI assistant finishing a conversation with a user. Write the session-end "
@@ -104,6 +103,16 @@ EXTRACT_PROMPTS = {
         "Write nothing the transcript does not support. No markdown fences."
     ),
 }
+#: v1 stays the default, deliberately — the ledger prompt's gain is
+#: reader-dependent, not general. v2 beat v1 by +12 on the fully local subset row
+#: (0.860 vs 0.740) and LOST under the Gemini-family reader the published rows use
+#: (0.780 vs E1noarch's 0.820), at 3,803 prompt tokens per answer against 2,731.
+#: For a strong reader whose v1 extractions were already good, an exhaustive ledger
+#: adds more noise than signal. A default that makes the published rows worse is the
+#: wrong default, and selecting one automatically per reader would make two runs
+#: incomparable without reading their meta — so the choice stays explicit. Set
+#: LME_EXTRACT_PROMPT_VERSION to pick, and state which prompt each row used in any
+#: cross-row comparison. Numbers: docs/BENCHMARKS.md row E.
 DEFAULT_EXTRACT_PROMPT_VERSION = "v1"
 
 

@@ -21,7 +21,7 @@ nothing hook-shaped:
 
 Everything this module produces for injection is a **message body**. There
 is no function here that yields a system prompt, and no binding may route
-these strings into one (ADR-019 §4, #1002). Model providers cache the prompt
+these strings into one (ADR-019 §4). Model providers cache the prompt
 as a strict prefix — tools, then system, then messages — so per-turn content
 in the system prompt invalidates the whole cached prefix every turn and
 costs more than the recall saves. Bindings append a message after the cached

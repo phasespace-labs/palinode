@@ -19,12 +19,37 @@ You are not a search engine. You are not an archival system. You are memory — 
 - **Consolidation pass:** Runs weekly (cron). Merges daily captures into curated summaries, detects superseded decisions, extracts insights.
 - **Core memory:** Files with `core: true` — loaded at every session start without search.
 - **Archival memory:** Everything else — retrieved via semantic search when relevant.
+- **Trajectory:** The sequence of memory states over time. Correctness is a property of the trajectory, not of any single file — a store can hold only accurate records and still be wrong.
 
 ---
 
 ## What to Remember
 
 Extract only things that will be useful **across sessions** — facts that a future agent instance would need to avoid re-learning from scratch.
+
+**Keep the source, not the takeaway.** A number with its inputs, a quote with its
+span, a decision with its rationale, a rule with the case that produced it. A
+takeaway on its own — "the total was $55", "we chose SQLite" — cannot be corrected
+later: a correction acts on the working, and if only the conclusion survived there is
+nothing for it to act on. When budget forces a choice, keep the recomputable source
+and drop the re-derivable conclusion. (Kwon, *Reclaim Evaluation*, arXiv:2606.25449.)
+
+**Resolve dates, and enumerate completely.** Two losses cannot be repaired by any
+later reader, which is what earns them a rule of their own:
+
+1. **Resolve relative times against the session date and record the absolute one.**
+   "Last Tuesday" is unreadable six months on, and nothing downstream can recover
+   which Tuesday it was.
+2. **When a list was recommended, considered, or chosen from, record every item by
+   name** — not one representative. A reader asked "which options did we look at?"
+   cannot recover the ones that were dropped at write time.
+
+Both were measured: on the row-E benchmark these two classes accounted for the
+extraction losses that no amount of retrieval quality could fix
+([BENCHMARKS.md](docs/BENCHMARKS.md)). Note what this is *not* — a requirement to
+write notes as exhaustive event ledgers. That shape was measured too, and its
+benefit turned out to depend on the reader (it helped a small local model and cost
+a strong one), so it stays a choice rather than a contract.
 
 ### Always extract
 
@@ -83,7 +108,7 @@ Extract only things that will be useful **across sessions** — facts that a fut
 - **Secrets** — passwords, API keys, tokens, credentials. NEVER. Even if the human says "remember this password." Log a warning instead.
 - **The agent's own responses** — unless they contain a commitment or promise to the human
 - **Duplicate information** — if it's already in memory, NOOP. Don't create a second copy.
-- **Context the agent generated** — summaries, research reports, lesson plans that the agent WROTE are outputs, not memories. The *decision to create them* and their *key conclusions* may be memories; the full text is not.
+- **Context the agent generated** — summaries, research reports, lesson plans that the agent WROTE are outputs, not memories. The *decision to create them* and their *key conclusions* may be memories — with the evidence each conclusion rests on, not the bare conclusion; the full text is not.
 
 ---
 
@@ -272,7 +297,7 @@ last_updated: 2026-03-22T16:00:00Z
 2-3 sentence overview.
 
 ## Key Points
-- Bullet list of the important takeaways.
+- What the source says, with the number, quote, or rule that carries it — not only the conclusion drawn from it.
 
 ## Relevance
 Why this matters for the user's work.
@@ -391,7 +416,7 @@ distinctive slug, or distinctive title) and records the matches in `cross_refs`.
   the surfaces you keep consistent by the contract above.
 - **`cross_refs:`** — auto-generated, untyped ("this memory mentions that one"),
   regenerated on every index. It says nothing about *how* two memories relate —
-  typed relations (`contradicts` / `backed_by`) are a separate axis (#533).
+  typed relations (`contradicts` / `backed_by`) are a separate axis.
 
 Treat `cross_refs` as derived output: don't hand-edit it (the indexer overwrites
 it), and don't rely on it as the authoritative link set — `entities:` remains the
@@ -411,6 +436,14 @@ because it only ever reflects what the body literally mentions.
 ## Update Logic
 
 When you extract a candidate memory, ALWAYS check for existing related memories before writing.
+
+The rule behind every operation below: **correctness is a property of the
+memory's trajectory, not of any single record.** A file can be individually
+accurate and the memory still wrong — a superseded value returned as current, a
+claim whose `backed_by` source was retracted, or a store that grew until useful
+facts were crowded out. The transition between states therefore has to preserve
+those relationships, not merely leave each file well-formed. (Framing from
+Orogat & Mansour, *Is Agent Memory a Database?*, arXiv:2605.26252.)
 
 ### The decision flow
 

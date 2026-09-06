@@ -6,7 +6,8 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from palinode.core import store
 from palinode.core.config import config
-from palinode.core.parity import CATEGORIES, MEMORY_TYPES
+from palinode.core.parity import CATEGORIES, MEMORY_TYPES, TIERS
+from palinode.core.tiers import apply_tier
 from palinode.core.parser import VALID_EPISTEMICS, VALID_UPDATE_POLICIES
 from palinode.core.scope import ScopeChain
 from palinode.core.visibility import is_visible
@@ -31,7 +32,11 @@ router = APIRouter()
 
 
 @router.get("/read")
-def read_api(file_path: str, meta: bool = False) -> dict[str, Any]:
+def read_api(
+    file_path: str,
+    meta: bool = False,
+    tier: Literal[*TIERS] | None = None,
+) -> dict[str, Any]:
     from palinode.core import parser
 
     candidates = [file_path]
@@ -61,14 +66,28 @@ def read_api(file_path: str, meta: bool = False) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="File not found")
 
     try:
-        result = {
-            "file": file_path,
-            "content": content,
-            "size_bytes": len(content.encode("utf-8")),
-        }
-
+        # `meta` keeps parse_markdown as its source so the frontmatter shape
+        # callers already depend on is untouched; the abstract tier only needs
+        # the raw frontmatter, so it uses the cheaper splitter when `meta` is
+        # off rather than paying for chunking.
+        metadata: dict[str, Any] | None = None
         if meta:
             metadata, _ = parser.parse_markdown(content)
+        elif tier == "abstract":
+            metadata, _ = parser.parse_frontmatter(content)
+
+        # `size_bytes` stays the size of the FILE, not of the tiered view —
+        # a caller asking for an abstract still wants to know what opening
+        # the full record would cost.
+        result = {
+            "file": file_path,
+            "content": apply_tier(tier, content, metadata),
+            "size_bytes": len(content.encode("utf-8")),
+        }
+        if tier is not None:
+            result["tier"] = tier
+
+        if meta:
             result["frontmatter"] = metadata
 
         # Issue emit retrieval event (explicit — direct /read call).

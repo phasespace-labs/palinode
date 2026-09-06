@@ -7,11 +7,12 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from palinode.core import store, embedder
 from palinode.core.config import config
-from palinode.core.parity import CATEGORIES, MEMORY_TYPES
+from palinode.core.parity import CATEGORIES, MEMORY_TYPES, TIERS
 from palinode.core.path_guard import to_rel_path
 from palinode.api._util import _retrieval_logger, _safe_500
 from palinode.api.rate_limit import _RATE_LIMIT_SEARCH, _check_rate_limit
 from palinode.api.search_helpers import (
+    _apply_tier,
     _compute_effective_date_after,
     _embedding_candidates,
     _enrich_with_rel_path,
@@ -135,6 +136,10 @@ class SearchRequest(BaseModel):
     # ADR-015 §2.3: None → default hard-exclude of telemetry; [] → include
     # telemetry when the caller passes the explicit override.
     include_telemetry: bool | None = False
+    # How much of each hit to render — "abstract" (summary-first, ~300
+    # chars), "overview" (frontmatter + head of body), or "full". Omitted keeps
+    # the snippet + content shape search returned before tiers existed.
+    tier: Literal[*TIERS] | None = None
     # filter by memory `type` frontmatter (one of PersonMemory, Decision,
     # ProjectSnapshot, Insight, ResearchRef, ActionItem). Independent of `category`
     # which filters by directory. Applied as a post-fetch filter; pass multiple
@@ -294,6 +299,7 @@ def search_api(req: SearchRequest, request: Request = None) -> list[dict[str, An
             recent = recent[:limit]
             # enrich with snippet so MCP callers stay within budget.
             _enrich_with_snippets(recent, "", _resolve_snippet_max_chars(req.max_chars))
+            _apply_tier(recent, req.tier)
             _enrich_with_rel_path(recent)
             return recent
 
@@ -422,6 +428,7 @@ def search_api(req: SearchRequest, request: Request = None) -> list[dict[str, An
         # `content` is preserved untouched for CLI/API consumers.
         # Per-request max_chars overrides config default when supplied.
         _enrich_with_snippets(final, req.query, _resolve_snippet_max_chars(req.max_chars))
+        _apply_tier(final, req.tier)
         _enrich_with_rel_path(final)
 
         # Issue emit retrieval events (explicit — came in via /search API).

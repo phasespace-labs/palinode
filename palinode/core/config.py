@@ -218,6 +218,19 @@ class SearchConfig:
     snippet_max_chars: int = 400
 
 @dataclass
+class ReadConfig:
+    """Caps for the tiered read views.
+
+    Tiers are computed at read time from content already in hand — these are
+    presentation caps, not storage limits. Nothing here changes what is on
+    disk or in the index.
+    """
+    #: ``tier=abstract`` — summary / canonical_question / first paragraph.
+    abstract_max_chars: int = 300
+    #: ``tier=overview`` — frontmatter block plus the head of the body.
+    overview_max_chars: int = 4000
+
+@dataclass
 class NightlyConfig:
     """Lightweight daily update configurations."""
     enabled: bool = True
@@ -550,6 +563,7 @@ class Config:
     embeddings: EmbeddingsConfig = field(default_factory=EmbeddingsConfig)
     auto_summary: AutoSummaryConfig = field(default_factory=AutoSummaryConfig)
     search: SearchConfig = field(default_factory=SearchConfig)
+    read: ReadConfig = field(default_factory=ReadConfig)
     consolidation: ConsolidationConfig = field(default_factory=ConsolidationConfig)
     compaction: CompactionConfig = field(default_factory=CompactionConfig)
     ku_compat: KUCompatConfig = field(default_factory=KUCompatConfig)

@@ -636,6 +636,12 @@ Call `palinode_session_end` with `push: true` and:
 - `project` — the project slug from `.claude/CLAUDE.md` (or the directory
   name if no slug is set)
 
+Two things across all three fields, because a later reader cannot repair either:
+write **absolute dates**, resolving "yesterday" / "last week" against today's
+date; and when something was chosen from a set of options, name **every option
+considered**, not just the one that won. A note that says "picked the second
+approach" is unreadable once the list is gone.
+
 This writes and commits the daily note, the project status line, and an
 individual indexed memory file, then — because of `push: true` — pushes the
 memory repo so the note actually reaches the remote (#378). Without `push: true`
@@ -722,7 +728,9 @@ the workspace `CLAUDE.md`.
 
 **Step 4 — Archive the session (LAST).**
 Call `palinode_session_end` with `push: true` and `summary`, `decisions`,
-`blockers`, and `project` (the slug from `.claude/CLAUDE.md`). Fired last so the
+`blockers`, and `project` (the slug from `.claude/CLAUDE.md`). Write absolute
+dates rather than relative ones, and when a decision chose between options,
+name every option considered — neither is recoverable later. Fired last so the
 record captures the post-merge SHAs, the freshly-filed issue numbers, and the
 papercut/INBOX updates — reference *what the wrap did* (merged #X, pushed Y,
 filed #Z, appended N items), not just the work. `push: true` ships the note in

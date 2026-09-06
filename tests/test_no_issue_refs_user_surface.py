@@ -68,7 +68,7 @@ def _issue_refs(text: str) -> list[str]:
 
 
 # Shipping Python roots whose COMMENT tokens must stay issue-ref-free.
-_SOURCE_ROOTS = ("palinode", "tests")
+_SOURCE_ROOTS = ("palinode", "tests", "bench")
 
 
 def _iter_commands(

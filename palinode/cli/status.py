@@ -36,4 +36,4 @@ def status(fmt):
             
     except Exception as e:
         console.print(f"[red]Error getting status: {str(e)}[/red]")
-        click.Abort()
+        raise click.Abort()

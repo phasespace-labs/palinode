@@ -1,0 +1,8 @@
+{
+  "memory_type": "palinode",
+  "memory_params": {
+    "workspace_root": "palinode_workspace",
+    "top_k": 6,
+    "neighbor_radius": 1
+  }
+}
