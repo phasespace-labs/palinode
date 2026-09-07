@@ -10,6 +10,11 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- `palinode.config.yaml.example` now keeps every documented scalar value aligned with
+  its corresponding dataclass default, except for the explicitly documented schedule
+  and database-path representations. New installs that copy the example therefore use
+  the measured `api_threshold` of 0.5 and the current default result limit of 15.
+
 ### Removed
 
 ### Security
