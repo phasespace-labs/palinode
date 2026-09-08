@@ -218,6 +218,7 @@ def test_evaluate_runs_real_store_and_preserves_controls(monkeypatch):
         "control_exact": 1,
         "control_paraphrase": 1,
     }
+    assert results["parameters"]["fts_threshold"] == 0.0
     assert results["runs"][0]["num_chunks"] > 0
     vector_summaries = {
         row["threshold"]: row["summary"]
@@ -241,3 +242,4 @@ def test_evaluate_runs_real_store_and_preserves_controls(monkeypatch):
     assert "Production defaults changed: **no**" in report
     assert "## BM25 arm contribution" in report
     assert "Results from BM25 alone" in report
+    assert "BM25 floor: 0.00" in report

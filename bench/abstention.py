@@ -320,12 +320,11 @@ def _measure(
 def _fts_candidate_stats(
     cases: Sequence[QueryCase], *, top_k: int
 ) -> dict[str, Any]:
-    """The BM25 candidate scores the per-arm floor is applied to.
+    """The BM25 candidate scores its independent floor is applied to.
 
     ``search_fts`` normalizes BM25 as ``min(abs(rank) / 25.0, 1.0)``, a scale
-    with no relation to the cosine similarity the vector arm is scored on.
-    One threshold is applied to both, so this records where BM25 actually
-    lands on that shared axis.
+    with no relation to the cosine similarity the vector arm is scored on, so
+    this records where BM25 lands on its own axis.
     """
     from palinode.core import store
 
@@ -552,6 +551,7 @@ def evaluate(
             "size": size,
             "thresholds": list(thresholds),
             "top_k": top_k,
+            "fts_threshold": config.search.fts_threshold,
             "modes": list(MODES),
             "query_counts": query_kind_counts(cases),
             "production_defaults_changed": False,
@@ -590,6 +590,7 @@ def render_markdown(results: dict[str, Any]) -> str:
         f"- Embedder: {env['embedding_model']} ({env['embedding_dimensions']} dimensions)",
         f"- Corpus seeds: {', '.join(str(seed) for seed in params['seeds'])}",
         f"- Corpus size: {params['size']} files per seed; top-k: {params['top_k']}",
+        f"- BM25 floor: {params.get('fts_threshold', 0.0):.2f}",
         "- Query protocol: "
         f"{sum(counts.get(kind, 0) for kind in ABSENT_KINDS)} no-answer queries "
         f"and {sum(counts.get(kind, 0) for kind in CONTROL_KINDS)} answer-present controls per seed",
@@ -627,10 +628,11 @@ def render_markdown(results: dict[str, Any]) -> str:
         [
             "## BM25 arm contribution",
             "",
-            "The two arms are scored on different axes and share one floor: real cosine "
-            "similarity for the vector arm, `min(abs(bm25) / 25.0, 1.0)` for BM25. This "
-            "table is what separates the arms; the counted metrics above cannot, because "
-            "they are blind to a reordering.",
+            "The two arms are scored on different axes: each table threshold is the real "
+            "cosine floor for the vector arm, while BM25 uses the independently configured "
+            f"`fts_threshold` ({params.get('fts_threshold', 0.0):.2f}) against "
+            "`min(abs(bm25) / 25.0, 1.0)`. This table is what separates the arms; "
+            "the counted metrics above cannot, because they are blind to a reordering.",
             "",
             "| Threshold | Cases where hybrid differs from vector | Reordered only | Membership changed | Results from BM25 alone |",
             "|---:|---:|---:|---:|---:|",

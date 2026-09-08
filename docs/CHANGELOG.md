@@ -10,6 +10,10 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- Hybrid search now filters vector and BM25 candidates on independent score
+  floors. Request-level `threshold` remains the cosine floor, while the new
+  config-only `search.fts_threshold` defaults to no BM25 filtering.
+
 ### Removed
 
 ### Security

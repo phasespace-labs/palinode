@@ -6,19 +6,18 @@ embedder rejects that one input (bge-m3's NaN vector), and
 ``EmbeddingInputError``'s recovery text promises the chunk "stays
 keyword-searchable". It did not: the chunk has no ``chunks_vec`` row, so the
 vector arm can never carry it, and its normalized BM25 score (``raw / 25.0``)
-never clears the shared per-arm floor that the BM25-arm measurement
-deliberately left in place for chunks that *have* a vector. The row was in
-``chunks``, in ``chunks_fts``, matched ``MATCH`` — and ``/search`` would not
-return it while a vector-bearing control in the same two-document store came
-back normally.
+did not clear the old shared floor. The row was in ``chunks``, in
+``chunks_fts``, matched ``MATCH`` — and ``/search`` would not return it while
+a vector-bearing control in the same two-document store came back normally.
 
 Fix: ``search_hybrid`` marks each BM25 candidate with ``has_vector`` and
-``rank_hybrid`` exempts vectorless candidates from the floor. This file
-proves it end-to-end against a real SQLite store (no DB mocking, per
-CLAUDE.md) — the poisoned chunk is written through the real
+``rank_hybrid`` exempts vectorless candidates from a configured BM25 floor.
+The default BM25 floor is now zero, so all keyword candidates are reachable;
+the exemption remains relevant when an operator chooses a positive floor.
+This file proves it end-to-end against a real SQLite store (no DB mocking,
+per CLAUDE.md) — the poisoned chunk is written through the real
 ``reconcile.apply`` FTS-only path using the NaN-input regression test's
-selective embedder — and pins that a chunk with a vector is floored exactly
-as before.
+selective embedder — and pins the positive-floor behavior too.
 """
 from __future__ import annotations
 
@@ -127,7 +126,9 @@ class TestStoreLevel:
         assert poison_hit["has_vector"] is False
         assert poison_hit["raw_score"] is None
 
-    def test_vectored_chunk_is_floored_exactly_as_before(self, tmp_store):
+    def test_vectored_chunk_respects_configured_fts_floor(
+        self, tmp_store, monkeypatch
+    ):
         """Same BM25 band, same query — the only difference is whether the
         chunk has a vector. The vectored one (cosine 0 to the query, BM25
         below the floor) stays excluded; the vectorless one is returned."""
@@ -142,6 +143,9 @@ class TestStoreLevel:
         assert {h["file_path"] for h in fts} == {poison_path, vectored_path}
         assert all(h["score"] < config.search.api_threshold for h in fts)
 
+        monkeypatch.setattr(
+            config.search, "fts_threshold", config.search.api_threshold
+        )
         hits = store.search_hybrid(
             _KEYWORD_QUERY, _VEC, threshold=config.search.api_threshold,
             record_access=False,
@@ -149,7 +153,7 @@ class TestStoreLevel:
         paths = [h["file_path"] for h in hits]
         assert poison_path in paths
         assert vectored_path not in paths, (
-            "a chunk WITH a vector must still be thresholded per-arm, as before"
+            "a chunk WITH a vector must respect the configured BM25 floor"
         )
 
     def test_vectored_chunk_above_cosine_floor_keeps_its_score(self, tmp_store):
@@ -173,7 +177,9 @@ class TestStoreLevel:
         assert control_after["score"] == before[0]["score"]
         assert control_after.get("has_vector", True) is True
 
-    def test_exemption_retires_once_vector_is_backfilled(self, tmp_store):
+    def test_exemption_retires_once_vector_is_backfilled(
+        self, tmp_store, monkeypatch
+    ):
         """After a REEMBED pass writes the vector, the chunk is an ordinary
         vectored candidate again and the floor applies to it."""
         poison_path = _write_poison_fts_only(tmp_store)
@@ -186,6 +192,9 @@ class TestStoreLevel:
         assert [pw.reason for pw in p2.to_index] == [reconcile.REEMBED]
         assert reconcile.apply(p2, embedder=_HealedEmbedder()).vec_ok is True
 
+        monkeypatch.setattr(
+            config.search, "fts_threshold", config.search.api_threshold
+        )
         hits = store.search_hybrid(
             _KEYWORD_QUERY, _VEC, threshold=config.search.api_threshold,
             record_access=False,

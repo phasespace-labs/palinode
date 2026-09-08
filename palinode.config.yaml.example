@@ -128,6 +128,8 @@ search:
   hybrid_enabled: true
   # Balance: 0.0 = vector only, 1.0 = BM25 only, 0.5 = equal weight
   hybrid_weight: 0.5
+  # BM25 floor on its own normalized scale (0.0 = no BM25 filtering)
+  fts_threshold: 0.0
   # Default threshold for MCP server searches (lower = more results)
   mcp_threshold: 0.4
   # Default threshold for FastAPI searches (higher = more precision)

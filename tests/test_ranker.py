@@ -16,7 +16,7 @@ from __future__ import annotations
 import pytest
 
 from palinode.core import ranker
-from palinode.core.config import config
+from palinode.core.config import SearchConfig, config
 
 
 def _res(path, *, score=0.5, section="root", metadata=None, **extra):
@@ -47,6 +47,10 @@ def _order(results):
     return [r["file_path"] for r in results]
 
 
+def test_fts_threshold_defaults_to_no_filtering():
+    assert SearchConfig().fts_threshold == 0.0
+
+
 def test_rrf_fusion_rewards_agreement_across_both_lists():
     # `both` appears rank-0 in vec AND fts; `vonly`/`fonly` appear in one list.
     both = _res("both.md")
@@ -56,11 +60,12 @@ def test_rrf_fusion_rewards_agreement_across_both_lists():
     assert _order(out)[0] == "both.md", "a hit in both lists should fuse to the top"
 
 
-def test_threshold_is_a_per_arm_relevance_floor():
-    """`threshold` filters each candidate's OWN (real) score before fusion —
-    it is no longer a cutoff on the fused/RRF score. A low-own-score
-    candidate is dropped even where RRF rank alone would have carried it to
-    the top of the fused list.
+def test_vector_threshold_is_a_relevance_floor():
+    """`threshold` filters each vector candidate's real cosine before fusion.
+
+    It is no longer a cutoff on the fused/RRF score. A low-own-score candidate
+    is dropped even where RRF rank alone would have carried it to the top of
+    the fused list.
     """
     strong = _res("strong.md", score=0.7)
     weak = _res("weak.md", score=0.3)
@@ -74,14 +79,42 @@ def test_threshold_is_a_per_arm_relevance_floor():
     )
 
 
-def test_threshold_lets_either_arm_vouch_for_a_candidate():
-    """A candidate weak on one arm's own score still survives if the OTHER
-    arm's own score clears the floor — hybrid search should still catch a
-    strong keyword match with a weak vector score, or vice versa."""
+def test_independent_thresholds_let_either_arm_vouch_for_a_candidate():
+    """A candidate survives when either arm clears its own floor."""
     weak_vec = _res("hit.md", score=0.2)
     strong_fts = _res("hit.md", score=0.9)
-    out = _run([weak_vec], [strong_fts], threshold=0.5)
+    out = _run(
+        [weak_vec], [strong_fts], threshold=0.5, fts_threshold=0.5
+    )
     assert _order(out) == ["hit.md"]
+
+
+def test_vector_threshold_does_not_filter_fts_candidates():
+    weak_fts = _res("keyword.md", score=0.2, has_vector=True)
+
+    out = _run([], [weak_fts], threshold=0.5, fts_threshold=0.0)
+
+    assert _order(out) == ["keyword.md"]
+
+
+def test_fts_threshold_does_not_filter_vector_candidates():
+    weak_vec = _res("semantic.md", score=0.2, raw_score=0.2)
+
+    out = _run([weak_vec], [], threshold=0.0, fts_threshold=0.5)
+
+    assert _order(out) == ["semantic.md"]
+
+
+def test_zero_fts_threshold_keeps_every_fts_candidate():
+    candidates = [
+        _res("zero.md", score=0.0, has_vector=True),
+        _res("weak.md", score=0.01),
+        _res("vectorless.md", score=0.0, has_vector=False),
+    ]
+
+    out = _run([], candidates, threshold=0.9, fts_threshold=0.0)
+
+    assert set(_order(out)) == {"zero.md", "weak.md", "vectorless.md"}
 
 
 def test_threshold_floor_is_independent_of_rrf_rank():
@@ -230,7 +263,9 @@ def test_threshold_exempts_vectorless_fts_candidates():
     fts_only = _res("fts-only.md", score=0.05, has_vector=False)
     vectored = _res("vectored.md", score=0.05, has_vector=True)
     legacy = _res("legacy.md", score=0.05)
-    out = _run([], [fts_only, vectored, legacy], threshold=0.5)
+    out = _run(
+        [], [fts_only, vectored, legacy], threshold=0.0, fts_threshold=0.5
+    )
     assert _order(out) == ["fts-only.md"]
 
 
@@ -245,9 +280,17 @@ def test_vectorless_exemption_leaves_vectored_candidates_untouched():
     weak_fts_vectored = _res("weak.md", score=0.2, has_vector=True)
     fts_only = _res("fts-only.md", score=0.02, has_vector=False)
 
-    baseline = _run([strong_vec, weak_vec], [weak_fts_vectored], threshold=0.5)
+    baseline = _run(
+        [strong_vec, weak_vec],
+        [weak_fts_vectored],
+        threshold=0.5,
+        fts_threshold=0.5,
+    )
     with_fts_only = _run(
-        [strong_vec, weak_vec], [weak_fts_vectored, fts_only], threshold=0.5
+        [strong_vec, weak_vec],
+        [weak_fts_vectored, fts_only],
+        threshold=0.5,
+        fts_threshold=0.5,
     )
 
     def _vectored(results):

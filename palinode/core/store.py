@@ -1676,11 +1676,11 @@ def search_hybrid(
         query_embedding: The embedded query vector (for cosine similarity).
         category: Optional category filter applied to both searches.
         top_k: Maximum results to return.
-        threshold: Minimum PER-ARM relevance floor — real cosine similarity for
-            vector candidates, normalized BM25 for FTS candidates — applied
-            BEFORE RRF fusion (see :func:`palinode.core.ranker.rank_hybrid`).
-            FTS candidates with no ``chunks_vec`` row (written FTS-only) are
-            exempt: the keyword arm is the only arm they have.
+        threshold: Minimum vector relevance floor, measured as real cosine
+            similarity and applied BEFORE RRF fusion. The BM25 arm uses the
+            independent config-only ``search.fts_threshold`` floor; candidates
+            with no ``chunks_vec`` row are exempt because BM25 is their only
+            retrieval path (see :func:`palinode.core.ranker.rank_hybrid`).
             NOT a cutoff on the fused score: a production measurement found
             the post-RRF score to be a function of rank, not relevance, so
             thresholding it there selects a near-invariant rank cutoff
@@ -1711,7 +1711,7 @@ def search_hybrid(
     # Get vector candidates. record_access=False: search_hybrid records recall
     # on its final merged hit set, not on these candidates. threshold=0.0 here
     # is deliberate: this is a wide-net candidate fetch — rank_hybrid applies
-    # the caller's real `threshold` itself, per-arm, before fusion (see its
+    # the caller's real vector `threshold` itself before fusion (see its
     # docstring).
     vec_results = search(query_embedding, category=category, top_k=top_k * 2, threshold=0.0,
                          record_access=False, kind_exclude_list=kind_exclude_list)
@@ -1754,7 +1754,7 @@ def search_hybrid(
             for row in get_entity_files(entity):
                 context_files.add(row["file_path"])
 
-    # Fuse + re-rank (threshold → RRF → decay → priority → context → daily →
+    # Fuse + re-rank (arm floors → RRF → decay → priority → context → daily →
     # dedup → top_k → date) in the pure ranker. priority_weight is read from
     # this module so patch.object(store, "_PRIORITY_RANK_WEIGHT", ...) still
     # tunes ordering.
@@ -1763,6 +1763,7 @@ def search_hybrid(
         fts_results,
         top_k=top_k,
         threshold=threshold,
+        fts_threshold=config.search.fts_threshold,
         hybrid_weight=effective_hybrid_weight,
         priority_weight=_PRIORITY_RANK_WEIGHT,
         context_files=context_files,
