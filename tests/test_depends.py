@@ -5,6 +5,7 @@ Covers:
 - traverse_depends: empty deps, chains, unblocked/blocked, orphans
 - find_unblocked: returns only items ready to start
 - CLI: palinode depends command (via CLI runner with patched api_client methods)
+- API: the two routes, and that the sibling route stays a sibling
 
 All tests use tmp_path with real markdown files — no mocking of the filesystem.
 """
@@ -270,3 +271,70 @@ def test_cli_depends_no_args_error():
     result = runner.invoke(cli_main, ["depends"])
 
     assert result.exit_code != 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# API: GET /depends/{slug:path} and its sibling GET /depends/_unblocked
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The registry declares the sibling route as how the ``api`` surface realizes
+# the canonical ``unblocked`` param (``surface_realizations`` in
+# ``palinode/core/parity.py``).  These pin the two response shapes so that
+# declaration keeps describing something true.
+
+
+def _api_client(tmp_path, monkeypatch):
+    import importlib
+
+    from fastapi.testclient import TestClient
+
+    from palinode.core.config import config
+
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    monkeypatch.setattr(config, "db_path", str(tmp_path / ".palinode.db"))
+    for _k in ("PALINODE_API_TOKEN", "PALINODE_API_TOKEN_FILE", "PALINODE_API_HOST"):
+        monkeypatch.delenv(_k, raising=False)
+    # The memory files below are written before the API starts, so the
+    # startup guard would otherwise read a populated dir with no database as a
+    # misconfiguration and refuse to serve.  Here the fresh DB is the point.
+    monkeypatch.setenv("PALINODE_ALLOW_FRESH_DB", "1")
+    import palinode.api.server as srv
+
+    srv = importlib.reload(srv)
+    srv._rate_counters.clear()
+    return TestClient(srv.app, raise_server_exceptions=True)
+
+
+def test_api_unblocked_route_returns_a_list(tmp_path, monkeypatch):
+    """``GET /depends/_unblocked`` answers with the ready list, not a slug view.
+
+    Declared before ``GET /depends/{slug:path}`` in the router, so a reorder
+    would make ``_unblocked`` match as a slug and return a dict.  That is the
+    failure this pins: the assertion is on the shape, not just the status.
+    """
+    _write_md(tmp_path, "a.md", {"slug": "milestone/A", "status": "in_progress"})
+
+    with _api_client(tmp_path, monkeypatch) as client:
+        response = client.get("/depends/_unblocked")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert isinstance(body, list)
+    assert [item["slug"] for item in body] == ["milestone/A"]
+    assert set(body[0]) == {"slug", "status", "file_path"}
+
+
+def test_api_depends_route_returns_the_neighbourhood(tmp_path, monkeypatch):
+    """``GET /depends/{slug}`` answers with the dict view for one slug."""
+    _write_md(tmp_path, "a.md", {"slug": "milestone/A", "status": "done"})
+    _write_md(tmp_path, "b.md", {"slug": "milestone/B", "depends_on": ["milestone/A"]})
+
+    with _api_client(tmp_path, monkeypatch) as client:
+        response = client.get("/depends/milestone/B")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert isinstance(body, dict)
+    assert body["slug"] == "milestone/B"
+    assert body["unblocked"] is True
+    assert [dep["slug"] for dep in body["depends_on"]] == ["milestone/A"]
