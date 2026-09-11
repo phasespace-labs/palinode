@@ -7,8 +7,10 @@ giving it an expiry:
   absolute ``expires_at`` at save time (see :func:`normalize_expiry`).
 - ``expires_at`` — an explicit ISO-8601 timestamp in frontmatter.
 
-The :func:`archive_expired` sweep flips every memory whose ``expires_at`` has passed to
-``status: archived``. Because the archived-status recall fix made ``status: archived``
+The :func:`archive_expired` sweep flips every *age-eligible* memory whose ``expires_at``
+has passed to ``status: archived`` — identity/profile documents are exempt per ADR-020
+(:mod:`palinode.consolidation.retirement`), because age is not a retirement reason for
+them. Because the archived-status recall fix made ``status: archived``
 content recall-suppressed-but-retained (``config.search.exclude_status``), an expired
 ephemeral memory ages out of default recall while staying on disk + in git for audit —
 exactly ADR-015 §2.3's "down-weighted, then archived" end state.
@@ -32,6 +34,7 @@ import re
 from datetime import UTC, datetime, timedelta
 
 from palinode.consolidation.archive import set_archived_frontmatter
+from palinode.consolidation.retirement import SUPERSEDED_ONLY, classify
 from palinode.core import expiry, parser, store, git_tools
 from palinode.core.config import config
 
@@ -149,15 +152,24 @@ def archive_expired(now: datetime | None = None, dry_run: bool = False) -> dict:
     """Archive every memory whose ``expires_at`` has passed (ADR-015 §2.3, the TTL/auto-archive work).
 
     Returns ``{"archived": [relpaths], "count": int, "dry_run": bool,
-    "triggers_expired": [trigger ids]}``. Idempotent: a memory already at
-    ``status: archived`` is skipped, and a trigger already disabled is not
-    re-reported. The trigger half rides the same sweep so both acting state
-    types age out on one clock (see :mod:`palinode.core.expiry`).
+    "triggers_expired": [trigger ids], "skipped_superseded_only": int}``.
+    Idempotent: a memory already at ``status: archived`` is skipped, and a
+    trigger already disabled is not re-reported. The trigger half rides the
+    same sweep so both acting state types age out on one clock (see
+    :mod:`palinode.core.expiry`).
+
+    An identity/profile document (ADR-020, see
+    :mod:`palinode.consolidation.retirement`) is **never archived by this
+    sweep**, even with a lapsed ``expires_at``: for a ``core: true`` memory
+    that timestamp says when it stops *acting* — it stays stored and
+    searchable, which archiving it would undo. Those skips are reported once
+    per sweep, with a count and one sample path.
     """
     now = now or _utc_now()
     root = config.memory_dir
     archived: list[str] = []
     abs_paths: list[str] = []
+    skipped_superseded_only: list[str] = []
 
     for path in _iter_memory_files(root):
         try:
@@ -169,8 +181,22 @@ def archive_expired(now: datetime | None = None, dry_run: bool = False) -> dict:
             continue
         if not is_expired(meta, now):
             continue
+        policy, signal = classify(path, meta)
+        if policy == SUPERSEDED_ONLY:
+            skipped_superseded_only.append(f"{os.path.relpath(path, root)} ({signal})")
+            continue
         archived.append(os.path.relpath(path, root))
         abs_paths.append(path)
+
+    if skipped_superseded_only:
+        # One line per sweep, not per file: a store with many protected
+        # documents must not turn every sweep into a log flood.
+        logger.info(
+            "ttl: skipped %d expired document(s) whose retirement policy is "
+            "superseded-only (age does not retire them), e.g. %s",
+            len(skipped_superseded_only),
+            skipped_superseded_only[0],
+        )
 
     if not dry_run:
         for path in abs_paths:
@@ -200,4 +226,5 @@ def archive_expired(now: datetime | None = None, dry_run: bool = False) -> dict:
         "count": len(archived),
         "dry_run": dry_run,
         "triggers_expired": triggers_expired,
+        "skipped_superseded_only": len(skipped_superseded_only),
     }

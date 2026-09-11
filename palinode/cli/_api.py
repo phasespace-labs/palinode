@@ -210,13 +210,39 @@ class PalinodeAPI:
         response.raise_for_status()
         return response.json()
 
-    def lint(self) -> dict[str, Any]:
+    def lint(
+        self,
+        propose: bool = False,
+        apply: bool = False,
+        deep_contradictions: bool = False,
+        max_llm_calls: int | None = None,
+        similarity_threshold: float | None = None,
+    ) -> dict[str, Any]:
         """Run the memory lint pass via the API.  ADR-010.
+
+        ``propose`` adds the deterministic finding→operation proposal set (a dry
+        run); ``apply`` runs the applicable proposals through the executor path.
+        ``deep_contradictions`` includes the LLM-confirmed semantic pass so its
+        findings can be proposed too.
 
         Raises ``RequestError`` if the API is unreachable; the CLI catches
         this to fall back to a local in-process lint pass.
         """
-        response = self.client.post("/lint", timeout=30.0)
+        params: dict[str, Any] = {}
+        if propose:
+            params["propose"] = "true"
+        if apply:
+            params["apply"] = "true"
+        if deep_contradictions:
+            params["deep_contradictions"] = "true"
+            if max_llm_calls is not None:
+                params["max_llm_calls"] = max_llm_calls
+            if similarity_threshold is not None:
+                params["similarity_threshold"] = similarity_threshold
+        # Applying can archive documents and write commits; the propose pass may
+        # run an LLM check. Both outlast the report-only timeout.
+        timeout = 300.0 if (apply or deep_contradictions) else 30.0
+        response = self.client.post("/lint", params=params or None, timeout=timeout)
         response.raise_for_status()
         return response.json()
 
@@ -331,8 +357,13 @@ fields, the session-end hook audit push)."""
         dry_run: bool = False,
         nightly: bool = False,
         sources: list[str] | None = None,
+        respect_gate: bool = False,
     ) -> dict[str, Any]:
-        body: dict = {"dry_run": dry_run, "nightly": nightly}
+        body: dict = {
+            "dry_run": dry_run,
+            "nightly": nightly,
+            "respect_gate": respect_gate,
+        }
         # Omitted rather than sent as null so the server's default stays the
         # single definition of "which corpus".
         if sources:

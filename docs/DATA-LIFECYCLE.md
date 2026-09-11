@@ -95,3 +95,15 @@ git history persists until rewritten. If your obligations include maximum retent
 periods, implement them at the file layer (dated reviews of `daily/`, archive sweeps) —
 the mechanisms above are the enforcement path, and the tombstone convention gives the
 schedule an auditable record.
+
+One thing those sweeps deliberately do **not** cover: identity documents. Age-based
+retirement — the TTL sweep's `expires_at`, and a staleness `ARCHIVE` proposed by
+consolidation — applies to episodic content (daily notes, insights, research, status
+documents) and is refused on files about a person or a long-lived entity (`people/`,
+project profile documents, anything declaring `update_policy: replace` or `core: true`).
+Those are retired by supersession or retraction — a statement that the fact changed or
+was never true — because "this fact is old" is not evidence that it stopped being true.
+A document can state its own regime with `retirement_policy: age-eligible |
+superseded-only`. **This is orthogonal to erasure:** a retention schedule that must
+reach personal data uses the erasure procedure above, which is destructive by design;
+the retirement policy governs only what ages out of recall on its own.

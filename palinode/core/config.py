@@ -282,7 +282,13 @@ class NightlyConfig:
     """Lightweight daily update configurations."""
     enabled: bool = True
     lookback_days: int = 1
-    allowed_ops: list[str] = field(default_factory=lambda: ["UPDATE", "SUPERSEDE", "MERGE"])
+    # PROPOSE_CONTRADICTS is in the default set because it is the
+    # no-winner counterpart to SUPERSEDE: it records a conflict in
+    # frontmatter and retires nothing, so it is additive in exactly the
+    # sense this restricted pass requires. Omitting it would filter out
+    # every proposal the nightly prompt now asks for.
+    allowed_ops: list[str] = field(default_factory=lambda:
+        ["UPDATE", "SUPERSEDE", "MERGE", "PROPOSE_CONTRADICTS"])
 
 @dataclass
 class WriteTimeConfig:
@@ -340,6 +346,34 @@ class ForgetConfig:
     min_target_coverage: float = 0.05
 
 @dataclass
+class AutoGateConfig:
+    """Activity gate for the automatic (cron) consolidation path.
+
+    The wall-clock schedule alone gets both cases wrong: an idle week still
+    burns an LLM pass, and a heavy day still waits for the next tick. An
+    automatic pass runs only when **both** conditions hold — at least
+    ``min_hours_elapsed`` since that pass last ran, and at least
+    ``min_sessions`` session-end entries recorded since then — so the cron can
+    fire as often as you like and the pass lands on use rather than on the
+    calendar.
+
+    ``max_hours_elapsed`` is the ceiling that defeats the gate: past it the
+    pass runs whatever the session count is. Without it, a store that ingests
+    through the watcher and records no sessions would never consolidate — the
+    dual gate turns "no sessions" into "never", which is worse than the wasted
+    pass it exists to prevent. The default equals the weekly cadence
+    consolidation already had, so an idle deployment keeps today's behaviour.
+
+    Enabled by default, and only on the automatic path: ``palinode
+    consolidate`` / ``dream``, ``POST /consolidate`` and the MCP tool bypass
+    the gate unless they ask for it (``--respect-gate`` / ``respect_gate``).
+    """
+    enabled: bool = True
+    min_hours_elapsed: float = 24
+    min_sessions: int = 5
+    max_hours_elapsed: float = 168
+
+@dataclass
 class ConsolidationConfig:
     """Interval LLM job configuration settings logic."""
     enabled: bool = True
@@ -358,8 +392,10 @@ class ConsolidationConfig:
     # third, unrelated `compaction.allowed_ops` key that looked like it did
     # this and did nothing — removed; this is now the only weekly-pass knob.
     allowed_ops: list[str] = field(default_factory=lambda:
-        ["KEEP", "UPDATE", "MERGE", "SUPERSEDE", "ARCHIVE", "RETRACT"])
+        ["KEEP", "UPDATE", "MERGE", "SUPERSEDE", "ARCHIVE", "RETRACT",
+         "PROPOSE_CONTRADICTS"])
     nightly: NightlyConfig = field(default_factory=NightlyConfig)
+    auto_gate: AutoGateConfig = field(default_factory=AutoGateConfig)
     write_time: WriteTimeConfig = field(default_factory=WriteTimeConfig)
     forget: ForgetConfig = field(default_factory=ForgetConfig)
     keyword_map: dict[str, list[str]] | None = None
@@ -457,6 +493,18 @@ instrumentation).
     Set to False (or PALINODE_INSTRUMENTATION_DISABLED=1) to suppress entirely.
     """
     capture_retrievals: bool = True
+
+@dataclass
+class WriteConfig:
+    """What the capture surfaces normalize on the way in.
+
+    ``normalize_relative_dates`` defaults ON because ``PROGRAM.md`` already
+    requires it of every extractor: a relative time expression is resolved
+    against the session date and stored absolute, because nothing downstream
+    can recover which Tuesday "last Tuesday" was. Turning it off keeps the
+    author's wording and leaves the drift for ``palinode lint`` to report.
+    """
+    normalize_relative_dates: bool = True
 
 @dataclass
 class LoggingConfig:
@@ -619,6 +667,7 @@ class Config:
     scope: ScopeConfig = field(default_factory=ScopeConfig)
     decay: DecayConfig = field(default_factory=DecayConfig)
     services: ServicesConfig = field(default_factory=ServicesConfig)
+    write: WriteConfig = field(default_factory=WriteConfig)
     git: GitConfig = field(default_factory=GitConfig)
     audit: AuditConfig = field(default_factory=AuditConfig)
     instrumentation: InstrumentationConfig = field(default_factory=InstrumentationConfig)

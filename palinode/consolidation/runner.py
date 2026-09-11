@@ -33,6 +33,7 @@ from palinode.core.ollama_client import OllamaError, OllamaRole, get_ollama_clie
 from palinode.core.parser import split_frontmatter
 from palinode.consolidation import status_doc
 from palinode.consolidation.op_parse import op_kind, op_reason, parse_operations
+from palinode.prompts import PromptUnavailable, resolve_prompt
 
 logger = logging.getLogger("palinode.consolidation")
 
@@ -104,6 +105,14 @@ def _get_decisions_for_project(project_id: str) -> list[dict]:
                         active_decisions.append({
                             "id": meta.get("id"),
                             "name": meta.get("name"),
+                            # The memory's on-disk identity, `category/slug` —
+                            # the only form a typed link accepts. The
+                            # frontmatter `id` is `category-slug`, which is not
+                            # a ref, so a model told to cite one had nothing
+                            # citable in the prompt to copy.
+                            "ref": "decisions/" + os.path.splitext(
+                                os.path.basename(filepath)
+                            )[0],
                             "content": parts[2].strip()
                         })
                 except Exception as _parse_exc:
@@ -156,7 +165,12 @@ def _format_active_decisions(project_id: str) -> str:
         body = (d.get("content") or "").strip()
         if len(body) > _MAX_DECISION_CHARS:
             body = body[:_MAX_DECISION_CHARS].rstrip() + " …[truncated]"
-        entry = f"- **{title}**: {body}" if body else f"- **{title}**"
+        # The ref is rendered alongside the title because PROPOSE_CONTRADICTS
+        # takes `category/slug` refs: a conflict the model can see but cannot
+        # name is a conflict it cannot record.
+        ref = d.get("ref")
+        head = f"- **{title}** (ref: {ref})" if ref else f"- **{title}**"
+        entry = f"{head}: {body}" if body else head
         if total + len(entry) > MAX_DECISIONS_CHARS:
             parts.append(
                 f"- …and {len(decisions) - len(parts)} more decision(s) not shown"
@@ -474,6 +488,57 @@ def _partition_notes_for_archive(
     return retire, left
 
 
+def _read_prompt_body(prompt_path: str) -> str:
+    """The prompt text a model should see — frontmatter stripped.
+
+    Prompt files under ``specs/prompts/`` are memory files: they carry a
+    ``version:``/``active:`` frontmatter block that the prompt-versioning API
+    and `palinode doctor` read. That block is metadata *about* the prompt, not
+    an instruction to the model, and sending it prepends a YAML document to the
+    system prompt for no benefit. Files without frontmatter are returned whole,
+    which is what every prompt did before any of them had one.
+    """
+    with open(prompt_path, encoding="utf-8") as f:
+        _, body = split_frontmatter(f.read())
+    return body.lstrip("\n")
+
+
+def _system_prompt(prompt_file: str) -> str:
+    """The system prompt for a consolidation pass — store copy first.
+
+    Resolution order, and why each rung is there:
+
+    1. ``<memory_dir>/specs/prompts/<prompt_file>`` — the operator's copy.
+       Editing prompts is a documented workflow, so a store copy always wins.
+    2. ``<memory_dir>/specs/prompts/compaction.md`` — pre-existing behaviour
+       for a store that predates the nightly prompt. Kept above the packaged
+       rung deliberately: an operator who edited ``compaction.md`` and never
+       had a nightly file was getting their own text, and a packaging change
+       should not quietly take that away.
+    3. the copy inside the installed package — the rung that did not exist,
+       and whose absence meant a ``pip install`` could not consolidate at all.
+    4. nothing: raise. Never a quiet "no operations", which the run summary
+       cannot tell apart from a week with nothing to compact.
+
+    Every rung goes through :func:`_read_prompt_body`, so frontmatter never
+    reaches the model regardless of which copy was used.
+    """
+    store_dir = os.path.join(config.memory_dir, "specs", "prompts")
+    for candidate in (prompt_file, "compaction.md"):
+        store_path = os.path.join(store_dir, candidate)
+        if os.path.exists(store_path):
+            return _read_prompt_body(store_path)
+
+    packaged_path, _ = resolve_prompt(prompt_file, config.memory_dir)
+    logger.info(
+        "palinode.consolidation: %s is not in the store (%s) — using the copy "
+        "packaged with palinode (%s). `palinode init` provisions the store's "
+        "prompts so you can edit them.",
+        prompt_file, store_dir, packaged_path,
+    )
+    return _read_prompt_body(str(packaged_path))
+
+
 def _consolidate_project(
     project_id: str,
     notes: list[dict],
@@ -497,15 +562,13 @@ def _consolidate_project(
     Returns:
         Tuple of (List of operation dicts, model_used).
     """
-    # Load compaction prompt
-    prompt_file = "nightly-consolidation.md" if is_nightly else "compaction.md"
-    prompt_path = os.path.join(config.memory_dir, "specs", "prompts", prompt_file)
-    if not os.path.exists(prompt_path):
-        prompt_path = os.path.join(config.memory_dir, "specs", "prompts", "compaction.md")
-        
-    with open(prompt_path, encoding="utf-8") as f:
-        system_prompt = f.read()
-    
+    # Load compaction prompt: store copy, then the copy inside the wheel.
+    # PromptUnavailable propagates — the caller records the project as failed,
+    # which is the honest report for "this pass could not run".
+    system_prompt = _system_prompt(
+        "nightly-consolidation.md" if is_nightly else "compaction.md"
+    )
+
     # Load project file and extract facts. Callers filter no-target groups out
     # before reaching here; this stays defensive for direct callers, and returns
     # the same "nothing to do" shape as a file with no tagged facts rather than
@@ -589,12 +652,25 @@ def _check_contradictions(
     tests inject a fake returning a canned contradiction op so the embed/search
     + parse + translate path runs deterministically.
     """
-    update_prompt_path = os.path.join(config.memory_dir, "specs", "prompts", "update.md")
-    if not os.path.exists(update_prompt_path):
+    try:
+        update_prompt_path, from_store = resolve_prompt("update.md", config.memory_dir)
+    except PromptUnavailable as exc:
+        # Not the vacuous-success shape: every candidate still becomes an ADD,
+        # so the caller's work happens — only the contradiction check is lost,
+        # and now it says so instead of degrading silently.
+        logger.warning(
+            "palinode.consolidation: no update.md prompt (%s) — adding %d item(s) "
+            "for project %s without the contradiction check.",
+            exc, len(new_items), project_id,
+        )
         return [{"operation": "ADD", "item": item} for item in new_items]
-        
-    with open(update_prompt_path, encoding="utf-8") as f:
-        system_prompt = f.read()
+    if not from_store:
+        logger.info(
+            "palinode.consolidation: update.md is not in the store — using the "
+            "copy packaged with palinode (%s).",
+            update_prompt_path,
+        )
+    system_prompt = _read_prompt_body(str(update_prompt_path))
 
     operations = []
     for item in new_items:
@@ -696,6 +772,29 @@ def _fact_ids_before_apply(file_path: str) -> set[str]:
         return status_doc.fact_ids(f.read())
 
 
+def _loggable_operations(
+    operations: list[dict], applied_merges: list[int],
+) -> list[dict]:
+    """Drop the MERGE proposals the executor did not apply.
+
+    The Consolidation Log records what consolidation *did*, and every other op
+    kind's line already survives a no-op honestly (a KEEP with no rationale
+    emits nothing; an unresolvable id logs as unresolved). MERGE was the
+    exception: a proposal that retired nothing — no fact moved, no history
+    entry written — still left a ``[MERGE] …`` line claiming a merge happened.
+    Gate that one kind on the executor's own report of which merges landed.
+
+    Args:
+        operations: The ops passed to ``apply_operations``, in order.
+        applied_merges: Indices into ``operations`` of the MERGEs it applied.
+    """
+    applied = set(applied_merges)
+    return [
+        op for index, op in enumerate(operations)
+        if (op_kind(op) or "KEEP") != "MERGE" or index in applied
+    ]
+
+
 def _update_status_summary(
     file_path: str,
     new_activity: list[dict],
@@ -789,16 +888,26 @@ def run_consolidation(
     llm_fn: LlmFn | None = None,
     sources: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Run weekly consolidation under the memory store's shared run lock."""
+    """Run weekly consolidation under the memory store's shared run lock.
+
+    Records the pass against the activity gate's clock on the way out. A pass
+    that raises records nothing, so the next tick retries it immediately rather
+    than waiting out a fresh interval; a dry run records nothing either, since
+    it changed no memory and consolidated no notes.
+    """
+    from palinode.consolidation import activity_gate
     from palinode.consolidation.run_lock import consolidation_run_lock
 
     with consolidation_run_lock():
-        return _run_consolidation_unlocked(
+        result = _run_consolidation_unlocked(
             lookback_days=lookback_days,
             dry_run=dry_run,
             llm_fn=llm_fn,
             sources=sources,
         )
+        if not dry_run:
+            activity_gate.record_run("weekly")
+        return result
 
 
 def _run_consolidation_unlocked(
@@ -900,12 +1009,17 @@ def _run_consolidation_unlocked(
                 continue
 
             pre_apply_ids = _fact_ids_before_apply(target)
-            stats = apply_operations(target, operations)
+            applied_merges: list[int] = []
+            stats = apply_operations(target, operations, applied_merges=applied_merges)
             for k, v in stats.items():
                 total_stats[k] = total_stats.get(k, 0) + v
 
             # Iteratively append operations to the status file, preserving history
-            _update_status_summary(target, operations, known_fact_ids=pre_apply_ids)
+            _update_status_summary(
+                target,
+                _loggable_operations(operations, applied_merges),
+                known_fact_ids=pre_apply_ids,
+            )
 
             # Track exactly the files this project's compaction touched so the
             # commit stages only them (one-mutation-one-commit).
@@ -959,10 +1073,18 @@ def _run_consolidation_unlocked(
             ", ".join(os.path.basename(n["filepath"]) for n in left_in_place),
         )
 
+    # A pass whose only outcome was a contradiction link used to commit
+    # "0u 0m 0s 0a" — a message that reads as "nothing happened" over a real
+    # mutation. Appended only when non-zero so the common message is unchanged.
+    contradicts_note = (
+        f" {total_stats.get('contradicts_proposed', 0)}c"
+        if total_stats.get("contradicts_proposed") else ""
+    )
     _git_commit(
         f"palinode: compaction {_utc_now().strftime('%Y-%m-%d')} — "
         f"{total_stats['updated']}u {total_stats['merged']}m "
         f"{total_stats['superseded']}s {total_stats['archived']}a"
+        f"{contradicts_note}"
         f" (model: {model_used})",
         files=mutated_files,
     )
@@ -990,15 +1112,24 @@ def _run_consolidation_unlocked(
 
 
 def run_nightly(lookback_days: int | None = None, dry_run: bool = False, llm_fn: LlmFn | None = None) -> dict[str, Any]:
-    """Run nightly consolidation under the memory store's shared run lock."""
+    """Run nightly consolidation under the memory store's shared run lock.
+
+    Records against the gate's ``nightly`` clock on the same terms as
+    ``run_consolidation`` records against ``weekly``; the two modes are tracked
+    separately so whichever ran last cannot starve the other.
+    """
+    from palinode.consolidation import activity_gate
     from palinode.consolidation.run_lock import consolidation_run_lock
 
     with consolidation_run_lock():
-        return _run_nightly_unlocked(
+        result = _run_nightly_unlocked(
             lookback_days=lookback_days,
             dry_run=dry_run,
             llm_fn=llm_fn,
         )
+        if not dry_run:
+            activity_gate.record_run("nightly")
+        return result
 
 
 def _run_nightly_unlocked(lookback_days: int | None = None, dry_run: bool = False, llm_fn: LlmFn | None = None) -> dict[str, Any]:
@@ -1086,11 +1217,18 @@ def _run_nightly_unlocked(lookback_days: int | None = None, dry_run: bool = Fals
                 continue
 
             pre_apply_ids = _fact_ids_before_apply(target)
-            stats = apply_operations(target, operations, nightly_policy=True)
+            applied_merges: list[int] = []
+            stats = apply_operations(
+                target, operations, nightly_policy=True, applied_merges=applied_merges,
+            )
             for k, v in stats.items():
                 total_stats[k] = total_stats.get(k, 0) + v
 
-            _update_status_summary(target, operations, known_fact_ids=pre_apply_ids)
+            _update_status_summary(
+                target,
+                _loggable_operations(operations, applied_merges),
+                known_fact_ids=pre_apply_ids,
+            )
 
             mutated_files.extend(_touched_files(target))
 
@@ -1150,3 +1288,54 @@ def _run_nightly_unlocked(lookback_days: int | None = None, dry_run: bool = Fals
         nightly_result["groups_skipped_no_target"] = len(skipped_no_target)
         nightly_result["skipped_no_target_projects"] = skipped_no_target
     return nightly_result
+
+
+def apply_proposed_operations(
+    target: str,
+    operations: list[dict],
+    *,
+    source: str,
+) -> dict[str, Any]:
+    """Apply already-built operations to one memory file, with provenance.
+
+    The entry point for proposers that are *not* the LLM — today the
+    deterministic lint→op mapping in
+    :mod:`palinode.consolidation.propose_from_lint`. It deliberately reuses the
+    weekly pass's tail rather than reimplementing it: the same
+    ``apply_operations`` call, the same pre-apply fact-id capture so a retiring
+    op's id still resolves in the audit log, the same status-document log entry,
+    and the same one-mutation-one-commit staging of the target plus its
+    ``-history.md`` sibling.
+
+    The only thing it adds is the actor. ``source`` names the proposer and lands
+    in the commit subject, so ``git log`` distinguishes an op the executor
+    applied on lint's proposal from one it applied on the model's. Everything
+    upstream of this call — deciding *which* ops, and whether they are allowed —
+    belongs to the proposer.
+
+    Args:
+        target: absolute path to the memory file the operations address.
+        operations: executor operation dicts, already validated by the proposer.
+        source: the proposing actor, e.g. ``"lint"``.
+
+    Returns the executor's stats dict.
+    """
+    from palinode.consolidation.executor import apply_operations
+
+    pre_apply_ids = _fact_ids_before_apply(target)
+    stats = apply_operations(target, operations)
+
+    # A status document is the one place with a Consolidation Log to append to;
+    # writing that log into an ordinary memory would invent a section the
+    # document never had.
+    if target.endswith("-status.md"):
+        _update_status_summary(target, operations, known_fact_ids=pre_apply_ids)
+
+    kinds = ", ".join(sorted({
+        op_kind(op) or "KEEP" for op in operations if isinstance(op, dict)
+    }))
+    _git_commit(
+        f"{config.git.commit_prefix} {source}-proposed ops: {kinds}",
+        files=_touched_files(target),
+    )
+    return stats

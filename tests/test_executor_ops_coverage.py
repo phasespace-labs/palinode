@@ -281,6 +281,125 @@ def test_merge_records_each_removed_line_for_a_duplicated_source_id(memory_file:
     assert "(reason: dup)" in history  # `reason` is honoured when `rationale` is absent
 
 
+# A MERGE whose `new_text` is the surviving fact's own text is the model saying
+# "ids[1:] add nothing to ids[0]" — a real merge whose conclusion needs no
+# rewriting. It used to abort on the content-unchanged check: the duplicates
+# stayed in the file, no history was written, and the runner still logged a
+# MERGE. The contract now: keep ids[0] byte-identical, retire ids[1:].
+
+IDENTICAL_TEXT_MERGE = {
+    "op": "MERGE",
+    "ids": ["f2", "f3"],
+    "new_text": "- [2024-01-02] Second project fact",
+    "rationale": "f3 adds nothing to f2",
+}
+
+
+def test_identical_text_merge_retires_later_sources_and_keeps_survivor_byte_identical(
+    memory_file: Path,
+) -> None:
+    stats = apply_operations(str(memory_file), [IDENTICAL_TEXT_MERGE])
+
+    content = _read(memory_file)
+    assert stats == {**ZERO_STATS, "merged": 1}
+    # ids[0] is untouched — same text, same id, same line.
+    assert f"{F2_ACTIVE}\n" in content
+    # ids[1:] are gone; unrelated facts survive.
+    assert "<!-- fact:f3 -->" not in content
+    assert F1_ACTIVE in content
+    assert DUP_F1_ACTIVE in content
+
+
+def test_identical_text_merge_records_only_the_retired_sources_in_history(
+    memory_file: Path,
+) -> None:
+    apply_operations(str(memory_file), [IDENTICAL_TEXT_MERGE])
+
+    history = _read_history(memory_file)
+    entries = [line for line in history.splitlines() if line.startswith("- [")]
+    # Only the retired line is recorded: ids[0]'s text never changed, so there
+    # is no pre-merge version of it to preserve.
+    assert len(entries) == 1
+    assert "Third project fact" in entries[0]
+    assert entries[0].endswith("<!-- fact:f3 -->")
+    assert "f2" in entries[0]  # where it went — the surviving fact
+    assert "f3 adds nothing to f2" in entries[0]  # why
+
+
+def test_identical_text_merge_with_nothing_left_to_retire_is_unmatched(
+    memory_file: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # ids[0]'s text is already the proposal and the only other source matches
+    # nothing: no fact is retired, so nothing happened and nothing is claimed.
+    before = _read(memory_file)
+    with caplog.at_level(logging.WARNING, logger="palinode.consolidation.executor"):
+        stats = apply_operations(
+            str(memory_file),
+            [{
+                "op": "MERGE",
+                "ids": ["f2", "missing"],
+                "new_text": "- [2024-01-02] Second project fact",
+            }],
+        )
+
+    assert stats == {**ZERO_STATS, "unmatched": 1}
+    assert _read(memory_file) == before
+    assert not _history_path(memory_file).exists()
+    assert "unmatched" in caplog.text.lower()
+
+
+def test_identical_text_merge_never_removes_its_own_survivor(memory_file: Path) -> None:
+    # f1 names two lines. Naming it as both survivor and source cannot delete
+    # the survivor: with no `merged-` rename, removing by id would match it.
+    stats = apply_operations(
+        str(memory_file),
+        [{
+            "op": "MERGE",
+            "ids": ["f1", "f1"],
+            "new_text": "- [2024-01-01] First project fact",
+            "rationale": "self-referential source",
+        }],
+    )
+
+    assert stats["merged"] == 0
+    assert F1_ACTIVE in _read(memory_file)
+
+
+def test_identical_text_merge_is_deterministic_and_reruns_as_a_noop(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    frozen = datetime(2026, 9, 5, 12, 34, tzinfo=UTC)
+    monkeypatch.setattr(executor_module, "_utc_now", lambda: frozen)
+    body = """- [2024-01-01] First project fact <!-- fact:f1 -->
+- [2024-01-02] Second project fact <!-- fact:f2 -->
+- [2024-01-03] Third project fact <!-- fact:f3 -->
+"""
+
+    outputs = []
+    for run in ("a", "b"):
+        run_dir = tmp_path / run
+        run_dir.mkdir()
+        target = _write_memory(run_dir, body)
+        stats = apply_operations(str(target), [IDENTICAL_TEXT_MERGE])
+        assert stats["merged"] == 1
+        outputs.append((_read(target), _read_history(target)))
+
+    assert outputs[0] == outputs[1]
+    _, history = outputs[0]
+    assert (
+        "- [2026-09-05 12:34] Merged into f2 (2026-09-05): [2024-01-03] Third "
+        "project fact (reason: f3 adds nothing to f2) <!-- fact:f3 -->\n"
+    ) in history
+
+    # Re-running the same op on its own result retires nothing a second time:
+    # ids[0] still matches, but every ids[1:] line is already gone.
+    rerun_target = tmp_path / "a" / "project-alpha.md"
+    rerun_stats = apply_operations(str(rerun_target), [IDENTICAL_TEXT_MERGE])
+    assert rerun_stats == {**ZERO_STATS, "unmatched": 1}
+    assert (_read(rerun_target), _read_history(rerun_target)) == outputs[0]
+
+
 def test_merge_rejected_by_nightly_policy_writes_no_history(memory_file: Path) -> None:
     # f2 and f3 carry different dates, so the nightly guard refuses the merge
     # before the helper runs — nothing is retired, so nothing is recorded.

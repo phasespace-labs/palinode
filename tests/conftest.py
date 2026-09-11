@@ -180,6 +180,26 @@ def _isolate_db_path(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "db_path", str(tmp_path / ".palinode.db"))
 
 
+@pytest.fixture(autouse=True)
+def _isolate_memory_dir(tmp_path, monkeypatch):
+    """Point ``config.memory_dir`` at this test's ``tmp_path`` by default.
+
+    The ``_isolate_db_path`` argument, one directory up. The process default
+    is the developer's real memory store (``~/palinode``), and a command that
+    writes into ``config.memory_dir`` without being told otherwise writes
+    *there*. That stayed invisible while nothing but the database was written
+    outside a fixture's ``tmp_path``; ``palinode init`` provisioning
+    ``specs/prompts/`` into the store is the first command that does, and
+    every existing ``init`` test invokes it.
+
+    Same override rule as ``db_path``: a test that patches ``memory_dir``
+    itself runs afterwards and wins.
+    """
+    from palinode.core.config import config
+
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+
+
 @pytest.fixture(scope="session")
 def _default_db_path() -> pathlib.Path | None:
     """The db path the process resolves to before any test patches it."""

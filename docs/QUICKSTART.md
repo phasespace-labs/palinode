@@ -179,6 +179,22 @@ Content here.
 └── PRD.md                  ← what Palinode is
 ```
 
+### Where the prompts come from
+
+`specs/prompts/*.md` are the prompts consolidation actually reads, and they are
+yours to edit — that is the point of keeping them in the store as files rather
+than in the code. `palinode init` writes them there from the copies that ship
+inside the package, and never overwrites one that already exists.
+
+Two consequences worth knowing:
+
+- A store that has no `specs/prompts/` still consolidates: the runner falls back
+  to the packaged copy and logs one line saying so. Run `palinode init` to get
+  editable copies.
+- A release that changes a prompt does not change *your* copy. `palinode doctor`
+  reports the gap (`prompts_current`) and `palinode prompt sync` closes it,
+  replacing only the files you have not edited.
+
 ## Ports & Services
 
 | Service | Port | Process |

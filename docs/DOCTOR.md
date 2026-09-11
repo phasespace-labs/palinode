@@ -40,7 +40,7 @@ palinode doctor --fix --dry-run  # 3. preview safe fixes if any apply
 
 ## The check catalog
 
-There are 22 checks across six categories. Severity is one of `info`, `warn`, `error`, `critical`; `passed=True` means the check did not detect a problem (a passed `info` check still appears in the report so the operator can see the resolved state).
+There are 23 checks across six categories. Severity is one of `info`, `warn`, `error`, `critical`; `passed=True` means the check did not detect a problem (a passed `info` check still appears in the report so the operator can see the resolved state).
 
 ### Path integrity
 
@@ -140,6 +140,7 @@ Config-vs-runtime consistency checks. All `fast` (no network).
 | `env_vs_yaml_consistency` | warn | An env var is overriding a non-default YAML value |
 | `mcp_config_homes` | warn | Multiple MCP client config files have divergent `palinode` entries |
 | `process_env_drift` | warn / info | A running palinode-{api,mcp,watcher} has stale `PALINODE_DIR` |
+| `prompts_current` | warn / info | The store's consolidation prompts lag the ones shipped with this release |
 
 #### `env_vs_yaml_consistency`
 
@@ -166,6 +167,21 @@ For every running palinode-{api,mcp,watcher}, reads `/proc/<pid>/environ` (Linux
 - macOS / Windows / anywhere without `/proc` → **info**, declined with a clear message.
 
 When the API runs the check on itself (`GET /doctor` from inside the API process), it skips its own PID — the API's environ is necessarily what the API sees, so the comparison is meaningless.
+
+#### `prompts_current`
+
+Consolidation prefers the prompts in the **memory store** (`$PALINODE_DIR/specs/prompts/*.md`) over the packaged ones, because they are yours to edit. A store keeps whatever prompt files it was provisioned with, so a release that changes a prompt changes nothing on a store that predates it: the new behaviour ships, and is reachable only where somebody refreshed the files. Nothing else in doctor looks at that.
+
+The check compares the `version:` frontmatter of every packaged prompt against the store's copy of the same filename.
+
+"Packaged" means the prompts inside the install (`palinode/prompts/`), so the check works the same on a `pip install` as in a checkout.
+
+- Warn: a store copy declares an older `version:` than the packaged one ("lags"), declares a different one ("differs from" — a locally bumped or hand-edited prompt), declares none where the packaged one does, or is absent from the store entirely. The message names each file with both versions; the remediation is [`palinode prompt sync`](CLI.md#palinode-prompt-sync), which replaces only the copies you have not edited and reports the rest.
+- Info: every versioned prompt matches. The message also states how many packaged prompts declare no `version:` — those cannot be compared, and are reported as uncovered rather than counted as current.
+- Info: the store has no `specs/prompts/` at all (a fresh or prompt-less store). The message names the missing path. Consolidation still runs — the runner falls back to the packaged copies — but nothing there is yours to edit until `palinode init` or `palinode prompt sync` provisions it.
+- Info: this install has no packaged prompts at all. Only reachable on a damaged install; reinstall palinode. The message names the path it looked for.
+
+Tagged `fast`: a bounded read of a handful of small files, no network.
 
 ### Index sanity
 
@@ -508,6 +524,7 @@ palinode doctor --json | jq -e '.[] | select(.passed == false)' >/dev/null && ec
 - Missing `entities:` lists and `description:` fields
 - Core file count (warn if > 10)
 - Wiki drift (frontmatter entities vs body `[[wikilinks]]`)
+- Relative dates ("yesterday", "last Tuesday") that will rot, each with the absolute date it resolves to — or `unresolvable` and why
 
 ```bash
 palinode lint               # text report (default)

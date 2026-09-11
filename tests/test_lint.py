@@ -51,16 +51,17 @@ from palinode.core.lint import check_relative_dates, run_lint_pass
 def test_check_relative_dates_matches_specified_expressions(expression):
     body = f"First line.\nWe wrote {expression} in a memory."
 
-    assert check_relative_dates(body) == [{"line": "2", "expression": expression}]
+    assert [
+        (f["line"], f["expression"]) for f in check_relative_dates(body)
+    ] == [("2", expression)]
 
 
 def test_check_relative_dates_is_case_insensitive_and_flags_quoted_text():
     body = 'She said, "YESTERDAY we decided it."\nRIGHT NOW it still applies.'
 
-    assert check_relative_dates(body) == [
-        {"line": "1", "expression": "YESTERDAY"},
-        {"line": "2", "expression": "RIGHT NOW"},
-    ]
+    assert [
+        (f["line"], f["expression"]) for f in check_relative_dates(body)
+    ] == [("1", "YESTERDAY"), ("2", "RIGHT NOW")]
 
 
 @pytest.mark.parametrize(
@@ -93,12 +94,13 @@ def test_lint_relative_dates_exempts_daily_logs(tmp_path, monkeypatch):
 
     result = run_lint_pass()
 
-    assert result["relative_dates"] == [
-        {
-            "file": "insights/drifting.md",
-            "matches": [{"line": "2", "expression": "Tomorrow"}],
-        }
+    assert [item["file"] for item in result["relative_dates"]] == [
+        "insights/drifting.md"
     ]
+    assert [
+        (m["line"], m["expression"])
+        for m in result["relative_dates"][0]["matches"]
+    ] == [("2", "Tomorrow")]
 
 
 def test_lint_cli_renders_relative_dates(monkeypatch):
@@ -122,7 +124,7 @@ def test_lint_cli_renders_relative_dates(monkeypatch):
             }
         ],
     }
-    monkeypatch.setattr(lint_module.api_client, "lint", lambda: data)
+    monkeypatch.setattr(lint_module.api_client, "lint", lambda **_kwargs: data)
 
     result = CliRunner().invoke(lint_module.lint, ["--format", "text"])
 
@@ -132,7 +134,8 @@ def test_lint_cli_renders_relative_dates(monkeypatch):
 
 
 def _run_lint_text(monkeypatch):
-    monkeypatch.setattr(api_client, "lint", run_lint_pass)
+    # The client takes the propose/apply options; this stub ignores them.
+    monkeypatch.setattr(api_client, "lint", lambda **_kwargs: run_lint_pass())
     result = CliRunner().invoke(lint_command, ["--format", "text"])
     assert result.exit_code == 0, result.output
     return result.output

@@ -12,6 +12,12 @@ Crontab examples (times in UTC, target 4am PT = 11:00 UTC during PDT):
 
     # Weekly — full compaction with MERGE/ARCHIVE
     0 11 * * 0 cd /path/to/palinode && PALINODE_DIR=~/.palinode venv/bin/python -m palinode.consolidation.cron --days 3
+
+The schedule above is now an upper bound, not the trigger: this entry point
+consults the activity gate (``consolidation.auto_gate``) first and exits 0
+quietly when a pass is not yet due, so the cron can fire as often as hourly and
+the pass lands on use rather than on the calendar. ``--ignore-gate`` forces the
+pass, which is what a hand-run recovery wants. See ``docs/OPERATIONS.md``.
 """
 from __future__ import annotations
 
@@ -19,6 +25,7 @@ import logging
 import sys
 
 from palinode.core.config import config
+from palinode.consolidation import activity_gate
 from palinode.consolidation.runner import run_consolidation, run_nightly
 from palinode.consolidation.run_lock import ConsolidationAlreadyRunning
 
@@ -43,6 +50,16 @@ def main() -> None:
             pass
 
     mode = "nightly" if nightly else "weekly"
+
+    if "--ignore-gate" not in sys.argv:
+        decision = activity_gate.evaluate(mode)
+        if not decision.should_run:
+            # One line, with both numerators and both denominators: an operator
+            # asking "why didn't it run last night" gets the answer from the
+            # cron log alone, without reconstructing the state file by hand.
+            logger.info("Skipping %s consolidation — %s", mode, decision.reason)
+            sys.exit(0)
+
     logger.info(f"Starting {mode} consolidation (lookback: {lookback or 'config default'} days)...")
 
     try:

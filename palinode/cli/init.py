@@ -8,6 +8,11 @@ Creates:
   - .claude/hooks/palinode-user-prompt-submit.sh  (per-turn implicit recall — triggers + strict search)
   - .mcp.json  (MCP server block for palinode, if --mcp given)
 
+Also provisions, in the *memory store* rather than the project:
+  - $PALINODE_DIR/specs/prompts/*.md  (the consolidation prompts, from the
+    copies packaged with palinode — an install had none of them before, so a
+    fresh store could not consolidate at all)
+
 With --obsidian, additionally writes:
   - .obsidian/app.json       (file recovery, daily/ default location, wikilinks)
   - .obsidian/graph.json     (pre-tuned graph: collapsed dirs, color groups)
@@ -1270,6 +1275,48 @@ def _write_text_file(path: Path, content: str, force: bool) -> str:
     return "created"
 
 
+def _write_store_prompt(source: Path, dest: Path) -> str:
+    """Provision one consolidation prompt into the memory store.
+
+    Never overwrites, and deliberately does not honour ``--force``: unlike
+    everything else `init` writes, these are files the operator is invited to
+    edit (`docs/HOW-MEMORY-WORKS.md` says so), and they live in the memory
+    store rather than in the scaffolded project. A flag whose job is "redo the
+    scaffolding" must not be able to discard tuning. `palinode prompt sync` is
+    the sanctioned refresh path — it can tell a pristine copy from an edited
+    one, and this cannot.
+    """
+    _ensure_parent(dest)
+    if dest.exists():
+        return "skipped (exists)"
+    dest.write_bytes(source.read_bytes())
+    return "created"
+
+
+def _prompts_plan(memory_dir: Path) -> list[PlannedWrite]:
+    """One entry per packaged consolidation prompt, into the memory store.
+
+    Consolidation reads ``<memory_dir>/specs/prompts/*.md``. Before this, a
+    `pip install` + `palinode init` store had none of them and the first
+    `palinode consolidate` raised — the prompts only ever arrived by cloning
+    the repo. The runner now falls back to the packaged copies, so this is
+    about the *editable* copy: provisioning the store is what makes "tune the
+    prompt" a thing an operator can do.
+    """
+    from palinode.prompts import iter_packaged_prompts, store_prompts_dir
+
+    dest_dir = store_prompts_dir(memory_dir)
+    return [
+        PlannedWrite(
+            f"prompt {source.name}",
+            dest_dir / source.name,
+            "consolidation prompt (memory store)",
+            lambda source=source: _write_store_prompt(source, dest_dir / source.name),
+        )
+        for source in iter_packaged_prompts()
+    ]
+
+
 # The standard memory category directories so the Obsidian graph has seed
 # nodes to render and Obsidian's file tree isn't empty.
 _VAULT_DIRS = (
@@ -1387,6 +1434,11 @@ class InitOptions:
     obsidian: bool
     force: bool
     force_obsidian: bool
+    #: Where to provision ``specs/prompts/`` — the memory store, not the
+    #: project. ``None`` skips it (``--no-prompts``). Passed in rather than
+    #: read from config inside `build_plan()` so the plan stays a pure
+    #: function of its inputs and tests can point it at a tmp_path.
+    prompts_dir: Path | None = None
 
 
 def build_plan(target: Path, opts: InitOptions) -> list[PlannedWrite]:
@@ -1484,6 +1536,9 @@ def build_plan(target: Path, opts: InitOptions) -> list[PlannedWrite]:
 
     if opts.obsidian:
         plan.extend(_obsidian_plan(target, opts.force, opts.force_obsidian))
+
+    if opts.prompts_dir is not None:
+        plan.extend(_prompts_plan(opts.prompts_dir))
 
     return plan
 
@@ -1627,6 +1682,16 @@ def _display_path(path: Path, target: Path) -> str:
     ),
 )
 @click.option(
+    "--prompts/--no-prompts",
+    default=True,
+    help=(
+        "Provision the consolidation prompts into the memory store "
+        "($PALINODE_DIR/specs/prompts/). Existing files are never overwritten, "
+        "with or without --force — use `palinode prompt sync` to refresh them. "
+        "Default: on."
+    ),
+)
+@click.option(
     "--force",
     is_flag=True,
     help="Overwrite existing files (default: preserve / append / skip)",
@@ -1652,6 +1717,7 @@ def init(
     user_skill,
     obsidian,
     force_obsidian,
+    prompts,
     force,
     dry_run,
 ):
@@ -1671,6 +1737,12 @@ def init(
       .claude/skills/palinode-session/SKILL.md — ambient memory skill (plus
                                                 .cursor/skills/ and .agent/skills/ when
                                                 detected; --user for ~/.claude/skills/)
+
+    And, in the memory store (not the project):
+      $PALINODE_DIR/specs/prompts/*.md        — the consolidation prompts, copied
+                                                from the ones packaged with palinode.
+                                                Never overwritten; `palinode prompt sync`
+                                                refreshes them. --no-prompts skips.
 
     With --obsidian, additionally writes:
       .obsidian/app.json       — wikilinks, daily/ as default file location
@@ -1728,6 +1800,16 @@ def init(
             if (target / ".agent").is_dir():
                 session_skill_roots.append(("agent-dir", target / ".agent" / "skills"))
 
+    # The prompts go into the memory store, which is usually somewhere else
+    # entirely than the project being scaffolded. Config is imported here
+    # rather than at module scope so `palinode init --no-prompts` and the
+    # scaffolding tests keep working without a resolvable memory dir.
+    prompts_dir: Path | None = None
+    if prompts:
+        from palinode.core.config import config as _config
+
+        prompts_dir = Path(_config.memory_dir)
+
     opts = InitOptions(
         slug=slug,
         claudemd=claudemd,
@@ -1742,6 +1824,7 @@ def init(
         obsidian=obsidian,
         force=force,
         force_obsidian=force_obsidian,
+        prompts_dir=prompts_dir,
     )
     plan = build_plan(target, opts)
 

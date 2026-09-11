@@ -44,6 +44,7 @@
     "params": {
       "dry_run": {},
       "nightly": {},
+      "respect_gate": {},
       "sources": {}
     },
     "required": []
@@ -130,7 +131,9 @@
   },
   "palinode_lint": {
     "description": "Scan memory for health issues: orphaned files, stale active files (>90 days), missing frontmatter fields, and potential contradictions. Returns a report without modifying files.",
-    "params": {},
+    "params": {
+      "propose": {}
+    },
     "required": []
   },
   "palinode_list": {

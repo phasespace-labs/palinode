@@ -22,6 +22,7 @@ from palinode.core import git_tools
 from palinode.core.config import config
 from palinode.core.envelope import envelope_complaint
 from palinode.core.parity import PROMPT_TASKS
+from palinode.core.relative_dates import normalize_lines, normalize_text
 
 from palinode.api._util import _project_from_cwd, _utc_now
 from palinode.api.path_safety import _memory_base_dir
@@ -223,6 +224,26 @@ def session_end_api(req: SessionEndRequest, request: Request = None) -> dict[str
 
     today = _utc_now().strftime("%Y-%m-%d")
     now_iso = _utc_now().isoformat().replace("+00:00", "Z")
+
+    # PROGRAM.md § "Resolve dates": a relative time expression is resolved
+    # against the session date on the way in, because a reader six months from
+    # now cannot recover which Tuesday "last Tuesday" was and no later pass can
+    # reconstruct it. Runs on the extracted text only — the summary and the
+    # decision/blocker bullets — and refuses quoted text, blockquotes, code and
+    # anything vague; see palinode.core.relative_dates.normalize_text.
+    summary, decisions, blockers = req.summary, req.decisions, req.blockers
+    if config.write.normalize_relative_dates:
+        anchor = _utc_now().date()
+        summary, summary_count = normalize_text(summary, anchor)
+        decisions, decision_count = normalize_lines(decisions, anchor)
+        blockers, blocker_count = normalize_lines(blockers, anchor)
+        normalized = summary_count + decision_count + blocker_count
+        if normalized:
+            logger.info(
+                "session-end normalized %d relative date(s) to absolute (anchor=%s)",
+                normalized, anchor.isoformat(),
+            )
+
     # ADR-010: same precedence as save_api — explicit > header > env > default.
     source = _resolve_source(req.source, request)
 
@@ -232,15 +253,15 @@ def session_end_api(req: SessionEndRequest, request: Request = None) -> dict[str
     # Build session entry
     parts = [f"## Session End — {now_iso}\n"]
     parts.append(f"**Source:** {source}\n")
-    parts.append(f"**Summary:** {req.summary}\n")
-    if req.decisions:
+    parts.append(f"**Summary:** {summary}\n")
+    if decisions:
         parts.append("**Decisions:**")
-        for d in req.decisions:
+        for d in decisions:
             parts.append(f"- {d}")
         parts.append("")
-    if req.blockers:
+    if blockers:
         parts.append("**Blockers/Next:**")
-        for b in req.blockers:
+        for b in blockers:
             parts.append(f"- {b}")
         parts.append("")
 
@@ -331,7 +352,7 @@ def session_end_api(req: SessionEndRequest, request: Request = None) -> dict[str
         )
     else:
         try:
-            short_hash = hashlib.sha256(req.summary.encode()).hexdigest()[:8]
+            short_hash = hashlib.sha256(summary.encode()).hexdigest()[:8]
             # Pass structured metadata through to the indexed file's frontmatter so
             # it's queryable later. Only include fields the caller set.
             extra_meta: dict[str, Any] = {}
@@ -378,9 +399,9 @@ def session_end_api(req: SessionEndRequest, request: Request = None) -> dict[str
         if os.path.exists(status_path):
             line = _status_line(
                 today,
-                req.summary,
-                req.decisions,
-                req.blockers,
+                summary,
+                decisions,
+                blockers,
                 _status_pointer(individual_file, f"daily/{today}.md"),
             )
             # Same read-then-atomic-rewrite trade as the daily note above —
@@ -391,7 +412,7 @@ def session_end_api(req: SessionEndRequest, request: Request = None) -> dict[str
             status_file = f"projects/{project}-status.md"
             logger.info(
                 "session_end status append: file=%s decisions=%d blockers=%d",
-                status_file, len(req.decisions or []), len(req.blockers or []),
+                status_file, len(decisions or []), len(blockers or []),
             )
 
     # Git commit (covers daily + status). One session-end is one logical event,

@@ -198,10 +198,53 @@ def entities_list_api() -> list[dict[str, Any]]:
 
 
 @router.post("/lint")
-def lint_api() -> dict[str, Any]:
-    """Scan memory and report orphans, stale files, and contradictions."""
+def lint_api(
+    propose: bool = False,
+    apply: bool = False,
+    deep_contradictions: bool = False,
+    max_llm_calls: int | None = None,
+    similarity_threshold: float | None = None,
+) -> dict[str, Any]:
+    """Scan memory and report orphans, stale files, and contradictions.
+
+    ``propose=true`` adds a ``proposals`` block: the deterministic findings
+    translated into executor operations, each carrying the finding it came from.
+    It is a dry run — nothing is written. ``apply=true`` (which implies
+    ``propose``) runs the applicable ones through the existing deterministic
+    write paths, stamped with an actor of ``lint``.
+
+    ``deep_contradictions=true`` additionally runs the LLM-confirmed semantic
+    pass over Decision memories, returns it under ``deep_contradictions``, and
+    maps its findings to ``PROPOSE_CONTRADICTS`` proposals. Opt-in because it
+    needs the configured embedder and LLM endpoint.
+    """
     from palinode.core.lint import run_lint_pass
-    return run_lint_pass()
+    report = run_lint_pass()
+
+    deep = None
+    if deep_contradictions:
+        from palinode.lint.contradictions import (
+            DEFAULT_MAX_LLM_CALLS,
+            DEFAULT_SIMILARITY_THRESHOLD,
+            run_deep_contradiction_check,
+        )
+        deep = run_deep_contradiction_check(
+            similarity_threshold=(
+                DEFAULT_SIMILARITY_THRESHOLD
+                if similarity_threshold is None
+                else similarity_threshold
+            ),
+            max_llm_calls=(
+                DEFAULT_MAX_LLM_CALLS if max_llm_calls is None else max_llm_calls
+            ),
+        )
+        report["deep_contradictions"] = deep
+
+    if not (propose or apply):
+        return report
+
+    from palinode.consolidation.propose_from_lint import attach_proposals
+    return attach_proposals(report, apply=apply, deep_contradictions=deep)
 
 
 class ReviewRequest(BaseModel):

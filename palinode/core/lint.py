@@ -3,34 +3,20 @@ from __future__ import annotations
 import os
 import glob
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 import frontmatter as _frontmatter
 
 from palinode.core.config import config
 from palinode.core import parser
+from palinode.core.relative_dates import anchor_for, find_relative_dates
 
 # Marker written by Deliverable C (palinode_save auto-footer plumbing).
 # Wikilinks that appear under this marker count as satisfying the entity
 # requirement — the auto-footer is a derived view of ``entities:`` and
 # deliberately links every frontmatter entity that has no inline body link.
 _AUTO_FOOTER_MARKER = "<!-- palinode-auto-footer -->"
-
-_RELATIVE_DATE_NUMBER = (
-    r"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
-)
-_RELATIVE_DATE_RE = re.compile(
-    rf"(?<!\w)(?:"
-    rf"{_RELATIVE_DATE_NUMBER} (?:days|weeks|months|years) ago|"
-    r"last (?:week|month|year)|"
-    r"next (?:week|month|year)|"
-    r"this (?:week|month)|"
-    r"right now|these days|"
-    r"yesterday|today|tomorrow|recently|lately|currently"
-    r")(?!\w)",
-    re.IGNORECASE,
-)
 
 def _alias_key(name: str) -> str:
     """Separator-and-case-insensitive form of an entity ref's name part.
@@ -370,15 +356,23 @@ def check_wiki_drift(
     return warnings
 
 
-def check_relative_dates(body: str) -> list[dict[str, str]]:
-    """Return relative time expressions whose meaning will drift over time."""
-    findings: list[dict[str, str]] = []
-    for line_number, line in enumerate(body.splitlines(), start=1):
-        findings.extend(
-            {"line": str(line_number), "expression": match.group(0)}
-            for match in _RELATIVE_DATE_RE.finditer(line)
-        )
-    return findings
+def check_relative_dates(body: str, anchor: date | None = None) -> list[dict[str, str]]:
+    """Relative time expressions whose meaning will drift, with their fix.
+
+    Each finding carries ``line``, ``expression``, the ``anchor`` the memory is
+    dated by, and ``resolved`` — the absolute date the phrase means, or
+    ``"unresolvable"`` with a ``reason``. The resolution is what makes the
+    finding actionable rather than merely annoying: it is exactly the
+    replacement text ``palinode lint --propose`` turns into an ``UPDATE``.
+
+    Detection is deliberately wider than rewriting. A relative date inside a
+    quotation is reported here and refused by the normaliser — see
+    :mod:`palinode.core.relative_dates`.
+    """
+    return [
+        found.as_finding(anchor)
+        for found in find_relative_dates(body, anchor)
+    ]
 
 
 def run_lint_pass() -> dict[str, Any]:
@@ -569,7 +563,9 @@ def run_lint_pass() -> dict[str, Any]:
             if drift_warnings:
                 wiki_drift.append({"file": path, "warnings": drift_warnings})
 
-            relative_date_matches = check_relative_dates(body)
+            relative_date_matches = check_relative_dates(
+                body, anchor_for(meta, path)
+            )
             if relative_date_matches:
                 relative_dates.append({"file": path, "matches": relative_date_matches})
 

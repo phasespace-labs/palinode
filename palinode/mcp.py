@@ -1258,6 +1258,16 @@ def _all_tools() -> list[types.Tool]:
                             "`[\"insights\"]`.  Defaults to `daily` only."
                         ),
                     },
+                    "respect_gate": {
+                        "type": "boolean",
+                        "description": (
+                            "Apply the activity gate the automatic cron path "
+                            "uses (enough time elapsed AND enough sessions "
+                            "since the last pass); reports `deferred` instead "
+                            "of running when a pass is not yet due."
+                        ),
+                        "default": False,
+                    },
                 },
             },
             annotations=types.ToolAnnotations(
@@ -1661,7 +1671,17 @@ def _all_tools() -> list[types.Tool]:
             ),
             inputSchema={
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "propose": {
+                        "type": "boolean",
+                        "description": (
+                            "Also translate the deterministic findings into proposed "
+                            "consolidation operations, each with its rationale and the "
+                            "finding it came from. Advisory: this tool never applies them "
+                            "— run `palinode lint --apply` to let the executor act."
+                        ),
+                    },
+                },
             },
             annotations=types.ToolAnnotations(
                 title="Lint Memory",
@@ -2207,6 +2227,8 @@ async def _tool_consolidate(arguments: dict[str, Any]) -> list[types.TextContent
         body["nightly"] = True
     if arguments.get("sources"):
         body["sources"] = _coerce_str_array(arguments["sources"])
+    if arguments.get("respect_gate"):
+        body["respect_gate"] = True
     resp = await _post("/consolidate", json=body, timeout=300.0)
     if resp.status_code != 200:
         return _text(f"Consolidation failed: {resp.text}")
@@ -2659,7 +2681,12 @@ async def _tool_doctor_deep(arguments: dict[str, Any]) -> list[types.TextContent
 # ── lint ──────────────────────────────────────────────────────────
 @_handles("palinode_lint")
 async def _tool_lint(arguments: dict[str, Any]) -> list[types.TextContent]:
-    resp = await _post("/lint", timeout=120.0)
+    # `apply` is deliberately absent from this surface: a health scan an agent
+    # can call freely must not be able to retire memories as a side effect. The
+    # proposal set is the agent-facing half of the loop; applying it is the
+    # operator's move, on the CLI or the API.
+    params = {"propose": "true"} if arguments.get("propose") else None
+    resp = await _post_params("/lint", params=params, timeout=120.0)
     if resp.status_code != 200:
         return _text(f"Lint failed: {resp.text}")
     return _text(json.dumps(resp.json(), indent=2))

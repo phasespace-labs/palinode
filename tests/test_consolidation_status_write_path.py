@@ -185,6 +185,54 @@ def test_archived_fact_id_still_resolves(tmp_path, monkeypatch):
     assert "- [ARCHIVE] f1: genuinely archived" in body
 
 
+def _add_duplicate_fact(target: Path) -> None:
+    """A second line saying exactly what ``f1`` says — the merge candidate."""
+    with open(target, "a", encoding="utf-8") as f:
+        f.write("- [2026-06-01] The one real fact. <!-- fact:f2 -->\n")
+
+
+def test_identical_text_merge_logs_the_merge_it_performed(tmp_path, monkeypatch):
+    """The model proposing the survivor's own text is a real merge: the
+    duplicate is retired, so the log line is earned."""
+    target = _seed(tmp_path, monkeypatch)
+    _add_duplicate_fact(target)
+    ops = [{
+        "op": "MERGE",
+        "ids": ["f1", "f2"],
+        "new_text": "[2026-06-01] The one real fact.",
+        "rationale": "f2 restates f1",
+    }]
+
+    runner.run_consolidation(dry_run=False, llm_fn=_fake_llm(ops))
+
+    body = target.read_text(encoding="utf-8")
+    assert "<!-- fact:f2 -->" not in body          # the duplicate really went
+    assert "<!-- fact:f1 -->" in body              # the survivor really stayed
+    assert _log_lines(body) == ["- [MERGE] f1, f2: f2 restates f1"]
+    history = (tmp_path / "projects" / "proj-history.md").read_text(encoding="utf-8")
+    assert "<!-- fact:f2 -->" in history           # retired, not deleted
+
+
+def test_merge_that_retired_nothing_writes_no_merge_line(tmp_path, monkeypatch):
+    """The log records what consolidation did. A MERGE whose sources match
+    nothing moves no fact and writes no history — it must not leave a line
+    saying a merge happened."""
+    target = _seed(tmp_path, monkeypatch)
+    ops = [{
+        "op": "MERGE",
+        "ids": ["nope-1", "nope-2"],
+        "new_text": "[2026-06-01] Something merged.",
+        "rationale": "merging two facts that are not there",
+    }]
+
+    runner.run_consolidation(dry_run=False, llm_fn=_fake_llm(ops))
+
+    body = target.read_text(encoding="utf-8")
+    assert _log_lines(body) == []
+    assert "[MERGE]" not in body
+    assert "## Consolidation Log" not in body
+
+
 def test_preview_and_write_agree_on_rationale(tmp_path, monkeypatch):
     """The regression that let this ship: preview and write must render the same
     rationale for the same operation."""

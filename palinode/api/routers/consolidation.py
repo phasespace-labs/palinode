@@ -19,6 +19,11 @@ class ConsolidateRequest(BaseModel):
     #: before — hardcoding that scan left the deterministic executor
     #: unreachable for typed memories saved through /save or MCP.
     sources: list[str] | None = None
+    #: Apply the activity gate (``consolidation.auto_gate``) to this call.
+    #: Off by default: a caller who asked for a pass has already made the
+    #: decision the gate exists to make. On, for a scheduler that wants the
+    #: same policy the cron entry point applies.
+    respect_gate: bool = False
 
 
 @router.post("/consolidate")
@@ -27,11 +32,20 @@ def consolidate_api(req: ConsolidateRequest = None) -> dict[str, Any]:
 
     Normally runs as a weekly cron, but can be triggered manually
     for testing or after a busy week.
+
+    With ``respect_gate`` set and the gate unmet, returns
+    ``{"status": "deferred", "gate": {...}}`` rather than an error — a
+    deferral is a normal outcome of asking, not a failed request.
     """
+    from palinode.consolidation import activity_gate
     from palinode.consolidation.runner import run_consolidation, run_nightly
     from palinode.consolidation.run_lock import ConsolidationAlreadyRunning
 
     req = req or ConsolidateRequest()
+    if req.respect_gate:
+        decision = activity_gate.evaluate("nightly" if req.nightly else "weekly")
+        if not decision.should_run:
+            return {"status": "deferred", "gate": decision.as_dict()}
     try:
         if req.nightly:
             result = run_nightly(dry_run=req.dry_run)

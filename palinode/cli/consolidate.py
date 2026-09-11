@@ -12,23 +12,41 @@ from palinode.cli._format import console, print_result, get_default_format, Outp
     metavar="DIR",
     help="Memory directory to consolidate; repeatable. Defaults to daily/.",
 )
+@click.option(
+    "--respect-gate",
+    "respect_gate",
+    is_flag=True,
+    help="Apply the activity gate (consolidation.auto_gate) to this run, as the "
+         "cron path does; skip and report when a pass is not yet due.",
+)
 @click.option("--format", "fmt", type=click.Choice(["json", "text"]), help="Output format")
-def consolidate(nightly, dry_run, sources, fmt):
+def consolidate(nightly, dry_run, sources, respect_gate, fmt):
     """Run or preview memory compaction (weekly full or --nightly lightweight).
+
+    Runs unconditionally: the activity gate governs the automatic cron path,
+    not an operator who has asked for a pass. ``--respect-gate`` opts this run
+    into the same policy.
 
     ``palinode dream`` is an alias; ``palinode consolidate`` is the canonical name.
     """
     try:
         data = api_client.consolidate(
-            dry_run=dry_run, nightly=nightly, sources=list(sources) or None
+            dry_run=dry_run,
+            nightly=nightly,
+            sources=list(sources) or None,
+            respect_gate=respect_gate,
         )
-        
+
         output_fmt = OutputFormat(fmt) if fmt else get_default_format()
-        
+
         if output_fmt == OutputFormat.JSON:
             print_result(data, fmt=output_fmt)
         else:
-            if dry_run:
+            if data.get("status") == "deferred":
+                console.print(
+                    f"[yellow]Consolidation skipped — {data['gate']['reason']}.[/yellow]"
+                )
+            elif dry_run:
                 console.print("[cyan]Previewing consolidation...[/cyan]")
                 for change in data.get("proposed_changes", []):
                     console.print(f"  [{change['type']}] {change['file']}")

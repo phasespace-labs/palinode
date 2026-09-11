@@ -206,10 +206,18 @@ Alice wants async check-ins instead of meetings -es
 
 **Script:** `palinode/consolidation/runner.py`  
 **LLM:** OLMo 3.1:32b via Ollama (localhost:11434)
-**Schedule:** `0 3 * * 0` (crontab)  
+**Schedule:** `0 3 * * 0` (crontab) — an upper bound, not the trigger
 **Prompt:** `specs/prompts/consolidation.md`
 
 The consolidation cron is where raw daily logs become curated memory.
+
+The crontab entry decides how often the pass may be *considered*; the activity
+gate decides whether it runs. A pass fires when at least 24 h have elapsed
+**and** at least 5 sessions have been recorded since the last one — or when the
+7-day ceiling passes, whichever comes first. So a busy week consolidates
+mid-week and an idle one does not burn an LLM pass over nothing. Thresholds,
+the ceiling, and how to turn the gate off are in
+[OPERATIONS.md § Consolidation scheduling](OPERATIONS.md#consolidation-scheduling).
 
 ### What It Does
 
@@ -459,6 +467,18 @@ status: in_progress  # in_progress | done | blocked
 - Quality standards
 
 The consolidation runner uses the prompt in `specs/prompts/compaction.md`. To change consolidation behavior, edit that file — no code changes needed. (PROGRAM.md documents overall agent behavior, not the consolidation runner specifically.)
+
+That file lives in your **memory store**, not in the installed package.
+`palinode init` puts it there, copied from the prompts that ship inside
+palinode, and never overwrites an existing one — so an edit survives every
+re-run of `init`, with or without `--force`. If the store has no copy, the
+runner reads the packaged one and logs that it did; nothing silently skips.
+
+The flip side of owning the file: a palinode release that improves a prompt
+does not reach you until you take it. `palinode doctor` flags the gap
+(`prompts_current`) and `palinode prompt sync` closes it — it replaces only the
+copies that still match a version palinode shipped, and reports the ones you
+have edited instead of overwriting them.
 
 ---
 
