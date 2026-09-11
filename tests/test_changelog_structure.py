@@ -108,6 +108,8 @@ def test_every_unreleased_bullet_sits_under_a_heading() -> None:
 # freezes it here) updates this constant as part of the release roll.
 
 _FROZEN_RELEASED = {
+    "0.19.1": "451e97cd35b7fe3a33644097fe63229d07f73fbdfc9afdec7f6c1cc9f05efd8a",
+    "0.19.0": "df5581e1c7a99c6d7a1c48938e068a917241f12f74c18d551e88c6b5eeaddcaf",
     # Re-frozen once after publication (dev issue 1282): the 0.18.0 relative-FTS-floor
     # note credited the wrong person with filing the public issue for it, and called
     # the discovery independent. The maintainer filed that issue. The corrected text

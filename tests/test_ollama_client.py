@@ -23,6 +23,7 @@ import pytest
 
 from palinode.core.config import config
 from palinode.core.ollama_client import (
+    ChatCompletionText,
     CircuitBreaker,
     CircuitState,
     EmbeddingContextError,
@@ -618,6 +619,74 @@ def test_chat_completions_timeout_raises_typed():
         client.chat_completions(
             [{"role": "user", "content": "hi"}], model="m", base_url="http://h:8000",
         )
+
+
+# ── why the model stopped ─────────────────────────────────────────────────
+# Truncation used to be invisible: a consolidation response cut off at
+# max_tokens came back as a bare str, parsed to zero operations, and was
+# reported as a clean "nothing to compact".
+
+
+def _chat(finish_reason=None, *, content="text", extra=None):
+    """A client whose one response carries ``finish_reason`` (or not)."""
+    choice = {"message": {"content": content}}
+    if finish_reason is not None:
+        choice["finish_reason"] = finish_reason
+    body = {"choices": [choice], **(extra or {})}
+
+    client, _, _ = make_client(lambda request: httpx.Response(200, json=body), retries=0)
+    return client.chat_completions(
+        [{"role": "user", "content": "hi"}], model="m", base_url="http://h:8000",
+    )
+
+
+def test_chat_completions_result_is_still_a_str():
+    """Backwards compatibility is the whole point of the str subclass."""
+    out = _chat("stop", content="verdict")
+
+    assert isinstance(out, str) and isinstance(out, ChatCompletionText)
+    assert out == "verdict" and out.upper() == "VERDICT"
+
+
+def test_finish_reason_length_is_truncated():
+    out = _chat("length")
+
+    assert out.finish_reason == "length"
+    assert out.truncated is True
+
+
+def test_finish_reason_stop_is_not_truncated():
+    out = _chat("stop")
+
+    assert out.finish_reason == "stop"
+    assert out.truncated is False
+
+
+def test_absent_finish_reason_is_not_truncated():
+    """A server that reports nothing yields None — "cannot tell", not "cut off"."""
+    out = _chat(None)
+
+    assert out.finish_reason is None
+    assert out.truncated is False
+
+
+def test_ollama_done_reason_is_read_when_no_finish_reason():
+    """Ollama puts the stop reason at the top level as ``done_reason``."""
+    out = _chat(None, extra={"done_reason": "length"})
+
+    assert out.finish_reason == "length"
+    assert out.truncated is True
+
+
+def test_max_tokens_spelling_also_counts_as_truncated():
+    """Shims and OpenAI-compatible servers spell the same condition differently."""
+    assert _chat("max_tokens").truncated is True
+    assert _chat("MAX_TOKENS").truncated is True
+
+
+def test_non_str_content_passes_through_unwrapped():
+    """A null content is a caller-visible bug; wrapping it would make it "None"."""
+    assert _chat("stop", content=None) is None
 
 
 # ──────────────────────────────────────────────────────────────────────────

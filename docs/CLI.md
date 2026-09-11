@@ -135,12 +135,19 @@ Operator maintenance: walk `people/`, `projects/`, `decisions/`, and
 when adopting consolidation on a store written before fact IDs existed; a no-op
 afterwards.
 
+`--file` narrows it to one document, which is the usual case: `palinode doctor`
+names a consolidation target carrying no markers (`consolidation_targets_tagged`)
+and this tags exactly that file. The path is relative to the memory dir and is
+rejected if it resolves outside it.
+
 | Option | Default | Meaning |
 |---|---|---|
+| `--file REL_PATH` | — | Tag one memory file instead of walking the store |
 | `--format [json\|text]` | auto | Output format |
 
 ```bash
 palinode bootstrap-ids
+palinode bootstrap-ids --file projects/palinode-status.md
 ```
 
 Output: **auto**.
@@ -247,6 +254,19 @@ palinode consolidate --dry-run
 palinode consolidate --nightly
 palinode consolidate --respect-gate
 ```
+
+**This command waits for minutes, not seconds.** A pass that reaches the LLM
+gets 600 s per project group server-side, so the client waits
+`PALINODE_CONSOLIDATE_TIMEOUT` seconds (default `900`) rather than the 30 s
+every other route uses. Raise it for a large store with many project groups.
+
+If the wait is still not enough, the CLI stops waiting — it does not cancel
+anything. The server finishes the pass and holds the store's run lock
+(`.palinode/consolidation.lock`) until it does, so a second `palinode
+consolidate` returns `409 Consolidation is already running (pid=…)` in the
+meantime, and that run's result is only in the API log and
+`logs/consolidation.log`. The command says so and exits 1; under `--format
+json` it emits `{"status": "timeout", "server_still_running": true, …}`.
 
 Output: **auto**.
 
@@ -847,6 +867,10 @@ Manage the versioned LLM prompts (extraction, compaction, update,
 classification, nightly consolidation) that are themselves stored as memory
 files, so a prompt change is a reviewable commit like any other.
 
+Every subcommand reads and writes `$PALINODE_DIR/specs/prompts/*.md` — the same
+copies consolidation reads and `palinode doctor`'s `prompts_current` check
+compares against. There is no second prompts directory.
+
 #### `palinode prompt activate`
 
 ```
@@ -854,6 +878,12 @@ palinode prompt activate [OPTIONS] NAME
 ```
 
 Activate a prompt version; other versions for the same task are deactivated.
+`NAME` is the filename without `.md` (`compaction`), and the toggle rewrites
+`active:` in `$PALINODE_DIR/specs/prompts/<name>.md`.
+
+Consolidation selects its prompt by *filename* (`compaction.md`,
+`nightly-consolidation.md`), not by this flag, so `active:` records which
+version you consider current rather than switching what the runner loads.
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -931,9 +961,15 @@ palinode prompt sync --dry-run
 palinode prompt sync
 ```
 
+Whatever it writes is git-committed in one commit whose message names each
+prompt and the version it now declares (`palinode prompt sync: refreshed
+compaction.md→v3; added trajectory-extraction.md (palinode 0.19.1)`, with
+`--force` recorded when you used it), so `git log -- specs/prompts` tells you
+when consolidation started running a given prompt revision; set
+`git.auto_commit: false` to keep the store's history yours to write.
+
 CLI-only: it is local file maintenance on your own store, not a memory
-operation, so it has no MCP or REST counterpart. It does not commit — the
-memory repo's history stays yours to write. Output: **auto**.
+operation, so it has no MCP or REST counterpart. Output: **auto**.
 
 ### `palinode push`
 

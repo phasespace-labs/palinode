@@ -212,9 +212,40 @@ def split_layers_api() -> dict[str, Any]:
     return stats
 
 
+class BootstrapFactIdsRequest(BaseModel):
+    #: One memory file to tag, relative to the store
+    #: (``projects/palinode-status.md``). ``None`` keeps the original whole-store
+    #: walk. Present because the case that needs tagging is usually a single
+    #: inert consolidation target named by ``doctor``, not the whole store.
+    file: str | None = None
+
+
 @router.post("/bootstrap-fact-ids")
-def bootstrap_fact_ids_api() -> dict[str, Any]:
-    """Add fact IDs to all memory files."""
-    from palinode.consolidation.fact_ids import bootstrap_all_fact_ids
-    stats = bootstrap_all_fact_ids()
-    return stats
+def bootstrap_fact_ids_api(
+    req: BootstrapFactIdsRequest = None,
+) -> dict[str, Any]:
+    """Add fact IDs to memory files — the whole store, or one named file.
+
+    ``{"file": "projects/foo-status.md"}`` tags exactly that file; a bodyless
+    POST keeps the default whole-store walk over
+    ``people/``/``projects/``/``decisions/``/``insights/``. Both commit with the
+    same provenance. The path is guarded: absolute paths, ``../`` traversal and
+    symlink escapes are rejected before the file is read.
+    """
+    from palinode.consolidation.fact_ids import (
+        bootstrap_all_fact_ids,
+        bootstrap_fact_ids_for_file,
+    )
+
+    req = req or BootstrapFactIdsRequest()
+    if req.file:
+        try:
+            return bootstrap_fact_ids_for_file(req.file)
+        except PathTraversalError as e:
+            status_code = 400 if e.malformed else 403
+            raise HTTPException(status_code=status_code, detail="Invalid path")
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="File not found")
+        except Exception as e:
+            raise _safe_500(e, "Bootstrap fact ids failed")
+    return bootstrap_all_fact_ids()

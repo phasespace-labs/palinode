@@ -18,11 +18,13 @@ from typing import Any, Literal, NoReturn
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from palinode.consolidation.fact_ids import stamp_fact_id
 from palinode.core import git_tools
 from palinode.core.config import config
 from palinode.core.envelope import envelope_complaint
 from palinode.core.parity import PROMPT_TASKS
 from palinode.core.relative_dates import normalize_lines, normalize_text
+from palinode.prompts import store_prompts_dir
 
 from palinode.api._util import _project_from_cwd, _utc_now
 from palinode.api.path_safety import _memory_base_dir
@@ -404,6 +406,15 @@ def session_end_api(req: SessionEndRequest, request: Request = None) -> dict[str
                 blockers,
                 _status_pointer(individual_file, f"daily/{today}.md"),
             )
+            # Mint the fact marker on the way in. Consolidation harvests only
+            # bullets carrying `<!-- fact:... -->`, and every line this writer
+            # appended carried none — so a store fed exclusively by session-end
+            # accumulated bullets the runner could not address, and its
+            # consolidation was skipped, silently, on every nightly run.
+            # `stamp_fact_id` is the same minting the `bootstrap-ids` backfill
+            # uses, so the id here is the id a later backfill would produce for
+            # this text and re-running it is a no-op.
+            line = stamp_fact_id(status_path, line)
             # Same read-then-atomic-rewrite trade as the daily note above —
             # through write_memory_file, not an O_APPEND open().
             with open(status_path, encoding="utf-8") as f:
@@ -459,7 +470,18 @@ def session_end_api(req: SessionEndRequest, request: Request = None) -> dict[str
 # ── Prompts ──────────────────────────────────────────────────────────────────
 
 def _prompts_dir() -> str:
-    return os.path.join(_memory_base_dir(), "prompts")
+    """``<memory_dir>/specs/prompts`` — the directory the runner actually reads.
+
+    Through :func:`palinode.prompts.store_prompts_dir`, the one definition of
+    that location, shared with ``palinode init``, ``palinode prompt sync``, the
+    ``prompts_current`` doctor check, and the consolidation runner's
+    ``resolve_prompt``. This used to return ``<memory_dir>/prompts``, a
+    directory nothing else in palinode ever writes: on a real store
+    ``GET /prompts`` (and therefore ``prompt list`` / ``prompt show``) listed
+    nothing, and ``prompt activate`` would have flipped ``active:`` on a copy
+    no consolidation pass reads.
+    """
+    return str(store_prompts_dir(_memory_base_dir()))
 
 
 def _read_prompt_file(file_path: str) -> dict[str, Any]:

@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from palinode.api.routers import session
 from palinode.api.server import app
 from palinode.core.config import config
+from palinode.prompts import store_prompts_dir
 
 client = TestClient(app)
 
@@ -51,6 +52,94 @@ def _write_prompt(
     return path
 
 
+# ── Which directory the prompt surface reads ─────────────────────────────────
+
+def test_prompts_dir_is_the_store_prompts_dir(mock_memory_dir):
+    """One definition of the prompts directory, shared with everything else.
+
+    ``_prompts_dir`` used to return ``<memory_dir>/prompts``, which nothing in
+    palinode writes, so on a real store ``GET /prompts`` listed nothing while
+    ``specs/prompts`` held all nine.
+    """
+    assert session._prompts_dir() == str(store_prompts_dir(mock_memory_dir))
+    assert session._prompts_dir().endswith(os.path.join("specs", "prompts"))
+
+
+def test_list_prompts_ignores_the_legacy_top_level_prompts_dir(mock_memory_dir):
+    """A prompt in ``<memory_dir>/prompts`` is not what consolidation reads.
+
+    Listing it would put the store back in the state the bug created: an
+    operator activating a version nothing consumes.
+    """
+    _write_prompt(os.path.join(mock_memory_dir, "prompts"), "compaction-v1")
+
+    resp = client.get("/prompts")
+    assert resp.status_code == 200
+    assert resp.json() == []
+    assert client.get("/prompts/compaction-v1").status_code == 404
+
+
+def test_list_prompts_after_prompt_sync_lists_every_packaged_prompt(mock_memory_dir):
+    """The reported symptom, end to end: sync a real store, then list it.
+
+    Goes through ``prompt sync``'s own plan/apply functions rather than copying
+    files by hand, so the test fails if either side of the pair drifts onto a
+    different directory again.
+    """
+    from palinode.cli.prompt import apply_sync_plan, sync_plan
+    from palinode.prompts import iter_packaged_prompts, packaged_prompt_names
+
+    store_dir = store_prompts_dir(mock_memory_dir)
+    apply_sync_plan(sync_plan(store_dir), store_dir)
+
+    resp = client.get("/prompts")
+    assert resp.status_code == 200
+    data = resp.json()
+
+    expected = {name[:-3] for name in packaged_prompt_names()}
+    assert {prompt["name"] for prompt in data} == expected
+    assert all(
+        prompt["file"] == os.path.join("specs", "prompts", f"{prompt['name']}.md")
+        for prompt in data
+    )
+
+    # Every prompt that declares a version reports it — the field `prompt list`
+    # prints and the operator uses to tell a synced store from a stale one.
+    declared = {}
+    for source in iter_packaged_prompts():
+        text = source.read_text(encoding="utf-8")
+        if not text.startswith("---"):
+            continue
+        declared[source.stem] = yaml.safe_load(text.split("---")[1])["version"]
+    assert declared, "no packaged prompt declares frontmatter — fixture assumption broke"
+
+    reported = {prompt["name"]: prompt["version"] for prompt in data}
+    for name, version in declared.items():
+        assert str(reported[name]) == str(version)
+
+
+def test_activate_writes_the_file_the_consolidation_runner_reads(mock_memory_dir):
+    """``prompt activate`` must land on the runner's copy, not a parallel one."""
+    from palinode.cli.prompt import apply_sync_plan, sync_plan
+    from palinode.consolidation.runner import _system_prompt
+    from palinode.prompts import resolve_prompt
+
+    store_dir = store_prompts_dir(mock_memory_dir)
+    apply_sync_plan(sync_plan(store_dir), store_dir)
+
+    assert client.post("/prompts/compaction/activate").status_code == 200
+
+    resolved, from_store = resolve_prompt("compaction.md", mock_memory_dir)
+    assert from_store is True
+    assert resolved == store_dir / "compaction.md"
+    assert "active: true" in resolved.read_text(encoding="utf-8")
+
+    # And the runner's own resolution reads that same file's body.
+    body = _system_prompt("compaction.md")
+    assert body
+    assert body in resolved.read_text(encoding="utf-8")
+
+
 # ── GET /prompts ───────────────────────────────────────────────────────────────
 
 def test_list_prompts_empty(mock_memory_dir):
@@ -60,7 +149,7 @@ def test_list_prompts_empty(mock_memory_dir):
 
 
 def test_list_prompts_returns_all(mock_memory_dir):
-    prompts_dir = os.path.join(mock_memory_dir, "prompts")
+    prompts_dir = str(store_prompts_dir(mock_memory_dir))
     _write_prompt(prompts_dir, "compaction-v1", task="compaction", active=True)
     _write_prompt(prompts_dir, "extraction-v1", task="extraction", active=False)
 
@@ -73,7 +162,7 @@ def test_list_prompts_returns_all(mock_memory_dir):
 
 
 def test_list_prompts_logs_unreadable_file(mock_memory_dir, monkeypatch, caplog):
-    prompts_dir = os.path.join(mock_memory_dir, "prompts")
+    prompts_dir = str(store_prompts_dir(mock_memory_dir))
     broken_path = _write_prompt(prompts_dir, "broken")
     _write_prompt(prompts_dir, "healthy")
     read_prompt_file = session._read_prompt_file
@@ -99,7 +188,7 @@ def test_list_prompts_logs_unreadable_file(mock_memory_dir, monkeypatch, caplog)
 
 
 def test_list_prompts_filter_by_task(mock_memory_dir):
-    prompts_dir = os.path.join(mock_memory_dir, "prompts")
+    prompts_dir = str(store_prompts_dir(mock_memory_dir))
     _write_prompt(prompts_dir, "compaction-v1", task="compaction")
     _write_prompt(prompts_dir, "compaction-v2", task="compaction")
     _write_prompt(prompts_dir, "extraction-v1", task="extraction")
@@ -112,7 +201,7 @@ def test_list_prompts_filter_by_task(mock_memory_dir):
 
 
 def test_list_prompts_metadata_fields(mock_memory_dir):
-    prompts_dir = os.path.join(mock_memory_dir, "prompts")
+    prompts_dir = str(store_prompts_dir(mock_memory_dir))
     _write_prompt(
         prompts_dir, "compaction-v1",
         task="compaction", model="olmo-3.1:32b", version="1.0",
@@ -133,13 +222,13 @@ def test_list_prompts_metadata_fields(mock_memory_dir):
 # ── GET /prompts/{name} ────────────────────────────────────────────────────────
 
 def test_get_prompt_not_found(mock_memory_dir):
-    os.makedirs(os.path.join(mock_memory_dir, "prompts"), exist_ok=True)
+    os.makedirs(store_prompts_dir(mock_memory_dir), exist_ok=True)
     resp = client.get("/prompts/nonexistent")
     assert resp.status_code == 404
 
 
 def test_get_prompt_by_name(mock_memory_dir):
-    prompts_dir = os.path.join(mock_memory_dir, "prompts")
+    prompts_dir = str(store_prompts_dir(mock_memory_dir))
     _write_prompt(prompts_dir, "compaction-v1", task="compaction", body="The prompt body.")
 
     resp = client.get("/prompts/compaction-v1")
@@ -151,7 +240,7 @@ def test_get_prompt_by_name(mock_memory_dir):
 
 def test_get_prompt_by_name_with_md_extension(mock_memory_dir):
     """Requesting with .md suffix should also resolve."""
-    prompts_dir = os.path.join(mock_memory_dir, "prompts")
+    prompts_dir = str(store_prompts_dir(mock_memory_dir))
     _write_prompt(prompts_dir, "extraction-v2", task="extraction")
 
     resp = client.get("/prompts/extraction-v2.md")
@@ -169,13 +258,13 @@ def test_get_prompt_path_traversal_rejected(mock_memory_dir):
 # ── POST /prompts/{name}/activate ─────────────────────────────────────────────
 
 def test_activate_prompt_not_found(mock_memory_dir):
-    os.makedirs(os.path.join(mock_memory_dir, "prompts"), exist_ok=True)
+    os.makedirs(store_prompts_dir(mock_memory_dir), exist_ok=True)
     resp = client.post("/prompts/missing-prompt/activate")
     assert resp.status_code == 404
 
 
 def test_activate_prompt_sets_active(mock_memory_dir):
-    prompts_dir = os.path.join(mock_memory_dir, "prompts")
+    prompts_dir = str(store_prompts_dir(mock_memory_dir))
     _write_prompt(prompts_dir, "compaction-v1", task="compaction", active=False)
 
     resp = client.post("/prompts/compaction-v1/activate")
@@ -190,7 +279,7 @@ def test_activate_prompt_sets_active(mock_memory_dir):
 
 
 def test_activate_prompt_deactivates_others_same_task(mock_memory_dir):
-    prompts_dir = os.path.join(mock_memory_dir, "prompts")
+    prompts_dir = str(store_prompts_dir(mock_memory_dir))
     _write_prompt(prompts_dir, "compaction-v1", task="compaction", active=True)
     _write_prompt(prompts_dir, "compaction-v2", task="compaction", active=False)
     # Different task — should not be touched
@@ -214,7 +303,7 @@ def test_activate_prompt_deactivates_others_same_task(mock_memory_dir):
 
 def test_activate_prompt_idempotent(mock_memory_dir):
     """Activating an already-active prompt should succeed cleanly."""
-    prompts_dir = os.path.join(mock_memory_dir, "prompts")
+    prompts_dir = str(store_prompts_dir(mock_memory_dir))
     _write_prompt(prompts_dir, "compaction-v1", task="compaction", active=True)
 
     resp1 = client.post("/prompts/compaction-v1/activate")
@@ -249,7 +338,7 @@ def test_activate_prompt_fails_closed_when_a_sibling_write_fails(
     Parametrised over the first, middle and last sibling, because the loop
     aborts at a different point in each and the surviving state differs.
     """
-    prompts_dir = os.path.join(mock_memory_dir, "prompts")
+    prompts_dir = str(store_prompts_dir(mock_memory_dir))
     _write_prompt(prompts_dir, "compaction-a", task="compaction", active=True)
     _write_prompt(prompts_dir, "compaction-b", task="compaction", active=False)
     _write_prompt(prompts_dir, "compaction-c", task="compaction", active=False)
@@ -282,7 +371,7 @@ def test_activate_prompt_fails_closed_when_the_target_write_fails(
     mock_memory_dir, monkeypatch
 ):
     """The target is activated last, and its own write failure fails closed too."""
-    prompts_dir = os.path.join(mock_memory_dir, "prompts")
+    prompts_dir = str(store_prompts_dir(mock_memory_dir))
     _write_prompt(prompts_dir, "compaction-a", task="compaction", active=True)
     _write_prompt(prompts_dir, "compaction-target", task="compaction", active=False)
 
@@ -306,7 +395,7 @@ def test_activate_prompt_commits_partial_writes_before_failing(
     mock_memory_dir, monkeypatch
 ):
     """_set_active writes immediately, so whatever reached disk still gets committed."""
-    prompts_dir = os.path.join(mock_memory_dir, "prompts")
+    prompts_dir = str(store_prompts_dir(mock_memory_dir))
     _write_prompt(prompts_dir, "compaction-a", task="compaction", active=True)
     _write_prompt(prompts_dir, "compaction-b", task="compaction", active=True)
     _write_prompt(prompts_dir, "compaction-target", task="compaction", active=False)
@@ -337,7 +426,7 @@ def test_activate_prompt_leaves_other_tasks_alone_when_it_fails(
     mock_memory_dir, monkeypatch
 ):
     """A failure in one task must not touch a prompt belonging to another."""
-    prompts_dir = os.path.join(mock_memory_dir, "prompts")
+    prompts_dir = str(store_prompts_dir(mock_memory_dir))
     _write_prompt(prompts_dir, "compaction-a", task="compaction", active=True)
     _write_prompt(prompts_dir, "compaction-target", task="compaction", active=False)
     _write_prompt(prompts_dir, "extraction-v1", task="extraction", active=True)
@@ -360,7 +449,13 @@ def test_activate_prompt_leaves_other_tasks_alone_when_it_fails(
 # ── Integration: /list excludes prompts/ ─────────────────────────────────────
 
 def test_list_memory_excludes_prompts_dir(mock_memory_dir):
-    """GET /list should not return files from the prompts/ directory."""
+    """GET /list should not return files from a top-level ``prompts/`` directory.
+
+    Deliberately the legacy location, not ``specs/prompts``: the subject here is
+    ``collect_memory_files``' top-level skip set, which names ``prompts``. Stores
+    carrying that directory predate the prompts API reading ``specs/prompts``
+    and must still not have it browsed as memory.
+    """
 
     prompts_dir = os.path.join(mock_memory_dir, "prompts")
     _write_prompt(prompts_dir, "compaction-v1", task="compaction")
@@ -384,7 +479,7 @@ def test_consolidation_skip_dirs_includes_prompts():
 
 def test_prompt_frontmatter_is_stored_correctly(mock_memory_dir):
     """Writing a prompt file should persist all frontmatter fields."""
-    prompts_dir = os.path.join(mock_memory_dir, "prompts")
+    prompts_dir = str(store_prompts_dir(mock_memory_dir))
     _write_prompt(
         prompts_dir, "update-v1",
         task="update", model="qwen3:30b", version="2.1", active=False,

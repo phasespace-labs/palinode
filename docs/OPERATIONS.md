@@ -41,6 +41,34 @@ palinode status
 palinode reindex
 ```
 
+### One-time: mint fact ids on a store that predates them
+
+Consolidation addresses facts by id and harvests only bullets carrying a
+`<!-- fact:… -->` marker. Session-end now mints one on every line it appends to
+`projects/<project>-status.md`, but it did not before v0.19.1 — so a store that
+has been running since before this release has consolidation *targets* full of
+bullets the runner cannot address. It skips them, proposes nothing, and reports
+`status: success`. Measured on one real store: 449 untagged bullets, 79
+consecutive nightly runs, not one proposal.
+
+After upgrading, tag the documents once:
+
+```bash
+# What is inert? doctor names the files.
+palinode doctor            # consolidation_targets_tagged
+
+# Fix the named document(s) — idempotent, committed with provenance.
+palinode bootstrap-ids --file projects/palinode-status.md
+
+# Or tag the whole store (people/, projects/, decisions/, insights/).
+palinode bootstrap-ids
+```
+
+Skip it and consolidation never runs on those projects, quietly. The cron path
+now logs a WARNING naming each skipped project, and the run summary carries
+`groups_skipped_untagged` + `skipped_untagged_projects`, so a store still in
+this state says so out loud.
+
 ### What reindex does
 
 For each `.md` file in your memory directory:

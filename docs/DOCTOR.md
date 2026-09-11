@@ -141,6 +141,7 @@ Config-vs-runtime consistency checks. All `fast` (no network).
 | `mcp_config_homes` | warn | Multiple MCP client config files have divergent `palinode` entries |
 | `process_env_drift` | warn / info | A running palinode-{api,mcp,watcher} has stale `PALINODE_DIR` |
 | `prompts_current` | warn / info | The store's consolidation prompts lag the ones shipped with this release |
+| `consolidation_targets_tagged` | warn / info | A consolidation target document carries body bullets but no `<!-- fact:id -->` markers, so every pass over it proposes nothing |
 
 #### `env_vs_yaml_consistency`
 
@@ -182,6 +183,20 @@ The check compares the `version:` frontmatter of every packaged prompt against t
 - Info: this install has no packaged prompts at all. Only reachable on a damaged install; reinstall palinode. The message names the path it looked for.
 
 Tagged `fast`: a bounded read of a handful of small files, no network.
+
+#### `consolidation_targets_tagged`
+
+Consolidation addresses facts by id: the runner harvests only the bullets carrying `<!-- fact:id -->`, and the executor's operations name those ids. A target document whose bullets have no markers is therefore *inert* — the pass collects its daily notes, finds nothing it can address, proposes nothing, and reports `status: success`. On one real store that ran 79 consecutive nightly times against a 449-bullet status document appended entirely by session-end, which never minted markers.
+
+The check reads every `projects/*-status.md`, plus the target of any project a recent daily note mentions (which catches a plain `projects/<slug>.md` target the glob misses), and compares body bullets against markers. Frontmatter is excluded on both counts — a `- project/foo` under `entities:` is YAML, not a fact.
+
+- Warn: a target has body bullets and zero markers. The message names each file with its untagged-bullet count; the remediation is a ready-to-run [`palinode bootstrap-ids --file <path>`](CLI.md#palinode-bootstrap-ids) per file (idempotent, committed with provenance).
+- Info: every target either carries markers or has no body bullets yet. One marker is enough — a partially tagged document is normal, since consolidation tags what it rewrites.
+- Info: the store has no `projects/` directory, or no target documents in it.
+
+Session-end mints an id on each line it appends, so this fires on stores that predate that fix and on documents built by hand or by an importer that does not mint — not on ongoing use.
+
+Tagged `fast`: one directory glob plus a bounded read of the recent daily notes, no network.
 
 ### Index sanity
 

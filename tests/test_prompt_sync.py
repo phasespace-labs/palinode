@@ -12,11 +12,14 @@ Every case here uses real files under ``tmp_path`` and the real manifest.
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
+from palinode import __version__ as palinode_version
 from palinode.cli import main
 from palinode.cli.prompt import sync_plan
 from palinode.core.config import config
@@ -185,3 +188,168 @@ def test_sync_after_init_reports_everything_current(
     CliRunner().invoke(main, ["init", "--dir", str(project)])
 
     assert set(_actions(store).values()) == {"unchanged"}
+
+
+# ---------------------------------------------------------------------------
+# Provenance: the refresh is a commit, or it is reported as not being one
+# ---------------------------------------------------------------------------
+
+
+def _git(cwd: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=cwd, capture_output=True, text=True, check=True
+    ).stdout
+
+
+@pytest.fixture()
+def git_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A store that is a real git repo, which is what a provisioned store is.
+
+    Nothing about git is mocked below: what is under test is whether a commit
+    exists afterwards, and a fake would assert the call, not the commit.
+    """
+    memory_dir = tmp_path / "store"
+    (memory_dir / "specs" / "prompts").mkdir(parents=True)
+    _git(memory_dir, "init", "-q")
+    _git(memory_dir, "config", "user.email", "sync-test@example.invalid")
+    _git(memory_dir, "config", "user.name", "Prompt Sync Test")
+    (memory_dir / "README.md").write_text("store\n", encoding="utf-8")
+    _git(memory_dir, "add", "README.md")
+    _git(memory_dir, "commit", "-qm", "initial")
+    monkeypatch.setattr(config, "memory_dir", str(memory_dir))
+    return memory_dir
+
+
+def _subject(store: Path) -> str:
+    return _git(store, "log", "-1", "--pretty=%s").strip()
+
+
+def _commit_count(store: Path) -> int:
+    return int(_git(store, "rev-list", "--count", "HEAD").strip())
+
+
+def _packaged_version(name: str) -> str:
+    text = (packaged_prompts_dir() / name).read_text(encoding="utf-8")
+    return str(yaml.safe_load(text.split("---")[1])["version"])
+
+
+def test_sync_commits_what_it_wrote(git_store: Path) -> None:
+    """The reported bug: refreshed prompts left dirty in the working tree."""
+    before = _commit_count(git_store)
+
+    result = _sync()
+
+    assert result.exit_code == 0, result.output
+    assert _git(git_store, "status", "--porcelain") == ""
+    assert _commit_count(git_store) == before + 1
+
+    committed = _git(
+        git_store, "show", "--name-only", "--pretty=format:", "HEAD"
+    ).split()
+    assert sorted(committed) == sorted(
+        f"specs/prompts/{name}" for name in packaged_prompt_names()
+    )
+
+
+def test_the_commit_message_names_the_prompts_and_their_versions(
+    git_store: Path,
+) -> None:
+    _sync()
+
+    subject = _subject(git_store)
+    assert subject.startswith("palinode prompt sync: added ")
+    assert f"compaction.md→v{_packaged_version('compaction.md')}" in subject
+    assert f"palinode {palinode_version}" in subject
+    assert "--force" not in subject
+
+
+def test_a_refresh_says_refreshed_and_names_the_new_version(
+    git_store: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The audit question this exists for: when did compaction.md change?"""
+    from palinode.prompts import content_hash
+
+    monkeypatch.setattr(
+        "palinode.prompts.shipped_hashes",
+        lambda: {"compaction.md": [content_hash(_EARLIER_RELEASE)]},
+    )
+    for name in packaged_prompt_names():
+        (_prompts(git_store) / name).write_bytes(
+            (packaged_prompts_dir() / name).read_bytes()
+        )
+    (_prompts(git_store) / "compaction.md").write_bytes(_EARLIER_RELEASE)
+    _git(git_store, "add", "specs")
+    _git(git_store, "commit", "-qm", "provisioned by an earlier release")
+
+    result = _sync()
+
+    assert result.exit_code == 0, result.output
+    subject = _subject(git_store)
+    expected = f"refreshed compaction.md→v{_packaged_version('compaction.md')}"
+    assert expected in subject, subject
+    assert "added" not in subject
+    assert _git(git_store, "status", "--porcelain") == ""
+
+
+def test_force_is_recorded_in_the_commit_message(git_store: Path) -> None:
+    """`--force` is the operator-discarded-edits event worth finding later."""
+    (_prompts(git_store) / "compaction.md").write_text("MINE\n", encoding="utf-8")
+
+    result = _sync("--force")
+
+    assert result.exit_code == 0, result.output
+    assert "--force" in _subject(git_store)
+
+
+def test_dry_run_commits_nothing(git_store: Path) -> None:
+    before = _commit_count(git_store)
+
+    result = _sync("--dry-run")
+
+    assert result.exit_code == 0, result.output
+    assert _commit_count(git_store) == before
+    assert _git(git_store, "status", "--porcelain") == ""
+
+
+def test_a_sync_that_writes_nothing_makes_no_commit(git_store: Path) -> None:
+    """An already-current store must not collect an empty commit per run."""
+    _sync()
+    after_first = _commit_count(git_store)
+
+    _sync()
+
+    assert _commit_count(git_store) == after_first
+
+
+def test_auto_commit_off_writes_but_does_not_commit(
+    git_store: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Operators who commit their store by hand keep that choice."""
+    monkeypatch.setattr(config.git, "auto_commit", False)
+    before = _commit_count(git_store)
+
+    result = _sync("--format", "text")
+
+    assert result.exit_code == 0, result.output
+    assert sorted(
+        p.name for p in _prompts(git_store).glob("*.md")
+    ) == packaged_prompt_names()
+    assert _commit_count(git_store) == before
+    assert _git(git_store, "status", "--porcelain") != ""
+    assert "not committed" in result.output
+
+
+def test_json_output_reports_the_commit(git_store: Path) -> None:
+    result = _sync("--format", "json")
+
+    payload = json.loads(result.output)
+    assert payload["committed"] is True
+    assert payload["commit_message"] == _subject(git_store)
+
+
+def test_json_output_reports_a_dry_run_as_uncommitted(git_store: Path) -> None:
+    result = _sync("--dry-run", "--format", "json")
+
+    payload = json.loads(result.output)
+    assert payload["committed"] is False
+    assert payload["commit_message"] is None

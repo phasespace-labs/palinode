@@ -89,16 +89,16 @@ def test_propose_contradicts_is_allowed_by_default_on_both_passes() -> None:
 
 @pytest.mark.parametrize(
     "prompt,expected_version",
-    [("compaction.md", 2), ("nightly-consolidation.md", 2)],
+    [("compaction.md", 3), ("nightly-consolidation.md", 2)],
 )
 def test_consolidation_prompts_declare_a_version(prompt: str, expected_version: int) -> None:
     """A prompt with no `version:` cannot be reported as stale.
 
     `palinode doctor` compares each store prompt's declared version against the
     packaged copy, so an undeclared version means the one file whose contract
-    just changed is the one the check cannot warn about. Both consolidation
-    prompts are at v2: v1 named the six reachable ops, v2 adds
-    `PROPOSE_CONTRADICTS`.
+    just changed is the one the check cannot warn about. v1 named the six
+    reachable ops; v2 adds `PROPOSE_CONTRADICTS`; compaction v3 makes KEEP
+    implicit, so the model emits only ops that change something.
     """
     meta = frontmatter.load(PROMPTS_DIR / prompt).metadata
     assert meta.get("version") == expected_version

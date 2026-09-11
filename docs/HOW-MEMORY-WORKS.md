@@ -239,8 +239,8 @@ graph LR
    - Entity tags in frontmatter (`entities: [project/my-app]`)
    - Keyword fallback (scans content for project names, tool names, etc.)
 3. **Analyze** — for each project, sends notes + current summary + existing decisions to the LLM (OLMo 3.1:32b) with the compaction prompt to determine what facts are relevant
-4. **Determine Operations** — the LLM returns structured JSON operations (`KEEP`, `UPDATE`, `MERGE`, `SUPERSEDE`, `ARCHIVE`) determining the fate of each active fact
-5. **Execute Compaction** — the Compaction Executor runs deterministically to modify or move facts:
+4. **Determine Operations** — the LLM returns a structured JSON array holding only the operations that *change* something (`UPDATE`, `MERGE`, `SUPERSEDE`, `ARCHIVE`, `RETRACT`, `PROPOSE_CONTRADICTS`). Any fact it does not name is kept as it stands, and an empty array means nothing needed changing — so the response size follows the number of judgments, not the size of the document
+5. **Apply Changes** — modify or move the named facts:
    - Updated/Merged facts are preserved in the Identity or Status layers.
    - Superseded or Archived facts are moved to the History layer (`{name}-history.md`) with a rationale and timestamp ensuring data is never lost.
 6. **Assign IDs** — any newly generated facts get a deterministic `<!-- fact:slug -->` ID block for tracking.
@@ -263,7 +263,7 @@ assistant: Updating My App with testing progress.
 
 ## Session 2026-03-29T16:12:25Z  
 user: run the consolidation
-assistant: Processed 18 notes, My App summary updated via 5 KEEP, 2 UPDATE, 1 ARCHIVE ops...
+assistant: Processed 18 notes, My App summary updated via 2 UPDATE, 1 ARCHIVE ops...
 ```text
 
 **After consolidation (projects/my-app-status.md):**

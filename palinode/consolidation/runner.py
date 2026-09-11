@@ -32,7 +32,8 @@ from palinode.core import store, embedder, git_tools
 from palinode.core.ollama_client import OllamaError, OllamaRole, get_ollama_client
 from palinode.core.parser import split_frontmatter
 from palinode.consolidation import status_doc
-from palinode.consolidation.op_parse import op_kind, op_reason, parse_operations
+from palinode.consolidation.fact_ids import FACT_LINE_RE, count_body_facts
+from palinode.consolidation.op_parse import op_kind, op_reason, parse_result
 from palinode.prompts import PromptUnavailable, resolve_prompt
 
 logger = logging.getLogger("palinode.consolidation")
@@ -400,6 +401,98 @@ def _partition_by_target(
             keep[project_id] = notes
     return keep, sorted(skipped)
 
+
+#: What an operator has to run to make an untagged target consolidatable.
+UNTAGGED_REMEDIATION = (
+    "run `palinode bootstrap-ids --file projects/<project>-status.md` (or "
+    "`palinode bootstrap-ids` for the whole store) to mint ids for the bullets "
+    "already there"
+)
+
+
+def _tagged_fact_count(target_file: str) -> int:
+    """How many body bullets in *target_file* the runner can actually address.
+
+    Counted with the same regex ``_consolidate_project`` harvests with, so this
+    cannot answer "there are facts" for a file that harvests to nothing.
+    """
+    return count_body_facts(target_file)[1]
+
+
+def _partition_by_tagged_facts(
+    grouped: dict[str, list[dict]],
+) -> tuple[dict[str, list[dict]], list[str]]:
+    """Split groups whose target carries no ``<!-- fact:… -->`` marker out of the pass.
+
+    Sibling of :func:`_partition_by_target`, and it exists for the same reason
+    one layer in: a target document with no markers harvests to zero facts, so
+    the pass proposes nothing for that project no matter how much activity its
+    daily notes hold — and that outcome was reported as ``projects_compacted: 0``
+    under ``status: success``, indistinguishable from a quiet week. Measured on
+    a real store: 79 consecutive nightly runs skipped a 449-bullet status
+    document appended entirely by session-end, every one of them "successful".
+
+    Partitioning *here* rather than inside ``_consolidate_project`` also means
+    the skip costs no prompt render and no inference, and puts the count where
+    the run summary can report it.
+    """
+    keep: dict[str, list[dict]] = {}
+    skipped: list[str] = []
+    for project_id, notes in grouped.items():
+        target = _target_file_for(project_id)
+        if target is not None and _tagged_fact_count(target) == 0:
+            skipped.append(project_id)
+        else:
+            keep[project_id] = notes
+    return keep, sorted(skipped)
+
+
+def _log_untagged_skips(skipped: list[str]) -> None:
+    """WARNING, not INFO: an inert consolidation target is a defect in the store.
+
+    The old line was INFO from inside ``_consolidate_project`` and read as
+    routine — which is how six months of it went unread in the cron log. The
+    message names the files (what to fix) and the command (how).
+    """
+    if not skipped:
+        return
+    targets = ", ".join(
+        f"{project_id} ({_target_file_for(project_id) or 'no target'})"
+        for project_id in skipped
+    )
+    logger.warning(
+        "palinode.consolidation: %d group(s) skipped — the target document "
+        "carries no <!-- fact:... --> markers, so consolidation has nothing to "
+        "address and proposes nothing: %s. To fix, %s.",
+        len(skipped),
+        targets,
+        UNTAGGED_REMEDIATION,
+    )
+
+
+def _record_skips(
+    result: dict[str, Any],
+    *,
+    no_target: list[str],
+    untagged: list[str],
+) -> None:
+    """Annotate a run summary with both skip classes.
+
+    Present-or-absent rather than zero, matching how ``yaml_parse_errors``
+    behaves. The two classes stay separate keys because their remediations
+    differ: a no-target group wants a project document created (or the ref
+    dropped), an untagged one wants ids minted in a document that already
+    exists.
+    """
+    if no_target:
+        result["groups_skipped_no_target"] = len(no_target)
+        result["skipped_no_target_projects"] = no_target
+    if untagged:
+        result["groups_skipped_untagged"] = len(untagged)
+        result["skipped_untagged_projects"] = untagged
+        result["untagged_remediation"] = UNTAGGED_REMEDIATION
+
+
 def _build_model_chain() -> list[dict[str, str]]:
     """Build ordered chain from config: primary + fallbacks.
 
@@ -417,6 +510,13 @@ def _call_llm_with_fallback(system_prompt: str, user_prompt: str) -> tuple[str, 
 
     Tries primary model first. On timeout or HTTP error, tries each
     fallback in order. Returns (response_text, model_used).
+
+    ``response_text`` is a
+    :class:`~palinode.core.ollama_client.ChatCompletionText` — a ``str`` that
+    also knows whether the model was cut off at ``llm_max_tokens``
+    (``.truncated`` / ``.finish_reason``). The chain deliberately does *not*
+    walk to the next model on truncation: that is not a host failure, and the
+    next host would hit the same cap on the same prompt. The caller reports it.
 
     Raises:
         RuntimeError: All models in chain failed.
@@ -455,10 +555,13 @@ def _call_llm_with_fallback(system_prompt: str, user_prompt: str) -> tuple[str, 
 
     raise RuntimeError(f"All {len(chain)} models failed. Last error: {last_error}")
 
-#: ``model_used`` sentinel returned by ``_consolidate_project`` when the LLM
-#: call itself raised. The runners read it to count the group as failed rather
-#: than as a quiet "nothing to do" — the two are indistinguishable by the
-#: (empty) operations list alone.
+#: ``model_used`` sentinel returned by ``_consolidate_project`` when the propose
+#: step produced nothing usable — the call raised, the response was cut off at
+#: the token cap, or what came back could not be parsed as an operations array.
+#: The runners read it to count the group as failed rather than as a quiet
+#: "nothing to do" — the two are indistinguishable by the (empty) operations
+#: list alone. The *reason* is logged at WARNING where it is detected, next to
+#: the project name, rather than threaded through this one-word return.
 LLM_FAILED = "failed"
 
 
@@ -560,7 +663,12 @@ def _consolidate_project(
             real fact-extraction + parse + executor path runs without an LLM.
 
     Returns:
-        Tuple of (List of operation dicts, model_used).
+        Tuple of (List of operation dicts, model_used). ``model_used`` is
+        :data:`LLM_FAILED` when the propose step produced nothing usable — the
+        call raised, the response was truncated, or it carried no readable
+        operations array — so the caller counts the group as failed. An empty
+        list with a real model name is the other thing entirely: the model
+        looked and proposed nothing.
     """
     # Load compaction prompt: store copy, then the copy inside the wheel.
     # PromptUnavailable propagates — the caller records the project as failed,
@@ -589,7 +697,7 @@ def _consolidate_project(
     # LLM to propose operations against `entities:`.
     _, file_body = split_frontmatter(file_content)
     facts = []
-    for match in re.finditer(r'^[\s]*[-*]\s+(.*?)<!-- fact:(\S+) -->', file_body, re.MULTILINE):
+    for match in FACT_LINE_RE.finditer(file_body):
         facts.append({"id": match.group(2), "text": match.group(1).strip()})
 
     if not facts:
@@ -638,10 +746,35 @@ Return the operations JSON array."""
     except Exception as e:
         logger.error(f"Failed to call LLM for {project_id}: {e}")
         return [], LLM_FAILED
-    
+
+    # A response cut off at the token cap is a failed proposal, not an empty
+    # one. `getattr` because the propose seam is injectable: a test fake (or a
+    # server that reports no finish_reason) hands back a plain str, which reads
+    # as "not known to be truncated" — the parse check below is the backstop.
+    if getattr(result_text, "truncated", False):
+        logger.warning(
+            "palinode.consolidation: %s — the model's response was cut off at the "
+            "token cap (finish_reason=%s, consolidation.llm_max_tokens=%d, %d chars "
+            "returned); proposing nothing for this project. Raise llm_max_tokens or "
+            "reduce what the prompt asks the model to enumerate.",
+            project_id, getattr(result_text, "finish_reason", None),
+            config.consolidation.llm_max_tokens, len(result_text),
+        )
+        return [], LLM_FAILED
+
     # Parse the operations JSON array — extraction + json_repair recovery +
-    # nested-list/dict filtering all live in op_parse now.
-    return parse_operations(result_text), model_used
+    # nested-list/dict filtering all live in op_parse now. An empty *list* is a
+    # model that proposed nothing, which is a legitimate no-op; a response with
+    # no readable array is a failure, and the two used to be the same `[]`.
+    parsed = parse_result(result_text)
+    if not parsed.ok:
+        logger.warning(
+            "palinode.consolidation: %s — could not read operations from the %s "
+            "response: %s. Counting this project as failed; its notes stay in place.",
+            project_id, model_used, parsed.reason,
+        )
+        return [], LLM_FAILED
+    return parsed.operations, model_used
 
 def _check_contradictions(
     new_items: list[dict], project_id: str, llm_fn: LlmFn | None = None
@@ -961,6 +1094,8 @@ def _run_consolidation_unlocked(
             len(skipped_no_target),
             ", ".join(skipped_no_target),
         )
+    grouped, skipped_untagged = _partition_by_tagged_facts(grouped)
+    _log_untagged_skips(skipped_untagged)
 
     total_stats = {"kept": 0, "updated": 0, "merged": 0, "superseded": 0, "archived": 0}
     projects_processed = 0
@@ -1038,7 +1173,7 @@ def _run_consolidation_unlocked(
             "processed_notes": len(notes),
             "projects_compacted": projects_processed,
             "projects_failed": len(failed_projects),
-            "projects_skipped": len(skipped_no_target),
+            "projects_skipped": len(skipped_no_target) + len(skipped_untagged),
             "dry_run": True,
             "proposed_changes": proposed_changes,
         }
@@ -1046,18 +1181,19 @@ def _run_consolidation_unlocked(
             result["yaml_parse_errors"] = yaml_skipped
         if failed_projects:
             result["failed_projects"] = failed_projects
-        if skipped_no_target:
-            # Same shape as yaml_parse_errors: a count of what silently
-            # did not happen belongs in the result, not only the log.
-            result["groups_skipped_no_target"] = len(skipped_no_target)
-            result["skipped_no_target_projects"] = skipped_no_target
+        # Same shape as yaml_parse_errors: a count of what silently
+        # did not happen belongs in the result, not only the log.
+        _record_skips(result, no_target=skipped_no_target, untagged=skipped_untagged)
         return result
 
     # Archive only what was actually consolidated. A note that belongs to a
-    # failed or untargetable group stays in place so the next run sees it
-    # again — moving it to archive/ would retire it unconsolidated.
+    # failed, untargetable or untagged group stays in place so the next run sees
+    # it again — moving it to archive/ would retire it unconsolidated. The
+    # untagged class was previously archived: the group reached the loop, was
+    # dropped for having no addressable facts, and its notes retired anyway.
     retire, left_in_place = _partition_notes_for_archive(
-        notes, unresolved=set(failed_projects) | set(skipped_no_target)
+        notes,
+        unresolved=set(failed_projects) | set(skipped_no_target) | set(skipped_untagged),
     )
     if projects_processed > 0:
         _archive_daily_notes(retire)
@@ -1068,7 +1204,7 @@ def _run_consolidation_unlocked(
     if left_in_place and projects_processed > 0:
         logger.warning(
             "palinode.consolidation: %d note(s) left in place — their project "
-            "group(s) failed or had no target: %s",
+            "group(s) failed, had no target, or had no tagged facts: %s",
             len(left_in_place),
             ", ".join(os.path.basename(n["filepath"]) for n in left_in_place),
         )
@@ -1094,7 +1230,7 @@ def _run_consolidation_unlocked(
         "processed_notes": len(notes),
         "projects_compacted": projects_processed,
         "projects_failed": len(failed_projects),
-        "projects_skipped": len(skipped_no_target),
+        "projects_skipped": len(skipped_no_target) + len(skipped_untagged),
         "notes_archived": len(retire),
         "notes_left_in_place": len(left_in_place),
         **total_stats,
@@ -1103,11 +1239,7 @@ def _run_consolidation_unlocked(
         result["yaml_parse_errors"] = yaml_skipped
     if failed_projects:
         result["failed_projects"] = failed_projects
-    if skipped_no_target:
-        # Same shape as yaml_parse_errors: a count of what silently
-        # did not happen belongs in the result, not only the log.
-        result["groups_skipped_no_target"] = len(skipped_no_target)
-        result["skipped_no_target_projects"] = skipped_no_target
+    _record_skips(result, no_target=skipped_no_target, untagged=skipped_untagged)
     return result
 
 
@@ -1176,6 +1308,8 @@ def _run_nightly_unlocked(lookback_days: int | None = None, dry_run: bool = Fals
             len(skipped_no_target),
             ", ".join(skipped_no_target),
         )
+    grouped, skipped_untagged = _partition_by_tagged_facts(grouped)
+    _log_untagged_skips(skipped_untagged)
     
     total_stats = {"kept": 0, "updated": 0, "merged": 0, "superseded": 0, "archived": 0}
     projects_processed = 0
@@ -1247,7 +1381,7 @@ def _run_nightly_unlocked(lookback_days: int | None = None, dry_run: bool = Fals
             "processed_notes": len(notes),
             "projects_compacted": projects_processed,
             "projects_failed": len(failed_projects),
-            "projects_skipped": len(skipped_no_target),
+            "projects_skipped": len(skipped_no_target) + len(skipped_untagged),
             "dry_run": True,
             "proposed_changes": proposed_changes,
         }
@@ -1255,11 +1389,9 @@ def _run_nightly_unlocked(lookback_days: int | None = None, dry_run: bool = Fals
             nightly_result["yaml_parse_errors"] = yaml_skipped
         if failed_projects:
             nightly_result["failed_projects"] = failed_projects
-        if skipped_no_target:
-            # Same shape as yaml_parse_errors: a count of what silently
-            # did not happen belongs in the result, not only the log.
-            nightly_result["groups_skipped_no_target"] = len(skipped_no_target)
-            nightly_result["skipped_no_target_projects"] = skipped_no_target
+        _record_skips(
+            nightly_result, no_target=skipped_no_target, untagged=skipped_untagged
+        )
         return nightly_result
     
     if projects_processed > 0:
@@ -1275,18 +1407,14 @@ def _run_nightly_unlocked(lookback_days: int | None = None, dry_run: bool = Fals
         "processed_notes": len(notes),
         "projects_compacted": projects_processed,
         "projects_failed": len(failed_projects),
-        "projects_skipped": len(skipped_no_target),
+        "projects_skipped": len(skipped_no_target) + len(skipped_untagged),
         **total_stats,
     }
     if yaml_skipped:
         nightly_result["yaml_parse_errors"] = yaml_skipped
     if failed_projects:
         nightly_result["failed_projects"] = failed_projects
-    if skipped_no_target:
-        # Same shape as yaml_parse_errors: a count of what silently
-        # did not happen belongs in the result, not only the log.
-        nightly_result["groups_skipped_no_target"] = len(skipped_no_target)
-        nightly_result["skipped_no_target_projects"] = skipped_no_target
+    _record_skips(nightly_result, no_target=skipped_no_target, untagged=skipped_untagged)
     return nightly_result
 
 

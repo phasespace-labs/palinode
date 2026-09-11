@@ -14,6 +14,135 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Security
 
+## [0.19.1] — 2026-09-11
+
+**Compatibility:** existing stores refresh `compaction.md` (v3) with `palinode prompt sync`.
+Consolidation prefers prompts in the memory store (`$PALINODE_DIR/specs/prompts/*.md`),
+falling back to the installed package only when a store copy is absent. Upgrading does not
+replace an existing store copy: a store still on v2 keeps asking the model for a verdict on *every* fact, which is
+the output-volume bug this release fixes. `palinode doctor` reports the gap
+(`prompts_current`, store version 2 vs packaged version 3) and `palinode prompt sync`
+performs the refresh, replacing only copies whose content still matches a released version
+and reporting the ones you have edited instead of overwriting them. Two more one-time steps apply to stores that predate this release. A store whose watcher ran before 0.19.1 had its prompt frontmatter rewritten by the cross-reference updater, so `prompt sync` reports every prompt as edited: check `palinode prompt sync --dry-run` and `git log -- specs/prompts` for real edits, then run `palinode prompt sync --force` once. And status documents written before this release carry no fact ids, so consolidation skipped them — and reported success — on every pass: `palinode doctor` (`consolidation_targets_tagged`) names them, and `palinode bootstrap-ids --file` mints the ids for one document (`palinode bootstrap-ids --file projects/<project>-status.md`). Until then the pass skips the document and now says so.
+
+### Added
+
+- **`palinode doctor` names consolidation targets nothing can compact
+  (`consolidation_targets_tagged`).** The runner harvests only bullets
+  carrying a `<!-- fact:id -->` marker, so a target document with body bullets and
+  no markers is inert: every pass over it proposes nothing and reports success. The
+  new `fast` check reads every `projects/*-status.md` (plus the target of any project
+  a recent daily note mentions) and warns with the file name, its untagged-bullet
+  count, and a ready-to-run fix. Documented in `docs/DOCTOR.md`.
+- **`palinode bootstrap-ids --file <rel-path>` tags one memory file.** The
+  whole-store walk is the wrong instrument when `doctor` has named a single inert
+  status document. Same minting, same provenance commit, idempotent; the path is
+  guarded and anything resolving outside the store is rejected. Also available as
+  `POST /bootstrap-fact-ids {"file": "..."}`; a bodyless POST still walks the store.
+
+### Changed
+
+- **The compaction prompt stops asking for a verdict on every fact — KEEP is now implicit
+  (`compaction.md` v3).** v2 said "decide what happens to each fact" and opened its
+  example output with `{"op": "KEEP", …}`, so the response grew with the document: on a
+  449-fact status file the model emitted one KEEP per fact, ran into
+  `consolidation.llm_max_tokens` (2000) after roughly 100 of them, and returned a JSON array
+  with no closing `]`. The parse produced no operations, and a minute-long LLM call was
+  reported exactly like a quiet week. v3 asks for **only the operations that change
+  something** — UPDATE / MERGE / SUPERSEDE / ARCHIVE / RETRACT / PROPOSE_CONTRADICTS — and
+  states that every fact not named in an operation is kept unchanged. Omitted facts
+  retain their existing text.
+  An empty array is now documented as a complete answer meaning "nothing to change", and an
+  explicit KEEP is still accepted and still a no-op — it is simply never required. No judgment
+  rule changed: the ACTIVE_DECISIONS constraint, the no-winner PROPOSE_CONTRADICTS rule, the
+  `category/slug` ref format and the rationale requirement are unchanged, and keep their
+  numbering. Measured on a seeded 300-fact store: the v2-shaped response overruns the token
+  cap and applies nothing, while the v3-shaped response carries the same four judgments in
+  under 900 characters and applies all four. `llm_max_tokens` is unchanged — the point is that
+  the output no longer scales with the document.
+- **`json-repair` is now a declared runtime dependency.** `op_parse` imported it inside an `except` branch to recover malformed model JSON, but it was in neither `pyproject.toml` nor any install — so the documented recovery path had never once run in production, and every malformed proposal fell through to "no operations". Declared rather than deleted: it is pure Python, ~25 KB, MIT, with no required transitive dependencies, and it is the difference between a salvageable proposal and a discarded one. Its test no longer `importorskip`s — a missing module is now a broken install, not a reason to pass silently.
+
+### Fixed
+
+- **`palinode prompt sync` commits the prompts it writes.** The refresh wrote the
+  packaged bytes into `$PALINODE_DIR/specs/prompts/` and returned, leaving the store dirty
+  with no record of which release the prompts came from — and `git log -- specs/prompts` is
+  the only place a store says *when* consolidation started running a given prompt revision,
+  which is when the model's proposals change shape. The written files are now staged
+  explicitly and committed in one commit naming each prompt and the version it now declares
+  (`palinode prompt sync: refreshed compaction.md→v3; added trajectory-extraction.md
+  (palinode 0.19.1)`), recording `--force` when it was used since that is the
+  operator-discarded-edits event worth finding later. `--dry-run` still writes and commits
+  nothing, a sync with nothing to write makes no empty commit, and `git.auto_commit: false`
+  leaves the files uncommitted and says so. The writes go through the store's guarded atomic
+  write primitive, so a prompt path is validated against `PALINODE_DIR` like every other
+  memory write; `--format json` reports `committed` and `commit_message`.
+- **`palinode consolidate` no longer aborts at 30 s while the server keeps running the
+  pass.** The CLI applied its 30 s default request budget to `/consolidate`, but
+  the server gives the model 600 s per project group — so any pass that reached an LLM
+  outlived the command that asked for it, which printed a bare `Aborted!` and exited 1
+  while the API finished the run, held `.palinode/consolidation.lock`, and 409'd the next
+  invocation. `/consolidate` now waits `PALINODE_CONSOLIDATE_TIMEOUT` seconds (default
+  900); `/bootstrap-fact-ids` and `/archive` likewise get budgets that match the work they
+  do. If the wait is exceeded, the CLI reports that the server is still running, names the
+  run lock and where the result lands, and exits 1 — `--format json` emits
+  `{"status": "timeout", "server_still_running": true, …}`.
+- **`palinode_consolidate` (MCP) waits the same budget the CLI does, and reports a timeout
+  instead of failing blank.** The tool posted `/consolidate` with a hardcoded
+  300 s while the server gives the model 600 s per project group — the same failure the CLI
+  had, one surface over: the request gave up, the API kept running the pass and holding
+  `.palinode/consolidation.lock`, and the next call got a 409. The budget now comes from
+  `PALINODE_CONSOLIDATE_TIMEOUT` (default 900), which moved to `palinode.core.defaults` so
+  both surfaces read one value, and on timeout the tool returns the CLI's structured report
+  — `{"status": "timeout", "server_still_running": true, …}` naming the lock, the log and
+  the env var — rather than a bare "request timed out". `palinode_archive` moves 30 s →
+  120 s to match the CLI. The tool description and `docs/MCP-SETUP.md` now say that a long
+  pass can outlast the MCP *client's* own tool-call timeout, which Palinode cannot raise,
+  and that the server finishes the pass regardless.
+- **Consolidation never ran on a store fed by session-end — its status bullets
+  carried no fact ids.** The session-end append to
+  `projects/<project>-status.md` wrote plain `- [YYYY-MM-DD] …` lines, and the
+  runner harvests only bullets with a `<!-- fact:id -->` marker, so a store written
+  exclusively through the supported write paths could never satisfy the runner's
+  precondition. Observed on a real store: 449 untagged bullets, 79 consecutive
+  nightly runs, not one proposal. Session-end now mints the marker on the way in,
+  using the same deterministic id `bootstrap-ids` would produce for that text, so a
+  later backfill is a no-op and nothing is double-stamped.
+- **A skipped consolidation target is counted, not reported as a successful pass.**
+  "Target exists but has no tagged facts" was folded into
+  `projects_compacted: 0` under `status: success`, indistinguishable from a quiet
+  week. Both run summaries now carry `groups_skipped_untagged` and
+  `skipped_untagged_projects` (and count them in `projects_skipped`), the skip is
+  logged at WARNING naming the file and the fix instead of INFO, the cron entry
+  point repeats it as a WARNING, and the group's daily notes are left in place
+  rather than archived as though they had been consolidated.
+- **A consolidation proposal that could not be read is now a failed project, not a quiet week.** Measured on a real store: with a 449-fact status document tagged, the LLM ran for 60 s, emitted per-fact `KEEP` operations, hit `consolidation.llm_max_tokens` mid-id and stopped with no closing `]`. The parser found no array, returned `[]`, and the run summary said `status: success, projects_failed: 0` — byte-identical to a week with nothing to compact. `LLM_FAILED` covered transport failure only. Three changes close it: `OllamaClient.chat_completions` now returns a `ChatCompletionText` (a `str` subclass, so every caller is unchanged) carrying `finish_reason` / `truncated`, read from the OpenAI-shape `choices[0].finish_reason` or Ollama's top-level `done_reason`; `op_parse.parse_result` distinguishes "the model proposed nothing" (`[]`, a legitimate no-op) from "there was nothing readable to parse" (no array, an array that never closed, or one that repaired to no operations); and `_consolidate_project` returns the `LLM_FAILED`-class result for both, with the reason logged at WARNING next to the project name. Such a project is counted in `projects_failed`, named in `failed_projects`, and its daily notes stay in `daily/` for the next run (the note-retention guarantee, on the new failure class).
+- **`palinode prompt list|show|activate` and `GET /prompts` read the store's real prompts
+  directory.** All three went through `GET /prompts`, which listed
+  `$PALINODE_DIR/prompts` — a directory nothing in palinode writes. On a store provisioned by
+  `palinode init` or refreshed by `palinode prompt sync`, the prompts are in
+  `$PALINODE_DIR/specs/prompts`, so `prompt list` printed nothing while consolidation and
+  `palinode doctor`'s `prompts_current` check were reading nine files, and `prompt activate`
+  would have flipped `active:` on a copy no consolidation pass reads. The API now resolves the
+  directory through `palinode.prompts.store_prompts_dir()`, the same helper the runner,
+  `init`, `prompt sync` and the doctor check use. Path-guard behaviour is unchanged.
+- **`prompt sync` no longer sees every store prompt as operator-edited.** The
+  cross-reference auto-updater intended to skip prompts, but tested only the first path
+  segment of a memory's path — and store prompts live at `specs/prompts/*.md`, so they
+  fell through, had their frontmatter rewritten (`cross_refs:`, key ordering) and were
+  committed as `palinode: auto-update cross_refs for specs/prompts/<name>.md`. Since
+  `prompt sync` compares a whole-file sha256 against the hashes palinode has released,
+  one watcher pass over a pristine prompt was enough to make it look edited, and
+  `palinode prompt sync` would then refuse to refresh it without `--force` — leaving
+  the `doctor prompts_current` warning with no working remedy. The skip now matches any
+  directory segment, so `specs/prompts/` is excluded both as a scan source and as a
+  cross-reference target, and the churn commits on prompt files stop. Stores already
+  rewritten need one `palinode prompt sync --force` (back up local prompt edits first).
+
+### Removed
+
+### Security
+
 ## [0.19.0] — 2026-09-10
 
 **Compatibility:** existing stores must refresh two prompt files. Consolidation reads its

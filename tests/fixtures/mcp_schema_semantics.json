@@ -40,7 +40,7 @@
     ]
   },
   "palinode_consolidate": {
-    "description": "Run a manual knowledge consolidation pass.  Set `dry_run=true` to preview the proposed operations without applying them.",
+    "description": "Run a manual knowledge consolidation pass.  Set `dry_run=true` to preview the proposed operations without applying them.  A pass that reaches the LLM can run for minutes and may outlast your client's own tool-call timeout; the server finishes it either way and holds a run lock while it does, so a retry returns 409 rather than starting again.",
     "params": {
       "dry_run": {},
       "nightly": {},

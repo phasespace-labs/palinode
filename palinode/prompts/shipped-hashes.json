@@ -3,6 +3,7 @@
   "_note": "Every sha256 palinode has ever shipped for each prompt, newest first. `palinode prompt sync` refreshes a store copy only when its hash appears here - i.e. it is a pristine copy of some release, not an operator edit. When you change a prompt, prepend its new hash; the previous one is already listed. tests/test_packaged_prompts_match_source.py enforces it.",
   "prompts": {
     "compaction.md": [
+      "61bf616b4f72afcadc2863aaeb1e9bd17faf5b99c429403092abafe78185bf60",
       "0e8c28550b0fa9a9da48253eeaa36ecd6251e5d3532455c4ff5d7d9adf0ecc54",
       "5285de3ca04f24f2593c05a80869242a0b1d7f8e2bd3bc3533114717f9fe7209",
       "294d4c773657cd3f4c9a5d8d6096c7d534a9a5f3c84784e9f89af4e1ad4918c4",

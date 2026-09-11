@@ -309,6 +309,64 @@ def _extract_openai_embedding_batch(
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# Chat completions — the text, plus why the model stopped
+# ──────────────────────────────────────────────────────────────────────────
+
+#: Stop reasons that mean "the model was cut off", normalised to lower case.
+#: ``length`` is the OpenAI shape (and what Ollama's ``done_reason`` says);
+#: the others are what OpenAI-compatible servers and shims emit for the same
+#: condition. Anything else — ``stop``, ``tool_calls``, absent — is a model
+#: that finished on its own terms.
+_TRUNCATION_STOP_REASONS = frozenset({"length", "max_tokens", "max_output_tokens"})
+
+
+def _finish_reason(data: Any) -> str | None:
+    """The stop reason from a chat-completions response, or ``None``.
+
+    Reads ``choices[0].finish_reason`` (the OpenAI shape that vLLM / llama.cpp /
+    LM Studio emit) and falls back to a top-level ``done_reason``, which is what
+    Ollama puts on its own chat responses. Never raises: a server that reports
+    nothing yields ``None``, which callers read as "cannot tell".
+    """
+    if not isinstance(data, dict):
+        return None
+    choices = data.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        reason = choices[0].get("finish_reason")
+        if isinstance(reason, str) and reason:
+            return reason
+    reason = data.get("done_reason")
+    return reason if isinstance(reason, str) and reason else None
+
+
+class ChatCompletionText(str):
+    """The assistant message content, carrying why generation stopped.
+
+    A ``str`` subclass rather than a tuple or dataclass so this is a
+    backwards-compatible return type: every existing caller of
+    :meth:`OllamaClient.chat_completions` keeps slicing, regexing and
+    ``.strip()``-ing it unchanged, while the one caller that needs to know the
+    response was cut off at ``max_tokens`` reads ``.truncated``.
+
+    Truncation used to be invisible, and the cost was not theoretical: a
+    consolidation pass whose 60 s LLM call hit the token cap mid-array parsed
+    to zero operations and was reported as a clean "nothing to compact".
+    Callers that may receive a plain ``str`` (a test fake, a seam someone
+    injected) should read it defensively:
+    ``getattr(text, "truncated", False)``.
+    """
+
+    finish_reason: str | None
+    truncated: bool
+
+    def __new__(cls, content: str, *, finish_reason: str | None = None) -> ChatCompletionText:
+        obj = super().__new__(cls, content)
+        obj.finish_reason = finish_reason
+        obj.truncated = (finish_reason or "").lower() in _TRUNCATION_STOP_REASONS
+        return obj
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # Roles — the per-endpoint routing that makes misroutes impossible
 # ──────────────────────────────────────────────────────────────────────────
 
@@ -1133,6 +1191,11 @@ class OllamaClient:
         the role URL per call so the consolidation fallback chain can walk several
         hosts. Raises :class:`OllamaError` on transport failure *or* a malformed
         response (missing ``choices[0].message.content``).
+
+        The return value is a :class:`ChatCompletionText` — a ``str`` carrying
+        ``finish_reason`` / ``truncated``, so a caller that needs to know the
+        model was cut off at ``max_tokens`` can ask, and every caller that just
+        wants the text is unchanged.
         """
         payload: dict[str, Any] = {"model": model, "messages": messages}
         if temperature is not None:
@@ -1145,13 +1208,19 @@ class OllamaClient:
             op="chat_completions", base_url=base_url,
         )
         try:
-            return data["choices"][0]["message"]["content"]
+            content = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as e:
             keys = sorted(data.keys()) if isinstance(data, dict) else "?"
             raise OllamaError(
                 f"malformed chat_completions response (keys={keys})",
                 role=role.value, model=model,
             ) from e
+        if not isinstance(content, str):
+            # A server that answers with a null/structured content is already a
+            # caller-visible bug; wrapping it would only turn it into the string
+            # "None". Pass it through exactly as before.
+            return content
+        return ChatCompletionText(content, finish_reason=_finish_reason(data))
 
     def ping(self, role: OllamaRole = OllamaRole.EMBED, *, timeout: float = 2.0) -> bool:
         """Liveness probe — a raw GET to the role's base URL.
