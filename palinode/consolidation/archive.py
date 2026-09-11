@@ -125,6 +125,8 @@ def archive_memory(
     file_path: str,
     reason: str | None = None,
     superseded_by: str | None = None,
+    *,
+    actor: str | None = None,
 ) -> dict[str, Any]:
     """Retire one named memory: ARCHIVE, or SUPERSEDE when ``superseded_by`` is set.
 
@@ -136,6 +138,12 @@ def archive_memory(
 
     Idempotent: a memory already at ``status: archived`` is reported as
     ``already_archived`` and nothing is written or committed.
+
+    ``actor`` names a non-human proposer whose finding is why this retirement is
+    happening — today the deterministic lint→op mapping. It is recorded in both
+    durable places, the history line and the commit subject, so a reader can
+    tell an operator's on-demand archive from one a proposer earned. Omitted (a
+    direct CLI/API/MCP call), nothing changes.
 
     Raises:
         ValueError: the path is malformed or escapes ``memory_dir``.
@@ -183,6 +191,8 @@ def archive_memory(
         entry = f"Archived: {rel}"
     if reason:
         entry = f"{entry} (reason: {reason})"
+    if actor:
+        entry = f"{entry} [actor: {actor}]"
     history_abs = append_to_history(abs_path, _audit_id(post.metadata, rel), entry)
     history_rel = os.path.relpath(history_abs, config.memory_dir)
 
@@ -192,6 +202,8 @@ def archive_memory(
     message = f"{config.git.commit_prefix} {verb}: {rel}"
     if superseded_by:
         message = f"{message} -> {superseded_by}"
+    if actor:
+        message = f"{message} (actor: {actor})"
     # One mutation = one commit, staging exactly the two files it touched.
     committed = git_tools.commit_memory_files([abs_path, history_abs], message)
 

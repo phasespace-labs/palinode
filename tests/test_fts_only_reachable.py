@@ -6,18 +6,19 @@ embedder rejects that one input (bge-m3's NaN vector), and
 ``EmbeddingInputError``'s recovery text promises the chunk "stays
 keyword-searchable". It did not: the chunk has no ``chunks_vec`` row, so the
 vector arm can never carry it, and its normalized BM25 score (``raw / 25.0``)
-did not clear the old shared floor. The row was in ``chunks``, in
-``chunks_fts``, matched ``MATCH`` — and ``/search`` would not return it while
-a vector-bearing control in the same two-document store came back normally.
+never clears the shared per-arm floor that the BM25-arm measurement
+deliberately left in place for chunks that *have* a vector. The row was in
+``chunks``, in ``chunks_fts``, matched ``MATCH`` — and ``/search`` would not
+return it while a vector-bearing control in the same two-document store came
+back normally.
 
 Fix: ``search_hybrid`` marks each BM25 candidate with ``has_vector`` and
-``rank_hybrid`` exempts vectorless candidates from a configured BM25 floor.
-The default BM25 floor is now zero, so all keyword candidates are reachable;
-the exemption remains relevant when an operator chooses a positive floor.
-This file proves it end-to-end against a real SQLite store (no DB mocking,
-per CLAUDE.md) — the poisoned chunk is written through the real
+``rank_hybrid`` exempts vectorless candidates from the floor. This file
+proves it end-to-end against a real SQLite store (no DB mocking, per
+CLAUDE.md) — the poisoned chunk is written through the real
 ``reconcile.apply`` FTS-only path using the NaN-input regression test's
-selective embedder — and pins the positive-floor behavior too.
+selective embedder — and pins that a chunk with a vector is floored exactly
+as before.
 """
 from __future__ import annotations
 
@@ -126,26 +127,26 @@ class TestStoreLevel:
         assert poison_hit["has_vector"] is False
         assert poison_hit["raw_score"] is None
 
-    def test_vectored_chunk_respects_configured_fts_floor(
-        self, tmp_store, monkeypatch
-    ):
-        """Same BM25 band, same query — the only difference is whether the
-        chunk has a vector. The vectored one (cosine 0 to the query, BM25
-        below the floor) stays excluded; the vectorless one is returned."""
+    def test_vectored_chunk_is_floored_exactly_as_before(self, tmp_store):
+        """Same query — the difference is whether the chunk has a vector and
+        how strong its keyword match is. The FTS floor is relative to the best
+        keyword match (``config.search.fts_threshold`` × top): the vectored
+        chunk matches one query word, lands under that floor, has cosine 0 to
+        the query, and stays excluded; the vectorless one is exempt from the
+        FTS floor and is returned however weak its BM25."""
         poison_path = _write_poison_fts_only(tmp_store)
         vectored_path = _write_vectored(
             tmp_store, "vectored",
-            "The painting of a sunset was worth every cent I paid for it.",
+            "The painting hangs in the hall.",   # one of the four query words
             _orthogonal_to_vec(),
         )
 
         fts = store.search_fts(_KEYWORD_QUERY)
         assert {h["file_path"] for h in fts} == {poison_path, vectored_path}
         assert all(h["score"] < config.search.api_threshold for h in fts)
+        by_path = {h["file_path"]: h["score"] for h in fts}
+        assert by_path[vectored_path] < config.search.fts_threshold * by_path[poison_path]
 
-        monkeypatch.setattr(
-            config.search, "fts_threshold", config.search.api_threshold
-        )
         hits = store.search_hybrid(
             _KEYWORD_QUERY, _VEC, threshold=config.search.api_threshold,
             record_access=False,
@@ -153,7 +154,7 @@ class TestStoreLevel:
         paths = [h["file_path"] for h in hits]
         assert poison_path in paths
         assert vectored_path not in paths, (
-            "a chunk WITH a vector must respect the configured BM25 floor"
+            "a chunk WITH a vector must still be thresholded per-arm, as before"
         )
 
     def test_vectored_chunk_above_cosine_floor_keeps_its_score(self, tmp_store):
@@ -177,12 +178,15 @@ class TestStoreLevel:
         assert control_after["score"] == before[0]["score"]
         assert control_after.get("has_vector", True) is True
 
-    def test_exemption_retires_once_vector_is_backfilled(
-        self, tmp_store, monkeypatch
-    ):
+    def test_exemption_retires_once_vector_is_backfilled(self, tmp_store):
         """After a REEMBED pass writes the vector, the chunk is an ordinary
-        vectored candidate again and the floor applies to it."""
+        vectored candidate again and the FTS floor applies to it. A strict
+        explicit floor (nothing clears it unless exempt) makes that visible:
+        vectorless, the chunk is returned; vectored, it is not."""
         poison_path = _write_poison_fts_only(tmp_store)
+        strict = dict(threshold=config.search.api_threshold, fts_threshold=2.0, record_access=False)
+        before = store.search_hybrid(_KEYWORD_QUERY, _VEC, **strict)
+        assert poison_path in [h["file_path"] for h in before]
 
         class _HealedEmbedder:
             def embed(self, text: str) -> list[float]:
@@ -192,13 +196,7 @@ class TestStoreLevel:
         assert [pw.reason for pw in p2.to_index] == [reconcile.REEMBED]
         assert reconcile.apply(p2, embedder=_HealedEmbedder()).vec_ok is True
 
-        monkeypatch.setattr(
-            config.search, "fts_threshold", config.search.api_threshold
-        )
-        hits = store.search_hybrid(
-            _KEYWORD_QUERY, _VEC, threshold=config.search.api_threshold,
-            record_access=False,
-        )
+        hits = store.search_hybrid(_KEYWORD_QUERY, _VEC, **strict)
         assert poison_path not in [h["file_path"] for h in hits]
 
 

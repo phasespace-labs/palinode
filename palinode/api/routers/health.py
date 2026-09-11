@@ -140,6 +140,16 @@ def status_api() -> dict[str, Any]:
             import logging
             logging.getLogger("palinode.api").warning(f"write-time status lookup failed: {e}")
 
+    # Activity gate: why the automatic consolidation path did or did not
+    # fire. Without it the only evidence is a cron log on the host, which is
+    # exactly what an operator asking "is consolidation still running?" lacks.
+    try:
+        from palinode.consolidation import activity_gate
+        stats["consolidation_gate"] = activity_gate.status()
+    except Exception as e:
+        import logging
+        logging.getLogger("palinode.api").warning(f"consolidation gate status lookup failed: {e}")
+
     # Reindex progress
     stats["reindex"] = {
         "running": _reindex_state["running"],

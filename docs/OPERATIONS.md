@@ -41,6 +41,34 @@ palinode status
 palinode reindex
 ```
 
+### One-time: mint fact ids on a store that predates them
+
+Consolidation addresses facts by id and harvests only bullets carrying a
+`<!-- fact:… -->` marker. Session-end now mints one on every line it appends to
+`projects/<project>-status.md`, but it did not before v0.19.1 — so a store that
+has been running since before this release has consolidation *targets* full of
+bullets the runner cannot address. It skips them, proposes nothing, and reports
+`status: success`. Measured on one real store: 449 untagged bullets, 79
+consecutive nightly runs, not one proposal.
+
+After upgrading, tag the documents once:
+
+```bash
+# What is inert? doctor names the files.
+palinode doctor            # consolidation_targets_tagged
+
+# Fix the named document(s) — idempotent, committed with provenance.
+palinode bootstrap-ids --file projects/palinode-status.md
+
+# Or tag the whole store (people/, projects/, decisions/, insights/).
+palinode bootstrap-ids
+```
+
+Skip it and consolidation never runs on those projects, quietly. The cron path
+now logs a WARNING naming each skipped project, and the run summary carries
+`groups_skipped_untagged` + `skipped_untagged_projects`, so a store still in
+this state says so out loud.
+
 ### What reindex does
 
 For each `.md` file in your memory directory:
@@ -66,6 +94,71 @@ For each `.md` file in your memory directory:
 | List, read, diff, blame, rollback | No | — | File/git operations only |
 
 If Ollama is unreachable during reindex, embedding failures are logged and skipped. The file is not indexed until Ollama comes back and you reindex again.
+
+---
+
+## Consolidation scheduling
+
+Automatic consolidation runs from one entry point:
+
+```bash
+cd /path/to/palinode && PALINODE_DIR=~/palinode venv/bin/python -m palinode.consolidation.cron [--nightly] [--days N]
+```
+
+**The crontab is an upper bound on how often the pass may run, not the trigger.**
+Before consolidating, the entry point consults the *activity gate*: a pass runs
+only when **both** conditions hold since that pass last ran —
+
+| Condition | Config key | Default |
+|---|---|---|
+| Enough time elapsed | `consolidation.auto_gate.min_hours_elapsed` | 24 |
+| Enough sessions recorded | `consolidation.auto_gate.min_sessions` | 5 |
+
+— or when the ceiling `consolidation.auto_gate.max_hours_elapsed` (default 168,
+i.e. 7 days) has passed, which runs the pass regardless of session count.
+
+Wall-clock scheduling alone gets both cases wrong: an idle week still burns an
+LLM pass over nothing, and a heavy day still waits for the next tick. With the
+gate on, schedule the cron as often as hourly and let it decide:
+
+```cron
+# Hourly; the gate decides whether anything actually happens.
+17 * * * * cd /path/to/palinode && PALINODE_DIR=~/palinode venv/bin/python -m palinode.consolidation.cron --nightly --days 1 >> logs/consolidation.log 2>&1
+47 * * * * cd /path/to/palinode && PALINODE_DIR=~/palinode venv/bin/python -m palinode.consolidation.cron --days 3 >> logs/consolidation.log 2>&1
+```
+
+A deferred pass exits 0 and logs one line naming both numerators and both
+denominators, so the cron log alone answers "why didn't it run last night":
+
+```
+2026-09-09 11:00:03 [INFO] palinode.consolidation.cron: Skipping weekly consolidation — deferred: 3 sessions / 5, 11 h / 24 h
+```
+
+**Sessions are counted from `daily/`**, as the number of `## Session End —`
+entries newer than the last recorded run. `POST /session-end` is the only
+writer of that heading and every surface (MCP, CLI, the SessionEnd hook) routes
+through it, so the count is exact and needs no separate counter to keep in sync.
+
+**Weekly and nightly are gated independently.** Last-run state lives in
+`<memory_dir>/.palinode/consolidation-state.json`, one entry per mode, so
+whichever ran last cannot starve the other. A pass that raises records nothing
+and is retried on the next tick; a `--dry-run` records nothing either.
+
+Notes:
+
+- **Keep the ceiling.** A store that ingests through the watcher and never
+  records a session has no session count to satisfy — without
+  `max_hours_elapsed` the dual gate would turn "no sessions" into "never".
+- **On-demand runs bypass the gate.** `palinode consolidate`, `palinode dream`,
+  `POST /consolidate` and the MCP tool run unconditionally; pass
+  `--respect-gate` (`respect_gate: true`) to opt one into the same policy.
+- **`--ignore-gate`** forces the cron entry point through, for a hand-run
+  recovery.
+- **Set `consolidation.auto_gate.enabled: false`** to restore pure wall-clock
+  behaviour.
+- **Current state is on `/status`** under `consolidation_gate` (`palinode
+  status --format json`): the configured thresholds plus, per mode, the last
+  run, hours elapsed, sessions since, and whether a pass is due now.
 
 ---
 
@@ -231,6 +324,37 @@ palinode lint
 ```
 
 Scans for: orphaned files, stale active files (>90 days), missing frontmatter fields, missing descriptions, core file count.
+
+#### From findings to repairs
+
+`palinode lint --propose` turns the deterministic findings into proposed
+consolidation operations — detect (lint) → propose (operations with a
+rationale) → dispose (the executor). It is a dry run; each proposal names the
+finding it came from and whether it is applicable or advisory:
+
+```bash
+palinode lint --propose
+palinode lint --apply     # implies --propose
+```
+
+`--apply` runs the applicable proposals through the same deterministic writers
+a consolidation pass uses — the document is retired to `status: archived` with
+its `-history.md` audit sibling, the index status is pushed, and the mutation is
+one commit. Every trace is stamped with an actor of `lint`, so `git log` and the
+history sibling distinguish an operation lint earned from one the model
+proposed. Nothing that needs wording is proposed by this path.
+
+The proposal set is also available over the other surfaces:
+`POST /lint?propose=true` (add `apply=true` to apply), and the `propose`
+argument on the `palinode_lint` MCP tool. `apply` is deliberately CLI- and
+API-only: an agent's health scan must not be able to retire memories as a side
+effect.
+
+Age-based `ARCHIVE` is restricted by document class (ADR-020) — `people/`,
+`projects/`, `decisions/`, identity documents, `core: true`,
+`update_policy: replace` and `retirement_policy: superseded-only` documents are
+reported as skipped rather than proposed. See
+[CLI.md — `palinode lint`](CLI.md#palinode-lint) for the full mapping.
 
 ### Disk usage
 

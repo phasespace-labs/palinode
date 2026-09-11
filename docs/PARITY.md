@@ -27,6 +27,22 @@ When you add a parameter, add it to all three surfaces (modulo exemptions below)
 
 When the surface is fixed, **remove the `known_drift` entry**. The parity test fails loudly if drift was tracked and the param now exists — that's the test telling you to close the issue.
 
+### Drift or realization
+
+A surface that does not expose a canonical param is not automatically lagging. Two mechanisms sit side by side on `Operation`, and picking the wrong one puts a false statement in the registry:
+
+| | `known_drift` | `surface_realizations` |
+|---|---|---|
+| Says | the surface should expose this and does not, yet | the surface exposes this as its own capability |
+| Value | the GitHub issue tracking the fix | the capability that realizes it, in the identifier form for that surface |
+| Lifetime | temporary; removed when the surface is fixed | permanent; the arrangement is the design |
+| Parity test | xfails, naming the issue | passes, naming the capability |
+| Inventory guard | unaffected | counts the named capability as registered, so it needs no `INVENTORY_BACKLOG` row |
+
+The test question is whether there is anything to fix. `depends` is the worked example: the API realizes the canonical `unblocked` boolean as `GET /depends/_unblocked` rather than as a query param on `GET /depends/{slug}`, and the CLI and MCP call that route. Nothing is lagging, so no issue number can ever be right for it, and it is declared as `surface_realizations[("api", "unblocked")] = "GET /depends/_unblocked"`.
+
+`test_surface_realizations_name_a_real_param_and_capability` checks both halves of every declaration: the param exists in `canonical_params`, and the capability is live on that surface. A declaration nothing verifies rots — the entry this replaced carried an issue number from a private tracker, which resolved in the public one to an unrelated closed issue, and the parity test reported that number for months.
+
 ## Admin-exempt operations
 
 These operations are **not** required to appear on every surface. They are intentionally CLI-only or CLI+API only because they're operational, not memory-semantic.
@@ -118,13 +134,15 @@ If a surface adds sugar, document it here.
 1. **Exempt surface?** Skipped (per `Operation.exempt_surfaces`).
 2. **Plugin?** Skipped on the Python side (Python can't introspect the TypeBox schemas). The TS-side test at `plugin/test/parity.test.ts` enforces plugin parity using the JSON dump produced by `scripts/dump-parity-registry.py`. Run with `cd plugin && npm test`.
 3. **In `known_drift`?** xfailed with `reason="drift tracked in #<issue>"`. The test passes; the issue tracks the fix.
-4. **Otherwise:** asserted present. Missing → CI red.
+4. **In `surface_realizations`?** Passed, naming the capability that realizes the param. Not drift, so not reported as drift.
+5. **Otherwise:** asserted present. Missing → CI red.
 
 The test additionally enforces:
 
 - `test_admin_exempt_ops_are_not_in_registry` — the two lists are disjoint.
 - `test_default_keys_resolve` — every `default_key` reference in the registry exists in `palinode/core/defaults.py`.
 - `test_known_drift_references_a_canonical_param` — `known_drift` keys must reference real canonical param names (catches dangling drift entries after a refactor).
+- `test_surface_realizations_name_a_real_param_and_capability` — `surface_realizations` keys must reference real canonical param names, and each value must name a capability that is live on that surface.
 
 ## Inventory completeness — the surface→registry direction
 
@@ -136,6 +154,8 @@ The param checks above walk `REGISTRY` and verify each surface (registry→surfa
 2. **`INVENTORY_INFRA`** (`palinode/core/parity.py`) — framework/admin/observability surface that is *not* a memory operation: Swagger/Redoc/OpenAPI, the HTML inspector under `/ui`, liveness probes, and the DB-maintenance + importer endpoints (the surface-identifier form of `ADMIN_EXEMPT_OPERATIONS`).
 3. **`INVENTORY_BACKLOG`** (`palinode/core/parity.py`) — a memory-semantic operation that already ships on the surface but has **not yet** been promoted into `REGISTRY` with canonical params. Each entry maps to its tracking issue (the ADR-010 implementation backlog), and alternate names annotate the canonical entry instead of counting as additional capabilities. These are acknowledged, not silently ignored.
 
+A capability named by `surface_realizations` counts as registered under (1): the operation declares that this is how the surface realizes one of its canonical params, so it is part of the registered contract rather than a backlog row awaiting promotion.
+
 A live capability in none of the three buckets **fails the guard** — that is an operation that skipped the contract. Stale buckets also fail (`test_inventory_accounting_is_not_stale`): an entry whose capability was renamed or removed must be cleaned up, mirroring the `known_drift` hygiene rule. `test_inventory_buckets_are_disjoint` keeps each capability classified exactly once.
 
 **Promoting a backlog op into the registry:** add its `Operation` (with canonical params) to `REGISTRY` and remove its `INVENTORY_BACKLOG` entry. The disjoint check fails if you register it without removing the backlog row — that is the test telling you the move is complete.
@@ -146,7 +166,7 @@ Identifier form per surface: MCP = tool name (`palinode_search`); API = `METHOD 
 
 These memory-semantic operations ship on all of MCP/API/CLI today but are not yet promoted into `REGISTRY` with canonical params. They are tracked in the internal registration backlog (admin/framework surface is in `INVENTORY_INFRA`, not here):
 
-`dedup_suggest`, `diff`, `entities`, `history`, `ingest`/`ingest-url`, `lint`, `orphan_repair`, `prompt` (list/show/activate), `push`, `session_end`, and the trigger `list`/`remove` + `check-triggers` + `search-associative` API endpoints. `depends/_unblocked` is tracked under #97.
+`dedup_suggest`, `diff`, `entities`, `history`, `ingest`/`ingest-url`, `lint`, `orphan_repair`, `prompt` (list/show/activate), `push`, `session_end`, and the trigger `list`/`remove` + `check-triggers` + `search-associative` API endpoints.
 
 Promoting each (registry `Operation` + canonical params + removing its backlog entry) is the per-op work the issue tracks; this contract makes the gap explicit and prevents *new* unregistered ops from slipping in alongside them.
 
@@ -169,7 +189,9 @@ inventory; this document does not duplicate temporary exceptions.
 ## Known drift
 
 `Operation.known_drift` in `palinode/core/parity.py` is the only drift
-inventory. Do not copy its entries into a hand-maintained table here: that
+inventory. It records surfaces that are lagging, not surfaces that differ by
+design — for those see `surface_realizations` and the table under "Drift or
+realization" above. Do not copy its entries into a hand-maintained table here: that
 second list cannot participate in either parity guard and will drift from the
 registry again.
 

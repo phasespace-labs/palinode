@@ -209,6 +209,7 @@ def test_evaluate_runs_real_store_and_preserves_controls(monkeypatch):
         seeds=(7,),
         size=10,
         thresholds=(0.0, 0.5),
+        fts_threshold=0.25,
         top_k=5,
         cases=cases,
     )
@@ -218,7 +219,7 @@ def test_evaluate_runs_real_store_and_preserves_controls(monkeypatch):
         "control_exact": 1,
         "control_paraphrase": 1,
     }
-    assert results["parameters"]["fts_threshold"] == 0.0
+    assert results["parameters"]["fts_threshold"] == 0.25
     assert results["runs"][0]["num_chunks"] > 0
     vector_summaries = {
         row["threshold"]: row["summary"]
@@ -242,4 +243,9 @@ def test_evaluate_runs_real_store_and_preserves_controls(monkeypatch):
     assert "Production defaults changed: **no**" in report
     assert "## BM25 arm contribution" in report
     assert "Results from BM25 alone" in report
-    assert "BM25 floor: 0.00" in report
+    assert "BM25 relative floor: 0.25 x top keyword score" in report
+
+
+def test_evaluate_rejects_negative_fts_threshold():
+    with pytest.raises(ValueError, match="fts_threshold must be non-negative"):
+        abstention.evaluate(fts_threshold=-0.1)

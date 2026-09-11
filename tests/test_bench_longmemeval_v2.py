@@ -191,6 +191,32 @@ def test_extract_digest_and_parse():
     assert extract.parse_notes("[]") == ([], True)
 
 
+def test_extract_form_schema_kind_keeps_markers_and_renders_a_table():
+    from bench.longmemeval_v2 import extract
+
+    # The digest must keep the markers a schema is read from; the other attrs still go.
+    tree = "RootWebArea 'Incident'\n\t[1] textbox 'Caller', required, visible, focusable\n\t[2] checkbox 'Active', checked=true, url='x'\n"
+    assert extract.digest_tree(tree, max_chars=500).splitlines()[1:] == ["textbox 'Caller', required", "checkbox 'Active', checked=true"]
+
+    notes, ok = extract.parse_notes(json.dumps([
+        {"kind": "form_schema", "content": "The New Incident form.", "form": "New Incident", "sections": ["Details"],
+         "fields": [{"label": "Caller", "type": "reference", "required": True, "default": None},
+                    {"label": "Impact", "type": "choice", "default": "3 - Low"},
+                    {"label": "Active", "type": "checkbox", "default": True},
+                    {"label": "", "type": "text"}],
+         "buttons": ["Submit"], "page": "/incident.do", "states": [4]},
+        {"kind": "form_schema", "content": "no inventory"},
+    ]))
+    assert ok and len(notes) == 1, "a form_schema item without fields is dropped"
+    n = notes[0]
+    assert n["title"] == "Form schema: New Incident" and [f["label"] for f in n["fields"]] == ["Caller", "Impact", "Active"]
+    body = extract.render_form_schema(n)
+    assert "| Caller | reference | yes | — |" in body
+    assert "| Impact | choice | no | 3 - Low |" in body
+    assert "| Active | checkbox | no | checked |" in body
+    assert body.endswith("Buttons: Submit")
+
+
 def test_backend_extract_writes_notes_pool_and_queries_it_first(tmp_path, keyword_only, monkeypatch):
     pytest.importorskip("memory_modules.memory")
     from bench.longmemeval import llm

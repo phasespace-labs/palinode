@@ -32,6 +32,7 @@ pointed at it. """
 from __future__ import annotations
 
 import json
+import re
 import logging
 import random
 import threading
@@ -137,6 +138,14 @@ _CTX_OVERFLOW_PATTERNS = (
     "exceeds context",
     "num_ctx",
 )
+
+
+_NAN_RE = re.compile(r"\bnan\b", re.IGNORECASE)
+
+
+def _is_nan_message(message: str) -> bool:
+    """True for the serialiser's NaN rejection (``json: unsupported value: NaN``)."""
+    return bool(_NAN_RE.search(message or ""))
 
 
 def _is_ctx_overflow_message(message: str) -> bool:
@@ -297,6 +306,64 @@ def _extract_openai_embedding_batch(
 
     vectors = [item.get("embedding") if isinstance(item, dict) else None for item in ordered]
     return _extract_embedding_batch({"embeddings": vectors}, expected_count=expected_count)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Chat completions — the text, plus why the model stopped
+# ──────────────────────────────────────────────────────────────────────────
+
+#: Stop reasons that mean "the model was cut off", normalised to lower case.
+#: ``length`` is the OpenAI shape (and what Ollama's ``done_reason`` says);
+#: the others are what OpenAI-compatible servers and shims emit for the same
+#: condition. Anything else — ``stop``, ``tool_calls``, absent — is a model
+#: that finished on its own terms.
+_TRUNCATION_STOP_REASONS = frozenset({"length", "max_tokens", "max_output_tokens"})
+
+
+def _finish_reason(data: Any) -> str | None:
+    """The stop reason from a chat-completions response, or ``None``.
+
+    Reads ``choices[0].finish_reason`` (the OpenAI shape that vLLM / llama.cpp /
+    LM Studio emit) and falls back to a top-level ``done_reason``, which is what
+    Ollama puts on its own chat responses. Never raises: a server that reports
+    nothing yields ``None``, which callers read as "cannot tell".
+    """
+    if not isinstance(data, dict):
+        return None
+    choices = data.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        reason = choices[0].get("finish_reason")
+        if isinstance(reason, str) and reason:
+            return reason
+    reason = data.get("done_reason")
+    return reason if isinstance(reason, str) and reason else None
+
+
+class ChatCompletionText(str):
+    """The assistant message content, carrying why generation stopped.
+
+    A ``str`` subclass rather than a tuple or dataclass so this is a
+    backwards-compatible return type: every existing caller of
+    :meth:`OllamaClient.chat_completions` keeps slicing, regexing and
+    ``.strip()``-ing it unchanged, while the one caller that needs to know the
+    response was cut off at ``max_tokens`` reads ``.truncated``.
+
+    Truncation used to be invisible, and the cost was not theoretical: a
+    consolidation pass whose 60 s LLM call hit the token cap mid-array parsed
+    to zero operations and was reported as a clean "nothing to compact".
+    Callers that may receive a plain ``str`` (a test fake, a seam someone
+    injected) should read it defensively:
+    ``getattr(text, "truncated", False)``.
+    """
+
+    finish_reason: str | None
+    truncated: bool
+
+    def __new__(cls, content: str, *, finish_reason: str | None = None) -> ChatCompletionText:
+        obj = super().__new__(cls, content)
+        obj.finish_reason = finish_reason
+        obj.truncated = (finish_reason or "").lower() in _TRUNCATION_STOP_REASONS
+        return obj
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -822,8 +889,11 @@ class OllamaClient:
                 endpoint's).
             EmbeddingInputError: when the backend deterministically rejects this
                 one input (e.g. a NaN vector it cannot serialise, HTTP 500) —
-                raised immediately, no legacy-endpoint fallback (same model,
-                same input), no retry, no circuit-breaker hit.
+                raised after one CPU retry when the rejection is NaN-shaped and
+                ``embeddings.primary.nan_cpu_retry`` is on (the GPU path's F16
+                overflow is the known cause; the CPU path embeds the same input
+                correctly), otherwise immediately. No legacy-endpoint fallback
+                (same model, same input), no circuit-breaker hit.
             OllamaTimeout / OllamaUnreachable / OllamaError: on transient failure
                 after the retry/circuit policy, or an unexpected response shape.
         """
@@ -846,7 +916,14 @@ class OllamaClient:
             except OllamaInputError as e:
                 # Deterministic per-input failure (NaN vector): the legacy
                 # endpoint runs the same model on the same input, so no
-                # fallback — surface the typed per-input signal immediately.
+                # endpoint fallback. A NaN-shaped rejection gets one retry on
+                # the CPU path (see PrimaryEmbeddingConfig.nan_cpu_retry);
+                # anything else surfaces the typed per-input signal now.
+                if config.embeddings.primary.nan_cpu_retry and _is_nan_message(str(e)):
+                    vec = self._embed_cpu_retry(endpoint, payload_key, mdl, text, tmo)
+                    if vec is not None:
+                        self._embed_ok_once = True
+                        return vec
                 raise EmbeddingInputError(
                     model=mdl, text_len=len(text), ollama_message=str(e)
                 ) from e
@@ -883,6 +960,36 @@ class OllamaClient:
         raise last_exc or OllamaUnreachable(
             "embed: all endpoints exhausted", role="embed", model=mdl
         )
+
+    def _embed_cpu_retry(
+        self, endpoint: str, payload_key: str, mdl: str, text: str,
+        tmo: float | httpx.Timeout,
+    ) -> list[float] | None:
+        """One retry of a NaN-rejected input on the CPU path. ``keep_alive: 0``
+        so the CPU-resident instance unloads after this call and the next
+        normal request reloads on the GPU — without it a long server-side
+        keep_alive pins the model on the CPU for every later caller. Returns
+        the vector, or ``None`` on any failure (the caller then raises the
+        original typed error)."""
+        try:
+            data = self._request_json(
+                OllamaRole.EMBED, endpoint,
+                {"model": mdl, payload_key: text, "keep_alive": 0, "options": {"num_gpu": 0}},
+                timeout=tmo, retries=0, model=mdl, op="embed",
+            )
+        except OllamaError as e:
+            event_logger.warning(json.dumps({
+                "event": "embed_nan_cpu_retry", "op": "embed", "role": "embed",
+                "endpoint": endpoint, "model": mdl, "outcome": "failed", "error": str(e)[:200],
+            }, sort_keys=True))
+            return None
+        vec = _extract_embedding_vector(data)
+        event_logger.info(json.dumps({
+            "event": "embed_nan_cpu_retry", "op": "embed", "role": "embed",
+            "endpoint": endpoint, "model": mdl,
+            "outcome": "ok" if vec is not None else "no_vector", "text_len": len(text),
+        }, sort_keys=True))
+        return vec
 
     def embed_many(
         self, texts: list[str], *, model: str | None = None,
@@ -1084,6 +1191,11 @@ class OllamaClient:
         the role URL per call so the consolidation fallback chain can walk several
         hosts. Raises :class:`OllamaError` on transport failure *or* a malformed
         response (missing ``choices[0].message.content``).
+
+        The return value is a :class:`ChatCompletionText` — a ``str`` carrying
+        ``finish_reason`` / ``truncated``, so a caller that needs to know the
+        model was cut off at ``max_tokens`` can ask, and every caller that just
+        wants the text is unchanged.
         """
         payload: dict[str, Any] = {"model": model, "messages": messages}
         if temperature is not None:
@@ -1096,13 +1208,19 @@ class OllamaClient:
             op="chat_completions", base_url=base_url,
         )
         try:
-            return data["choices"][0]["message"]["content"]
+            content = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as e:
             keys = sorted(data.keys()) if isinstance(data, dict) else "?"
             raise OllamaError(
                 f"malformed chat_completions response (keys={keys})",
                 role=role.value, model=model,
             ) from e
+        if not isinstance(content, str):
+            # A server that answers with a null/structured content is already a
+            # caller-visible bug; wrapping it would only turn it into the string
+            # "None". Pass it through exactly as before.
+            return content
+        return ChatCompletionText(content, finish_reason=_finish_reason(data))
 
     def ping(self, role: OllamaRole = OllamaRole.EMBED, *, timeout: float = 2.0) -> bool:
         """Liveness probe — a raw GET to the role's base URL.

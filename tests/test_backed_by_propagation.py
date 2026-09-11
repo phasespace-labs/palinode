@@ -467,7 +467,8 @@ def test_lint_cli_text_lists_stale_backing(store_env, monkeypatch):
     apply_operations(p["source"], [
         {"op": "SUPERSEDE", "id": "f1", "new_text": "new", "reason": "r"},
     ])
-    monkeypatch.setattr(api_client, "lint", run_lint_pass)
+    # The client takes the propose/apply options; this stub ignores them.
+    monkeypatch.setattr(api_client, "lint", lambda **_kwargs: run_lint_pass())
     result = CliRunner().invoke(lint_command, ["--format", "text"])
     assert result.exit_code == 0, result.output
     assert "Stale Backing (2)" in result.output, result.output

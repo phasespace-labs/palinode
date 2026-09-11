@@ -112,11 +112,11 @@ def rank_hybrid(
     threshold: float,
     hybrid_weight: float,
     priority_weight: float,
-    fts_threshold: float = 0.0,
     context_files: set[str] | None = None,
     include_daily: bool = False,
     date_after: str | None = None,
     date_before: str | None = None,
+    fts_threshold: float | None = None,
 ) -> list[dict[str, Any]]:
     """Fuse and re-rank vector + BM25 candidate slates into the final hit list.
 
@@ -125,9 +125,8 @@ def rank_hybrid(
     ``context_files`` set (from the entity index), and ``priority_weight`` (the
     ``store``-owned tuning knob); everything else is read from ``config``.
 
-    Stages, in order: arm-specific relevance floors (``threshold`` and
-    ``fts_threshold``) → Reciprocal Rank Fusion (RRF, k=60) → demand-decay
-    re-rank (ADR-007, when
+    Stages, in order: arm-specific relevance floors → Reciprocal Rank Fusion
+    (RRF, k=60) → demand-decay re-rank (ADR-007, when
     ``config.decay.enabled``) → human-priority nudge → ambient context boost
     (ADR-008) → daily-file penalty → per-file dedup → date window → top_k.
     Date window runs BEFORE top_k, not after: filtering the already-truncated
@@ -136,13 +135,14 @@ def rank_hybrid(
     carrying ``score`` and ``raw_score``); recall + freshness are recorded by
     the caller on this output.
 
-    ``threshold`` filters ``vec_results`` by their real cosine score;
-    ``fts_threshold`` independently filters ``fts_results`` by normalized
-    BM25 score. Both floors run BEFORE fusion, so a candidate needs only one
-    arm to admit it. The one exemption: an FTS candidate carrying
-    ``has_vector=False`` (the store's mark for a chunk with no ``chunks_vec``
-    row) is kept regardless of its BM25 score, because the keyword arm is its
-    only retrieval path. ``threshold`` is deliberately **not** applied to the
+    ``threshold`` filters ``vec_results`` by their real cosine score.
+    ``fts_threshold`` independently filters ``fts_results`` relative to the
+    best normalized BM25 score in the same slate. Both floors run BEFORE
+    fusion, so a candidate needs only one arm to admit it. The one exemption:
+    an FTS candidate carrying ``has_vector=False`` (the store's mark for a
+    chunk with no ``chunks_vec`` row) is kept regardless of its BM25 score,
+    because the keyword arm is its only retrieval path. ``threshold`` is
+    deliberately **not** applied to the
     fused/boosted score: a production
     measurement found that score to be a function of RRF rank, not
     relevance — two semantically unrelated queries against the same store
@@ -164,14 +164,21 @@ def rank_hybrid(
             r for r in vec_results
             if (r.get("raw_score") if r.get("raw_score") is not None else r.get("score", 0.0)) >= threshold
         ]
-    if fts_threshold > 0.0:
+    # The FTS arm has its own floor, relative to its best candidate: normalized
+    # BM25 is not on the cosine scale and its magnitude moves with corpus size,
+    # so an absolute floor discards correct keyword hits (all of them at the
+    # cosine threshold; the small-store ones at any fixed value). See
+    # ``SearchConfig.fts_threshold`` for the measurement. ``None`` = the
+    # configured default; ``0.0`` = no FTS floor.
+    fts_frac = config.search.fts_threshold if fts_threshold is None else fts_threshold
+    if fts_frac > 0.0 and fts_results:
+        top_fts = max(r.get("score", 0.0) for r in fts_results)
         # A candidate the store marked ``has_vector=False`` (an FTS-only row:
-        # per-input embed rejection, deferred embed) is exempt from the floor —
-        # the vector arm can never vouch for it. Anything with a vector, or
-        # without the flag at all, is judged against the BM25-specific floor.
+        # per-input embed rejection, deferred embed) is exempt — the vector arm
+        # can never vouch for it, so the keyword arm is its only route in.
         fts_results = [
             r for r in fts_results
-            if r.get("score", 0.0) >= fts_threshold or r.get("has_vector") is False
+            if r.get("score", 0.0) >= fts_frac * top_fts or r.get("has_vector") is False
         ]
 
     # Reciprocal Rank Fusion (RRF)

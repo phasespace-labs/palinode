@@ -108,9 +108,23 @@ def test_every_unreleased_bullet_sits_under_a_heading() -> None:
 # freezes it here) updates this constant as part of the release roll.
 
 _FROZEN_RELEASED = {
-    # Public hashes are computed from the exact published sections; public wording may
-    # differ from the corresponding development changelog.
+    "0.19.1": "451e97cd35b7fe3a33644097fe63229d07f73fbdfc9afdec7f6c1cc9f05efd8a",
+    "0.19.0": "df5581e1c7a99c6d7a1c48938e068a917241f12f74c18d551e88c6b5eeaddcaf",
+    # Re-frozen once after publication (dev issue 1282): the 0.18.0 relative-FTS-floor
+    # note credited the wrong person with filing the public issue for it, and called
+    # the discovery independent. The maintainer filed that issue. The corrected text
+    # separates the four contributions the original clause conflated: the mis-scaling
+    # was already on record in the SearchConfig docstring, the instrument is the
+    # abstention harness plus the per-arm instrumentation built on it, the
+    # measurement that forced the decision is the BM25 ceiling sweep, and the
+    # contributor PR carries the absolute-floor variant that did not ship. Corrected
+    # in lockstep with the GitHub release body so the repo and the published notes
+    # still agree — same precedent as the 0.16.0 and 0.10.0 re-freezes below, applied
+    # to an attribution error.
+    "0.18.0": "9fea40886aaafe23b7f5a21689ad9167a5da8c8799d63f2e5b86e38884f6afaa",
     "0.17.0": "27bb1e53b25c2fdfcb74e679134fd78cb3c64ca9b007a09d8fc020f4f507b44d",
+    # Frozen after publication (dev issue 1240): the scrub-durability sync fix reconciled the 0.16.0 wording
+    # toward the public release body, same precedent as the 0.10.0 re-freeze below.
     "0.16.0": "e9022e3c0cc2df2fed3583047de03be7a154f04d155349eec7ab6ac96880d274",
     "0.15.0": "d55d3207c1b139720afd9a59bab463cc63ae21a9fec54c5d13d04051d4fec0a9",
     "0.14.0": "5c07098de48e83869cbd71e7f27eeca52e8c4d827c6a26ef3db0366347dd6af6",
@@ -118,7 +132,9 @@ _FROZEN_RELEASED = {
     "0.12.0": "e9ccd8d718a12d5966ac5c6c180d1539568b0055f39181ff9b953f97f45a0d59",
     "0.11.0": "351e7fb515ef0e475bb799774627c8878df89f742a7df6b05e77a3b9cd5595e0",
     "0.10.1": "8378af087cdf738d0ff1e15afc325e36531e06f1e97bba695aa630d45b9bd50b",
-    # Re-frozen once to reconcile the repository toward its published notes.
+    # Re-frozen once after publication (dev issue 823): the private section lacked the
+    # `**Compatibility:**` paragraph the public release body shipped with, so
+    # this is a reconciliation *toward* the published notes, not a divergence.
     "0.10.0": "aeff282e906646ecd99578eee3350f4b1fada01dc107e9b7131e80241f35f5e2",
 }
 

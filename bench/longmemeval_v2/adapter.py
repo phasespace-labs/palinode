@@ -55,8 +55,8 @@ DEFAULT_PARAMS: dict[str, Any] = {
     "slice_max_chars": corpus.DEFAULT_SLICE_MAX_CHARS,
     "dedup_score_gap": 1e9,    # disable the ranker's per-file dedup: several states of one
                                # trajectory are legitimately the evidence for one question
-    "fts_mode": "or",          # BM25 arm: "or" = any content word (this module); "and" = store.search_hybrid's
-                               # implicit-AND MATCH, which returns nothing for most question-shaped queries
+    "fts_mode": "or",          # BM25 arm: "or" = any content word (this module); "and" = the store's own path —
+                               # implicit-AND MATCH when measured (42.5 vs 48.3), OR-joined since the store fix
     "neighbor_radius": 0,      # also return states N±r around each hit state N (the upstream slice baseline
                                # uses radius 1: for "what happens after X" the next state is the evidence)
     "images": False,           # also return each hit state's screenshot as an image item (the upstream RAG
@@ -130,7 +130,9 @@ def hybrid_or(question: str, vec: list[float] | None, *, top_k: int, threshold: 
     vec_results = (store.search(vec, category=category, top_k=top_k * 2, threshold=0.0, record_access=False)
                    if vec else [])
     fts_results = bm25_or(question, top_k=top_k * 2, category=category)
-    return ranker.rank_hybrid(vec_results, fts_results, top_k=top_k, threshold=threshold,
+    # fts_threshold=threshold: the rows were measured with one floor (0 = let RRF decide);
+    # keep that, independent of the store's per-arm FTS default.
+    return ranker.rank_hybrid(vec_results, fts_results, top_k=top_k, threshold=threshold, fts_threshold=threshold,
                               hybrid_weight=hybrid_weight if vec else 1.0,
                               priority_weight=store._PRIORITY_RANK_WEIGHT, include_daily=True)
 
@@ -368,8 +370,9 @@ class PalinodeMemory(Memory):
             # short dense notes outrank the slices and fill the slice slots (measured
             # 2026-09-05 — 10.8 notes + 2.8 slices per question instead of 6 + 10.9).
             hits = store.search_hybrid(kw, vec, category=slice_cat, top_k=2 * self.top_k,
-                                       threshold=self.threshold, hybrid_weight=self.hybrid_weight,
-                                       include_daily=True, record_access=False)
+                                       threshold=self.threshold, fts_threshold=self.threshold,
+                                       hybrid_weight=self.hybrid_weight, include_daily=True,
+                                       record_access=False)
         else:
             hits = store.search_fts(kw, category=slice_cat, top_k=2 * self.top_k)
         hits, _dups = dedupe_hits(hits)

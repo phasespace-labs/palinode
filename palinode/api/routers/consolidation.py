@@ -19,6 +19,11 @@ class ConsolidateRequest(BaseModel):
     #: before — hardcoding that scan left the deterministic executor
     #: unreachable for typed memories saved through /save or MCP.
     sources: list[str] | None = None
+    #: Apply the activity gate (``consolidation.auto_gate``) to this call.
+    #: Off by default: a caller who asked for a pass has already made the
+    #: decision the gate exists to make. On, for a scheduler that wants the
+    #: same policy the cron entry point applies.
+    respect_gate: bool = False
 
 
 @router.post("/consolidate")
@@ -27,11 +32,20 @@ def consolidate_api(req: ConsolidateRequest = None) -> dict[str, Any]:
 
     Normally runs as a weekly cron, but can be triggered manually
     for testing or after a busy week.
+
+    With ``respect_gate`` set and the gate unmet, returns
+    ``{"status": "deferred", "gate": {...}}`` rather than an error — a
+    deferral is a normal outcome of asking, not a failed request.
     """
+    from palinode.consolidation import activity_gate
     from palinode.consolidation.runner import run_consolidation, run_nightly
     from palinode.consolidation.run_lock import ConsolidationAlreadyRunning
 
     req = req or ConsolidateRequest()
+    if req.respect_gate:
+        decision = activity_gate.evaluate("nightly" if req.nightly else "weekly")
+        if not decision.should_run:
+            return {"status": "deferred", "gate": decision.as_dict()}
     try:
         if req.nightly:
             result = run_nightly(dry_run=req.dry_run)
@@ -198,9 +212,40 @@ def split_layers_api() -> dict[str, Any]:
     return stats
 
 
+class BootstrapFactIdsRequest(BaseModel):
+    #: One memory file to tag, relative to the store
+    #: (``projects/palinode-status.md``). ``None`` keeps the original whole-store
+    #: walk. Present because the case that needs tagging is usually a single
+    #: inert consolidation target named by ``doctor``, not the whole store.
+    file: str | None = None
+
+
 @router.post("/bootstrap-fact-ids")
-def bootstrap_fact_ids_api() -> dict[str, Any]:
-    """Add fact IDs to all memory files."""
-    from palinode.consolidation.fact_ids import bootstrap_all_fact_ids
-    stats = bootstrap_all_fact_ids()
-    return stats
+def bootstrap_fact_ids_api(
+    req: BootstrapFactIdsRequest = None,
+) -> dict[str, Any]:
+    """Add fact IDs to memory files — the whole store, or one named file.
+
+    ``{"file": "projects/foo-status.md"}`` tags exactly that file; a bodyless
+    POST keeps the default whole-store walk over
+    ``people/``/``projects/``/``decisions/``/``insights/``. Both commit with the
+    same provenance. The path is guarded: absolute paths, ``../`` traversal and
+    symlink escapes are rejected before the file is read.
+    """
+    from palinode.consolidation.fact_ids import (
+        bootstrap_all_fact_ids,
+        bootstrap_fact_ids_for_file,
+    )
+
+    req = req or BootstrapFactIdsRequest()
+    if req.file:
+        try:
+            return bootstrap_fact_ids_for_file(req.file)
+        except PathTraversalError as e:
+            status_code = 400 if e.malformed else 403
+            raise HTTPException(status_code=status_code, detail="Invalid path")
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="File not found")
+        except Exception as e:
+            raise _safe_500(e, "Bootstrap fact ids failed")
+    return bootstrap_all_fact_ids()

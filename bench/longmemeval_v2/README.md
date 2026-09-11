@@ -70,14 +70,14 @@ measured configuration is `--palinode-extract --palinode-notes-top-k 6 --palinod
 
 - **Save-only, LLM-free.** The store is the raw state-slice pool. Query latency — what the
   leaderboard's LAFS metric scores — is one embed call plus two SQLite queries (~0.1 s).
-- **BM25 arm is OR-joined** (`fts_mode: "or"`, `bm25_or()`). FTS5 treats whitespace as implicit
-  AND and `sanitize_fts_query` strips `OR`, so `store.search_hybrid` returns an empty BM25 slate
-  for almost any question-shaped query and silently runs vector-only. The adapter runs its own
-  any-content-word MATCH and fuses through the store's pure `rank_hybrid`. `fts_mode: "and"` is
-  the stock path (`--palinode-fts-mode and`), kept so the difference can be measured — the
-  defect was documented and was closed on V1 evidence that the vector arm carries recall.
-  Measured on V2 web, same store and budget: 42.5 vs 48.3 (`docs/BENCHMARKS.md` → *The BM25
-  arm, measured*). Exact UI labels inside a11y trees are where that conclusion fails.
+- **BM25 arm is OR-joined** (`fts_mode: "or"`, `bm25_or()`). When this adapter was written,
+  FTS5's implicit AND meant `store.search_hybrid` returned an empty BM25 slate for almost any
+  question-shaped query and silently ran vector-only, so the adapter ran its own
+  any-content-word MATCH and fused through the store's pure `rank_hybrid`. `fts_mode: "and"`
+  (`--palinode-fts-mode and`) is the store's own path, kept so the difference can be measured:
+  42.5 vs 48.3 on V2 web with the implicit-AND store (`docs/BENCHMARKS.md` → *The BM25 arm,
+  measured*), which is what got the store fixed — `store.fts_match_expression` now OR-joins
+  content words itself, and this row is the regression check for it.
 - **Per-file dedup off** (`dedup_score_gap: 1e9`). The ranker keeps a second chunk from the same
   file only within 0.2 of the file's best; several states of one trajectory are legitimately the
   evidence for a dynamic-tracking question.

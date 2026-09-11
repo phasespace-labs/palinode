@@ -39,7 +39,10 @@ later reader, which is what earns them a rule of their own:
 
 1. **Resolve relative times against the session date and record the absolute one.**
    "Last Tuesday" is unreadable six months on, and nothing downstream can recover
-   which Tuesday it was.
+   which Tuesday it was. Enforced, not merely asked for: session-end rewrites the
+   day-precise phrases it can resolve (and refuses quoted text, code, and anything
+   vaguer than a day), and `palinode lint` reports the rest with the date each one
+   resolves to.
 2. **When a list was recommended, considered, or chosen from, record every item by
    name** — not one representative. A reader asked "which options did we look at?"
    cannot recover the ones that were dropped at write time.
@@ -226,6 +229,8 @@ Where things live. Paths, repos, docs.
 ```
 
 The **identity sections** (What This Is, People, Architecture, Key Files) change slowly and should survive consolidation intact. The **status sections** (Status, Current Work, Recent Changes, Blockers) get updated by the weekly consolidation from daily notes.
+
+**Retirement is document-relative:** identity documents — `people/{slug}.md`, a project's profile document, and anything declaring `update_policy: replace` or `core: true` — are retired only by SUPERSEDE (the fact changed) or RETRACT (the fact was never true), never by age, while the episodic kinds (`daily/`, `insights/`, `research/`, `projects/{slug}-status.md`, `inbox/`) are the ones a TTL expiry or a staleness `ARCHIVE` may retire; a document can state its own regime with `retirement_policy: age-eligible | superseded-only`, which wins over the default for its kind.
 
 ### Decision → `decisions/{slug}.md`
 
@@ -469,7 +474,8 @@ Orogat & Mansour, *Is Agent Memory a Database?*, arXiv:2605.26252.)
    - **Same fact, no change** → `NOOP` (most common — don't create duplicates)
    - **Same entity, updated info** → `UPDATE` (edit the existing file, update `last_updated`)
    - **New fact, no conflict** → `ADD` (create new file)
-   - **Direct contradiction** → `SUPERSEDE` (retire old with `status: archived` + `superseded_by: <new-id>`, create new with `supersedes: [old_id]`)
+   - **Direct contradiction, the new one clearly replaces the old** → `SUPERSEDE` (retire old with `status: archived` + `superseded_by: <new-id>`, create new with `supersedes: [old_id]`)
+   - **Direct contradiction, no clear winner** → record a `contradicts` link between the two and retire neither
    - **Obsolete/wrong** → `ARCHIVE` (move to `status: archived`, never hard-delete)
 
 ### Never hard-delete
@@ -496,6 +502,11 @@ Keep the two axes separate when reading or writing this: `status` decides
 whether a memory is surfaced; `superseded_by` decides what it points at. A
 supersession that sets only `superseded_by` has documented a replacement
 without retiring anything.
+
+**And `ARCHIVE` is not available on every document** — see "Retirement is
+document-relative" above. On an identity document the executor refuses an
+`ARCHIVE` that names no successor, because the only argument left for it is
+age, and age does not make an identity fact false.
 
 ### Merging into existing files
 
@@ -526,7 +537,15 @@ Scan for decisions about the same project+topic that contradict each other:
   (`archived` is what suppresses recall — see "Never hard-delete". Marking it
   `superseded` leaves the retired decision fully recallable.)
 - If complementary: both stay `status: active`
-- If unclear: leave both active, note the tension in an Insight
+- If unclear — the two cannot both be true and nothing shows which one won:
+  leave both active and **record the conflict as a typed link** rather than
+  picking a winner. In a consolidation pass that is the `PROPOSE_CONTRADICTS`
+  operation (`{"op": "PROPOSE_CONTRADICTS", "id": "<fact id>", "contradicts":
+  ["category/slug"], "rationale": "<one line naming both claims>"}`); by hand it
+  is `contradicts:` in the memory's frontmatter. Either way the link is
+  non-destructive: nothing is retired, `lint` reports it under
+  `open_contradictions`, and search marks the memory. Only `SUPERSEDE` picks a
+  winner.
 
 ### Cross-project insights
 

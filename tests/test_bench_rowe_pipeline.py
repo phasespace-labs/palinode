@@ -185,7 +185,7 @@ def test_session_end_pipeline_e0(tmp_path, keyword_only):
     assert r["retrieval"]["dup_hits"] >= 1
     assert "(2023-05-22)" in seen["prompt"]
     assert r["label"] is True and "consolidation_ops" not in r
-    # Keyword-only search ANDs every token, so the profile is reached with its own words.
+    # The profile is reached with its own words (and, since the OR-joined arm, by the question too).
     prof = adapter.retrieve("border collie named Pip", top_k=10, threshold=0.4, hybrid=False)
     assert prof.profile_hit is True and "(user)" in adapter.format_context(prof.hits)
     # A profile section is traceable to a session. This profile is < 2000 chars so the
@@ -195,7 +195,10 @@ def test_session_end_pipeline_e0(tmp_path, keyword_only):
 
     s = run.summarize(rows)
     assert s["extraction"]["calls"] == 3 and s["extraction"]["facts_per_question_mean"] == 3.0
-    assert s["profile_hit_rate"] == 0.0 and s["answer_in_context"] == 1.0
+    # profile_hit_rate was 0.0 while FTS5's implicit AND kept the question ("What is the
+    # name of the user's dog?") from matching the profile; the OR-joined arm
+    # reaches it through "user s" and "dog".
+    assert s["profile_hit_rate"] == 1.0 and s["answer_in_context"] == 1.0
     assert "consolidation_ops" not in s
     text = run.render(s, {"pipeline": "session-end"})
     assert "extraction: 3 calls over 1 questions" in text and "answer string in context" in text

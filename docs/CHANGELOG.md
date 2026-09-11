@@ -10,9 +10,419 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
-- Hybrid search now filters vector and BM25 candidates on independent score
-  floors. Request-level `threshold` remains the cosine floor, while the new
-  config-only `search.fts_threshold` defaults to no BM25 filtering.
+### Removed
+
+### Security
+
+## [0.19.1] — 2026-09-11
+
+**Compatibility:** existing stores refresh `compaction.md` (v3) with `palinode prompt sync`.
+Consolidation prefers prompts in the memory store (`$PALINODE_DIR/specs/prompts/*.md`),
+falling back to the installed package only when a store copy is absent. Upgrading does not
+replace an existing store copy: a store still on v2 keeps asking the model for a verdict on *every* fact, which is
+the output-volume bug this release fixes. `palinode doctor` reports the gap
+(`prompts_current`, store version 2 vs packaged version 3) and `palinode prompt sync`
+performs the refresh, replacing only copies whose content still matches a released version
+and reporting the ones you have edited instead of overwriting them. Two more one-time steps apply to stores that predate this release. A store whose watcher ran before 0.19.1 had its prompt frontmatter rewritten by the cross-reference updater, so `prompt sync` reports every prompt as edited: check `palinode prompt sync --dry-run` and `git log -- specs/prompts` for real edits, then run `palinode prompt sync --force` once. And status documents written before this release carry no fact ids, so consolidation skipped them — and reported success — on every pass: `palinode doctor` (`consolidation_targets_tagged`) names them, and `palinode bootstrap-ids --file` mints the ids for one document (`palinode bootstrap-ids --file projects/<project>-status.md`). Until then the pass skips the document and now says so.
+
+### Added
+
+- **`palinode doctor` names consolidation targets nothing can compact
+  (`consolidation_targets_tagged`).** The runner harvests only bullets
+  carrying a `<!-- fact:id -->` marker, so a target document with body bullets and
+  no markers is inert: every pass over it proposes nothing and reports success. The
+  new `fast` check reads every `projects/*-status.md` (plus the target of any project
+  a recent daily note mentions) and warns with the file name, its untagged-bullet
+  count, and a ready-to-run fix. Documented in `docs/DOCTOR.md`.
+- **`palinode bootstrap-ids --file <rel-path>` tags one memory file.** The
+  whole-store walk is the wrong instrument when `doctor` has named a single inert
+  status document. Same minting, same provenance commit, idempotent; the path is
+  guarded and anything resolving outside the store is rejected. Also available as
+  `POST /bootstrap-fact-ids {"file": "..."}`; a bodyless POST still walks the store.
+
+### Changed
+
+- **The compaction prompt stops asking for a verdict on every fact — KEEP is now implicit
+  (`compaction.md` v3).** v2 said "decide what happens to each fact" and opened its
+  example output with `{"op": "KEEP", …}`, so the response grew with the document: on a
+  449-fact status file the model emitted one KEEP per fact, ran into
+  `consolidation.llm_max_tokens` (2000) after roughly 100 of them, and returned a JSON array
+  with no closing `]`. The parse produced no operations, and a minute-long LLM call was
+  reported exactly like a quiet week. v3 asks for **only the operations that change
+  something** — UPDATE / MERGE / SUPERSEDE / ARCHIVE / RETRACT / PROPOSE_CONTRADICTS — and
+  states that every fact not named in an operation is kept unchanged. Omitted facts
+  retain their existing text.
+  An empty array is now documented as a complete answer meaning "nothing to change", and an
+  explicit KEEP is still accepted and still a no-op — it is simply never required. No judgment
+  rule changed: the ACTIVE_DECISIONS constraint, the no-winner PROPOSE_CONTRADICTS rule, the
+  `category/slug` ref format and the rationale requirement are unchanged, and keep their
+  numbering. Measured on a seeded 300-fact store: the v2-shaped response overruns the token
+  cap and applies nothing, while the v3-shaped response carries the same four judgments in
+  under 900 characters and applies all four. `llm_max_tokens` is unchanged — the point is that
+  the output no longer scales with the document.
+- **`json-repair` is now a declared runtime dependency.** `op_parse` imported it inside an `except` branch to recover malformed model JSON, but it was in neither `pyproject.toml` nor any install — so the documented recovery path had never once run in production, and every malformed proposal fell through to "no operations". Declared rather than deleted: it is pure Python, ~25 KB, MIT, with no required transitive dependencies, and it is the difference between a salvageable proposal and a discarded one. Its test no longer `importorskip`s — a missing module is now a broken install, not a reason to pass silently.
+
+### Fixed
+
+- **`palinode prompt sync` commits the prompts it writes.** The refresh wrote the
+  packaged bytes into `$PALINODE_DIR/specs/prompts/` and returned, leaving the store dirty
+  with no record of which release the prompts came from — and `git log -- specs/prompts` is
+  the only place a store says *when* consolidation started running a given prompt revision,
+  which is when the model's proposals change shape. The written files are now staged
+  explicitly and committed in one commit naming each prompt and the version it now declares
+  (`palinode prompt sync: refreshed compaction.md→v3; added trajectory-extraction.md
+  (palinode 0.19.1)`), recording `--force` when it was used since that is the
+  operator-discarded-edits event worth finding later. `--dry-run` still writes and commits
+  nothing, a sync with nothing to write makes no empty commit, and `git.auto_commit: false`
+  leaves the files uncommitted and says so. The writes go through the store's guarded atomic
+  write primitive, so a prompt path is validated against `PALINODE_DIR` like every other
+  memory write; `--format json` reports `committed` and `commit_message`.
+- **`palinode consolidate` no longer aborts at 30 s while the server keeps running the
+  pass.** The CLI applied its 30 s default request budget to `/consolidate`, but
+  the server gives the model 600 s per project group — so any pass that reached an LLM
+  outlived the command that asked for it, which printed a bare `Aborted!` and exited 1
+  while the API finished the run, held `.palinode/consolidation.lock`, and 409'd the next
+  invocation. `/consolidate` now waits `PALINODE_CONSOLIDATE_TIMEOUT` seconds (default
+  900); `/bootstrap-fact-ids` and `/archive` likewise get budgets that match the work they
+  do. If the wait is exceeded, the CLI reports that the server is still running, names the
+  run lock and where the result lands, and exits 1 — `--format json` emits
+  `{"status": "timeout", "server_still_running": true, …}`.
+- **`palinode_consolidate` (MCP) waits the same budget the CLI does, and reports a timeout
+  instead of failing blank.** The tool posted `/consolidate` with a hardcoded
+  300 s while the server gives the model 600 s per project group — the same failure the CLI
+  had, one surface over: the request gave up, the API kept running the pass and holding
+  `.palinode/consolidation.lock`, and the next call got a 409. The budget now comes from
+  `PALINODE_CONSOLIDATE_TIMEOUT` (default 900), which moved to `palinode.core.defaults` so
+  both surfaces read one value, and on timeout the tool returns the CLI's structured report
+  — `{"status": "timeout", "server_still_running": true, …}` naming the lock, the log and
+  the env var — rather than a bare "request timed out". `palinode_archive` moves 30 s →
+  120 s to match the CLI. The tool description and `docs/MCP-SETUP.md` now say that a long
+  pass can outlast the MCP *client's* own tool-call timeout, which Palinode cannot raise,
+  and that the server finishes the pass regardless.
+- **Consolidation never ran on a store fed by session-end — its status bullets
+  carried no fact ids.** The session-end append to
+  `projects/<project>-status.md` wrote plain `- [YYYY-MM-DD] …` lines, and the
+  runner harvests only bullets with a `<!-- fact:id -->` marker, so a store written
+  exclusively through the supported write paths could never satisfy the runner's
+  precondition. Observed on a real store: 449 untagged bullets, 79 consecutive
+  nightly runs, not one proposal. Session-end now mints the marker on the way in,
+  using the same deterministic id `bootstrap-ids` would produce for that text, so a
+  later backfill is a no-op and nothing is double-stamped.
+- **A skipped consolidation target is counted, not reported as a successful pass.**
+  "Target exists but has no tagged facts" was folded into
+  `projects_compacted: 0` under `status: success`, indistinguishable from a quiet
+  week. Both run summaries now carry `groups_skipped_untagged` and
+  `skipped_untagged_projects` (and count them in `projects_skipped`), the skip is
+  logged at WARNING naming the file and the fix instead of INFO, the cron entry
+  point repeats it as a WARNING, and the group's daily notes are left in place
+  rather than archived as though they had been consolidated.
+- **A consolidation proposal that could not be read is now a failed project, not a quiet week.** Measured on a real store: with a 449-fact status document tagged, the LLM ran for 60 s, emitted per-fact `KEEP` operations, hit `consolidation.llm_max_tokens` mid-id and stopped with no closing `]`. The parser found no array, returned `[]`, and the run summary said `status: success, projects_failed: 0` — byte-identical to a week with nothing to compact. `LLM_FAILED` covered transport failure only. Three changes close it: `OllamaClient.chat_completions` now returns a `ChatCompletionText` (a `str` subclass, so every caller is unchanged) carrying `finish_reason` / `truncated`, read from the OpenAI-shape `choices[0].finish_reason` or Ollama's top-level `done_reason`; `op_parse.parse_result` distinguishes "the model proposed nothing" (`[]`, a legitimate no-op) from "there was nothing readable to parse" (no array, an array that never closed, or one that repaired to no operations); and `_consolidate_project` returns the `LLM_FAILED`-class result for both, with the reason logged at WARNING next to the project name. Such a project is counted in `projects_failed`, named in `failed_projects`, and its daily notes stay in `daily/` for the next run (the note-retention guarantee, on the new failure class).
+- **`palinode prompt list|show|activate` and `GET /prompts` read the store's real prompts
+  directory.** All three went through `GET /prompts`, which listed
+  `$PALINODE_DIR/prompts` — a directory nothing in palinode writes. On a store provisioned by
+  `palinode init` or refreshed by `palinode prompt sync`, the prompts are in
+  `$PALINODE_DIR/specs/prompts`, so `prompt list` printed nothing while consolidation and
+  `palinode doctor`'s `prompts_current` check were reading nine files, and `prompt activate`
+  would have flipped `active:` on a copy no consolidation pass reads. The API now resolves the
+  directory through `palinode.prompts.store_prompts_dir()`, the same helper the runner,
+  `init`, `prompt sync` and the doctor check use. Path-guard behaviour is unchanged.
+- **`prompt sync` no longer sees every store prompt as operator-edited.** The
+  cross-reference auto-updater intended to skip prompts, but tested only the first path
+  segment of a memory's path — and store prompts live at `specs/prompts/*.md`, so they
+  fell through, had their frontmatter rewritten (`cross_refs:`, key ordering) and were
+  committed as `palinode: auto-update cross_refs for specs/prompts/<name>.md`. Since
+  `prompt sync` compares a whole-file sha256 against the hashes palinode has released,
+  one watcher pass over a pristine prompt was enough to make it look edited, and
+  `palinode prompt sync` would then refuse to refresh it without `--force` — leaving
+  the `doctor prompts_current` warning with no working remedy. The skip now matches any
+  directory segment, so `specs/prompts/` is excluded both as a scan source and as a
+  cross-reference target, and the churn commits on prompt files stop. Stores already
+  rewritten need one `palinode prompt sync --force` (back up local prompt edits first).
+
+### Removed
+
+### Security
+
+## [0.19.0] — 2026-09-10
+
+**Compatibility:** existing stores must refresh two prompt files. Consolidation reads its
+prompts from the memory store's `specs/prompts` directory (`$PALINODE_DIR/specs/prompts/*.md`),
+never from the installed package, so a store provisioned before this release keeps its old
+copies and the new `PROPOSE_CONTRADICTS` op — a `contradicts` link between two memories with no
+winner picked — stays unreachable there. Upgrading the package changes nothing until
+`specs/prompts/compaction.md` and `specs/prompts/nightly-consolidation.md` are refreshed from
+this release (`nightly-consolidation.md` goes to `version: 2`; back up local edits first).
+`palinode doctor` now reports the gap instead of leaving it silent: the new `prompts_current`
+check compares each packaged prompt's `version:` frontmatter against the store's copy and warns,
+naming the file and both versions. The new `palinode prompt sync` command performs the refresh:
+it replaces only the store copies whose content still matches a version palinode released, and
+reports the ones you have edited rather than overwriting them. Second change: automatic consolidation now runs behind an **activity gate** by default
+(`consolidation.auto_gate`: both 24 hours elapsed and 5 sessions since the last successful run,
+with a 168-hour ceiling so a store that records no sessions still consolidates weekly). Nothing
+stops consolidating, but a quiet week's nightly pass defers to the ceiling instead of running
+every night; on-demand `palinode consolidate` bypasses the gate, and `auto_gate.enabled: false`
+restores the previous wall-clock schedule.
+
+### Added
+
+- **Retirement is document-relative — age no longer retires identity documents
+  (ADR-020).** A new frontmatter field `retirement_policy:` declares whether a
+  document may be retired by *age* (`age-eligible`) or only by a stated supersession or
+  retraction (`superseded-only`), and a single classifier
+  (`palinode/consolidation/retirement.py`) infers the regime when the field is absent:
+  `people/`, project profile documents (`projects/<slug>.md`, as distinct from their
+  `-status.md` layer), `type: PersonMemory` / `category: person`,
+  `update_policy: replace` and `core: true` are `superseded-only`; daily notes, insights,
+  research, decisions, inbox items and status documents stay `age-eligible`, which is
+  also the fallback, so nothing unclassified changes behaviour. Two age-based paths now
+  consult it: the TTL sweep (`palinode archive-expired`, `POST /archive-expired`,
+  `palinode_archive_expired`) skips a `superseded-only` document whose `expires_at` has
+  lapsed — reported as `skipped_superseded_only` in the result and one log line per sweep
+  with the count and a sample path, which also fixes a `core: true` memory being archived
+  out of recall by the timestamp that was only ever meant to stop it *acting* — and the
+  deterministic executor refuses an `ARCHIVE` op against one unless the op names a
+  successor (`superseded_by`), counting it under the existing `protected_rejected` stat
+  and logging the reason. `superseded_by` is the whole test: naming a successor states a
+  supersession, its absence leaves age as the only argument. `SUPERSEDE`, `RETRACT`,
+  on-demand `palinode archive` with an explicit reason, and `forget` are untouched — the
+  rule is about age, not about retirement. New `tests/test_retirement_policy.py`;
+  `docs/EXECUTOR-SPEC.md` gains a *Retirement Policy Guard* section.
+- `palinode doctor` gains a `prompts_current` check. Consolidation prompts live in the
+  memory store, not the package, so a release that changes one is inert on every store
+  provisioned before it — and nothing told the operator. The check compares each packaged
+  prompt's `version:` frontmatter against the store's copy of the same filename and **warns**,
+  naming the file and both versions, when the store lags, differs, or is missing the file
+  outright; it passes when they match, and declines with the path it looked at when the store has
+  no `specs/prompts/` or the install has no packaged prompts to compare against. Tagged `fast`,
+  so it reaches the MCP `palinode_doctor` tool and `GET /doctor?fast=true` as well as the CLI.
+  Documented in `docs/DOCTOR.md`; the release's compatibility warning above is its companion.
+- `palinode lint --propose` closes the lint→consolidation loop: the deterministic
+  findings become consolidation operations carrying their rationale and the finding they came
+  from — stale document → whole-document `ARCHIVE`, deep-check contradiction pair →
+  `PROPOSE_CONTRADICTS` on both sides, withdrawn `backed_by` and orphans → advisory
+  `PROPOSE_UPDATE`, relative dates left to the date-normalisation pass. Dry run by default;
+  `--apply` runs the applicable ones through the existing deterministic writers with an actor
+  of `lint`, so the history sibling (`[actor: lint]`) and the commit subject distinguish them
+  from LLM-proposed operations. Also `POST /lint?propose=true` (with `apply=true`,
+  `deep_contradictions=true`) and a `propose` argument on the `palinode_lint` MCP tool, which
+  stays read-only — `apply` is CLI/API-only. Age-based `ARCHIVE` is never proposed against a
+  document the ADR-020 classifier calls `superseded-only`, is withheld from `decisions/` as
+  proposal-side conservatism (see *Changed*), and honours `consolidation.allowed_ops`. `lint` is promoted from the parity registration
+  backlog into the registry with `propose` as its canonical parameter.
+- Relative dates are normalised at write time and linted after it. `PROGRAM.md`
+  has required absolute dates since v0.16.0 and nothing enforced it. Session-end now
+  resolves day-precise relative phrases in the summary and the decision/blocker bullets
+  against the session date — "yesterday" becomes "on 2026-09-09" — and refuses everything
+  it cannot rewrite honestly: quoted text, blockquotes, fenced and inline code,
+  possessives, vague phrases ("recently"), and intervals ("last week", "three weeks ago"),
+  which name a span rather than a day. Off with `write.normalize_relative_dates: false`.
+  `palinode lint`'s `relative_dates` check now reports the resolution beside the phrase —
+  the absolute date derived from the memory's `created_at` or its dated filename, or
+  `unresolvable` with the reason — on the text, JSON, API and MCP surfaces, and skips ISO
+  dates, dated bullets, code and already-anchored phrases. A resolvable finding on a fact
+  line becomes an `UPDATE` under `palinode lint --propose`, with the phrase and the anchor
+  in its rationale; everything else is recorded as skipped with the reason.
+- Activity-gated automatic consolidation. The cron entry point no longer
+  consolidates on the calendar alone: a pass runs only when both **≥
+  `consolidation.auto_gate.min_hours_elapsed`** (24) have passed **and**
+  **≥ `min_sessions`** (5) session-end entries have been recorded since that pass last
+  ran, with a `max_hours_elapsed` ceiling (168 h) that fires regardless so a
+  watcher-only store still consolidates. Enabled by default; a deferral exits 0 and
+  logs one line naming both thresholds, so the cron can be scheduled hourly. Weekly and
+  nightly are gated independently from
+  `<memory_dir>/.palinode/consolidation-state.json`; sessions are counted from the
+  `## Session End —` entries in `daily/`. On-demand runs bypass the gate —
+  `palinode consolidate --respect-gate`, `respect_gate` on `POST /consolidate` and
+  `palinode_consolidate`, and `--ignore-gate` on the cron path opt in or out
+  explicitly. Gate state is reported on `/status` under `consolidation_gate`.
+
+### Changed
+
+- **`palinode lint --propose` now reads the ADR-020 retirement classifier instead of its own
+  copy of the rule.** The deterministic proposer and the executor's retirement
+  guard shipped in the same release with two separately maintained lists of what an identity
+  document is, and they already disagreed. The proposer now asks
+  `retirement.is_superseded_only()` — the one classifier the guard and the TTL sweep read — so
+  the two cannot drift, and keeps only a short, labelled list of its own: `decisions/`, which
+  ADR-020 calls conservative rather than forbidden, is still not nominated, as a *proposal-side*
+  preference and not an invariant. Two behaviour changes fall out: a stale
+  `projects/<slug>-status.md` is now proposed for `ARCHIVE` (status documents are the one regime
+  ADR-020 explicitly ages out; only `projects/<slug>.md`, the profile document, is protected),
+  and a document declaring `retirement_policy: age-eligible` is proposable even under `people/`.
+  Each skipped finding now names the layer that stopped it —
+  `retirement_policy: superseded-only (<signal>)` versus `proposer: conservative class` — so a
+  report says whether an exclusion is the executor's rule or the proposer's caution.
+  `docs/EXECUTOR-SPEC.md` § *Proposers and the `lint` Actor* states the layering.
+
+### Fixed
+
+- The cross-surface parity registry can now say that a canonical param is *realized as its own
+  capability* on a surface, instead of recording that arrangement as temporary drift.
+  `Operation.surface_realizations` names the realizing capability, the parity test passes on
+  those entries rather than xfailing, and `registered_capabilities` counts the capability as
+  registered so it needs no `INVENTORY_BACKLOG` row. `depends`/`unblocked` — realized as
+  `GET /depends/_unblocked` — was the only such case, and its three stale references to a
+  private-tracker issue number are gone. A new guard asserts every declaration names a real
+  canonical param *and* a capability live on that surface
+  ([#204](https://github.com/phasespace-labs/palinode/pull/204), thanks
+  [@chiruu12](https://github.com/chiruu12)).
+- **`PROPOSE_CONTRADICTS` is reachable — the executor op no model could propose.**
+  The op that records a `contradicts` link between two memories *without* picking a winner
+  shipped in v0.9.0, was covered by tests, and was named in **no prompt**, so no model was
+  ever told it exists and it had never run once. `specs/prompts/compaction.md` and
+  `specs/prompts/nightly-consolidation.md` now name it with its contract (conflict with no
+  clear winner → propose the link, never SUPERSEDE or ARCHIVE) and its JSON shape, and it is
+  in the default `consolidation.allowed_ops` / `consolidation.nightly.allowed_ops` — the
+  second gate, which silently dropped the proposal even once the prompt asked for it.
+  `contradicts` takes `category/slug` memory refs, so the compaction prompt's
+  `ACTIVE_DECISIONS` context now renders each decision's ref alongside its title: a conflict
+  the model can see but cannot name is one it cannot record. Measured on a seeded store with
+  two conflicting facts (`6340` vs `6341`) and a governing decision: **before**, both a local
+  4B instruct model and a 32B instruct model picked a winner they had no basis to pick
+  (`ARCHIVE`, `RETRACT`); **after**, both proposed exactly
+  `{"op": "PROPOSE_CONTRADICTS", "id": "port-b", "contradicts": ["decisions/api-port"], …}`,
+  which applies to a `contradicts:` frontmatter link with both facts still live and no
+  history sibling. Reachable is not the same as chosen: on the dev rig, the production
+  coder model given a governing decision plus a later conflicting observation still picked
+  the decision as winner every time (the prompt's "the decision wins" rule dominates the
+  no-winner rule); the executor path is proven on a real store, and the prompt tuning is
+  tracked for a future release. No new surface — `lint` (`open_contradictions`), `trace`, and the search
+  result marker already show the link. A pass whose only outcome was a contradiction link
+  also committed `0u 0m 0s 0a` ("nothing happened"); the commit summary now carries the
+  count. New `tests/test_prompt_op_vocabulary.py` asserts every executor op is named in at
+  least one prompt (the generalizable guard for this whole class) and
+  `tests/test_propose_contradicts_seam.py` drives the propose→dispose seam end to end on a
+  real store. `specs/prompts/compaction.md` also gains the frontmatter block every other
+  prompt carries and declares `version: 2` (v1 named the six reachable ops, v2 adds this
+  one), so the `prompts_current` doctor check can report a store still running the old
+  contract; the consolidation loader now strips prompt frontmatter before the text reaches
+  the model, which it never did — the nightly prompt's YAML block was being sent as part of
+  its instructions.
+- Consolidation: a `MERGE` whose `new_text` equals the surviving fact's current
+  text is now applied as a merge instead of aborting as a no-op — `ids[0]` is
+  left byte-identical and every `ids[1:]` line is retired to `-history.md` with
+  the standard merge record. Previously the duplicate stayed in the file, no
+  history was written, and the status document's Consolidation Log still
+  claimed a `[MERGE]`. That log line is now gated on the executor's outcome, so
+  a dropped, unmatched, or nightly-rejected `MERGE` leaves no line.
+
+- **The prompts are in the wheel, and `init` writes them into the store.** A
+  `pip install palinode` shipped no consolidation prompts at all: `specs/prompts/*.md` sits at
+  the root of the source tree, entered no distribution, and the runner read
+  `<memory_dir>/specs/prompts/compaction.md` with a bare `open()`. So the advertised path —
+  install, `palinode init`, save, `palinode consolidate` — ended in `FileNotFoundError`, and
+  every store that worked had been cloned from a checkout. The prompts now ship as package data
+  under `palinode/prompts/` (`tests/test_packaged_prompts_match_source.py` pins them
+  byte-identical to `specs/prompts/`, which stays the source of truth), reachable through one
+  accessor. `palinode init` provisions them into `$PALINODE_DIR/specs/prompts/` — never
+  overwriting an existing file, not even under `--force`, since a tuned prompt is not
+  scaffolding; `--no-prompts` opts out and `--dry-run` lists them. The runner prefers the
+  store's copy, falls back to the packaged one with a single INFO line naming it, and raises
+  when neither exists rather than returning the empty-operations result that a run summary
+  cannot tell apart from a quiet week. Both read sites go through the frontmatter-stripping
+  loader, so a packaged prompt's YAML block never reaches the model either. `prompts_current`
+  now compares against the packaged copies inside the install, so it works on a wheel — where
+  it previously reported "no packaged prompts to compare against", which is how this was found.
+  New `palinode prompt sync` refreshes stale store copies: palinode ships the sha256 of every
+  prompt revision it has released, so a store copy whose hash is in that list is provably
+  untouched and safe to replace, and anything else is reported as `kept-edited` and left alone
+  (`--force` to override, `--dry-run` to preview). The `wheel-smoke` CI job now installs the
+  wheel, inits a store, saves a memory and runs a dry consolidation, so the whole path is
+  covered where an editable install cannot see it.
+
+### Removed
+
+### Security
+
+
+## [0.18.0] — 2026-09-09
+
+**Compatibility:** keyword recall changes. The BM25 arm of hybrid search now OR-joins the
+content words of a query (stopwords dropped; an identifier such as `CVE-2026-31889` stays an
+exact phrase), where FTS5's implicit AND previously required every word of a question to
+co-occur in one chunk. Natural-language queries reach the keyword arm for the first time, so
+`palinode search`, `/search`, and `palinode_search` can return keyword hits they never did
+before — and a query of several unrelated words now matches chunks carrying any of them,
+ranked by how many. The FTS arm also gets its own relevance floor, `search.fts_threshold`
+(default 0.4), **relative to the best keyword match** — the cosine `threshold` no longer
+applies to keyword scores, so keyword hits that were silently discarded before fusion at the
+default MCP/API thresholds now reach the results: an identifier query (`CVE-2026-31889`,
+a ticket or PR number) can
+return its chunk where it previously returned only vector neighbours. Fusion is unchanged.
+
+### Added
+
+- `bench/longmemeval_v2/` — a fifth extraction note kind, `form_schema`: one
+  structured note per form the agent saw (fields with type / required / default, sections,
+  buttons), rendered as a table so "which field is mandatory" is a lookup. The a11y digest
+  now keeps the `required` / `checked=` / `disabled` / `readonly` markers it is read from.
+  `reextract.py` runs a second extraction pass over a saved raw store — new notes, same
+  embedded slices — so a prompt change costs hours of extraction, not a rebuild.
+
+### Changed
+
+- `docs/BENCHMARKS.md` → *LongMemEval-V2* gains *Extraction grain: a form-schema note kind*
+ : the second extraction pass measured against the first on both domains.
+  Negative result — enterprise static −6.8 (an off-target form schema makes the reader
+  abstain on multi-form questions; 14 schemas per 100 trajectories), web inside the noise
+  floor. Artifacts under `bench/results/longmemeval-v2-*-formschema-2026-09-06/`.
+- `docs/BENCHMARKS.md` → *The BM25 arm, measured* carries the three-seed replicate of the
+  keyword-arm fix: stock path 41.7 → 48.2 on LongMemEval-V2 web (ranges 40.8–42.5 vs
+  47.5–49.6, disjoint), with the seed-to-seed spread stated as the noise floor. Four more
+  rows under `bench/results/`.
+
+### Fixed
+
+- The embed preflight no longer drops the first embed of every process.
+  `check_model_context` read Ollama's `/api/show` `parameters` field as a mapping, but
+  current Ollama returns it as a newline-delimited `key value` string, and the fallback was
+  evaluated eagerly — so the first embed in the API server and in the watcher raised
+  `AttributeError`, the inline index of the first save after a restart was lost, and the
+  watcher's first file was dropped for good (its retry is the same process). The field is
+  now parsed, `bert.context_length` (bge-m3 is a BERT model) counts alongside
+  `llama.context_length`, the runtime `num_ctx` wins over the architecture capability when
+  both are present (a model that reports 8192 but runs at 4096 truncates at 4096, and the
+  warning now says so), and a raise anywhere inside the preflight costs one warning line
+  instead of the payload. Found by the release-gate smoke; the unit fixtures had modelled
+  `parameters` as a dict.
+- An embed input that Ollama's GPU path rejects with a NaN vector is retried once on the
+  CPU path (`options.num_gpu: 0`, `keep_alive: 0`) before the chunk degrades to
+  keyword-only. The cause is a flash-attention precision bug in llama.cpp on
+  cacheless encoders such as `bge-m3` (upstream open); the same input embeds correctly on
+  CPU. `keep_alive: 0` is deliberate — without it a long server-side keep_alive leaves the
+  model CPU-resident for every later caller. `embeddings.primary.nan_cpu_retry: false`
+  restores the previous behaviour; Ollama dialect only.
+- Correct keyword hits were discarded before fusion at the default thresholds.
+  `rank_hybrid` floored the FTS arm at the caller's *cosine* threshold (0.4 MCP / 0.5 API),
+  but normalised BM25 is on a different scale that also moves with corpus size: on a 54-pair
+  rig only 43 % of true keyword hits cleared 0.4, and every single-identifier hit
+  (`CVE-…`, `SOW-…`, issue numbers) sat at 0.12–0.13. The FTS arm now has its own floor,
+  `search.fts_threshold` (default 0.4), **relative to the best keyword match in the result
+  set** — the true chunk is that match in 51/54 rig pairs and within 0.49× of it otherwise;
+  distractors sit at a median 0.39×. Against a copy of a live 11.8k-chunk store at MCP
+  defaults, an identifier query's chunk reached the top-10 for 16/20 identifiers (was 6/20;
+  vector-only 1/20) and 10/20 as a question (was 7/20). `fts_threshold=0.0` disables the
+  FTS floor; FTS-only rows (no vector) stay exempt as before. Documented in
+  `palinode.config.yaml.example`. The defect was filed independently as
+  [public #199](https://github.com/phasespace-labs/palinode/issues/199) by
+  [@WilliamK112](https://github.com/WilliamK112), whose
+  [#202](https://github.com/phasespace-labs/palinode/pull/202) carries the absolute-floor
+  variant and its acceptance run.
+- Hybrid search was effectively vector-only for natural-language queries: FTS5's
+  implicit AND meant *"why does consolidation skip groups?"* required all five words in one
+  chunk and the BM25 arm returned nothing — 0 of 30 sentence queries matched when the arm
+  was first measured, and on LongMemEval-V2's exact-label questions the empty arm cost 5.8
+  points against an OR-joined one. `store.fts_match_expression` now builds the MATCH
+  expression: content words OR-joined, identifiers kept as phrases, BM25 ranking by terms
+  matched. Verified on the same row: the stock path goes 42.5 → 47.5, within noise of the
+  benchmark adapter's own OR arm (48.3); row in `docs/BENCHMARKS.md`. The score
+  normalisation and per-arm threshold questions from the same issue stay open.
+- `palinode.config.yaml.example` now keeps every documented scalar value aligned with
+  its corresponding dataclass default, except for the explicitly documented schedule
+  and database-path representations. New installs that copy the example therefore use
+  the measured `api_threshold` of 0.5 and the current default result limit of 15
+  ([#201](https://github.com/phasespace-labs/palinode/pull/201),
+  thanks [@WilliamK112](https://github.com/WilliamK112)).
 
 ### Removed
 

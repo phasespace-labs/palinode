@@ -405,14 +405,64 @@ same store, same reader, judge and budget, the stock path switched on (`--palino
 |---|---|---|---|---|---|---|
 | OR-joined BM25 arm (row above) | 48.3 | 51.7 | 49.0 | 73.8 | 26.7 | 34.7 |
 | stock implicit-AND path | 42.5 | 43.3 | 41.2 | 66.7 | 33.3 | 30.6 |
+| stock path after the fix (OR-joined in the store, 2026-09-07) | 47.5 | 47.3 | 43.1 | 56.5 | 33.3 | 29.2 |
+
+Replicated, three seeds each (question order reshuffled, reader resampled at temperature 0.6;
+the pre-fix rows run against the pre-fix store code):
+
+| stock path, 3 seeds | overall | static | dynamic | procedure |
+|---|---|---|---|---|
+| implicit AND — mean (range) | 41.7 (40.8–42.5) | 41.0 (40.7–41.8) | 38.0 (36.1–40.3) | 48.4 (45.2–51.6) |
+| OR-joined — mean (range) | 48.2 (47.5–49.6) | 48.4 (46.2–51.6) | 46.3 (43.1–52.8) | 53.8 (50.0–56.5) |
+| Δ | **+6.5** | +7.3 | +8.3 | +5.4 |
+
+Overall, static and dynamic have disjoint ranges across the three seeds; procedure and the two
+small types overlap. Seed-to-seed spread on a fixed configuration is 1–2 points overall and up
+to 10 on a 51-question type — the noise floor stated above, measured rather than assumed.
 
 −5.8 overall, 27 questions lost to 13 won, UNKNOWN up from 63 to 84 — with the same six
 notes and within one slice of the same context size, so this is retrieval, not budget. The
 three large types each lose 7–8 points; the two small types that move up are 15 and 20
 questions. Single seed, so the number is a signal and not a citation, but it clears the
 noise floor in the direction the closure said it wouldn't: on questions that name an exact
-UI label, the BM25 arm is doing work the vector arm does not. Artifacts:
-`bench/results/longmemeval-v2-palinode-web-notes6-slices6-r1-ftsand-2026-09-05/`.
+UI label, the BM25 arm is doing work the vector arm does not. The store's query builder
+was then changed to OR-join content words itself (identifiers kept as phrases), and the
+same row rerun through the stock path: 47.5 — within noise of the adapter's arm (−0.8,
+15 won / 17 lost) and +5.0 on the pre-fix path; +6.5 over three seeds. Artifacts:
+`bench/results/longmemeval-v2-palinode-web-notes6-slices6-r1-ftsand-2026-09-05/`,
+`…-ftsfixed-2026-09-07/`, and the `…-seed{1,2}-` / `…-seed1b-` rows beside them.
+
+### Extraction grain: a form-schema note kind (added 2026-09-06)
+
+The enterprise analysis above said the static misses were form-inventory questions that
+seven sentence-notes per trajectory cannot carry. The test: a fifth note kind, `form_schema`
+— one structured note per form (fields with type / required / default, sections, buttons),
+rendered as a table — and a second extraction pass over the same saved slices with the
+a11y digest keeping the `required` / `checked=` markers it used to strip. Same reader, judge,
+budget and query configuration as the `notes 6 + slices 6 ±1` rows; web is the control
+(few form questions, so it measures whether the second pass changed the other note kinds).
+
+| notes 6 + slices 6 ±1 | overall | static | dynamic | procedure | gotchas | abstention |
+|---|---|---|---|---|---|---|
+| enterprise, first pass (row above) | 40.8 | 42.9 | 34.5 | 45.5 | 35.7 | 8.9 |
+| enterprise, second pass with `form_schema` | 37.4 | 39.8 | 32.7 | 40.9 | 28.6 | 8.9 |
+| web, first pass (row above) | 48.3 | 49.5 | 45.8 | 54.8 | 26.7 | 34.7 |
+| web, second pass with `form_schema` | 46.2 | 47.3 | 37.5 | 58.1 | 33.3 | 33.3 |
+
+**The hypothesis does not hold as implemented.** Web is inside the noise floor (−2.1, 22 lost /
+17 won, symmetric), so the second pass did not damage the other kinds. Enterprise static
+fell 6.8 points on the base type (54.1 → 47.3 on 74 questions), 16 lost / 9 won, and the
+losses have one shape. 105 of 211 questions had a schema in context; on those, six were
+gained and ten lost. The lost ones are *"among these five forms, which…"* questions where the
+gold string was in the retrieved slices in both rows and the reader answered UNKNOWN in the
+second: the schema it was given was for the one form the trajectory *worked in*, not the five
+the question compares, and a confident table without the answer stops a 9B reader searching
+the trees. Yield was the other half — 14 schemas across 100 trajectories, because the
+extractor wrote one per goal form, not per form seen. Single seed, gate (+5 on enterprise
+static) not met. What it leaves open: schemas for every form visited, and whether an
+off-target structured note should be allowed to induce abstention at all — the second is a
+reader-behaviour question the memory layer may not own. Artifacts:
+`bench/results/longmemeval-v2-palinode-*-notes6-slices6-r1-formschema-2026-09-06/`.
 
 ### Against the leaderboard
 

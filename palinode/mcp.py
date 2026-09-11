@@ -48,6 +48,7 @@ from palinode.core.audit import AuditLogger
 from palinode.core.auth import load_api_token
 from palinode.core.config import ToolSurface, config, validate_tool_surface
 from palinode.core.defaults import (
+    CONSOLIDATION_TIMEOUT_SECONDS as _CONSOLIDATE_TIMEOUT,
     SAVE_SOURCE_HEADER as _SOURCE_HEADER,
     SESSION_END_TIMEOUT_SECONDS as _SESSION_END_TIMEOUT,
     _SESSION_END_TIMEOUT_SENTINEL as _SENTINEL,
@@ -1228,7 +1229,11 @@ def _all_tools() -> list[types.Tool]:
             name="palinode_consolidate",
             description=(
                 "Run a manual knowledge consolidation pass.  Set `dry_run=true` "
-                "to preview the proposed operations without applying them."
+                "to preview the proposed operations without applying them.  A "
+                "pass that reaches the LLM can run for minutes and may outlast "
+                "your client's own tool-call timeout; the server finishes it "
+                "either way and holds a run lock while it does, so a retry "
+                "returns 409 rather than starting again."
             ),
             inputSchema={
                 "type": "object",
@@ -1257,6 +1262,16 @@ def _all_tools() -> list[types.Tool]:
                             "Memory directories to consolidate, e.g. "
                             "`[\"insights\"]`.  Defaults to `daily` only."
                         ),
+                    },
+                    "respect_gate": {
+                        "type": "boolean",
+                        "description": (
+                            "Apply the activity gate the automatic cron path "
+                            "uses (enough time elapsed AND enough sessions "
+                            "since the last pass); reports `deferred` instead "
+                            "of running when a pass is not yet due."
+                        ),
+                        "default": False,
                     },
                 },
             },
@@ -1661,7 +1676,17 @@ def _all_tools() -> list[types.Tool]:
             ),
             inputSchema={
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "propose": {
+                        "type": "boolean",
+                        "description": (
+                            "Also translate the deterministic findings into proposed "
+                            "consolidation operations, each with its rationale and the "
+                            "finding it came from. Advisory: this tool never applies them "
+                            "— run `palinode lint --apply` to let the executor act."
+                        ),
+                    },
+                },
             },
             annotations=types.ToolAnnotations(
                 title="Lint Memory",
@@ -2198,6 +2223,42 @@ async def _tool_entities(arguments: dict[str, Any]) -> list[types.TextContent]:
 
 
 # ── consolidate ───────────────────────────────────────────────────
+
+#: Where a pass that outlived its client ends up. The API logs the run (under
+#: systemd: ``journalctl -u palinode-api``); the consolidation logger also
+#: writes here when file logging is configured. Same value the CLI reports.
+CONSOLIDATION_LOG = "logs/consolidation.log"
+
+
+def _consolidation_timeout_report(seconds: float) -> dict[str, Any]:
+    """What to tell a caller whose request stopped waiting for a pass.
+
+    The request timing out does not cancel the pass: the server holds the
+    store's run lock until it finishes, so the next call gets a 409 and the
+    result of this one is only in the log. Same payload the CLI emits for the
+    same outcome, so an agent and an operator read the same facts.
+    """
+    # Lazy: the lock path is the run lock's own constant, and only the timeout
+    # path needs it.
+    from palinode.consolidation.run_lock import LOCK_RELATIVE_PATH
+
+    lock = str(LOCK_RELATIVE_PATH)
+    return {
+        "status": "timeout",
+        "timeout_seconds": seconds,
+        "server_still_running": True,
+        "lock": lock,
+        "log": CONSOLIDATION_LOG,
+        "message": (
+            f"Stopped waiting after {seconds:.0f}s. The consolidation was not "
+            f"cancelled — the server is still running it and holds {lock}, so "
+            "another run returns 409 until it finishes. Results land in the API "
+            f"log and {CONSOLIDATION_LOG}. Raise PALINODE_CONSOLIDATE_TIMEOUT to "
+            "wait longer."
+        ),
+    }
+
+
 @_handles("palinode_consolidate")
 async def _tool_consolidate(arguments: dict[str, Any]) -> list[types.TextContent]:
     body: dict[str, Any] = {}
@@ -2207,7 +2268,20 @@ async def _tool_consolidate(arguments: dict[str, Any]) -> list[types.TextContent
         body["nightly"] = True
     if arguments.get("sources"):
         body["sources"] = _coerce_str_array(arguments["sources"])
-    resp = await _post("/consolidate", json=body, timeout=300.0)
+    if arguments.get("respect_gate"):
+        body["respect_gate"] = True
+    try:
+        # Module global, read at call time: an override reaches both the
+        # request and the budget named in the report below.
+        resp = await _post("/consolidate", json=body, timeout=_CONSOLIDATE_TIMEOUT)
+    except httpx.ReadTimeout:
+        # The server has the request and is still working on it, so this is a
+        # report rather than a dispatcher failure — deliberately not one of
+        # DISPATCH_ERROR_PREFIXES, and deliberately not the generic
+        # `_timeout_message` the dispatcher would have applied, which would say
+        # only that the request timed out and leave a caller to retry into a
+        # 409. Caught here, before it reaches `_dispatch_tool`.
+        return _text(json.dumps(_consolidation_timeout_report(_CONSOLIDATE_TIMEOUT), indent=2))
     if resp.status_code != 200:
         return _text(f"Consolidation failed: {resp.text}")
     return _text(json.dumps(resp.json(), indent=2))
@@ -2234,7 +2308,10 @@ async def _tool_archive(arguments: dict[str, Any]) -> list[types.TextContent]:
         body["reason"] = arguments["reason"]
     if arguments.get("superseded_by"):
         body["superseded_by"] = arguments["superseded_by"]
-    resp = await _post("/archive", json=body)
+    # No model call, but a single archive writes the memory, appends to its
+    # history sibling, flags dependents, updates the chunk index and commits —
+    # enough work on a large store to outrun the 30 s default. Matches the CLI.
+    resp = await _post("/archive", json=body, timeout=120.0)
     if resp.status_code != 200:
         return _text(f"Archive failed: {resp.text}")
     data = resp.json()
@@ -2659,7 +2736,12 @@ async def _tool_doctor_deep(arguments: dict[str, Any]) -> list[types.TextContent
 # ── lint ──────────────────────────────────────────────────────────
 @_handles("palinode_lint")
 async def _tool_lint(arguments: dict[str, Any]) -> list[types.TextContent]:
-    resp = await _post("/lint", timeout=120.0)
+    # `apply` is deliberately absent from this surface: a health scan an agent
+    # can call freely must not be able to retire memories as a side effect. The
+    # proposal set is the agent-facing half of the loop; applying it is the
+    # operator's move, on the CLI or the API.
+    params = {"propose": "true"} if arguments.get("propose") else None
+    resp = await _post_params("/lint", params=params, timeout=120.0)
     if resp.status_code != 200:
         return _text(f"Lint failed: {resp.text}")
     return _text(json.dumps(resp.json(), indent=2))

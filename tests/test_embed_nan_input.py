@@ -20,6 +20,8 @@ faked at the HTTP layer (``httpx.MockTransport``) with the exact 500 body.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
 import httpx
@@ -67,9 +69,13 @@ class TestClientLayer:
         try:
             with pytest.raises(EmbeddingInputError) as exc_info:
                 oc.embed(_POISON, model="bge-m3")
-            # Deterministic per input: one request, no backoff retries, and no
-            # legacy-endpoint fallback (same model, same input).
-            assert len(calls) == 1
+            # Deterministic per input: one GPU request plus exactly one CPU
+            # retry (num_gpu 0, keep_alive 0 — the NaN is the GPU path's F16
+            # overflow), no backoff retries, and no legacy-endpoint fallback
+            # (same model, same input).
+            assert len(calls) == 2
+            last = json.loads(calls[-1].content)
+            assert last.get("options") == {"num_gpu": 0} and last.get("keep_alive") == 0
             assert exc_info.value.model == "bge-m3"
             assert exc_info.value.text_len == len(_POISON)
             assert "unsupported value: NaN" in exc_info.value.ollama_message

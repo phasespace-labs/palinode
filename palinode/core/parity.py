@@ -22,6 +22,13 @@ mirror to the others.  When surfaces drift, record the drift
 in ``known_drift`` with the GitHub issue number — the test xfails the
 drift entry until the issue closes.
 
+Not every difference is drift.  When a surface realizes a canonical param as
+a separate capability — a sibling route rather than a query param, say — that
+is a permanent, correct arrangement, and ``known_drift`` is the wrong home for
+it: there is no issue to close.  Record it in ``surface_realizations`` instead,
+naming the capability that realizes it.  The parity test passes on those
+entries and the inventory guard counts the named capability as registered.
+
 Admin-only operations (reindex, migrations, doctor, etc.) are explicitly
 exempt from parity by listing them in ``ADMIN_EXEMPT_OPERATIONS``.  The
 contract is "all memory operations are equivalent across surfaces, by
@@ -92,6 +99,16 @@ class Operation:
     #: with the issue ref — once the issue closes and the surface is fixed,
     #: remove the entry and the test enforces.
     known_drift: dict[tuple[Surface, str], int] = field(default_factory=dict)
+    #: Permanent per-surface realizations, keyed by ``(surface, param_name)``.
+    #: Value is the surface identifier of the capability that realizes the
+    #: param — ``"METHOD /path"`` for the API, the tool name for MCP, the
+    #: command path for the CLI.  Contrast with ``known_drift`` directly above:
+    #: drift is TEMPORARY, tracked by an issue, and removed when the surface is
+    #: fixed; a realization is PERMANENT, names a capability, and has no issue
+    #: because there is nothing to fix.  The parity test passes on these keys
+    #: rather than xfailing, and ``registered_capabilities`` counts the named
+    #: capability as registered, so it needs no ``INVENTORY_BACKLOG`` row.
+    surface_realizations: dict[tuple[Surface, str], str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -370,6 +387,9 @@ REGISTRY: tuple[Operation, ...] = (
             # Without it the deterministic executor was reachable only for
             # daily notes, never for typed memories.
             CanonicalParam(name="sources", type="array"),
+            # Opt this call into the activity gate the cron path applies.
+            # On-demand runs bypass it by default on every surface.
+            CanonicalParam(name="respect_gate", type="boolean"),
         ),
         cli_command="consolidate",
         mcp_tool="palinode_consolidate",
@@ -566,6 +586,38 @@ REGISTRY: tuple[Operation, ...] = (
         api_endpoint=("POST", "/topic-coverage"),
         known_drift={},
     ),
+    # ── lint ──────────────────────────────────────────────────────────
+    # Registered for the propose parameter — the finding→operation half of the
+    # detect/propose/dispose loop, which has to read the same on every surface
+    # or an agent and an operator disagree about what lint offers.
+    #
+    # `apply` is deliberately NOT a canonical param. It is the human gate on a
+    # path whose ARCHIVE proposals remove content from default recall, so it
+    # ships on CLI and API only; the MCP tool stays read-only, which is what its
+    # `readOnlyHint` annotation promises. This is a design boundary, not drift —
+    # `known_drift` would claim a fix is owed.
+    #
+    # The report-shaping options (`format`, `deep_contradictions`,
+    # `max_llm_calls`, `similarity_threshold`) are surface-local and
+    # unregistered, as they were before this operation was promoted out of
+    # INVENTORY_BACKLOG.
+    Operation(
+        name="lint",
+        canonical_params=(
+            CanonicalParam(
+                name="propose",
+                type="boolean",
+                notes=(
+                    "Translate deterministic findings into proposed executor ops. "
+                    "Dry run on every surface."
+                ),
+            ),
+        ),
+        cli_command="lint",
+        mcp_tool="palinode_lint",
+        api_endpoint=("POST", "/lint"),
+        known_drift={},
+    ),
     # ── review ────────────────────────────────────────────────────────
     # Advisory project-memory review. Composes the deterministic lint signals
     # scoped to a project and proposes corrective ops (read-only). Plugin-exempt
@@ -581,11 +633,10 @@ REGISTRY: tuple[Operation, ...] = (
         known_drift={},
     ),
     # ── depends ────────────────────────────────────────────────────────
-    # The `unblocked` mode is exposed as a separate REST endpoint
-    # (GET /depends/_unblocked) rather than a query param on
-    # GET /depends/{slug}, so it does not appear in the API endpoint's
-    # function signature.  Recorded as known drift to keep the parity test
-    # from failing; the endpoint exists but under a different URL.
+    # The API realizes `unblocked` as its own route, GET /depends/_unblocked,
+    # rather than as a query param on GET /depends/{slug}.  The CLI and MCP
+    # take a boolean and call that route.  This is the shipped design, not a
+    # lag, so it is declared as a surface realization rather than as drift.
     Operation(
         name="depends",
         canonical_params=(
@@ -596,8 +647,9 @@ REGISTRY: tuple[Operation, ...] = (
         mcp_tool="palinode_depends",
         api_endpoint=("GET", "/depends/{slug:path}"),
         plugin_tool="palinode_depends",
-        known_drift={
-            ("api", "unblocked"): 97,
+        known_drift={},
+        surface_realizations={
+            ("api", "unblocked"): "GET /depends/_unblocked",
         },
     ),
 )
@@ -710,6 +762,13 @@ INVENTORY_INFRA: dict[Surface, frozenset[str]] = {
             # is deliberately CLI-only (dry-run by default, human commits).
             "repair-status",
             "retrieval-stats",
+            # Copies the packaged consolidation prompts over the store's stale
+            # ones. Local file maintenance on the operator's own store — it
+            # exposes no memory-semantic operation, needs no server, and its
+            # whole value is the local diff between two files on disk, so an
+            # MCP or REST twin would be a remote command with nothing remote
+            # about it. Deliberately CLI-only, like `repair-status`.
+            "prompt sync",
             "worktree-reconcile",
         }
     ),
@@ -731,7 +790,6 @@ INVENTORY_BACKLOG: dict[Surface, dict[str, int | InventoryBacklogEntry]] = {
         "palinode_entities": 170,
         "palinode_history": 170,
         "palinode_ingest": 170,
-        "palinode_lint": 170,
         "palinode_orphan_repair": 170,
         "palinode_prompt": 170,
         "palinode_push": 170,
@@ -740,7 +798,6 @@ INVENTORY_BACKLOG: dict[Surface, dict[str, int | InventoryBacklogEntry]] = {
     "api": {
         "DELETE /triggers/{trigger_id}": 170,
         "GET /triggers": 170,
-        "GET /depends/_unblocked": 97,
         "GET /diff": 170,
         "GET /entities": 170,
         "GET /entities/{entity_ref:path}": 170,
@@ -751,7 +808,6 @@ INVENTORY_BACKLOG: dict[Surface, dict[str, int | InventoryBacklogEntry]] = {
         "POST /dedup-suggest": 170,
         "POST /ingest": 170,
         "POST /ingest-url": 170,
-        "POST /lint": 170,
         "POST /orphan-repair": 170,
         "POST /prompts/{name}/activate": 170,
         "POST /push": 170,
@@ -764,7 +820,6 @@ INVENTORY_BACKLOG: dict[Surface, dict[str, int | InventoryBacklogEntry]] = {
         "entities": 170,
         "history": 170,
         "ingest": 170,
-        "lint": 170,
         "orphan-repair": 170,
         "prompt activate": 170,
         "prompt list": 170,
@@ -799,6 +854,13 @@ def registered_capabilities(surface: Surface) -> frozenset[str]:
             ids.add(f"{method} {path}")
         elif surface == "cli" and op.cli_command is not None:
             ids.add(op.cli_command)
+        # A param realized as its own capability on this surface is part of the
+        # registered contract too — that is what the declaration says.  Without
+        # this the inventory guard would report the realizing capability as
+        # unaccounted for and it would need a backlog row it does not deserve.
+        for (realized_surface, _param), capability in op.surface_realizations.items():
+            if realized_surface == surface:
+                ids.add(capability)
     return frozenset(ids)
 
 

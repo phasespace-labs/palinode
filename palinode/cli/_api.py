@@ -3,7 +3,12 @@ import httpx
 from typing import Any
 from palinode.core.auth import load_api_token
 from palinode.core.config import config
-from palinode.core.defaults import SAVE_SOURCE_HEADER, SESSION_END_TIMEOUT_SECONDS, _SESSION_END_TIMEOUT_SENTINEL
+from palinode.core.defaults import (
+    CONSOLIDATION_TIMEOUT_SECONDS,
+    SAVE_SOURCE_HEADER,
+    SESSION_END_TIMEOUT_SECONDS,
+    _SESSION_END_TIMEOUT_SENTINEL,
+)
 from palinode.core.write_input import SAVE_PARAMS, SESSION_END_PARAMS, build_payload
 
 # Cross-surface drift guard: all three entry points (CLI, MCP, hook) must
@@ -31,6 +36,23 @@ assert SESSION_END_TIMEOUT_SECONDS == _SESSION_END_TIMEOUT_SENTINEL or os.enviro
 HTTPStatusError = httpx.HTTPStatusError
 RequestError = httpx.RequestError
 ReadTimeout = httpx.ReadTimeout
+
+
+# ── Budgets for routes that outlive the default request timeout ──────────────
+#
+# The client default below (30 s) is a budget for the deterministic routes.
+# Consolidation is not one, and it is not a CLI-only problem: MCP posts the
+# same route. The budget and its ``PALINODE_CONSOLIDATE_TIMEOUT`` override
+# therefore live in ``core.defaults`` with the rest of the cross-surface
+# contract (ADR-010) and are re-exported here, so the CLI keeps reading it
+# through this module's attribute — which is what makes a test (or an
+# operator's override) visible to both the request and the timeout message.
+
+#: Store-wide deterministic sweeps (``/bootstrap-fact-ids``): no model call,
+#: but one parse + rewrite + git commit per memory file, so wall time scales
+#: with the store rather than with any fixed budget. 600 s matches ``/reindex``,
+#: the other whole-store sweep.
+STORE_SWEEP_TIMEOUT_SECONDS: float = 600.0
 
 
 def _client_headers() -> dict[str, str]:
@@ -210,13 +232,39 @@ class PalinodeAPI:
         response.raise_for_status()
         return response.json()
 
-    def lint(self) -> dict[str, Any]:
+    def lint(
+        self,
+        propose: bool = False,
+        apply: bool = False,
+        deep_contradictions: bool = False,
+        max_llm_calls: int | None = None,
+        similarity_threshold: float | None = None,
+    ) -> dict[str, Any]:
         """Run the memory lint pass via the API.  ADR-010.
+
+        ``propose`` adds the deterministic finding→operation proposal set (a dry
+        run); ``apply`` runs the applicable proposals through the executor path.
+        ``deep_contradictions`` includes the LLM-confirmed semantic pass so its
+        findings can be proposed too.
 
         Raises ``RequestError`` if the API is unreachable; the CLI catches
         this to fall back to a local in-process lint pass.
         """
-        response = self.client.post("/lint", timeout=30.0)
+        params: dict[str, Any] = {}
+        if propose:
+            params["propose"] = "true"
+        if apply:
+            params["apply"] = "true"
+        if deep_contradictions:
+            params["deep_contradictions"] = "true"
+            if max_llm_calls is not None:
+                params["max_llm_calls"] = max_llm_calls
+            if similarity_threshold is not None:
+                params["similarity_threshold"] = similarity_threshold
+        # Applying can archive documents and write commits; the propose pass may
+        # run an LLM check. Both outlast the report-only timeout.
+        timeout = 300.0 if (apply or deep_contradictions) else 30.0
+        response = self.client.post("/lint", params=params or None, timeout=timeout)
         response.raise_for_status()
         return response.json()
 
@@ -331,13 +379,22 @@ fields, the session-end hook audit push)."""
         dry_run: bool = False,
         nightly: bool = False,
         sources: list[str] | None = None,
+        respect_gate: bool = False,
     ) -> dict[str, Any]:
-        body: dict = {"dry_run": dry_run, "nightly": nightly}
+        body: dict = {
+            "dry_run": dry_run,
+            "nightly": nightly,
+            "respect_gate": respect_gate,
+        }
         # Omitted rather than sent as null so the server's default stays the
         # single definition of "which corpus".
         if sources:
             body["sources"] = list(sources)
-        response = self.client.post("/consolidate", json=body)
+        # Resolved from the module global at call time so an override reaches
+        # both the request and the budget the CLI names in its timeout message.
+        response = self.client.post(
+            "/consolidate", json=body, timeout=CONSOLIDATION_TIMEOUT_SECONDS
+        )
         response.raise_for_status()
         return response.json()
 
@@ -352,7 +409,10 @@ fields, the session-end hook audit push)."""
             payload["reason"] = reason
         if superseded_by is not None:
             payload["superseded_by"] = superseded_by
-        response = self.client.post("/archive", json=payload)
+        # No model call, but a single archive writes the memory, appends to its
+        # history sibling, flags dependents, updates the chunk index and commits
+        # — enough work on a large store to outrun the 30 s default.
+        response = self.client.post("/archive", json=payload, timeout=120.0)
         response.raise_for_status()
         return response.json()
 
@@ -445,7 +505,17 @@ fields, the session-end hook audit push)."""
         return response.json()
 
     def bootstrap_ids(self) -> dict[str, Any]:
-        response = self.client.post("/bootstrap-fact-ids", timeout=120.0)
+        response = self.client.post(
+            "/bootstrap-fact-ids", timeout=STORE_SWEEP_TIMEOUT_SECONDS
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def bootstrap_ids_file(self, file_path: str) -> dict[str, Any]:
+        """Tag one memory file (``palinode bootstrap-ids --file <rel-path>``)."""
+        response = self.client.post(
+            "/bootstrap-fact-ids", json={"file": file_path}, timeout=120.0
+        )
         response.raise_for_status()
         return response.json()
 

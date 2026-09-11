@@ -17,7 +17,8 @@ from typing import Any
 
 from bench.longmemeval import llm
 
-NOTE_KINDS = ("fact", "transition", "procedure", "gotcha")
+NOTE_KINDS = ("fact", "transition", "procedure", "gotcha", "form_schema")
+FIELD_TYPES = ("text", "choice", "checkbox", "reference", "date", "number", "textarea", "lookup", "other")
 MAX_NOTES = 25
 PROMPT_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                            "specs", "prompts", "trajectory-extraction.md")
@@ -43,8 +44,10 @@ def digest_tree(tree: str, *, max_chars: int) -> str:
         if not s or not _KEEP_ROLE_RE.search(s):
             continue
         s = re.sub(r"^\[\d+\]\s*", "", s)                      # element id
+        # Kept on purpose: required / checked= / disabled / readonly — a form_schema
+        # note's "required" and "default" columns come from exactly these markers.
         s = re.sub(r",\s*(visible|focused|focusable|url=|live=|atomic|relevant=|expanded=|"
-                   r"hasPopup=|selected=|checked=|required|readonly|disabled|pressed=|"
+                   r"hasPopup=|selected=|pressed=|"
                    r"level=|orientation=|multiselectable|controls=|describedby=|haspopup=)[^,]*", "", s)
         s = " ".join(s.split())
         if s in seen:
@@ -109,6 +112,43 @@ def extract_messages(trajectory: dict[str, Any]) -> list[dict[str, str]]:
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.S)
 
 
+def _parse_fields(raw: Any) -> list[dict[str, Any]]:
+    """Validate a form_schema ``fields`` list: label required, type from
+    FIELD_TYPES (else "other"), required a bool, default kept as given."""
+    out: list[dict[str, Any]] = []
+    for f in raw or []:
+        if not isinstance(f, dict):
+            continue
+        label = " ".join(str(f.get("label") or "").split())
+        if not label:
+            continue
+        ftype = str(f.get("type") or "other").strip().lower()
+        default = f.get("default")
+        if isinstance(default, str):
+            default = " ".join(default.split()) or None
+        out.append({"label": label, "type": ftype if ftype in FIELD_TYPES else "other",
+                    "required": bool(f.get("required")), "default": default})
+        if len(out) >= 80:
+            break
+    return out
+
+
+def render_form_schema(n: dict[str, Any]) -> str:
+    """The note body the reader sees: a markdown table, one row per field, so
+    "which field is mandatory" is a lookup rather than a search."""
+    lines = [n["content"], "", f"Form: {n['form']}"]
+    if n.get("sections"):
+        lines.append("Sections: " + ", ".join(n["sections"]))
+    lines += ["", "| field | type | required | default |", "|---|---|---|---|"]
+    for f in n["fields"]:
+        default = f["default"]
+        shown = "—" if default in (None, "") else ("checked" if default is True else "unchecked" if default is False else str(default))
+        lines.append(f"| {f['label']} | {f['type']} | {'yes' if f['required'] else 'no'} | {shown} |")
+    if n.get("buttons"):
+        lines += ["", "Buttons: " + ", ".join(n["buttons"])]
+    return "\n".join(lines)
+
+
 def parse_notes(text: str) -> tuple[list[dict[str, Any]], bool]:
     """``(notes, parse_ok)``. Invalid items are dropped, not repaired."""
     raw = text.strip()
@@ -144,9 +184,20 @@ def parse_notes(text: str) -> tuple[list[dict[str, Any]], bool]:
             conf = min(1.0, max(0.0, float(conf))) if conf is not None else None
         except (TypeError, ValueError):
             conf = None
-        notes.append({"kind": kind, "title": title or content[:60], "content": content,
-                      "page": " ".join(str(item.get("page") or "").split()), "states": states[:8],
-                      "confidence": conf})
+        note = {"kind": kind, "title": title or content[:60], "content": content,
+                "page": " ".join(str(item.get("page") or "").split()), "states": states[:8],
+                "confidence": conf}
+        if kind == "form_schema":
+            fields = _parse_fields(item.get("fields"))
+            if not fields:
+                continue   # an inventory without fields is a fact wearing the wrong kind
+            note["form"] = " ".join(str(item.get("form") or title or "").split()) or "form"
+            note["sections"] = [" ".join(str(x).split()) for x in (item.get("sections") or []) if str(x).strip()][:20]
+            note["fields"] = fields
+            note["buttons"] = [" ".join(str(x).split()) for x in (item.get("buttons") or []) if str(x).strip()][:20]
+            if not title:
+                note["title"] = f"Form schema: {note['form']}"
+        notes.append(note)
         if len(notes) >= MAX_NOTES:
             break
     return notes, True
@@ -193,7 +244,7 @@ def save_notes(result: ExtractResult, trajectory: dict[str, Any]) -> list[str]:
     env = str(trajectory.get("environment") or "")
     paths: list[str] = []
     for i, n in enumerate(result.notes):
-        body = n["content"]
+        body = render_form_schema(n) if n["kind"] == "form_schema" else n["content"]
         if n["page"]:
             body += f"\n\nPage: {n['page']}"
         if n["states"]:
@@ -207,7 +258,7 @@ def save_notes(result: ExtractResult, trajectory: dict[str, Any]) -> list[str]:
             metadata={"note_kind": n["kind"], "trajectory_id": tid, "states": n["states"],
                       "outcome": trajectory.get("outcome")},
             confidence=n["confidence"],
-            epistemic="fact" if n["kind"] in ("fact", "transition") else "inference",
+            epistemic="fact" if n["kind"] in ("fact", "transition", "form_schema") else "inference",
             source="lme-v2-extraction",
         )
         paths.append(str(out.get("file_path") or out.get("path") or ""))

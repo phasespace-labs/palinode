@@ -42,12 +42,36 @@ def split_layers(fmt):
         raise SystemExit(1)
 
 @click.command(name="bootstrap-ids")
+@click.option("--file", "file_path", metavar="REL_PATH",
+              help="Tag one memory file, relative to the store "
+                   "(e.g. projects/palinode-status.md). Default: the whole store.")
 @click.option("--format", "fmt", type=click.Choice(["json", "text"]), help="Output format")
-def bootstrap_ids(fmt):
-    """Bootstrap fact IDs."""
+def bootstrap_ids(file_path, fmt):
+    """Bootstrap fact IDs.
+
+    With no options, walks people/, projects/, decisions/ and insights/. With
+    --file, tags exactly that file — which is what `palinode doctor` asks for
+    when it names a consolidation target carrying no markers. Idempotent either
+    way, and committed with provenance.
+    """
     try:
-        result = api_client.bootstrap_ids()
+        if file_path:
+            result = api_client.bootstrap_ids_file(file_path)
+        else:
+            result = api_client.bootstrap_ids()
         print_result(result, fmt=OutputFormat(fmt) if fmt else get_default_format())
+    except HTTPStatusError as e:
+        status = e.response.status_code
+        if status in (400, 403):
+            console.print(
+                f"[red]Refused: {file_path!r} does not resolve inside the memory "
+                f"store.[/red]"
+            )
+        elif status == 404:
+            console.print(f"[red]No such memory file: {file_path}[/red]")
+        else:
+            console.print(f"[red]Error bootstrapping IDs: {str(e)}[/red]")
+        raise SystemExit(1)
     except Exception as e:
         console.print(f"[red]Error bootstrapping IDs: {str(e)}[/red]")
         raise SystemExit(1)

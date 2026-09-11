@@ -38,17 +38,56 @@ console = Console()
     show_default=True,
     help="Cosine similarity floor for candidate pairs in --deep-contradictions (0–1).",
 )
-def lint(fmt, deep_contradictions, max_llm_calls, similarity_threshold):
+@click.option(
+    "--propose",
+    is_flag=True,
+    default=False,
+    help=(
+        "Translate the deterministic findings into proposed executor operations "
+        "with their rationale. Dry run — nothing is written."
+    ),
+)
+@click.option(
+    "--apply",
+    is_flag=True,
+    default=False,
+    help=(
+        "Apply the applicable proposals through the executor path, stamped with "
+        "an actor of 'lint'. Implies --propose."
+    ),
+)
+def lint(fmt, deep_contradictions, max_llm_calls, similarity_threshold, propose, apply):
     """Scan memory and report every deterministic memory-health check."""
     try:
-        data = api_client.lint()
+        data = api_client.lint(
+            propose=propose,
+            apply=apply,
+            deep_contradictions=deep_contradictions,
+            max_llm_calls=max_llm_calls,
+            similarity_threshold=similarity_threshold,
+        )
     except HTTPStatusError as e:
         console.print(f"[red]Error: API returned {e.response.status_code}[/red]")
         raise SystemExit(1)
     except RequestError:
-        # Fallback to local import if API is down
+        # Fallback to a local in-process pass if the API is down. Same
+        # composition the route performs, so --propose/--apply are not silently
+        # dropped when the daemon is not running.
         from palinode.core.lint import run_lint_pass
         data = run_lint_pass()
+        if deep_contradictions:
+            from palinode.lint.contradictions import run_deep_contradiction_check
+            data["deep_contradictions"] = run_deep_contradiction_check(
+                similarity_threshold=similarity_threshold,
+                max_llm_calls=max_llm_calls,
+            )
+        if propose or apply:
+            from palinode.consolidation.propose_from_lint import attach_proposals
+            data = attach_proposals(
+                data,
+                apply=apply,
+                deep_contradictions=data.get("deep_contradictions"),
+            )
 
     if fmt == "json" and not deep_contradictions:
         emit_json(data)
@@ -120,9 +159,14 @@ def lint(fmt, deep_contradictions, max_llm_calls, similarity_threshold):
         console.print(f"[bold yellow]Relative Dates ({match_count})[/bold yellow]")
         for item in relative_dates:
             for match in item.get("matches", []):
-                console.print(
-                    f"  - {item['file']}:{match['line']}: {match['expression']}"
-                )
+                line = f"  - {item['file']}:{match['line']}: {match['expression']}"
+                resolved = match.get("resolved")
+                if resolved:
+                    line += f" → {resolved}"
+                    reason = match.get("reason")
+                    if reason:
+                        line += f" ({reason})"
+                console.print(line, markup=False)
     else:
         console.print("[green]✓ No relative dates[/green]")
 
@@ -278,28 +322,92 @@ def lint(fmt, deep_contradictions, max_llm_calls, similarity_threshold):
 
     console.print("")
 
+    # The proposal set, when asked for. Printed before the deep check so the
+    # deterministic half of the report reads top to bottom.
+    if propose or apply:
+        _render_proposals(data.get("proposals", {}))
+
     # --deep-contradictions: LLM-confirmed semantic check (opt-in only)
     if deep_contradictions:
         _run_deep_contradictions_output(
             fmt=fmt,
             similarity_threshold=similarity_threshold,
             max_llm_calls=max_llm_calls,
+            precomputed=data.get("deep_contradictions"),
         )
+
+
+def _render_proposals(proposal_set: dict) -> None:
+    """Print the finding→operation proposals, applicable ones first."""
+    proposals = proposal_set.get("proposals", [])
+    summary = proposal_set.get("summary", {})
+    dry_run = proposal_set.get("dry_run", True)
+
+    header = "Proposed Operations" if dry_run else "Applied Operations"
+    console.print(
+        f"[bold cyan]{header} ({summary.get('proposed', 0)})[/bold cyan]"
+        + ("  [dim]dry run — nothing written[/dim]" if dry_run else "")
+    )
+    if not proposals:
+        console.print("[green]✓ Nothing to propose[/green]")
+        console.print("")
+        return
+
+    for proposal in proposals:
+        marker = "→" if proposal.get("applicable") else "·"
+        console.print(
+            f"  {marker} [{proposal.get('op')}] {proposal.get('file')}", markup=False
+        )
+        console.print(f"    [dim]{proposal.get('rationale', '')}[/dim]")
+        blocked = proposal.get("blocked_by")
+        if blocked and blocked != "advisory":
+            console.print(f"    [dim]not applied: blocked by {blocked}[/dim]")
+
+    for item in proposal_set.get("skipped", []):
+        console.print(f"  [dim]- {item.get('file')}: {item.get('reason')}[/dim]")
+
+    applied = proposal_set.get("applied")
+    if applied:
+        console.print(
+            f"  [green]Applied {len(applied.get('applied', []))} operation(s) "
+            f"as actor '{applied.get('source')}'[/green]"
+        )
+        for failure in applied.get("failed", []):
+            console.print(
+                f"  [red]failed: {failure.get('file')} — {failure.get('error')}[/red]"
+            )
+    elif dry_run and summary.get("applicable"):
+        console.print(
+            f"  [dim]{summary['applicable']} applicable — re-run with --apply "
+            f"to let the executor apply them.[/dim]"
+        )
+    console.print("")
 
 
 def _run_deep_contradictions_output(
     fmt: str,
     similarity_threshold: float,
     max_llm_calls: int,
+    precomputed: dict | None = None,
 ) -> None:
-    """Execute deep contradiction check and render results."""
+    """Render the deep contradiction check, running it only if needed.
+
+    ``precomputed`` is the result the API already produced for this invocation
+    (the route runs the pass when ``deep_contradictions`` is requested, so that
+    its findings can be proposed). Re-running it here would spend the LLM budget
+    twice for one command.
+    """
     from palinode.lint.contradictions import run_deep_contradiction_check
 
     console.print("[bold cyan]Running deep contradiction check (LLM-confirmed)...[/bold cyan]")
     try:
-        result = run_deep_contradiction_check(
-            similarity_threshold=similarity_threshold,
-            max_llm_calls=max_llm_calls,
+        result = (
+            precomputed
+            if precomputed is not None
+            else run_deep_contradiction_check(
+                similarity_threshold=similarity_threshold,
+                max_llm_calls=max_llm_calls,
+            )
         )
     except Exception as exc:
         console.print(f"[red]Deep contradiction check failed: {exc}[/red]")

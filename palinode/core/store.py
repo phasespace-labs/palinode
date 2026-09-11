@@ -1007,6 +1007,57 @@ def sanitize_fts_query(query: str) -> str:
     return query if query else '""'
 
 
+#: Words that carry no keyword signal: articles, prepositions, pronouns,
+#: auxiliaries, interrogatives. Question-shaped queries are mostly these, and
+#: under FTS5's implicit AND every one of them had to co-occur in the chunk.
+FTS_STOPWORDS = frozenset("""
+a an the and or but if then of in on at to for from by with about as into like through after over
+between out against during without before under around among is are was were be been being am do
+does did doing have has had having i me my mine we our ours you your yours he him his she her hers it
+its they them their theirs this that these those what which who whom whose how much many when where
+why will would shall should can could may might must not no nor so than too very just also there here
+s t d ll m re ve
+""".split())
+
+
+def fts_match_expression(query: str) -> str:
+    """Turn a natural-language query into an FTS5 MATCH expression that a
+    question can actually satisfy.
+
+    FTS5 joins bare terms with implicit AND, so ``"why does consolidation skip
+    groups"`` required all five words in one chunk and matched nothing — for
+    the dominant caller shape (an agent asking a question) hybrid search was
+    vector-only. Measured on LongMemEval-V2 web, the empty arm cost 5.8 points
+    on exact-label questions against an OR-joined arm (the implicit-AND finding).
+
+    Rules, in order:
+
+    * Each whitespace-delimited raw token is sanitized on its own. A token that
+      sanitizes to several words — ``CVE-2026-31889``, ``v0.16.0``,
+      ``palinode/core`` — becomes a *phrase* (``"cve 2026 31889"``) so an
+      identifier still has to match exactly and in order. A single word is
+      quoted as a one-word phrase (quoting sidesteps every bareword rule).
+    * Stopword units are dropped. If nothing survives, every unit is kept:
+      ``"what is it"`` should still match something rather than nothing.
+    * Units are joined with ``OR``. BM25 already scores a chunk higher for each
+      additional matched term, so a short query ranks as it did under AND and a
+      question finally reaches the arm at all.
+
+    Returns ``'""'`` (the empty phrase, valid and matching nothing) for a
+    query with no word characters.
+    """
+    units: list[str] = []
+    for raw in query.split():
+        words = sanitize_fts_query(raw)
+        if words == '""':
+            continue
+        units.append('"' + words + '"')
+    if not units:
+        return '""'
+    content = [u for u in units if u.strip('"').lower() not in FTS_STOPWORDS]
+    return " OR ".join(content or units)
+
+
 def search_fts(query: str, category: str | None = None, top_k: int = 10,
                kind_exclude_list: Sequence[str] | None = None) -> list[dict[str, Any]]:
     """Search using BM25 full-text search for exact keyword matching.
@@ -1030,9 +1081,9 @@ def search_fts(query: str, category: str | None = None, top_k: int = 10,
     try:
         cursor = db.cursor()
 
-        # FTS5 match query — sanitize before passing to MATCH
-        # sanitize_fts_query handles quotes, hyphens, and boolean operators
-        safe_query = sanitize_fts_query(query)
+        # FTS5 match query — OR-joined content words / identifier phrases (the implicit-AND finding);
+        # sanitize_fts_query handles quotes, hyphens, and boolean operators per token.
+        safe_query = fts_match_expression(query)
 
         sql = """
             SELECT c.id, c.file_path, c.section_id, c.content, c.category, c.metadata,
@@ -1665,6 +1716,7 @@ def search_hybrid(
     session_id: str | None = None,
     record_access: bool = True,
     use_fts: bool = True,
+    fts_threshold: float | None = None,
 ) -> list[dict[str, Any]]:
     """Hybrid search combining semantic vectors and BM25 keyword matching.
 
@@ -1676,11 +1728,16 @@ def search_hybrid(
         query_embedding: The embedded query vector (for cosine similarity).
         category: Optional category filter applied to both searches.
         top_k: Maximum results to return.
-        threshold: Minimum vector relevance floor, measured as real cosine
-            similarity and applied BEFORE RRF fusion. The BM25 arm uses the
-            independent config-only ``search.fts_threshold`` floor; candidates
-            with no ``chunks_vec`` row are exempt because BM25 is their only
-            retrieval path (see :func:`palinode.core.ranker.rank_hybrid`).
+        threshold: The VECTOR arm's relevance floor — real cosine similarity —
+            applied BEFORE RRF fusion (see :func:`palinode.core.ranker.rank_hybrid`).
+        fts_threshold: The FTS arm's own floor, as a fraction of the best
+            keyword match in this result set (``config.search.fts_threshold``
+            when ``None``; measured default 0.4; ``0.0`` = no FTS floor). Until
+            this existed the cosine floor was applied to normalized BM25 too,
+            and at 0.4/0.5 it discarded most correct keyword hits — every
+            single-identifier hit among them — before fusion.
+            FTS candidates with no ``chunks_vec`` row (written FTS-only) are
+            exempt: the keyword arm is the only arm they have.
             NOT a cutoff on the fused score: a production measurement found
             the post-RRF score to be a function of rank, not relevance, so
             thresholding it there selects a near-invariant rank cutoff
@@ -1763,7 +1820,7 @@ def search_hybrid(
         fts_results,
         top_k=top_k,
         threshold=threshold,
-        fts_threshold=config.search.fts_threshold,
+        fts_threshold=fts_threshold,
         hybrid_weight=effective_hybrid_weight,
         priority_weight=_PRIORITY_RANK_WEIGHT,
         context_files=context_files,

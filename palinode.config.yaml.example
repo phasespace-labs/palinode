@@ -76,6 +76,13 @@ embeddings:
     # dialect: "openai"
     # url: "http://localhost:8080"
     # model: "bge-m3"          # llama-server ignores it; vLLM / LM Studio match it
+    #
+    # Ollama's GPU path returns a NaN vector for a few exact inputs (a flash-
+    # attention precision bug in llama.cpp on cacheless encoders; the same input
+    # embeds fine on CPU). Such a rejection is retried once with num_gpu 0 and
+    # keep_alive 0, so the model does not stay CPU-resident afterwards. Off →
+    # the chunk stays keyword-only until re-embedded. Ollama dialect only.
+    # nan_cpu_retry: true
 
 # -----------------------------------------------------------------------------
 # Auto-Summary
@@ -128,14 +135,15 @@ search:
   hybrid_enabled: true
   # Balance: 0.0 = vector only, 1.0 = BM25 only, 0.5 = equal weight
   hybrid_weight: 0.5
-  # BM25 floor on its own normalized scale (0.0 = no BM25 filtering)
-  fts_threshold: 0.0
   # Default threshold for MCP server searches (lower = more results)
   mcp_threshold: 0.4
   # Default threshold for FastAPI searches (higher = more precision)
-  api_threshold: 0.6
+  api_threshold: 0.5
+  # BM25 arm floor, relative to the best keyword match in the same result set
+  # (a candidate survives when score >= fts_threshold * top_score). 0.0 = no floor.
+  fts_threshold: 0.4
   # Default number of results
-  default_limit: 10
+  default_limit: 15
   # Status values to exclude from search results
   exclude_status:
     - "archived"
@@ -189,7 +197,10 @@ consolidation:
   # Which operations the weekly full pass may apply. The nightly pass has
   # its own, separately-scoped restriction below (nightly.allowed_ops) —
   # this one only governs the weekly pass.
-  allowed_ops: ["KEEP", "UPDATE", "MERGE", "SUPERSEDE", "ARCHIVE", "RETRACT"]
+  # PROPOSE_CONTRADICTS records a conflict between two memories without
+  # picking a winner (SUPERSEDE stays the only winner-picking op); drop it
+  # from this list to stop the pass proposing contradiction links at all.
+  allowed_ops: ["KEEP", "UPDATE", "MERGE", "SUPERSEDE", "ARCHIVE", "RETRACT", "PROPOSE_CONTRADICTS"]
 
   # Nightly pass configuration (Tier 2)
   nightly:
@@ -200,7 +211,34 @@ consolidation:
     # MERGE is allowed but the executor enforces a same-day guard: only facts
     # sharing the same [YYYY-MM-DD] date prefix may be merged in a nightly run.
     # Cross-date or undated MERGE proposals are rejected with a log warning.
-    allowed_ops: ["UPDATE", "SUPERSEDE", "MERGE"]
+    # PROPOSE_CONTRADICTS is additive in the same sense: it writes a
+    # `contradicts` link and retires nothing.
+    allowed_ops: ["UPDATE", "SUPERSEDE", "MERGE", "PROPOSE_CONTRADICTS"]
+
+  # Activity gate for the AUTOMATIC path only (`python -m
+  # palinode.consolidation.cron`). A pass runs when BOTH conditions hold:
+  # enough hours elapsed AND enough session-end entries recorded since that
+  # pass last ran. Wall-clock cron alone gets both cases wrong — an idle week
+  # still burns an LLM pass, a heavy day still waits for the next tick — so
+  # with the gate on you can schedule the cron hourly and let the gate decide.
+  #
+  # `max_hours_elapsed` is the ceiling that defeats the gate: past it the pass
+  # runs whatever the session count is. Keep it. Without it, a store that
+  # ingests through the watcher and records no sessions would never
+  # consolidate at all. The default equals the weekly cadence consolidation
+  # already had, so an idle deployment keeps today's behaviour.
+  #
+  # Weekly and nightly passes are gated independently (state lives in
+  # `<memory_dir>/.palinode/consolidation-state.json`).
+  #
+  # On-demand runs bypass the gate: `palinode consolidate`, `palinode dream`,
+  # POST /consolidate and the MCP tool run unconditionally unless they pass
+  # `--respect-gate` / `respect_gate: true`.
+  auto_gate:
+    enabled: true
+    min_hours_elapsed: 24
+    min_sessions: 5
+    max_hours_elapsed: 168  # 7 days — the ceiling, not the schedule
 
   # Write-time contradiction check (Tier 2a — ADR-004)
   # When enabled, every palinode_save schedules a background contradiction check
@@ -297,6 +335,18 @@ services:
   watcher:
     # Debounce: ignore rapid file changes within this window
     debounce_seconds: 1.0
+
+# -----------------------------------------------------------------------------
+# Write-time normalisation
+# -----------------------------------------------------------------------------
+write:
+  # Rewrite resolvable relative dates ("yesterday", "last Tuesday", "3 days
+  # ago") to absolute ones in captured session text, anchored on the session
+  # date. Quoted text, blockquotes and code are never touched, and vague
+  # phrases ("recently") and intervals ("last week") are left for a human.
+  # Set false to store the author's wording; `palinode lint` reports the drift
+  # either way.
+  normalize_relative_dates: true
 
 # -----------------------------------------------------------------------------
 # Git Integration

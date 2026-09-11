@@ -135,12 +135,19 @@ Operator maintenance: walk `people/`, `projects/`, `decisions/`, and
 when adopting consolidation on a store written before fact IDs existed; a no-op
 afterwards.
 
+`--file` narrows it to one document, which is the usual case: `palinode doctor`
+names a consolidation target carrying no markers (`consolidation_targets_tagged`)
+and this tags exactly that file. The path is relative to the memory dir and is
+rejected if it resolves outside it.
+
 | Option | Default | Meaning |
 |---|---|---|
+| `--file REL_PATH` | — | Tag one memory file instead of walking the store |
 | `--format [json\|text]` | auto | Output format |
 
 ```bash
 palinode bootstrap-ids
+palinode bootstrap-ids --file projects/palinode-status.md
 ```
 
 Output: **auto**.
@@ -233,12 +240,33 @@ and [EXECUTOR-SPEC.md](EXECUTOR-SPEC.md). `palinode dream` is an alias.
 | `--nightly` | off | Lightweight nightly pass (today only, UPDATE/SUPERSEDE) |
 | `--dry-run` | off | Preview the proposed operations without applying |
 | `--source DIR` | `daily/` | Memory directory to consolidate; repeatable |
+| `--respect-gate` | off | Apply the activity gate the cron path uses; skip and report when a pass is not yet due |
 | `--format [json\|text]` | auto | Output format |
+
+This command runs unconditionally. The activity gate
+(`consolidation.auto_gate`, see [OPERATIONS.md](OPERATIONS.md#consolidation-scheduling))
+governs the automatic cron path, not an operator who has asked for a pass;
+`--respect-gate` opts this run into the same policy and reports
+`{"status": "deferred", "gate": {…}}` when the gate is unmet.
 
 ```bash
 palinode consolidate --dry-run
 palinode consolidate --nightly
+palinode consolidate --respect-gate
 ```
+
+**This command waits for minutes, not seconds.** A pass that reaches the LLM
+gets 600 s per project group server-side, so the client waits
+`PALINODE_CONSOLIDATE_TIMEOUT` seconds (default `900`) rather than the 30 s
+every other route uses. Raise it for a large store with many project groups.
+
+If the wait is still not enough, the CLI stops waiting — it does not cancel
+anything. The server finishes the pass and holds the store's run lock
+(`.palinode/consolidation.lock`) until it does, so a second `palinode
+consolidate` returns `409 Consolidation is already running (pid=…)` in the
+meantime, and that run's result is only in the API log and
+`logs/consolidation.log`. The command says so and exits 1; under `--format
+json` it emits `{"status": "timeout", "server_still_running": true, …}`.
 
 Output: **auto**.
 
@@ -494,6 +522,14 @@ are preserved or appended to unless `--force`. The README's "Daily use" section
 and [HARNESSES.md](HARNESSES.md) explain what each harness gets;
 [OBSIDIAN.md](OBSIDIAN.md) covers `--obsidian`.
 
+It also provisions the consolidation prompts into the **memory store** —
+`$PALINODE_DIR/specs/prompts/*.md`, copied from the ones packaged with
+palinode. That is where the consolidation runner reads them from and where you
+edit them. Existing files are never overwritten, with or without `--force`:
+`--force` means "redo the scaffolding", and a tuned prompt is not scaffolding.
+Use [`palinode prompt sync`](#palinode-prompt-sync) to bring stale copies
+current.
+
 | Option | Default | Meaning |
 |---|---|---|
 | `--dir DIRECTORY` | current dir | Project directory to scaffold |
@@ -511,6 +547,7 @@ and [HARNESSES.md](HARNESSES.md) explain what each harness gets;
 | `--user` | off | Install the skill to `~/.claude/skills/` instead of project paths |
 | `--obsidian / --no-obsidian` | off | Also scaffold an Obsidian vault config (`.obsidian/`, `_index.md`, `_README.md`) |
 | `--force-obsidian` | off | Overwrite the Obsidian scaffold (except `workspace.json`); implies `--obsidian` |
+| `--prompts / --no-prompts` | on | Provision `$PALINODE_DIR/specs/prompts/*.md` from the packaged prompts (never overwrites) |
 | `--force` | off | Overwrite existing files |
 | `--dry-run` | off | Print the plan without writing |
 
@@ -529,13 +566,50 @@ palinode lint [OPTIONS]
 
 Scan memory and report every deterministic health check: missing required
 frontmatter, orphaned wikilinks, stale files, unresolved `contradicts` links,
-core memories without `expires_at`, and more. Falls back to a local scan if the
+core memories without `expires_at`, relative dates that will rot, and more. A
+`relative_dates` finding carries the phrase, its line, the anchor the memory is
+dated by, and either the absolute date the phrase resolves to or `unresolvable`
+with the reason. Falls back to a local scan if the
 API is down. `--deep-contradictions` adds an LLM-confirmed semantic pass over
 Decision memories. Check catalog in [DOCTOR.md — lint](DOCTOR.md#palinode-lint).
+
+`--propose` closes the loop from *detect* to *dispose*: the deterministic
+findings become consolidation operations in the executor's own vocabulary, each
+carrying its rationale and the finding it came from. It is a dry run — nothing
+is written. `--apply` (which implies `--propose`) hands the applicable ones to
+the existing deterministic write paths, stamped with an actor of `lint` so the
+history sibling and the git subject say lint proposed them, not the model.
+
+| finding | proposed operation |
+|---|---|
+| stale active file, eligible document class | `ARCHIVE` the whole document |
+| stale active file, excluded document class | none — reported as skipped, with the reason |
+| deep contradiction pair | `PROPOSE_CONTRADICTS` on both sides |
+| withdrawn `backed_by` (`stale_backing`) | `PROPOSE_UPDATE` (advisory; never applied) |
+| orphaned file | `PROPOSE_UPDATE` (advisory; never applied) |
+| relative date, resolvable, on a fact line | `UPDATE` rewriting the phrase to its absolute date |
+| relative date, vague or off a fact line | none — reported as skipped, with the reason |
+
+A relative date is the one place this path emits replacement text, because the
+replacement is arithmetic rather than judgement: "yesterday" in a memory created
+on 2026-09-10 is 2026-09-09, resolved against the memory's own `created_at` (or a
+dated filename) by the same normaliser that runs at write time. Phrases that name
+no day — "recently", "last week", "three weeks ago" — and phrases inside quoted
+text or code are reported and skipped, never guessed at.
+
+Age-based `ARCHIVE` is never proposed for `people/`, `projects/` or
+`decisions/`, for a `PersonMemory`, or for a document declaring `core: true`,
+`update_policy: replace` or `retirement_policy: superseded-only` — ADR-020:
+retirement is a property of the document, not of the fact's age, and `ARCHIVE`
+is the only operation that removes content from default recall. Anything
+needing wording (a merged sentence, a chosen winner between two claims) stays
+the LLM proposer's job and is not proposed here.
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--format [json\|text]` | `text` | Output format |
+| `--propose` | off | Translate findings into proposed operations (dry run) |
+| `--apply` | off | Apply the applicable proposals through the executor path; implies `--propose` |
 | `--deep-contradictions` | off | LLM-confirmed contradiction check; needs the configured LLM endpoint |
 | `--max-llm-calls INTEGER` | 50 | Hard cap on LLM calls per `--deep-contradictions` run |
 | `--similarity-threshold FLOAT` | 0.75 | Cosine floor for candidate pairs in `--deep-contradictions` |
@@ -543,6 +617,8 @@ Decision memories. Check catalog in [DOCTOR.md — lint](DOCTOR.md#palinode-lint
 ```bash
 palinode lint
 palinode lint --format json | jq '.orphan_links'
+palinode lint --propose --format json | jq '.proposals.proposals[]'
+palinode lint --apply
 ```
 
 Output: fixed default (`text`); pass `--format json` explicitly when piping.
@@ -791,6 +867,10 @@ Manage the versioned LLM prompts (extraction, compaction, update,
 classification, nightly consolidation) that are themselves stored as memory
 files, so a prompt change is a reviewable commit like any other.
 
+Every subcommand reads and writes `$PALINODE_DIR/specs/prompts/*.md` — the same
+copies consolidation reads and `palinode doctor`'s `prompts_current` check
+compares against. There is no second prompts directory.
+
 #### `palinode prompt activate`
 
 ```
@@ -798,6 +878,12 @@ palinode prompt activate [OPTIONS] NAME
 ```
 
 Activate a prompt version; other versions for the same task are deactivated.
+`NAME` is the filename without `.md` (`compaction`), and the toggle rewrites
+`active:` in `$PALINODE_DIR/specs/prompts/<name>.md`.
+
+Consolidation selects its prompt by *filename* (`compaction.md`,
+`nightly-consolidation.md`), not by this flag, so `active:` records which
+version you consider current rather than switching what the runner loads.
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -845,6 +931,45 @@ palinode prompt show compaction-v3
 ```
 
 Output: **auto**.
+
+#### `palinode prompt sync`
+
+```
+palinode prompt sync [OPTIONS]
+```
+
+Refresh `$PALINODE_DIR/specs/prompts/*.md` — the consolidation prompts the
+runner reads — from the copies packaged with the installed palinode. A release
+that changes a prompt changes nothing until the store's copy is refreshed, and
+`palinode doctor`'s `prompts_current` check is what tells you one has fallen
+behind.
+
+Only copies that still match a version palinode released are replaced. Palinode
+ships the sha256 of every prompt revision it has ever released, so a store copy
+whose hash is in that list is provably untouched; anything else is your edit
+and is reported as `kept-edited` and left alone. A prompt missing from the store
+is provisioned.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--dry-run` | off | Report what would change without writing |
+| `--force` | off | Also overwrite prompts you have edited (destructive) |
+| `--format [text\|json]` | auto | Output format |
+
+```bash
+palinode prompt sync --dry-run
+palinode prompt sync
+```
+
+Whatever it writes is git-committed in one commit whose message names each
+prompt and the version it now declares (`palinode prompt sync: refreshed
+compaction.md→v3; added trajectory-extraction.md (palinode 0.19.1)`, with
+`--force` recorded when you used it), so `git log -- specs/prompts` tells you
+when consolidation started running a given prompt revision; set
+`git.auto_commit: false` to keep the store's history yours to write.
+
+CLI-only: it is local file maintenance on your own store, not a memory
+operation, so it has no MCP or REST counterpart. Output: **auto**.
 
 ### `palinode push`
 

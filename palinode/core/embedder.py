@@ -135,6 +135,58 @@ def _notice_keyword_only_once() -> None:
     )
 
 
+def _parse_num_ctx(parameters: object) -> int | None:
+    """Return the runtime ``num_ctx`` from an ``/api/show`` ``parameters`` field.
+
+    Ollama serialises ``parameters`` as the modelfile's PARAMETER lines — a
+    newline-delimited ``"key<spaces>value"`` string. Older builds returned a
+    mapping. Anything else (absent, malformed, non-numeric) is ``None`` so the
+    caller falls back to the capability value or skips the check.
+    """
+    if parameters is None:
+        return None
+    if isinstance(parameters, dict):
+        value = parameters.get("num_ctx")
+    elif isinstance(parameters, str):
+        value = None
+        for line in parameters.splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[0] == "num_ctx":
+                value = parts[1]
+                break
+    else:
+        return None
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _capability_ctx(model_info: object) -> int | None:
+    """Return the architecture context length from ``/api/show`` ``model_info``.
+
+    The key is ``"<architecture>.context_length"`` — ``llama.context_length``
+    for GGUF llama-family models, ``bert.context_length`` for bge-m3 — so any
+    ``*.context_length`` suffix counts. The canonical ``llama.`` key is preferred
+    when several are present.
+    """
+    if not isinstance(model_info, dict):
+        return None
+    candidates = {
+        key: value for key, value in model_info.items()
+        if isinstance(key, str) and key.endswith(".context_length") and value is not None
+    }
+    if not candidates:
+        return None
+    value = candidates.get("llama.context_length", next(iter(candidates.values())))
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def check_model_context(
     model: Optional[str] = None,
     min_ctx: int = _MIN_EXPECTED_CTX,
@@ -168,16 +220,20 @@ def check_model_context(
         # Phase 3: route /api/show through the centralized client (EMBED
         # role). retries=0 — preflight is best-effort and must not amplify load.
         data = get_ollama_client().show(model, role=OllamaRole.EMBED, retries=0)
-        # Ollama /api/show returns model_info with key "llama.context_length"
-        # for GGUF models. For bge-m3 the key is typically under model_info.
-        model_info = data.get("model_info", {})
-        # Try the canonical key first, then the legacy parameters dict.
-        ctx = model_info.get(
-            "llama.context_length",
-            data.get("parameters", {}).get("num_ctx", None)
-        )
+        # Two distinct numbers can come back, and they mean different things:
+        #   - `parameters` carries the *runtime* num_ctx the model is actually
+        #     loaded with. Ollama returns it as a newline-delimited
+        #     "key value" string (a mapping in some older builds).
+        #   - `model_info["<arch>.context_length"]` is the architecture's
+        #     *capability* — "llama." for GGUF llama-family models, "bert."
+        #     for bge-m3. It says what the model could do, not what it is
+        #     configured to do.
+        # The runtime value wins when present: a model that reports an 8192
+        # capability but runs at 4096 truncates at 4096.
+        runtime_ctx = _parse_num_ctx(data.get("parameters"))
+        capability_ctx = _capability_ctx(data.get("model_info"))
+        ctx = runtime_ctx if runtime_ctx is not None else capability_ctx
         if ctx is None:
-            # Some Ollama versions embed num_ctx in the "details" block.
             # We can't guarantee a key across all versions — skip the check.
             logger.debug(
                 "embed preflight: could not read num_ctx from /api/show for model=%s "
@@ -188,12 +244,17 @@ def check_model_context(
 
         ctx_int = int(ctx)
         if ctx_int < min_ctx:
+            capability_note = (
+                " (the model itself supports %d)" % capability_ctx
+                if capability_ctx is not None and capability_ctx != ctx_int
+                else ""
+            )
             logger.warning(
                 "embed preflight: model=%s has num_ctx=%d which is below the "
-                "recommended minimum of %d. Inputs longer than %d tokens will "
+                "recommended minimum of %d%s. Inputs longer than %d tokens will "
                 "silently fail or be truncated. Fix: create a custom Ollama "
                 "modelfile with 'PARAMETER num_ctx %d' and rebuild the model.",
-                model, ctx_int, min_ctx, ctx_int, min_ctx,
+                model, ctx_int, min_ctx, capability_note, ctx_int, min_ctx,
             )
         else:
             logger.debug(
@@ -258,7 +319,17 @@ def _run_preflight_once() -> None:
     with _preflight_lock:
         if not _preflight_done:
             _preflight_done = True
-            check_model_context()
+            try:
+                check_model_context()
+            except Exception as e:  # noqa: BLE001 — preflight must never take an embed down
+                # check_model_context already swallows the expected failure
+                # classes; this is the floor under everything else. Preflight
+                # is best-effort by contract, so a defect in it must cost one
+                # log line, never the payload the caller is embedding.
+                logger.warning(
+                    "embed preflight: check raised and was ignored op=preflight error=%r",
+                    str(e),
+                )
 
 
 def _embed_local(text: str) -> list[float]:
