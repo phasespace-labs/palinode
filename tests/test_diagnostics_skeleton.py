@@ -65,14 +65,14 @@ class TestMemoryDirExistsPass:
 
         assert result.remediation is None
 
-    def test_linked_issue_present_on_pass(self, tmp_path: Path) -> None:
+    def test_linked_issue_is_none_on_pass(self, tmp_path: Path) -> None:
         memory_dir = tmp_path / "palinode"
         memory_dir.mkdir()
 
         ctx = _ctx(memory_dir)
         result = run_one(ctx, "memory_dir_exists")
 
-        assert result.linked_issue == "#190"
+        assert result.linked_issue is None
 
 
 # ---------------------------------------------------------------------------
