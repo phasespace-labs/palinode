@@ -84,6 +84,22 @@ def test_threshold_lets_either_arm_vouch_for_a_candidate():
     assert _order(out) == ["hit.md"]
 
 
+def test_vector_threshold_does_not_filter_fts_candidates():
+    weak_fts = _res("keyword.md", score=0.2, has_vector=True)
+
+    out = _run([], [weak_fts], threshold=0.5, fts_threshold=0.0)
+
+    assert _order(out) == ["keyword.md"]
+
+
+def test_fts_threshold_does_not_filter_vector_candidates():
+    weak_vec = _res("semantic.md", score=0.2, raw_score=0.2)
+
+    out = _run([weak_vec], [], threshold=0.0, fts_threshold=0.5)
+
+    assert _order(out) == ["semantic.md"]
+
+
 def test_threshold_floor_is_independent_of_rrf_rank():
     """A candidate at/above the per-arm floor survives even buried deep in
     RRF rank — the floor no longer collapses into an accidental rank cutoff.
