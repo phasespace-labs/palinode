@@ -171,11 +171,11 @@ class SearchConfig:
     """Matching index score cutoffs thresholds layouts.
 
     mcp_threshold / api_threshold moved from a post-RRF-fusion cutoff (a rank
-    artifact, see ranker.rank_hybrid) to a PER-ARM relevance floor — real
-    cosine similarity for the vector arm, normalized BM25 for the FTS arm,
-    applied before fusion. That changed what these two numbers mean, so both
-    were re-measured against real bge-m3 embeddings + real SQLite FTS5 (no
-    synthetic vectors), not carried over from the pre-fix values by default.
+    artifact, see ranker.rank_hybrid) to a pre-fusion vector relevance floor
+    measured as real cosine similarity. That changed what these two numbers
+    mean, so both were re-measured against real bge-m3 embeddings + real
+    SQLite FTS5 (no synthetic vectors), not carried over from the pre-fix
+    values by default. BM25 uses the independent ``fts_threshold`` below.
     Methodology (54 query/chunk pairs, three rounds, deliberately spanning
     the relevance range rather than stacking near-duplicates at cosine>=0.9):
     round 1 (n=30) full-sentence questions a user/agent would naturally ask;

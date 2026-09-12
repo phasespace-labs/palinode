@@ -125,8 +125,8 @@ def rank_hybrid(
     ``context_files`` set (from the entity index), and ``priority_weight`` (the
     ``store``-owned tuning knob); everything else is read from ``config``.
 
-    Stages, in order: per-arm relevance floor (``threshold``) → Reciprocal Rank
-    Fusion (RRF, k=60) → demand-decay re-rank (ADR-007, when
+    Stages, in order: arm-specific relevance floors → Reciprocal Rank Fusion
+    (RRF, k=60) → demand-decay re-rank (ADR-007, when
     ``config.decay.enabled``) → human-priority nudge → ambient context boost
     (ADR-008) → daily-file penalty → per-file dedup → date window → top_k.
     Date window runs BEFORE top_k, not after: filtering the already-truncated
@@ -135,14 +135,14 @@ def rank_hybrid(
     carrying ``score`` and ``raw_score``); recall + freshness are recorded by
     the caller on this output.
 
-    ``threshold`` filters ``vec_results`` by their own (real cosine) score and
-    ``fts_results`` by their own (normalized BM25) score, BEFORE fusion — a
-    candidate needs only one arm to clear the bar to be considered at all.
-    The one exemption: an FTS candidate carrying ``has_vector=False`` (the
-    store's mark for a chunk with no ``chunks_vec`` row) is kept regardless
-    of its BM25 score, because the keyword arm is the only arm it has (the
-    FTS-only reachability fix); it then enters fusion as an ordinary FTS
-    candidate. ``threshold`` is deliberately **not** applied to the
+    ``threshold`` filters ``vec_results`` by their real cosine score.
+    ``fts_threshold`` independently filters ``fts_results`` relative to the
+    best normalized BM25 score in the same slate. Both floors run BEFORE
+    fusion, so a candidate needs only one arm to admit it. The one exemption:
+    an FTS candidate carrying ``has_vector=False`` (the store's mark for a
+    chunk with no ``chunks_vec`` row) is kept regardless of its BM25 score,
+    because the keyword arm is its only retrieval path. ``threshold`` is
+    deliberately **not** applied to the
     fused/boosted score: a production
     measurement found that score to be a function of RRF rank, not
     relevance — two semantically unrelated queries against the same store
@@ -157,9 +157,8 @@ def rank_hybrid(
     (``palinode/consolidation/forget.py``, commit 69c7e5a): never threshold
     a post-RRF score.
     """
-    # Per-arm relevance floor — see the ``threshold`` paragraph above. Applied
-    # before RRF ever sees either list, so the two inputs it fuses already
-    # carry only candidates at least one retrieval method considers relevant.
+    # Arm-specific relevance floors — see the docstring above. Apply them before
+    # RRF so each retrieval method is judged only on its own score scale.
     if threshold > 0.0:
         vec_results = [
             r for r in vec_results

@@ -22,6 +22,11 @@ Run JSON and Markdown forms independently of the stable benchmark runner::
 
     python -m bench.abstention --out abstention.json
     python -m bench.abstention --format markdown --out abstention.md
+
+Compare the shipped relative BM25 floor with no BM25 filtering::
+
+    python -m bench.abstention --fts-threshold 0.4 --out relative.json
+    python -m bench.abstention --fts-threshold 0.0 --out unfiltered.json
 """
 from __future__ import annotations
 
@@ -292,6 +297,7 @@ def _measure(
     query_vectors: dict[str, list[float]],
     *,
     threshold: float,
+    fts_threshold: float,
     top_k: int,
     mode: str,
 ) -> dict[str, Any]:
@@ -305,6 +311,7 @@ def _measure(
             query_vectors[case.case_id],
             top_k=top_k,
             threshold=threshold,
+            fts_threshold=fts_threshold,
             use_fts=use_fts,
             record_access=False,
         )
@@ -320,12 +327,12 @@ def _measure(
 def _fts_candidate_stats(
     cases: Sequence[QueryCase], *, top_k: int
 ) -> dict[str, Any]:
-    """The BM25 candidate scores the per-arm floor is applied to.
+    """The BM25 candidate scores its independent relative floor is applied to.
 
     ``search_fts`` normalizes BM25 as ``min(abs(rank) / 25.0, 1.0)``, a scale
-    with no relation to the cosine similarity the vector arm is scored on.
-    One threshold is applied to both, so this records where BM25 actually
-    lands on that shared axis.
+    with no relation to the cosine similarity the vector arm is scored on. The
+    relative floor compares each score with the top score in the same slate, so
+    this records the absolute scores and corpus-size effects behind that ratio.
     """
     from palinode.core import store
 
@@ -465,6 +472,7 @@ def evaluate(
     seeds: Sequence[int] = (1337, 2026, 9001),
     size: int = 60,
     thresholds: Sequence[float] = (0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60),
+    fts_threshold: float | None = None,
     top_k: int = 5,
     cases: Sequence[QueryCase] = DEFAULT_QUERY_CASES,
 ) -> dict[str, Any]:
@@ -484,6 +492,13 @@ def evaluate(
         raise ValueError("top_k must be positive")
     if not thresholds or any(value < 0.0 or value > 1.0 for value in thresholds):
         raise ValueError("thresholds must contain values between 0.0 and 1.0")
+    resolved_fts_threshold = (
+        float(config.search.fts_threshold)
+        if fts_threshold is None
+        else float(fts_threshold)
+    )
+    if resolved_fts_threshold < 0.0:
+        raise ValueError("fts_threshold must be non-negative")
     dimensions = int(config.embeddings.primary.dimensions)
     query_vectors: dict[str, list[float]] = {}
     try:
@@ -522,6 +537,7 @@ def evaluate(
                             cases,
                             query_vectors,
                             threshold=threshold,
+                            fts_threshold=resolved_fts_threshold,
                             top_k=top_k,
                             mode=mode,
                         )
@@ -552,6 +568,7 @@ def evaluate(
             "size": size,
             "thresholds": list(thresholds),
             "top_k": top_k,
+            "fts_threshold": resolved_fts_threshold,
             "modes": list(MODES),
             "query_counts": query_kind_counts(cases),
             "production_defaults_changed": False,
@@ -590,6 +607,8 @@ def render_markdown(results: dict[str, Any]) -> str:
         f"- Embedder: {env['embedding_model']} ({env['embedding_dimensions']} dimensions)",
         f"- Corpus seeds: {', '.join(str(seed) for seed in params['seeds'])}",
         f"- Corpus size: {params['size']} files per seed; top-k: {params['top_k']}",
+        "- BM25 relative floor: "
+        f"{params.get('fts_threshold', 0.0):.2f} x top keyword score",
         "- Query protocol: "
         f"{sum(counts.get(kind, 0) for kind in ABSENT_KINDS)} no-answer queries "
         f"and {sum(counts.get(kind, 0) for kind in CONTROL_KINDS)} answer-present controls per seed",
@@ -627,10 +646,11 @@ def render_markdown(results: dict[str, Any]) -> str:
         [
             "## BM25 arm contribution",
             "",
-            "The two arms are scored on different axes and share one floor: real cosine "
-            "similarity for the vector arm, `min(abs(bm25) / 25.0, 1.0)` for BM25. This "
-            "table is what separates the arms; the counted metrics above cannot, because "
-            "they are blind to a reordering.",
+            "The two arms are scored on different axes: each table threshold is the real "
+            "cosine floor for the vector arm, while BM25 uses the independent relative "
+            f"`fts_threshold` ({params.get('fts_threshold', 0.0):.2f} x the best keyword "
+            "score in that result set). This table is what separates the arms; the counted "
+            "metrics above cannot, because they are blind to a reordering.",
             "",
             "| Threshold | Cases where hybrid differs from vector | Reordered only | Membership changed | Results from BM25 alone |",
             "|---:|---:|---:|---:|---:|",
@@ -698,6 +718,14 @@ def main(argv: list[str] | None = None) -> int:
         default=(0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60),
     )
     parser.add_argument("--top-k", type=int, default=5)
+    parser.add_argument(
+        "--fts-threshold",
+        type=float,
+        help=(
+            "BM25 floor as a fraction of the best keyword score "
+            "(default: configured search.fts_threshold)"
+        ),
+    )
     parser.add_argument("--format", choices=("json", "markdown"), default="json")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
@@ -707,6 +735,7 @@ def main(argv: list[str] | None = None) -> int:
             seeds=args.seeds,
             size=args.size,
             thresholds=args.thresholds,
+            fts_threshold=args.fts_threshold,
             top_k=args.top_k,
         )
     except (RuntimeError, ValueError) as exc:

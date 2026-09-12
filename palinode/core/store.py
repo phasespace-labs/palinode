@@ -1768,7 +1768,7 @@ def search_hybrid(
     # Get vector candidates. record_access=False: search_hybrid records recall
     # on its final merged hit set, not on these candidates. threshold=0.0 here
     # is deliberate: this is a wide-net candidate fetch — rank_hybrid applies
-    # the caller's real `threshold` itself, per-arm, before fusion (see its
+    # the caller's real vector `threshold` itself before fusion (see its
     # docstring).
     vec_results = search(query_embedding, category=category, top_k=top_k * 2, threshold=0.0,
                          record_access=False, kind_exclude_list=kind_exclude_list)
@@ -1811,7 +1811,7 @@ def search_hybrid(
             for row in get_entity_files(entity):
                 context_files.add(row["file_path"])
 
-    # Fuse + re-rank (threshold → RRF → decay → priority → context → daily →
+    # Fuse + re-rank (arm floors → RRF → decay → priority → context → daily →
     # dedup → top_k → date) in the pure ranker. priority_weight is read from
     # this module so patch.object(store, "_PRIORITY_RANK_WEIGHT", ...) still
     # tunes ordering.
