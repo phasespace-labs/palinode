@@ -33,8 +33,6 @@ from pathlib import Path
 from palinode.diagnostics.registry import register
 from palinode.diagnostics.types import CheckResult, DoctorContext
 
-_LINKED_ISSUE = "#371"
-
 
 @register(tags=("fast",))
 def recall_write_health(ctx: DoctorContext) -> CheckResult:
@@ -48,7 +46,6 @@ def recall_write_health(ctx: DoctorContext) -> CheckResult:
             passed=True,
             message="DB file does not exist — skipping recall-write health check.",
             remediation=None,
-            linked_issue=_LINKED_ISSUE,
         )
 
     try:
@@ -63,7 +60,6 @@ def recall_write_health(ctx: DoctorContext) -> CheckResult:
                 "Verify db_path in config and that palinode-api has been started "
                 "at least once to create the DB."
             ),
-            linked_issue=_LINKED_ISSUE,
         )
 
     try:
@@ -89,7 +85,6 @@ def recall_write_health(ctx: DoctorContext) -> CheckResult:
                 "yet initialised. Start palinode-api once to create the schema."
             ),
             remediation=None,
-            linked_issue=_LINKED_ISSUE,
         )
     finally:
         con.close()
@@ -104,7 +99,6 @@ def recall_write_health(ctx: DoctorContext) -> CheckResult:
             passed=True,
             message="DB has no chunks yet — nothing to recall.",
             remediation=None,
-            linked_issue=_LINKED_ISSUE,
         )
 
     if max_recall == 0 and recalled_rows == 0:
@@ -123,9 +117,8 @@ def recall_write_health(ctx: DoctorContext) -> CheckResult:
                 "  palinode search 'any topic you have memories about'\n"
                 "  palinode doctor\n"
                 "If recall_count is still 0 after a search that returned hits, "
-                "the store write-back is broken (see #371)."
+                "the store write-back is broken."
             ),
-            linked_issue=_LINKED_ISSUE,
         )
 
     # ADR-007 §6.6 importance-spread signal. Recall metadata is being written;
@@ -156,5 +149,4 @@ def recall_write_health(ctx: DoctorContext) -> CheckResult:
             f"chunks recalled, MAX(recall_count)={max_recall}." + spread
         ),
         remediation=None,
-        linked_issue=_LINKED_ISSUE,
     )

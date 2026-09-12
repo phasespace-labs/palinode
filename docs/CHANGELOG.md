@@ -10,6 +10,14 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- **Diagnostic check results no longer cite unfollowable private issue references ([#205](https://github.com/phasespace-labs/palinode/issues/205)).**
+  `git_commit_ready`, `memory_dir_exists`, and `recall_write_health` carried bare `#NNN`
+  references in their `linked_issue` fields (and in `recall_write_health`'s remediation
+  message) that either pointed at non-existent numbers or resolved to unrelated public
+  issues. These have been cleared to `None` and the remediation message updated. A new
+  AST-based test guard (`test_no_issue_refs_in_diagnostics_strings`) prevents bare issue
+  numbers from being reintroduced into string literals across `palinode/diagnostics/`.
+
 ### Removed
 
 ### Security
