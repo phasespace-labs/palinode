@@ -136,7 +136,10 @@ mkdir -p ~/.palinode && cd ~/.palinode && git init
 cp ~/palinode-src/palinode.config.yaml.example palinode.config.yaml
 # memory_dir stays commented out in the copied config → it inherits PALINODE_DIR below
 
-# 3. Start the services (each in its own terminal — or as a service, next section)
+# 3. Start the services — one command, or each in its own terminal
+PALINODE_DIR=~/.palinode palinode start       # API + watcher from one foreground command
+
+# ...or run them separately (separate logs — or as a service, next section)
 PALINODE_DIR=~/.palinode palinode-api        # REST API on :6340
 PALINODE_DIR=~/.palinode palinode-watcher     # auto-indexes on file save
 
