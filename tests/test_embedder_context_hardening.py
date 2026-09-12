@@ -26,6 +26,7 @@ import pytest
 from palinode.core import embedder
 from palinode.core.embedder import (
     EmbeddingContextError,
+    EmbeddingInputError,
     EmbeddingUnavailable,
     _is_ctx_overflow_message,
     check_model_context,
@@ -39,6 +40,15 @@ def _client_with_embed(*, embed_return=None, embed_side_effect=None):
         fake.embed.side_effect = embed_side_effect
     else:
         fake.embed.return_value = embed_return
+    return patch("palinode.core.embedder.get_ollama_client", return_value=fake)
+
+
+def _client_with_embed_many(*, embed_return=None, embed_side_effect=None):
+    fake = MagicMock(name="OllamaClient")
+    if embed_side_effect is not None:
+        fake.embed_many.side_effect = embed_side_effect
+    else:
+        fake.embed_many.return_value = embed_return
     return patch("palinode.core.embedder.get_ollama_client", return_value=fake)
 
 
@@ -122,6 +132,33 @@ def test_embed_public_propagates_embedding_unavailable():
             embedder.embed("test text")
 
 
+def test_embed_many_public_returns_ordered_batch():
+    expected = [[0.1, 0.2], [0.3, 0.4]]
+    with patch("palinode.core.embedder._run_preflight_once"), \
+            _client_with_embed_many(embed_return=expected):
+        assert embedder.embed_many(["alpha", "beta"]) == expected
+
+
+def test_embed_many_propagates_typed_input_error():
+    error = EmbeddingInputError(
+        model="bge-m3", text_len=9, ollama_message="unsupported value: NaN"
+    )
+    with patch("palinode.core.embedder._run_preflight_once"), \
+            _client_with_embed_many(embed_side_effect=error):
+        with pytest.raises(EmbeddingInputError):
+            embedder.embed_many(["alpha", "beta"])
+
+
+def test_embed_many_wraps_backend_error_with_aggregate_length():
+    error = OllamaUnreachable("offline", role="embed")
+    with patch("palinode.core.embedder._run_preflight_once"), \
+            _client_with_embed_many(embed_side_effect=error):
+        with pytest.raises(EmbeddingUnavailable) as exc_info:
+            embedder.embed_many(["alpha", "beta"])
+    assert exc_info.value.text_len == len("alpha") + len("beta")
+    assert exc_info.value.cause == "offline"
+
+
 # ---------------------------------------------------------------------------
 # check_model_context — preflight ctx check (now via client.show)
 # ---------------------------------------------------------------------------
@@ -182,3 +219,79 @@ def test_preflight_runs_at_most_once_per_process(monkeypatch):
         emb_mod._embed_local("call 3")
 
     assert len(call_log) == 1
+
+
+# ---------------------------------------------------------------------------
+# check_model_context — the live /api/show shape (parameters is a str; bge-m3
+# reports bert.context_length, not llama.context_length)
+# ---------------------------------------------------------------------------
+
+
+_LIVE_BGE_M3_SHOW = {
+    "model_info": {"bert.context_length": 8192, "llama.context_length": None},
+    "parameters": "num_ctx                        4096",
+}
+
+
+def test_preflight_parses_parameters_string_and_runtime_wins(caplog):
+    """The live shape: runtime num_ctx 4096 (a string field) beats the 8192 capability."""
+    with caplog.at_level(logging.WARNING, logger="palinode.core.embedder"):
+        with _client_with_show(show_return=_LIVE_BGE_M3_SHOW):
+            check_model_context(min_ctx=8192)  # must not raise
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings, "runtime num_ctx below minimum must warn"
+    assert "num_ctx=4096" in warnings[0].message
+    assert "supports 8192" in warnings[0].message
+
+
+def test_preflight_uses_bert_capability_when_no_parameters(caplog):
+    with caplog.at_level(logging.WARNING, logger="palinode.core.embedder"):
+        with _client_with_show(show_return={"model_info": {"bert.context_length": 8192}}):
+            check_model_context(min_ctx=8192)
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+
+
+def test_preflight_accepts_legacy_parameters_mapping(caplog):
+    with caplog.at_level(logging.WARNING, logger="palinode.core.embedder"):
+        with _client_with_show(show_return={"model_info": {}, "parameters": {"num_ctx": 2048}}):
+            check_model_context(min_ctx=8192)
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings and "num_ctx=2048" in warnings[0].message
+
+
+def test_preflight_runtime_wins_over_llama_capability(caplog):
+    with caplog.at_level(logging.WARNING, logger="palinode.core.embedder"):
+        with _client_with_show(show_return={
+            "model_info": {"llama.context_length": 8192},
+            "parameters": "temperature 0.1\nnum_ctx 4096\n",
+        }):
+            check_model_context(min_ctx=8192)
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings and "num_ctx=4096" in warnings[0].message
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    ["", "stop <|im_end|>", "num_ctx notanumber", 4096, ["num_ctx", "4096"]],
+)
+def test_parse_num_ctx_returns_none_on_unusable_input(parameters):
+    import palinode.core.embedder as emb_mod
+
+    assert emb_mod._parse_num_ctx(parameters) is None
+
+
+def test_preflight_defect_cannot_take_down_an_embed(monkeypatch, caplog):
+    """A raise inside the preflight costs one WARNING, never the caller's payload."""
+    import palinode.core.embedder as emb_mod
+
+    monkeypatch.setattr(emb_mod, "_preflight_done", False)
+
+    def _boom(*a, **k):
+        raise AttributeError("'str' object has no attribute 'get'")
+
+    monkeypatch.setattr(emb_mod, "check_model_context", _boom)
+    with caplog.at_level(logging.WARNING, logger="palinode.core.embedder"):
+        with _client_with_embed(embed_return=[0.1] * 10):
+            vec = emb_mod._embed_local("first embed of the process")
+    assert vec, "the first embed must still return a vector"
+    assert any("preflight" in r.message and "ignored" in r.message for r in caplog.records)

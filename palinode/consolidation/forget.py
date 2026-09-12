@@ -52,12 +52,40 @@ establishing evidence while dropping template-similar unrelated requests
 restatements — measured, not assumed — which
 is exactly why the retained request memory is load-bearing: it is the safety
 net for what resolution misses.
+
+A REQUEST RESOLVES ONLY WHAT EXISTED WHEN IT WAS MADE. The same request text
+reaches the save path more than once — the SessionEnd floor hook re-captures
+a transcript the user already saved a message from, a session-end summary
+lands on the same slug twice — and each arrival re-runs detection. The
+retraction path was already idempotent (``retracted_prefs``); the archival
+path was not: a re-capture would archive pref memories the user created
+*after* the original request, which nobody asked to forget. The boundary
+that closes this is a timestamp, not a new ledger: the request memory's own
+``created_at`` (preserved across re-saves of the same slug) and, when the
+same normalized pref already has an earlier retained request record, that
+record's ``created_at`` — the earliest wins. A candidate whose effective
+creation (``restored_at`` when it has been restored, else ``created_at``)
+is later than the boundary is not this request's to retire. Same-pref
+request records are never targets either; they are the tombstones.
+
+The corollary is the honest one: to forget a memory created after the
+request, make a new request. And to take a request back,
+:func:`withdraw_forget_request` restores what it archived, un-strikes what it
+retracted, and archives the request records themselves so they stop acting
+as tombstones and stop bounding. The limit of the timestamp rule follows
+from that: a same-pref request arriving *after* a withdrawal is a new
+request — its ``created_at`` postdates the restorations — whether the user
+re-asked or a floor-hook re-capture of the withdrawn transcript landed late.
+The two are indistinguishable by text; the save result names what it
+retired, and a second withdrawal reverses it.
 """
 from __future__ import annotations
 
+import glob
 import logging
 import os
 import re
+from datetime import UTC, date, datetime
 from typing import Any, Callable
 
 from palinode.core.config import config
@@ -177,10 +205,137 @@ def detect_forget_request(text: str) -> str | None:
     return None
 
 
+def _frontmatter_of(file_path: str) -> dict[str, Any]:
+    """The file's frontmatter, or ``{}`` when it cannot be read or parsed.
+
+    Fail-open by design at every call site: an unreadable candidate must not
+    be silently dropped from resolution over a transient read error, and a
+    missing timestamp must not bound anything.
+    """
+    import frontmatter
+
+    try:
+        with open(file_path, encoding="utf-8") as f:
+            return dict(frontmatter.load(f).metadata)
+    except (OSError, ValueError):
+        return {}
+
+
+def _coerce_ts(value: object) -> datetime | None:
+    """A frontmatter timestamp as an aware UTC datetime, or ``None``.
+
+    YAML hands back ``datetime``/``date`` objects for bare timestamps and
+    strings for anything it does not recognize; the save path writes ISO
+    strings. Naive values are taken as UTC, which is what the save path
+    stamps.
+    """
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, date):
+        dt = datetime(value.year, value.month, value.day)
+    elif isinstance(value, str) and value.strip():
+        try:
+            dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
+
+
+def effective_created_at(meta: dict[str, Any]) -> datetime | None:
+    """When this memory (re-)entered the live store.
+
+    ``restored_at`` when the memory has been brought back from archive, else
+    ``created_at``. A restored memory counts as created at its restoration:
+    the request that retired it must not retire it again on re-capture,
+    while a request made after the restore still can.
+    """
+    return _coerce_ts(meta.get("restored_at")) or _coerce_ts(meta.get("created_at"))
+
+
+def is_forget_request_for(content: str, normalized_pref: str) -> bool:
+    """True when ``content`` is itself a forget request for this pref."""
+    from palinode.consolidation.retract import normalize_pref
+
+    found = detect_forget_request(content)
+    return found is not None and normalize_pref(found) == normalized_pref
+
+
+def _search_pref(pref: str) -> list[dict[str, Any]]:
+    """Hybrid-search hits for the pref phrase, in rank order (never thresholded)."""
+    from palinode.core import embedder, store
+
+    emb = embedder.embed(pref)
+    return store.search_hybrid(
+        pref,
+        emb,
+        top_k=config.consolidation.forget.search_k,
+        threshold=0.0,  # RRF scores are rank artifacts; never threshold them
+        record_access=False,
+    )
+
+
+def find_forget_requests(
+    pref: str,
+    exclude_paths: set[str] | None = None,
+    hits: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Live request records for this pref: search hits that are themselves a
+    forget request for the same normalized phrase, minus ``exclude_paths``.
+
+    Search-bounded (``search_k``) and search-scoped: an archived record is
+    not live and does not appear, which is what lets a withdrawn request
+    stop bounding later ones. One entry per file, rank order.
+    """
+    from palinode.consolidation.retract import normalize_pref
+
+    norm = normalize_pref(pref)
+    exclude = exclude_paths or set()
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for h in hits if hits is not None else _search_pref(pref):
+        fp = h.get("file_path")
+        if not fp or fp in exclude or fp in seen:
+            continue
+        if is_forget_request_for(h.get("content") or "", norm):
+            seen.add(fp)
+            out.append(h)
+    return out
+
+
+def resolution_boundary(
+    request_path: str,
+    pref: str,
+    hits: list[dict[str, Any]] | None = None,
+) -> tuple[datetime | None, list[str]]:
+    """The instant this request may resolve up to, and the prior records that set it.
+
+    The earliest of the request memory's own ``created_at`` and every live
+    prior request record's ``created_at`` for the same pref. Returns
+    ``(boundary, prior_request_abs_paths)``; ``boundary`` is ``None`` only
+    when no timestamp is available anywhere, in which case resolution is
+    unbounded (today's behaviour).
+    """
+    stamps: list[datetime] = []
+    own = _coerce_ts(_frontmatter_of(request_path).get("created_at"))
+    if own is not None:
+        stamps.append(own)
+    prior: list[str] = []
+    for h in find_forget_requests(pref, exclude_paths={request_path}, hits=hits):
+        prior.append(h["file_path"])
+        ts = _coerce_ts(_frontmatter_of(h["file_path"]).get("created_at"))
+        if ts is not None:
+            stamps.append(ts)
+    return (min(stamps) if stamps else None), prior
+
+
 def resolve_forget_targets(
     pref: str,
     exclude_paths: set[str] | None = None,
     candidate_filter: Callable[[dict[str, Any]], bool] | None = None,
+    before: datetime | None = None,
+    hits: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Resolve a preference phrase to the stored memories that carry it.
 
@@ -197,27 +352,26 @@ def resolve_forget_targets(
     A file whose ``retracted_prefs`` frontmatter already records this pref is
     not a candidate: its mentions are already struck, and letting it
     re-resolve would burn ``max_targets`` slots on every later same-pref
-    request while genuinely new pref-carrying memories go unreached.
+    request while genuinely new pref-carrying memories go unreached. A file
+    that is itself a forget request for this pref is never a candidate: it
+    is a tombstone, and archiving it would destroy the retained record.
+
+    ``before`` is the resolution boundary (:func:`resolution_boundary`): a
+    candidate whose :func:`effective_created_at` is later is not this
+    request's to retire. ``None`` leaves resolution unbounded.
 
     ``candidate_filter`` is an optional predicate over result dicts; the
     replay-measurement harness uses it to restrict resolution to memories
-    that existed before the request, which at real save time is vacuously
-    true.
+    that existed before the request. ``hits`` lets a caller that already
+    searched for the pref reuse the result instead of embedding twice.
     """
     from palinode.consolidation.retract import normalize_pref
-    from palinode.core import embedder, store
 
     cfg = config.consolidation.forget
     pref_words = _content_words(pref)
     norm = normalize_pref(pref)
-    emb = embedder.embed(pref)
-    hits = store.search_hybrid(
-        pref,
-        emb,
-        top_k=cfg.search_k,
-        threshold=0.0,  # RRF scores are rank artifacts; never threshold them
-        record_access=False,
-    )
+    if hits is None:
+        hits = _search_pref(pref)
     exclude = exclude_paths or set()
     targets: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -227,33 +381,28 @@ def resolve_forget_targets(
             continue
         if candidate_filter is not None and not candidate_filter(h):
             continue
-        shared = _content_words(h.get("content") or "") & pref_words
+        content = h.get("content") or ""
+        shared = _content_words(content) & pref_words
         if len(shared) < cfg.min_shared_words:
             continue
-        if _already_retracted(fp, norm):
+        if is_forget_request_for(content, norm):
             seen.add(fp)
             continue
+        meta = _frontmatter_of(fp)
+        recorded = meta.get("retracted_prefs")
+        if isinstance(recorded, list) and norm in recorded:
+            seen.add(fp)
+            continue
+        if before is not None:
+            created = effective_created_at(meta)
+            if created is not None and created > before:
+                seen.add(fp)
+                continue
         seen.add(fp)
         targets.append(h)
         if len(targets) >= cfg.max_targets:
             break
     return targets
-
-
-def _already_retracted(file_path: str, normalized_pref: str) -> bool:
-    """True when the file's ``retracted_prefs`` record carries this pref.
-
-    Unreadable or unparseable frontmatter counts as not-retracted — resolution
-    must not silently drop a live candidate over a transient read error.
-    """
-    import frontmatter
-
-    try:
-        with open(file_path, encoding="utf-8") as f:
-            recorded = frontmatter.load(f).metadata.get("retracted_prefs")
-    except (OSError, ValueError):
-        return False
-    return isinstance(recorded, list) and normalized_pref in recorded
 
 
 def check_forget_on_save(file_path: str, content: str) -> dict[str, Any] | None:
@@ -267,7 +416,10 @@ def check_forget_on_save(file_path: str, content: str) -> dict[str, Any] | None:
     (mention-level strikes in dense shared memories, with counts — see
     :func:`pref_coverage` and :mod:`palinode.consolidation.retract`),
     ``skipped`` (low-coverage targets with no strikeable span), and
-    ``failed`` (op errors) — the last three only when non-empty.
+    ``failed`` (op errors) — the last three only when non-empty — plus
+    ``resolved_before`` (the resolution boundary, see
+    :func:`resolution_boundary`) and ``prior_requests`` (earlier live
+    records for the same pref that set it) when present.
 
     Never raises on a target that fails to archive or retract: each target is
     its own mutation, and a partial retraction plus the retained request
@@ -283,7 +435,11 @@ def check_forget_on_save(file_path: str, content: str) -> dict[str, Any] | None:
     base = os.path.realpath(config.memory_dir)
     request_rel = os.path.relpath(os.path.realpath(file_path), base)
     pref_words = _content_words(pref)
-    targets = resolve_forget_targets(pref, exclude_paths={file_path})
+    hits = _search_pref(pref)
+    boundary, prior = resolution_boundary(file_path, pref, hits=hits)
+    targets = resolve_forget_targets(
+        pref, exclude_paths={file_path}, before=boundary, hits=hits
+    )
 
     archived: list[str] = []
     retracted: list[dict[str, Any]] = []
@@ -390,10 +546,144 @@ def check_forget_on_save(file_path: str, content: str) -> dict[str, Any] | None:
         "pref": pref,
         "archived": archived,
     }
+    if boundary is not None:
+        result["resolved_before"] = boundary.isoformat()
+    if prior:
+        result["prior_requests"] = [
+            os.path.relpath(os.path.realpath(p), base) for p in prior
+        ]
     if retracted:
         result["retracted"] = retracted
     if skipped:
         result["skipped"] = skipped
+    if failed:
+        result["failed"] = failed
+    return result
+
+
+class NotAForgetRequest(ValueError):
+    """The named memory carries no explicit first-person forget request."""
+
+
+def _iter_memory_files(root: str):
+    for path in glob.glob(os.path.join(root, "**", "*.md"), recursive=True):
+        yield path
+
+
+def withdraw_forget_request(
+    file_path: str, reason: str | None = None
+) -> dict[str, Any]:
+    """Take a forget request back: undo what it did and retire its record.
+
+    ``file_path`` names the request memory. Its pref is re-detected from the
+    body, then every memory the pref's forget retired is reversed at the
+    granularity it was retired at — ``status: archived`` files whose
+    ``superseded_by`` points at this request (or at any other live request
+    record for the same pref) are restored via
+    :func:`palinode.consolidation.archive.restore_memory`, and files whose
+    ``retracted_prefs`` carries the pref are un-struck via
+    :func:`palinode.consolidation.retract.unretract_mentions`. Finally the
+    request records themselves — this one and the live same-pref records —
+    are archived, so they stop acting as tombstones and stop bounding later
+    requests. This is a composition, not a new primitive: each step is the
+    on-demand op with its own audit line and commit, and a step that fails
+    is reported in ``failed`` rather than aborting the rest.
+
+    Not the same as restoring one memory: a request may have retired several
+    memories at two granularities, and the request record must stop
+    standing as the visible retraction — restoring a target while the record
+    stays live leaves the store saying two things at once.
+
+    Raises:
+        ValueError: the path is malformed or escapes ``memory_dir``;
+            :class:`NotAForgetRequest` when the body has no request.
+        FileNotFoundError: no such memory file.
+    """
+    from palinode.consolidation.archive import (
+        ARCHIVED_STATUS,
+        archive_memory,
+        resolve_memory_ref,
+        restore_memory,
+    )
+    from palinode.consolidation.retract import normalize_pref, unretract_mentions
+
+    rel, abs_path = resolve_memory_ref(file_path)
+    if not os.path.isfile(abs_path):
+        raise FileNotFoundError(rel)
+    pref = detect_forget_request(_file_body(abs_path))
+    if pref is None:
+        raise NotAForgetRequest(rel)
+    norm = normalize_pref(pref)
+    base = os.path.realpath(config.memory_dir)
+
+    def _rel(p: str) -> str:
+        return os.path.relpath(os.path.realpath(p), base)
+
+    record_rels = [rel] + [
+        _rel(h["file_path"])
+        for h in find_forget_requests(pref, exclude_paths={abs_path})
+    ]
+    record_set = set(record_rels)
+    why = reason or f'forget request withdrawn: "{pref}"'
+
+    restored: list[str] = []
+    unretracted: list[dict[str, Any]] = []
+    failed: list[dict[str, str]] = []
+    for path in _iter_memory_files(config.memory_dir):
+        target_rel = _rel(path)
+        if target_rel in record_set:
+            continue
+        meta = _frontmatter_of(path)
+        if not meta:
+            continue
+        if (meta.get("status") == ARCHIVED_STATUS
+                and str(meta.get("superseded_by") or "") in record_set):
+            try:
+                out = restore_memory(target_rel, reason=why)
+                if out["status"] == "active":
+                    restored.append(target_rel)
+            except Exception:
+                logger.warning("withdraw: failed to restore %s (non-fatal)",
+                               target_rel, exc_info=True)
+                failed.append({"path": target_rel, "op": "restore"})
+        recorded = meta.get("retracted_prefs")
+        if isinstance(recorded, list) and norm in recorded:
+            try:
+                out = unretract_mentions(target_rel, pref, reason=why)
+                if out["status"] == "unretracted":
+                    unretracted.append(
+                        {"path": target_rel, "mentions": out["mentions"]}
+                    )
+            except Exception:
+                logger.warning("withdraw: failed to unretract %s (non-fatal)",
+                               target_rel, exc_info=True)
+                failed.append({"path": target_rel, "op": "unretract"})
+
+    records_archived: list[str] = []
+    for record_rel in record_rels:
+        try:
+            out = archive_memory(record_rel, reason=why)
+            if out["status"] in ("archived", "already_archived"):
+                records_archived.append(record_rel)
+        except Exception:
+            logger.warning("withdraw: failed to archive request record %s "
+                           "(non-fatal)", record_rel, exc_info=True)
+            failed.append({"path": record_rel, "op": "archive_record"})
+
+    logger.info(
+        "forget request withdrawn: %s pref=%r restored=%d unretracted=%d "
+        "records=%d", rel, pref, len(restored), len(unretracted),
+        len(records_archived),
+    )
+    result: dict[str, Any] = {
+        "file": rel,
+        "status": "withdrawn",
+        "pref": pref,
+        "reason": reason,
+        "restored": restored,
+        "unretracted": unretracted,
+        "requests_archived": records_archived,
+    }
     if failed:
         result["failed"] = failed
     return result

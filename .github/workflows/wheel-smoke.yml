@@ -19,11 +19,11 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 on:
+  # PR-only, matching ci.yml. A same-repo `feat/**` branch with an open PR
+  # fires BOTH `push` and `pull_request`, so keeping the push trigger ran this
+  # whole workflow twice per commit — the same duplication the duplicate-CI-workflow fix removed from
+  # ci.yml, just in a second file. Push-to-main is covered by main-ci.yml.
   pull_request:
-  push:
-    branches:
-      - "feat/**"
-      - "bugfix/**"
 
 jobs:
   wheel-smoke:
@@ -72,3 +72,125 @@ jobs:
         working-directory: /tmp
         run: |
           /tmp/wheel-venv/bin/python -c "import palinode.api.server; import palinode.mcp; import palinode.cli"
+
+      - name: The wheel carries the consolidation prompts
+        # Second instance of the v0.8.14 class, found while shipping the
+        # prompt-versioning doctor check: the *data* the runtime reads was not
+        # in the wheel. `specs/prompts/` sits at the source-tree root, so it
+        # entered no distribution; a PyPI install had no prompts at all,
+        # `palinode init` wrote none into the store, and the first
+        # `palinode consolidate` died on a bare open(). Every store that
+        # worked had been cloned from a checkout. An editable install cannot
+        # catch this either — the source tree is on the path, so specs/ is
+        # right there.
+        working-directory: /tmp
+        run: |
+          /tmp/wheel-venv/bin/python - <<'PY'
+          from palinode.prompts import iter_packaged_prompts, packaged_prompt_names
+
+          names = packaged_prompt_names()
+          assert len(names) == 9, names
+          for path in iter_packaged_prompts():
+              assert path.read_text(encoding="utf-8").strip(), path
+          print("packaged prompts:", ", ".join(names))
+          PY
+
+      - name: A fresh install can init a store and consolidate
+        # The acceptance path end to end, from the wheel only: init an empty
+        # store, save one memory through the CLI, run a dry consolidation.
+        # `PALINODE_ALLOW_FRESH_DB` is the first-run acknowledgement; the git
+        # init keeps auto-commit from warning on every save. No Ollama here, so
+        # the save reports `embedded: false` and stays keyword-searchable —
+        # that is the documented cold-embed path, not a failure.
+        working-directory: /tmp
+        env:
+          PALINODE_DIR: /tmp/smoke-store
+          PALINODE_ALLOW_FRESH_DB: "1"
+          PALINODE_API_ALLOW_UNAUTH: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/smoke-store/projects /tmp/smoke-project
+          git init -q /tmp/smoke-store
+
+          # A project document with one tagged fact, so the consolidation pass
+          # has somewhere to compact into and therefore actually reads the
+          # compaction prompt. Without it the group is skipped for having no
+          # target and the prompt is never opened — which is exactly how this
+          # smoke could pass while the bug was live.
+          cat > /tmp/smoke-store/projects/wheel-smoke-status.md <<'MD'
+          ---
+          id: project-wheel-smoke-status
+          category: project
+          status: active
+          ---
+
+          # Wheel Smoke
+
+          ## Current Work
+
+          - The smoke seeds one fact so compaction has something to read. <!-- fact:f1 -->
+          MD
+
+          /tmp/wheel-venv/bin/palinode init --dir /tmp/smoke-project --no-skill --no-slash
+
+          test -d /tmp/smoke-store/specs/prompts
+          ls -1 /tmp/smoke-store/specs/prompts
+
+          /tmp/wheel-venv/bin/palinode-api > /tmp/smoke-api.log 2>&1 &
+          for _ in $(seq 1 60); do
+            curl -sf http://127.0.0.1:6340/health > /dev/null && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:6340/health
+
+          /tmp/wheel-venv/bin/palinode save \
+            "A wheel-installed palinode provisions its prompts at init time." \
+            --type Insight --project wheel-smoke
+
+          # The line this whole step exists for: before the prompts shipped,
+          # this raised FileNotFoundError on the compaction prompt.
+          /tmp/wheel-venv/bin/palinode consolidate --dry-run --format json \
+            | tee /tmp/smoke-consolidate.json
+          grep -q '"dry_run": true' /tmp/smoke-consolidate.json
+          # 0 skipped == the group had a target, so the compaction path ran and
+          # the prompt was opened. The pass then fails at the LLM call (no
+          # model on a CI runner), which is not what this smoke is about — so
+          # assert on the prompt read, not on the run's status.
+          grep -q '"projects_skipped": 0' /tmp/smoke-consolidate.json
+
+          /tmp/wheel-venv/bin/palinode doctor --check prompts_current --json \
+            | tee /tmp/smoke-doctor.json
+          grep -q '"passed": true' /tmp/smoke-doctor.json
+
+          /tmp/wheel-venv/bin/palinode prompt sync --format json \
+            | tee /tmp/smoke-sync.json
+          grep -q '"unchanged": 9' /tmp/smoke-sync.json
+
+          ! grep -q "FileNotFoundError" /tmp/smoke-api.log
+          ! grep -q "No such file or directory" /tmp/smoke-api.log
+
+      - name: The store got the packaged prompts, and the fallback works
+        # Two halves of the resolution contract, asserted against the wheel:
+        # the store's copy is what a provisioned store reads (and it is the
+        # packaged bytes), and a store that has none still resolves — which is
+        # what keeps an un-inited store consolidating instead of raising.
+        working-directory: /tmp
+        run: |
+          /tmp/wheel-venv/bin/python - <<'PY'
+          from pathlib import Path
+
+          from palinode.prompts import packaged_prompts_dir, resolve_prompt
+
+          store = Path("/tmp/smoke-store")
+          for path in packaged_prompts_dir().glob("*.md"):
+              provisioned = store / "specs" / "prompts" / path.name
+              assert provisioned.is_file(), provisioned
+              assert provisioned.read_bytes() == path.read_bytes(), path.name
+
+          found, from_store = resolve_prompt("compaction.md", store)
+          assert from_store and found == store / "specs" / "prompts" / "compaction.md"
+
+          found, from_store = resolve_prompt("compaction.md", "/tmp/no-such-store")
+          assert not from_store and found == packaged_prompts_dir() / "compaction.md"
+          print("prompt resolution: store copy wins, packaged copy is the fallback")
+          PY

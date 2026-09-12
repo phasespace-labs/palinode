@@ -60,6 +60,14 @@ source venv/bin/activate
 python3 -m palinode.indexer.watcher
 ```
 
+### Open the local inspector
+
+Once the API is running, open <http://127.0.0.1:6340/ui/> to browse memory
+health, files, search results, Git changes, compaction history, quality queues,
+and per-memory provenance. The inspector is read-only and loopback-only; see
+the [Local provenance UI guide](UI.md) for its views, access boundary, and
+troubleshooting.
+
 ## Usage
 
 ### Create a memory file
@@ -171,6 +179,22 @@ Content here.
 └── PRD.md                  ← what Palinode is
 ```
 
+### Where the prompts come from
+
+`specs/prompts/*.md` are the prompts consolidation actually reads, and they are
+yours to edit — that is the point of keeping them in the store as files rather
+than in the code. `palinode init` writes them there from the copies that ship
+inside the package, and never overwrites one that already exists.
+
+Two consequences worth knowing:
+
+- A store that has no `specs/prompts/` still consolidates: the runner falls back
+  to the packaged copy and logs one line saying so. Run `palinode init` to get
+  editable copies.
+- A release that changes a prompt does not change *your* copy. `palinode doctor`
+  reports the gap (`prompts_current`) and `palinode prompt sync` closes it,
+  replacing only the files you have not edited.
+
 ## Ports & Services
 
 | Service | Port | Process |
@@ -199,7 +223,7 @@ This checks 18+ conditions — DB path validity, watcher connectivity, config co
 
 ## Obsidian integration
 
-Palinode stores everything as plain markdown with YAML frontmatter, so your Palinode directory is already a valid Obsidian vault. Run `palinode init --obsidian /path/to/vault` for an opinionated scaffold (graph defaults, daily-notes wiring, a starter `_index.md` MOC), then open the directory in Obsidian. You get the graph view, backlinks, and Bases on top of Palinode's hybrid search and consolidation — same files, two surfaces.
+Palinode stores everything as plain markdown with YAML frontmatter, so your Palinode directory is already a valid Obsidian vault. Run `palinode init --obsidian --dir /path/to/vault` for an opinionated scaffold (graph defaults, daily-notes wiring, a starter `_index.md` MOC), then open the directory in Obsidian. You get the graph view, backlinks, and Bases on top of Palinode's hybrid search and consolidation — same files, two surfaces.
 
 See [OBSIDIAN.md](OBSIDIAN.md) for the comprehensive guide: quickstart, the wiki-maintenance contract, the embedding tools the LLM calls (`palinode_dedup_suggest`, `palinode_orphan_repair`), and migration paths.
 ## Connecting your IDE via MCP

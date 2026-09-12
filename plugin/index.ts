@@ -30,6 +30,11 @@ const PALINODE_MEMORY_TYPES = [
   "ResearchRef",
   "ActionItem",
 ] as const;
+const PALINODE_TIERS = [
+  "abstract",
+  "overview",
+  "full",
+] as const;
 
 function literalUnion(
   values: readonly string[],
@@ -153,18 +158,76 @@ type PalinodeConfig = {
   recallProfileConfig?: Partial<RecallProfileConfig>;  // per-field override over the named preset
 };
 
-// Config schema follows standard OpenClaw plugin pattern
-const _palinodeConfigSchema = Type.Object({
-  palinodeApiUrl: Type.String({ default: DEFAULTS.palinodeApiUrl }),
-  palinodeDir: Type.String({ default: DEFAULTS.palinodeDir }),
-  promptsDir: Type.String({ default: DEFAULTS.promptsDir }),
-  autoCapture: Type.Boolean({ default: DEFAULTS.autoCapture }),
-  autoRecall: Type.Boolean({ default: DEFAULTS.autoRecall }),
-  recallProfile: Type.String({ default: DEFAULTS.recallProfile }),
-});
+/** `{ type: "string", enum: [...] }` — the JSON Schema shape OpenClaw's bundled manifests use. */
+function stringEnum<T extends string>(values: readonly T[], description: string) {
+  return Type.Unsafe<T>({ type: "string", enum: [...values], description });
+}
+
+const MID_TURN_MODES = ["none", "summary", "full"] as const;
+
+const RECALL_SOURCES = ["core", "semantic", "associative", "triggers"] as const satisfies readonly RecallSource[];
+
+const recallProfileConfigSchema = Type.Object(
+  {
+    sources: Type.Optional(Type.Array(stringEnum(RECALL_SOURCES, "Recall source"))),
+    coreMaxCharsPerFile: Type.Optional(Type.Number()),
+    coreBudget: Type.Optional(Type.Number()),
+    semanticLimit: Type.Optional(Type.Number()),
+    semanticMaxChars: Type.Optional(Type.Number()),
+    associativeLimit: Type.Optional(Type.Number()),
+    associativeMaxChars: Type.Optional(Type.Number()),
+    triggersLimit: Type.Optional(Type.Number()),
+    triggersMaxCharsEach: Type.Optional(Type.Number()),
+    typeAllow: Type.Optional(Type.Array(Type.String())),
+    typeDeny: Type.Optional(Type.Array(Type.String())),
+    totalBudget: Type.Optional(Type.Number()),
+  },
+  {
+    additionalProperties: false,
+    description: "Per-field overrides applied on top of the named recall preset",
+  },
+);
+
+/**
+ * The single source of truth for the plugin's config surface.
+ *
+ * `openclaw.plugin.json`'s `configSchema` is GENERATED from this object
+ * (`npm run manifest`; `test/manifest.test.ts` fails when the committed copy
+ * drifts). The OpenClaw host validates `plugins.entries.<id>.config` against
+ * the manifest copy with Ajv before the plugin module is even loaded, so a key
+ * accepted by `parse()` below but missing here is rejected at load time.
+ *
+ * Every property is optional and none carries a `default`: `parse()` owns the
+ * defaults, and `palinodeDir`'s default is resolved from `$HOME` at runtime —
+ * it cannot be a static string in a manifest, and the host applies manifest
+ * defaults (`useDefaults`) to the user's config.
+ */
+export const PALINODE_CONFIG_SCHEMA = Type.Object(
+  {
+    palinodeApiUrl: Type.Optional(Type.String({ description: "Palinode API server URL" })),
+    palinodeDir: Type.Optional(Type.String({ description: "Path to the Palinode memory directory" })),
+    promptsDir: Type.Optional(
+      Type.String({ description: "Path to extraction prompts, relative to palinodeDir" }),
+    ),
+    autoCapture: Type.Optional(
+      Type.Boolean({ description: "Append session summaries to daily/ at agent end" }),
+    ),
+    autoRecall: Type.Optional(
+      Type.Boolean({ description: "Inject core memory + semantic recall before each agent turn" }),
+    ),
+    midTurnMode: Type.Optional(
+      stringEnum(MID_TURN_MODES, "Core-memory injection on turns after the first: none, summary lines, or full files"),
+    ),
+    recallProfile: Type.Optional(
+      stringEnum(Object.keys(PROFILES) as RecallProfileName[], "Named recall preset"),
+    ),
+    recallProfileConfig: Type.Optional(recallProfileConfigSchema),
+  },
+  { additionalProperties: false },
+);
 
 const palinodeConfigSchema = {
-  ..._palinodeConfigSchema,
+  ...PALINODE_CONFIG_SCHEMA,
   parse(value: unknown): PalinodeConfig {
     const cfg = (value || {}) as Record<string, unknown>;
     const profileName = (typeof cfg.recallProfile === "string" && (cfg.recallProfile as string) in PROFILES)
@@ -304,6 +367,16 @@ async function palinodeFetch(
   return res.json();
 }
 
+/** Keep aligned with palinode/core/scoring.py; OpenClaw has not migrated to the shared core yet. */
+function describeMatch(result: { score?: number; raw_score?: number | null }): string {
+  const rank = (result.score ?? 0).toFixed(2);
+  if (result.raw_score === null) return `keyword match, rank ${rank}`;
+  if (typeof result.raw_score === "number") {
+    return `${Math.round(result.raw_score * 100)}% match`;
+  }
+  return `rank ${rank}`;
+}
+
 // ============================================================================
 // Plugin
 // ============================================================================
@@ -378,6 +451,14 @@ const palinodePlugin = {
                 "churn does not pollute results (ADR-015 §5).",
             }),
           ),
+          tier: Type.Optional(
+            literalUnion(PALINODE_TIERS, {
+              description:
+                "How much of each hit to return: abstract (~300 chars, summary " +
+                "first), overview (frontmatter + head of body), or full. Omit " +
+                "for the default snippet view.",
+            }),
+          ),
         }),
         async execute(_toolCallId: string, params: any) {
           try {
@@ -394,6 +475,7 @@ const palinodePlugin = {
             if (params.include_daily !== undefined) body.include_daily = params.include_daily;
             if (params.min_priority !== undefined) body.min_priority = params.min_priority;
             if (params.include_telemetry !== undefined) body.include_telemetry = params.include_telemetry;
+            if (params.tier !== undefined) body.tier = params.tier;
             const results = await palinodeFetch(
               cfg.palinodeApiUrl,
               "/search",
@@ -414,7 +496,7 @@ const palinodePlugin = {
             const text = results
               .map(
                 (r: any, i: number) =>
-                  `${i + 1}. [${r.category || "?"}] ${r.content.slice(0, 200)}${r.content.length > 200 ? "..." : ""} (score: ${(r.score * 100).toFixed(0)}%, file: ${path.basename(r.file_path)})`,
+                  `${i + 1}. [${r.category || "?"}] ${r.content.slice(0, 200)}${r.content.length > 200 ? "..." : ""} (${describeMatch(r)}, file: ${path.basename(r.file_path)})`,
               )
               .join("\n\n");
 

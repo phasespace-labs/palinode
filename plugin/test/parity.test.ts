@@ -10,6 +10,12 @@
  * param), the matching ``known_drift`` entry must be removed — this test
  * fails loudly when that hasn't happened, which is exactly the point.
  *
+ * ``surface_realizations`` is the other way a param can legitimately be
+ * absent: the surface exposes it as its own capability rather than as a
+ * parameter, permanently, so there is no issue to close.  No plugin entry
+ * exists today; the handling is here so the two suites keep reading the
+ * registry the same way if one is ever added.
+ *
  * The registry is loaded from ``plugin/parity-registry.json``, regenerated
  * before each ``npm test`` run by the ``pretest`` script invoking
  * ``scripts/dump-parity-registry.py``.  No checked-in artifact; the
@@ -54,6 +60,12 @@ interface DriftEntry {
   issue: number;
 }
 
+interface RealizationEntry {
+  surface: Surface;
+  param: string;
+  capability: string;
+}
+
 interface RegistryOperation {
   name: string;
   canonical_params: CanonicalParam[];
@@ -63,6 +75,7 @@ interface RegistryOperation {
   plugin_tool: string | null;
   exempt_surfaces: Surface[];
   known_drift: DriftEntry[];
+  surface_realizations: RealizationEntry[];
 }
 
 interface ParityRegistry {
@@ -172,6 +185,25 @@ describe("ADR-010 plugin parity", () => {
     }
     expect(bad).toEqual([]);
   });
+
+  it("surface_realizations entries reference real canonical params", () => {
+    // Mirrors the param half of
+    // test_surface_realizations_name_a_real_param_and_capability.  The
+    // capability half is Python-side: only that suite can introspect the
+    // live surfaces a realization can name.
+    const bad: string[] = [];
+    for (const op of registry.operations) {
+      const canonicalNames = new Set(op.canonical_params.map((cp) => cp.name));
+      for (const realization of op.surface_realizations ?? []) {
+        if (!canonicalNames.has(realization.param)) {
+          bad.push(
+            `${op.name}: surface_realizations[("${realization.surface}", "${realization.param}")]`,
+          );
+        }
+      }
+    }
+    expect(bad).toEqual([]);
+  });
 });
 
 // Build the case list at module scope so vitest can render one test per
@@ -180,6 +212,7 @@ function buildCases(): Array<{
   op: RegistryOperation;
   param: CanonicalParam;
   driftIssue: number | null;
+  realizedBy: string | null;
 }> {
   // Need to load the registry synchronously here (before beforeAll runs)
   // for vitest to enumerate test names at collection time.
@@ -188,6 +221,7 @@ function buildCases(): Array<{
     op: RegistryOperation;
     param: CanonicalParam;
     driftIssue: number | null;
+    realizedBy: string | null;
   }> = [];
   for (const op of reg.operations) {
     if (!op.plugin_tool) continue; // Only ops that target the plugin.
@@ -196,10 +230,14 @@ function buildCases(): Array<{
       const drift = op.known_drift.find(
         (d) => d.surface === "plugin" && d.param === param.name,
       );
+      const realization = (op.surface_realizations ?? []).find(
+        (r) => r.surface === "plugin" && r.param === param.name,
+      );
       cases.push({
         op,
         param,
         driftIssue: drift ? drift.issue : null,
+        realizedBy: realization ? realization.capability : null,
       });
     }
   }
@@ -218,7 +256,7 @@ describe("ADR-010 plugin canonical params", () => {
     return;
   }
 
-  for (const { op, param, driftIssue } of cases) {
+  for (const { op, param, driftIssue, realizedBy } of cases) {
     const caseId = `${op.name}/plugin/${param.name}`;
     it(caseId, () => {
       const tool = pluginTools.get(op.plugin_tool!);
@@ -236,6 +274,11 @@ describe("ADR-010 plugin canonical params", () => {
           );
         }
         // Drift is current and the param is missing as expected — passes.
+        return;
+      }
+
+      if (realizedBy !== null) {
+        // Not drift: the plugin exposes this param as its own capability.
         return;
       }
 

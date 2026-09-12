@@ -1,19 +1,114 @@
 {
   "id": "openclaw-palinode",
-  "name": "Palinode Memory System",
-  "version": "0.1.0",
-  "description": "Persistent memory — files as truth, vectors as search.",
+  "name": "Palinode Memory",
+  "version": "0.2.0",
+  "description": "Persistent memory — files as truth, vectors as search. Injects core memory, extracts from conversations.",
   "configSchema": {
-    "type": "object",
     "additionalProperties": false,
+    "type": "object",
     "properties": {
-      "palinodeApiUrl": { "type": "string" },
-      "palinodeDir": { "type": "string" },
-      "autoCapture": { "type": "boolean" },
-      "autoRecall": { "type": "boolean" },
-      "promptsDir": { "type": "string" }
-    },
-    "required": []
+      "palinodeApiUrl": {
+        "description": "Palinode API server URL",
+        "type": "string"
+      },
+      "palinodeDir": {
+        "description": "Path to the Palinode memory directory",
+        "type": "string"
+      },
+      "promptsDir": {
+        "description": "Path to extraction prompts, relative to palinodeDir",
+        "type": "string"
+      },
+      "autoCapture": {
+        "description": "Append session summaries to daily/ at agent end",
+        "type": "boolean"
+      },
+      "autoRecall": {
+        "description": "Inject core memory + semantic recall before each agent turn",
+        "type": "boolean"
+      },
+      "midTurnMode": {
+        "type": "string",
+        "enum": [
+          "none",
+          "summary",
+          "full"
+        ],
+        "description": "Core-memory injection on turns after the first: none, summary lines, or full files"
+      },
+      "recallProfile": {
+        "type": "string",
+        "enum": [
+          "coding",
+          "monitoring",
+          "investigation",
+          "writing",
+          "conversation",
+          "minimal",
+          "off"
+        ],
+        "description": "Named recall preset"
+      },
+      "recallProfileConfig": {
+        "additionalProperties": false,
+        "description": "Per-field overrides applied on top of the named recall preset",
+        "type": "object",
+        "properties": {
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "core",
+                "semantic",
+                "associative",
+                "triggers"
+              ],
+              "description": "Recall source"
+            }
+          },
+          "coreMaxCharsPerFile": {
+            "type": "number"
+          },
+          "coreBudget": {
+            "type": "number"
+          },
+          "semanticLimit": {
+            "type": "number"
+          },
+          "semanticMaxChars": {
+            "type": "number"
+          },
+          "associativeLimit": {
+            "type": "number"
+          },
+          "associativeMaxChars": {
+            "type": "number"
+          },
+          "triggersLimit": {
+            "type": "number"
+          },
+          "triggersMaxCharsEach": {
+            "type": "number"
+          },
+          "typeAllow": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "typeDeny": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "totalBudget": {
+            "type": "number"
+          }
+        }
+      }
+    }
   },
   "contracts": {
     "tools": [

@@ -23,9 +23,11 @@ import pytest
 
 from palinode.core.config import config
 from palinode.core.ollama_client import (
+    ChatCompletionText,
     CircuitBreaker,
     CircuitState,
     EmbeddingContextError,
+    EmbeddingInputError,
     OllamaCircuitOpen,
     OllamaClient,
     OllamaError,
@@ -505,6 +507,77 @@ def test_embed_unexpected_shape_exhausts_both_then_raises():
     assert paths == ["/api/embed", "/api/embeddings"]  # tried both on unexpected shape
 
 
+def test_embed_many_uses_one_ordered_batch_request(monkeypatch):
+    monkeypatch.setattr(config.embeddings.primary, "url", "http://embed-host:11434")
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json={"embeddings": [[1, 2], [3, 4]]})
+
+    client, _, _ = make_client(handler, retries=0)
+    assert client.embed_many(["alpha", "beta"]) == [[1.0, 2.0], [3.0, 4.0]]
+    assert requests == [{"model": config.embeddings.primary.model,
+                         "input": ["alpha", "beta"]}]
+
+
+def test_embed_many_empty_input_performs_no_request():
+    def handler(request):  # pragma: no cover - a request is the failure
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    client, _, _ = make_client(handler, retries=0)
+    assert client.embed_many([]) == []
+
+
+@pytest.mark.parametrize("body", [
+    {"embeddings": [[0.1, 0.2]]},  # partial response
+    {"embeddings": [[0.1, 0.2], []]},
+    {"embeddings": [[0.1, 0.2], ["not-a-number", 0.3]]},
+    {"embeddings": [[0.1, 0.2], [0.3]]},  # inconsistent dimensions
+    {"embedding": [0.1, 0.2]},  # scalar legacy shape is invalid for a batch
+])
+def test_embed_many_rejects_incomplete_or_malformed_whole_response(body):
+    calls = 0
+
+    def handler(request):
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json=body)
+
+    client, _, _ = make_client(handler, retries=0)
+    with pytest.raises(OllamaError, match="unexpected embed batch response shape"):
+        client.embed_many(["alpha", "beta"])
+    assert calls == 1
+
+
+def test_embed_many_context_overflow_reports_aggregate_input_length():
+    def handler(request):
+        return httpx.Response(200, json={"error": "prompt is too long for max context"})
+
+    client, _, _ = make_client(handler, retries=0)
+    with pytest.raises(EmbeddingContextError) as exc_info:
+        client.embed_many(["alpha", "beta"])
+    assert exc_info.value.text_len == len("alpha") + len("beta")
+
+
+def test_embed_many_input_error_is_typed_and_not_retried():
+    calls = 0
+
+    def handler(request):
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            500,
+            text="failed to encode response: json: unsupported value: NaN",
+        )
+
+    client, _, _ = make_client(handler, retries=3)
+    with pytest.raises(EmbeddingInputError) as exc_info:
+        client.embed_many(["alpha", "beta"])
+    assert exc_info.value.text_len == len("alpha") + len("beta")
+    assert calls == 1
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # chat_completions — OpenAI-compatible (consolidation + lint) (Phase 4)
 # ──────────────────────────────────────────────────────────────────────────
@@ -548,6 +621,74 @@ def test_chat_completions_timeout_raises_typed():
         )
 
 
+# ── why the model stopped ─────────────────────────────────────────────────
+# Truncation used to be invisible: a consolidation response cut off at
+# max_tokens came back as a bare str, parsed to zero operations, and was
+# reported as a clean "nothing to compact".
+
+
+def _chat(finish_reason=None, *, content="text", extra=None):
+    """A client whose one response carries ``finish_reason`` (or not)."""
+    choice = {"message": {"content": content}}
+    if finish_reason is not None:
+        choice["finish_reason"] = finish_reason
+    body = {"choices": [choice], **(extra or {})}
+
+    client, _, _ = make_client(lambda request: httpx.Response(200, json=body), retries=0)
+    return client.chat_completions(
+        [{"role": "user", "content": "hi"}], model="m", base_url="http://h:8000",
+    )
+
+
+def test_chat_completions_result_is_still_a_str():
+    """Backwards compatibility is the whole point of the str subclass."""
+    out = _chat("stop", content="verdict")
+
+    assert isinstance(out, str) and isinstance(out, ChatCompletionText)
+    assert out == "verdict" and out.upper() == "VERDICT"
+
+
+def test_finish_reason_length_is_truncated():
+    out = _chat("length")
+
+    assert out.finish_reason == "length"
+    assert out.truncated is True
+
+
+def test_finish_reason_stop_is_not_truncated():
+    out = _chat("stop")
+
+    assert out.finish_reason == "stop"
+    assert out.truncated is False
+
+
+def test_absent_finish_reason_is_not_truncated():
+    """A server that reports nothing yields None — "cannot tell", not "cut off"."""
+    out = _chat(None)
+
+    assert out.finish_reason is None
+    assert out.truncated is False
+
+
+def test_ollama_done_reason_is_read_when_no_finish_reason():
+    """Ollama puts the stop reason at the top level as ``done_reason``."""
+    out = _chat(None, extra={"done_reason": "length"})
+
+    assert out.finish_reason == "length"
+    assert out.truncated is True
+
+
+def test_max_tokens_spelling_also_counts_as_truncated():
+    """Shims and OpenAI-compatible servers spell the same condition differently."""
+    assert _chat("max_tokens").truncated is True
+    assert _chat("MAX_TOKENS").truncated is True
+
+
+def test_non_str_content_passes_through_unwrapped():
+    """A null content is a caller-visible bug; wrapping it would make it "None"."""
+    assert _chat("stop", content=None) is None
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # ping — liveness probe, bypasses the circuit breaker (Phase 5)
 # ──────────────────────────────────────────────────────────────────────────
@@ -581,3 +722,82 @@ def test_ping_does_not_open_or_consult_circuit():
     assert client.circuit_state(OllamaRole.EMBED) is CircuitState.CLOSED
     # And pings aren't recorded in metrics.
     assert client.metrics().get("embed", {}).get("count_5m", 0) == 0
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# embed — NaN rejection retried once on the CPU path (dev issue 1269)
+# ──────────────────────────────────────────────────────────────────────────
+
+_NAN_BODY = "failed to encode response: json: unsupported value: NaN"
+
+
+def _nan_then_cpu_ok(record: list[dict]):
+    """GPU-path request → 500 NaN; a request carrying options.num_gpu 0 → vector."""
+    def handler(request):
+        payload = json.loads(request.content)
+        record.append(payload)
+        if payload.get("options", {}).get("num_gpu") == 0:
+            return httpx.Response(200, json={"embeddings": [[0.1, 0.2, 0.3]]})
+        return httpx.Response(500, text=_NAN_BODY)
+    return handler
+
+
+def test_embed_nan_rejection_is_retried_once_on_cpu_with_keep_alive_zero():
+    seen: list[dict] = []
+    client, _, sleeps = make_client(_nan_then_cpu_ok(seen), retries=3)
+    assert client.embed("Dana reads Slack in the morning") == [0.1, 0.2, 0.3]
+    assert len(seen) == 2, "one GPU attempt, one CPU retry — no backoff retries in between"
+    assert sleeps == []
+    gpu, cpu = seen
+    assert "options" not in gpu
+    assert cpu["options"] == {"num_gpu": 0}
+    # Load-bearing: without keep_alive 0 the CPU-resident instance stays pinned
+    # under a long server-side keep_alive and every later caller embeds on CPU.
+    assert cpu["keep_alive"] == 0
+    assert cpu["input"] == gpu["input"] and cpu["model"] == gpu["model"]
+
+
+def test_embed_nan_on_cpu_too_raises_typed_error_after_exactly_two_calls():
+    calls = 0
+
+    def handler(request):
+        nonlocal calls
+        calls += 1
+        return httpx.Response(500, text=_NAN_BODY)
+
+    client, _, _ = make_client(handler, retries=3)
+    with pytest.raises(EmbeddingInputError) as exc_info:
+        client.embed("poison")
+    assert calls == 2
+    assert "NaN" in exc_info.value.ollama_message
+
+
+def test_embed_nan_cpu_retry_can_be_disabled(monkeypatch):
+    monkeypatch.setattr(config.embeddings.primary, "nan_cpu_retry", False)
+    seen: list[dict] = []
+    client, _, _ = make_client(_nan_then_cpu_ok(seen), retries=3)
+    with pytest.raises(EmbeddingInputError):
+        client.embed("poison")
+    assert len(seen) == 1
+
+
+def test_embed_cpu_retry_is_not_used_for_non_nan_input_errors():
+    # A 500 that is an input error for another reason must not trigger the CPU path.
+    seen: list[dict] = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(500, text="input is too large for this model")
+
+    client, _, _ = make_client(handler, retries=0)
+    with pytest.raises((EmbeddingInputError, OllamaError)):
+        client.embed("x" * 10)
+    assert all("options" not in p for p in seen)
+
+
+def test_nan_message_detector_is_word_bounded():
+    from palinode.core.ollama_client import _is_nan_message
+
+    assert _is_nan_message(_NAN_BODY)
+    assert _is_nan_message("value: nan")
+    assert not _is_nan_message("financial maintenance banana")

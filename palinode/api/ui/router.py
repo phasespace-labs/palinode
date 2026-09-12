@@ -166,6 +166,7 @@ def _page_context() -> dict[str, Any]:
     orphaned_count = _browsable_lint_files(lint, "orphaned_files")
     missing_descriptions = _browsable_lint_files(lint, "missing_descriptions")
     contradictions = len(lint.get("contradictions", []))  # entity-keyed, not file
+    stale_backing = _browsable_lint_files(lint, "stale_backing")
 
     return {
         "total_memories": total_memories,
@@ -182,7 +183,7 @@ def _page_context() -> dict[str, Any]:
         # all-facts missing-extraction-metadata bucket so the badge reflects
         # real problems, not the universal not-yet-captured placeholder).
         "nav_quality_count": stale_count + orphaned_count
-        + missing_descriptions + contradictions,
+        + missing_descriptions + contradictions + stale_backing,
     }
 
 

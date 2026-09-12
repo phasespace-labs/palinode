@@ -293,12 +293,14 @@ def save_memory(
             already pushes explicitly afterward.
 
     Returns:
-        A dict carrying ``file_path``, ``rel_path``, ``id``, the index health
-        flags (``indexed``/``embedded``/``indexed_vec``/``indexed_fts``), and
+        A dict carrying ``file_path``, ``rel_path``, ``id``, ``save_outcome``
+        (one of ``created``, ``resaved``, ``disambiguated``, or ``replaced``),
+        ``disambiguated_from``, the index health flags
+        (``indexed``/``embedded``/``indexed_vec``/``indexed_fts``), and
         ``git_committed`` — plus ``git_error`` (why the auto-commit did not
         land: not a repo, missing identity, lock held), ``index_error``,
-        ``description_pending``, ``summary_pending``, ``write_time_check``
-        and ``forget`` when they apply.
+        ``description_pending``, ``summary_pending``, ``write_time_check`` and
+        ``forget`` when they apply.
 
     Raises:
         SaveValidationError: any input rejection — malformed envelope, unknown
@@ -352,6 +354,8 @@ def save_memory(
     # policy ("repalce") must not quietly fall back to append and leave a
     # living document mis-declared.
     from palinode.core.parser import (
+        AMR_SPEC_VERSION as _AMR_SPEC_VERSION,
+        VALID_AMR_VERSIONS as _VALID_AMR_VERSIONS,
         VALID_EPISTEMICS as _VALID_EPISTEMICS,
         VALID_STATUSES as _VALID_STATUSES,
         VALID_UPDATE_POLICIES as _VALID_UPDATE_POLICIES,
@@ -455,16 +459,72 @@ def save_memory(
             f"expected one of {list(_VALID_EPISTEMICS)}"
         )
 
+    # AMR §4.1: every record this path writes declares the spec version it
+    # conforms to. The value is authoritative — written from the constant, not
+    # the caller — but a caller-supplied value tunneled through `metadata` is
+    # still checked: an unrecognized version is rejected rather than guessed at
+    # or silently overwritten, so a record claiming "0.9" cannot be laundered
+    # into a "0.1" declaration by the save.
+    _meta_amr = None
+    if metadata and isinstance(metadata, dict):
+        _meta_amr = metadata.get("auditable_memory")
+    if _meta_amr is not None and str(_meta_amr) not in _VALID_AMR_VERSIONS:
+        raise SaveValidationError(
+            f"unrecognized auditable_memory version {_meta_amr!r}; "
+            f"this implementation writes {_AMR_SPEC_VERSION!r}"
+        )
+
+    # AMR §4.6 / conformance l1-011: confidence is a number in [0.0, 1.0].
+    # Resolved param-or-metadata like epistemic (the param wins) so a value
+    # tunneled through `metadata` cannot land unvalidated. Rejected, not
+    # clamped — a clamped 1.4 would read as certainty the caller never stated.
+    _meta_confidence = None
+    if metadata and isinstance(metadata, dict):
+        _meta_confidence = metadata.get("confidence")
+    _effective_confidence = (
+        confidence if confidence is not None else _meta_confidence
+    )
+    if _effective_confidence is not None:
+        if (
+            isinstance(_effective_confidence, bool)
+            or not isinstance(_effective_confidence, (int, float))
+            or not (0.0 <= float(_effective_confidence) <= 1.0)
+        ):
+            raise SaveValidationError(
+                f"confidence out of range: {_effective_confidence!r}; "
+                "expected a number in [0.0, 1.0]"
+            )
+        _effective_confidence = float(_effective_confidence)
+
     # Security scan: reject prompt injection and exfiltration attempts
     is_safe, reason = store.scan_memory_content(content)
     if not is_safe:
         raise SaveValidationError(f"Security scan failed: {reason}")
 
+    original_slug = slug
     file_path = os.path.join(config.palinode_dir, category, f"{slug}.md")
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
     if slug_was_derived:
         slug, file_path = _disambiguate_derived_slug(slug, file_path, content)
+
+    # Classify the save after derived-slug resolution but before the write.
+    # Looking only at the base path would mislabel a repeat save of an existing
+    # suffixed memory as disambiguated; the selected target's prior existence
+    # is what separates a normal re-save from creation at a new suffix.
+    target_existed = os.path.exists(file_path)
+    if slug_was_derived:
+        if target_existed:
+            save_outcome = "resaved"
+        elif slug != original_slug:
+            save_outcome = "disambiguated"
+        else:
+            save_outcome = "created"
+    else:
+        save_outcome = "replaced" if target_existed else "created"
+    disambiguated_from = (
+        original_slug if save_outcome == "disambiguated" else None
+    )
 
     content_hash = hashlib.sha256(content.encode()).hexdigest()
 
@@ -537,6 +597,11 @@ def save_memory(
                 exc,
             )
     frontmatter_dict = {
+        # AMR §4.1: the conformance declaration, REQUIRED on every record
+        # written under the spec. Constant-sourced (validated above if the
+        # caller also supplied one) so the field is never absent and never
+        # a value this implementation does not actually implement.
+        "auditable_memory": _AMR_SPEC_VERSION,
         "id": f"{category}-{slug}",
         "category": category,
         "type": type,
@@ -560,7 +625,10 @@ def save_memory(
         # link fields `contradicts`/`backed_by` are each resolved +
         # validated above/below and written from their own normalized values, so a
         # malformed value tunneled through metadata still gets a clean 400.
-        _verbatim_excluded = {"update_policy", "epistemic", "contradicts", "backed_by", "claims"}
+        _verbatim_excluded = {
+            "update_policy", "epistemic", "contradicts", "backed_by", "claims",
+            "auditable_memory", "confidence",
+        }
         frontmatter_dict.update(
             {k: v for k, v in metadata.items() if k not in _verbatim_excluded}
         )
@@ -575,8 +643,8 @@ def save_memory(
         raise SaveValidationError(_expiry_err)
     if core is not None:
         frontmatter_dict["core"] = core
-    if confidence is not None:
-        frontmatter_dict["confidence"] = confidence
+    if _effective_confidence is not None:
+        frontmatter_dict["confidence"] = _effective_confidence
     if priority is not None:
         frontmatter_dict["priority"] = priority
     # (ADR-018): persist the epistemic marker only when one is in effect —
@@ -752,8 +820,9 @@ def save_memory(
             logger.warning("reciprocal contradicts back-link skipped: %s", exc)
 
     logger.info(
-        "Saved memory op=save file_path=%s id=%s category=%s git_committed=%s%s",
-        file_path, frontmatter_dict["id"], category, git_committed,
+        "Saved memory op=save file_path=%s id=%s category=%s "
+        "save_outcome=%s git_committed=%s%s",
+        file_path, frontmatter_dict["id"], category, save_outcome, git_committed,
         f" git_error={git_error!r}" if git_error else "",
     )
 
@@ -798,6 +867,8 @@ def save_memory(
         "file_path": file_path,
         "rel_path": to_rel_path(file_path),
         "id": frontmatter_dict["id"],
+        "save_outcome": save_outcome,
+        "disambiguated_from": disambiguated_from,
         "indexed": indexed,
         "embedded": indexed,
         # Per-index health flags. vec/FTS failures are non-fatal

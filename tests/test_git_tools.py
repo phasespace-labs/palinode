@@ -39,13 +39,14 @@ def test_rollback_creates_new_commit():
 
 def test_history_returns_structured_data():
     with patch("palinode.core.git_tools._run_git") as mock_run:
-        # First call: git log
+        # One call now: the log carries its own --shortstat summary.
         log_res = MagicMock()
-        log_res.stdout = "abc1234|2026-04-10T12:00:00+00:00|palinode: update file\n"
-        # Second call: git diff --stat
-        stat_res = MagicMock()
-        stat_res.stdout = " some/file.md | 3 ++-\n 1 file changed, 2 insertions(+), 1 deletion(-)\n"
-        mock_run.side_effect = [log_res, stat_res]
+        log_res.stdout = (
+            "abc1234|2026-04-10T12:00:00+00:00|palinode: update file\n"
+            "\n"
+            " 1 file changed, 2 insertions(+), 1 deletion(-)\n"
+        )
+        mock_run.return_value = log_res
 
         with patch("os.path.exists", return_value=True):
             result = git_tools.history("some/file.md", limit=10)
@@ -162,6 +163,24 @@ def test_write_memory_file_skips_directory_fsync_on_windows(tmp_path, monkeypatc
         git_tools.write_memory_file(str(target), "UTF-8 content: “quotes”\n")
 
     assert target.read_text(encoding="utf-8") == "UTF-8 content: “quotes”\n"
+    fsync_directory.assert_not_called()
+
+
+def test_move_memory_file_skips_directory_fsync_on_windows(tmp_path, monkeypatch):
+    """Windows cannot open a directory as a file descriptor for fsync."""
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    source = tmp_path / "daily.md"
+    archive = tmp_path / "archive"
+    destination = archive / "daily.md"
+    source.write_text("daily note\n", encoding="utf-8")
+    archive.mkdir()
+    monkeypatch.setattr(git_tools, "_is_windows", lambda: True)
+
+    with patch.object(git_tools, "_fsync_directory") as fsync_directory:
+        git_tools.move_memory_file(str(source), str(destination))
+
+    assert not source.exists()
+    assert destination.read_text(encoding="utf-8") == "daily note\n"
     fsync_directory.assert_not_called()
 
 

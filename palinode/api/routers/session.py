@@ -13,15 +13,18 @@ import hashlib
 import logging
 import os
 import re
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from palinode.consolidation.fact_ids import stamp_fact_id
 from palinode.core import git_tools
 from palinode.core.config import config
 from palinode.core.envelope import envelope_complaint
 from palinode.core.parity import PROMPT_TASKS
+from palinode.core.relative_dates import normalize_lines, normalize_text
+from palinode.prompts import store_prompts_dir
 
 from palinode.api._util import _project_from_cwd, _utc_now
 from palinode.api.path_safety import _memory_base_dir
@@ -223,6 +226,26 @@ def session_end_api(req: SessionEndRequest, request: Request = None) -> dict[str
 
     today = _utc_now().strftime("%Y-%m-%d")
     now_iso = _utc_now().isoformat().replace("+00:00", "Z")
+
+    # PROGRAM.md § "Resolve dates": a relative time expression is resolved
+    # against the session date on the way in, because a reader six months from
+    # now cannot recover which Tuesday "last Tuesday" was and no later pass can
+    # reconstruct it. Runs on the extracted text only — the summary and the
+    # decision/blocker bullets — and refuses quoted text, blockquotes, code and
+    # anything vague; see palinode.core.relative_dates.normalize_text.
+    summary, decisions, blockers = req.summary, req.decisions, req.blockers
+    if config.write.normalize_relative_dates:
+        anchor = _utc_now().date()
+        summary, summary_count = normalize_text(summary, anchor)
+        decisions, decision_count = normalize_lines(decisions, anchor)
+        blockers, blocker_count = normalize_lines(blockers, anchor)
+        normalized = summary_count + decision_count + blocker_count
+        if normalized:
+            logger.info(
+                "session-end normalized %d relative date(s) to absolute (anchor=%s)",
+                normalized, anchor.isoformat(),
+            )
+
     # ADR-010: same precedence as save_api — explicit > header > env > default.
     source = _resolve_source(req.source, request)
 
@@ -232,15 +255,15 @@ def session_end_api(req: SessionEndRequest, request: Request = None) -> dict[str
     # Build session entry
     parts = [f"## Session End — {now_iso}\n"]
     parts.append(f"**Source:** {source}\n")
-    parts.append(f"**Summary:** {req.summary}\n")
-    if req.decisions:
+    parts.append(f"**Summary:** {summary}\n")
+    if decisions:
         parts.append("**Decisions:**")
-        for d in req.decisions:
+        for d in decisions:
             parts.append(f"- {d}")
         parts.append("")
-    if req.blockers:
+    if blockers:
         parts.append("**Blockers/Next:**")
-        for b in req.blockers:
+        for b in blockers:
             parts.append(f"- {b}")
         parts.append("")
 
@@ -331,7 +354,7 @@ def session_end_api(req: SessionEndRequest, request: Request = None) -> dict[str
         )
     else:
         try:
-            short_hash = hashlib.sha256(req.summary.encode()).hexdigest()[:8]
+            short_hash = hashlib.sha256(summary.encode()).hexdigest()[:8]
             # Pass structured metadata through to the indexed file's frontmatter so
             # it's queryable later. Only include fields the caller set.
             extra_meta: dict[str, Any] = {}
@@ -378,11 +401,20 @@ def session_end_api(req: SessionEndRequest, request: Request = None) -> dict[str
         if os.path.exists(status_path):
             line = _status_line(
                 today,
-                req.summary,
-                req.decisions,
-                req.blockers,
+                summary,
+                decisions,
+                blockers,
                 _status_pointer(individual_file, f"daily/{today}.md"),
             )
+            # Mint the fact marker on the way in. Consolidation harvests only
+            # bullets carrying `<!-- fact:... -->`, and every line this writer
+            # appended carried none — so a store fed exclusively by session-end
+            # accumulated bullets the runner could not address, and its
+            # consolidation was skipped, silently, on every nightly run.
+            # `stamp_fact_id` is the same minting the `bootstrap-ids` backfill
+            # uses, so the id here is the id a later backfill would produce for
+            # this text and re-running it is a no-op.
+            line = stamp_fact_id(status_path, line)
             # Same read-then-atomic-rewrite trade as the daily note above —
             # through write_memory_file, not an O_APPEND open().
             with open(status_path, encoding="utf-8") as f:
@@ -391,7 +423,7 @@ def session_end_api(req: SessionEndRequest, request: Request = None) -> dict[str
             status_file = f"projects/{project}-status.md"
             logger.info(
                 "session_end status append: file=%s decisions=%d blockers=%d",
-                status_file, len(req.decisions or []), len(req.blockers or []),
+                status_file, len(decisions or []), len(blockers or []),
             )
 
     # Git commit (covers daily + status). One session-end is one logical event,
@@ -438,7 +470,18 @@ def session_end_api(req: SessionEndRequest, request: Request = None) -> dict[str
 # ── Prompts ──────────────────────────────────────────────────────────────────
 
 def _prompts_dir() -> str:
-    return os.path.join(_memory_base_dir(), "prompts")
+    """``<memory_dir>/specs/prompts`` — the directory the runner actually reads.
+
+    Through :func:`palinode.prompts.store_prompts_dir`, the one definition of
+    that location, shared with ``palinode init``, ``palinode prompt sync``, the
+    ``prompts_current`` doctor check, and the consolidation runner's
+    ``resolve_prompt``. This used to return ``<memory_dir>/prompts``, a
+    directory nothing else in palinode ever writes: on a real store
+    ``GET /prompts`` (and therefore ``prompt list`` / ``prompt show``) listed
+    nothing, and ``prompt activate`` would have flipped ``active:`` on a copy
+    no consolidation pass reads.
+    """
+    return str(store_prompts_dir(_memory_base_dir()))
 
 
 def _read_prompt_file(file_path: str) -> dict[str, Any]:
@@ -480,8 +523,8 @@ def list_prompts_api(
             if task and info["task"] != task:
                 continue
             results.append(info)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Skipping prompt file %s: %s", filepath, e)
 
     results.sort(key=lambda x: (x["task"], x["name"]))
     return results
@@ -557,30 +600,56 @@ def activate_prompt_api(name: str) -> dict[str, Any]:
         git_tools.write_memory_file(file_path, new_text)
         changed_files.append(file_path)
 
-    # Deactivate all prompts of the same task
-    for filepath in glob.glob(os.path.join(prompts_dir, "*.md")):
+    def _commit_changed() -> None:
+        # One activation toggle = a per-file commit for each prompt actually
+        # changed. Stage only the prompts this toggle rewrote, never a repo-wide
+        # `git add prompts/*.md` sweep. Runs on the way out of a failed
+        # activation too, so a rewrite that already reached disk is not left
+        # uncommitted.
+        if config.git.auto_commit:
+            for fp in changed_files:
+                git_tools.commit_memory_file(
+                    fp,
+                    f"palinode: activate prompt {name} for task={task} [{os.path.basename(fp)}]",
+                )
+
+    def _fail_closed(filepath: str, exc: Exception) -> NoReturn:
+        # Fail closed: the target is never activated once any sibling write has
+        # failed, so one task cannot end up with two active prompts. The task
+        # keeps whatever was active before, or nothing, and the caller retries.
+        _commit_changed()
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Could not update '{os.path.basename(filepath)}', so "
+                f"'{name}' was not activated: {exc}"
+            ),
+        ) from exc
+
+    # Deactivate all prompts of the same task. Sorted so a failure part-way
+    # through leaves the same files rewritten on every platform.
+    for filepath in sorted(glob.glob(os.path.join(prompts_dir, "*.md"))):
+        resolved = os.path.realpath(filepath)
         try:
-            resolved = os.path.realpath(filepath)
             within = os.path.commonpath([_memory_base_dir(), resolved]) == _memory_base_dir()
-            if not within:
-                continue
+        except ValueError:
+            continue
+        if not within:
+            continue
+        try:
             info = _read_prompt_file(resolved)
             if info["task"] == task and resolved != target_path:
                 _set_active(resolved, False)
-        except Exception:
-            pass
+        except Exception as exc:
+            _fail_closed(resolved, exc)
 
-    # Activate target
-    _set_active(target_path, True)
+    # Activate target last. There is no reliable preflight for a write that
+    # fails, so the real failure goes through the same fail-closed path.
+    try:
+        _set_active(target_path, True)
+    except Exception as exc:
+        _fail_closed(target_path, exc)
 
-    # One activation toggle = a per-file commit for each prompt actually changed
-    # stage only the prompts this toggle rewrote, never a repo-wide
-    # `git add prompts/*.md` sweep.
-    if config.git.auto_commit:
-        for fp in changed_files:
-            git_tools.commit_memory_file(
-                fp,
-                f"palinode: activate prompt {name} for task={task} [{os.path.basename(fp)}]",
-            )
+    _commit_changed()
 
     return {"activated": name, "task": task}

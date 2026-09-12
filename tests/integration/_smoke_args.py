@@ -63,8 +63,15 @@ TOOL_SMOKE_ARGS: dict[str, tuple[dict, bool]] = {
     # gets its own function-scoped seeded_env, so no ordering coupling.
     "palinode_archive":           ({"file_path": "insights/smoke-target.md",
                                     "reason": "smoke"}, False),
+    # Reversal ops against the live seed take their reported no-change path
+    # (not archived / no retraction on record) — a success, not an error.
+    "palinode_restore":           ({"file_path": "insights/smoke-target.md",
+                                    "reason": "smoke"}, False),
+    "palinode_unretract":         ({"file_path": "insights/smoke-target.md",
+                                    "pref": "smoke"}, False),
 
     # Lenient — legitimately may error in test env
+    "palinode_forget_withdraw":   ({"file_path": "insights/smoke-target.md"}, True),  # seed is not a forget request → 409
     "palinode_ingest":            ({"url": "https://example.com/"}, True),       # no network in CI
     "palinode_consolidate":       ({"dry_run": True}, True),                     # needs LLM
     "palinode_push":              ({}, True),                                    # needs git remote

@@ -86,7 +86,7 @@ def _write_and_index(memory_dir: str, relpath: str, body: str, frontmatter: dict
     path = os.path.join(memory_dir, relpath)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fm = yaml.safe_dump(frontmatter, default_flow_style=False)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(f"---\n{fm}---\n\n{body}\n")
     index_file(path)
     return path
@@ -95,14 +95,19 @@ def _write_and_index(memory_dir: str, relpath: str, body: str, frontmatter: dict
 def _meta(path: str) -> dict[str, Any]:
     from palinode.core import parser
 
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         meta, _ = parser.parse_markdown(f.read())
     return meta
 
 
 def _git(memory_dir: str, *args: str) -> str:
     return subprocess.run(
-        ["git", "-C", memory_dir, *args], check=True, capture_output=True, text=True
+        ["git", "-C", memory_dir, *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
     ).stdout
 
 
@@ -126,7 +131,7 @@ def test_archive_sets_status_and_writes_history_sibling(store_env):
     assert _meta(os.path.join(store_env, "insights/claim-verification.md"))["status"] == "archived"
 
     history = os.path.join(store_env, "insights/claim-verification-history.md")
-    text = open(history).read()
+    text = open(history, encoding="utf-8").read()
     # The executor's own history writer: archived frontmatter + a dated entry
     # tagged with the memory's id, so the sibling is byte-shaped like a
     # consolidation ARCHIVE and `palinode trace` reads it unchanged.
@@ -135,14 +140,30 @@ def test_archive_sets_status_and_writes_history_sibling(store_env):
     assert "<!-- fact:insights-claim-verification -->" in text
 
 
+def test_archive_history_round_trips_non_ascii(store_env):
+    # The reason reaches the history sibling through the executor's writer, so
+    # a locale-default read here decodes it as cp1252 on native Windows and the
+    # assertion fails on content Palinode wrote as UTF-8.
+    reason = "retired after the caf\u00e9 rollout \u2014 \u65e5\u672c\u8a9e"
+    _write_and_index(
+        store_env, "insights/unicode-reason.md", "body",
+        {"id": "insights-unicode-reason", "category": "insights"},
+    )
+
+    archive_mod.archive_memory("insights/unicode-reason.md", reason=reason)
+
+    history = os.path.join(store_env, "insights/unicode-reason-history.md")
+    assert reason in open(history, encoding="utf-8").read()
+
+
 def test_archive_preserves_the_body(store_env):
-    marker = "the original body text must survive retirement"
+    marker = "the original body text must survive retirement \u2014 caf\u00e9, \u65e5\u672c\u8a9e"
     path = _write_and_index(
         store_env, "insights/keeper.md", marker,
         {"id": "insights-keeper", "category": "insights"},
     )
     archive_mod.archive_memory("insights/keeper.md")
-    assert marker in open(path).read()
+    assert marker in open(path, encoding="utf-8").read()
 
 
 def test_archived_memory_leaves_default_recall_but_is_retained(store_env):
@@ -213,7 +234,7 @@ def test_supersede_records_the_successor(store_env):
     assert meta["status"] == "archived"
     assert meta["superseded_by"] == "decisions/new-policy.md"
 
-    history = open(os.path.join(store_env, "decisions/old-policy-history.md")).read()
+    history = open(os.path.join(store_env, "decisions/old-policy-history.md"), encoding="utf-8").read()
     assert "Superseded by decisions/new-policy.md" in history
     assert "replaced after the re-promote" in history
     assert "supersede: decisions/old-policy.md -> decisions/new-policy.md" in _git(
@@ -278,7 +299,7 @@ def test_archive_is_idempotent_across_two_calls(store_env):
     second = archive_mod.archive_memory("insights/twice.md", reason="two")
     assert first["status"] == "archived"
     assert second["status"] == "already_archived"
-    history = open(os.path.join(store_env, "insights/twice-history.md")).read()
+    history = open(os.path.join(store_env, "insights/twice-history.md"), encoding="utf-8").read()
     assert history.count("reason: one") == 1
     assert "reason: two" not in history
 
@@ -304,14 +325,14 @@ def test_traversal_and_null_bytes_are_rejected(store_env, bad):
 
 def test_symlink_pointing_outside_memory_dir_is_rejected(store_env, tmp_path_factory):
     outside = tmp_path_factory.mktemp("outside") / "secret.md"
-    outside.write_text("---\nid: secret\n---\n\nnot yours\n")
+    outside.write_text("---\nid: secret\n---\n\nnot yours\n", encoding="utf-8")
     link = os.path.join(store_env, "insights", "escape.md")
     os.symlink(str(outside), link)
 
     with pytest.raises(ValueError):
         archive_mod.archive_memory("insights/escape.md")
     # The symlink target is untouched.
-    assert "status: archived" not in outside.read_text()
+    assert "status: archived" not in outside.read_text(encoding="utf-8")
 
 
 def test_superseded_by_is_held_to_the_same_path_guard(store_env):

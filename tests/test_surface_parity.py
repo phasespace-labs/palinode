@@ -12,6 +12,11 @@ reported as ``xfail`` with a ``reason="drift tracked in #N"`` — the test
 ``known_drift`` entry must be removed (or the test will fail because the
 parameter now appears unexpectedly).
 
+A param a surface realizes as its own capability is a different thing, and is
+declared in ``surface_realizations``.  Those cases *pass*, naming the realizing
+capability: the arrangement is permanent, so reporting it as drift would say
+something untrue and point a reader at an issue that is never going to close.
+
 The parametrized checks in this Python module intentionally skip the plugin:
 Python cannot introspect the TypeBox schemas in ``plugin/index.ts``.  Plugin
 parameter parity is enforced separately by ``plugin/test/parity.test.ts``,
@@ -43,6 +48,7 @@ from palinode.core.parity import (
     InventoryBacklogEntry,
     MEMORY_TYPES,
     REGISTRY,
+    TIERS,
     CanonicalParam,
     Operation,
     Surface,
@@ -365,6 +371,15 @@ def test_canonical_param_present(case: tuple[Operation, Surface, CanonicalParam]
             )
         pytest.xfail(f"drift tracked in #{issue}")
 
+    realization = op.surface_realizations.get(drift_key)
+    if realization is not None:
+        # Not drift: the surface exposes this param as its own capability.
+        # The declaration is checked for truth by
+        # test_surface_realizations_name_a_real_param_and_capability, so there
+        # is nothing left to assert here beyond recording what realizes it.
+        print(f"{op.name}/{surface}: {cp.name!r} realized as {realization}")
+        return
+
     assert cp.name in surface_params, (
         f"{op.name}/{surface}: canonical param {cp.name!r} not exposed "
         f"(found: {sorted(surface_params)}). "
@@ -423,6 +438,7 @@ def test_prompt_task_enum_matches(surface: Surface) -> None:
     [
         ("PALINODE_CATEGORIES", CATEGORIES),
         ("PALINODE_MEMORY_TYPES", MEMORY_TYPES),
+        ("PALINODE_TIERS", TIERS),
     ],
 )
 def test_plugin_enum_matches(
@@ -486,6 +502,33 @@ def test_known_drift_references_a_canonical_param() -> None:
                 bad.append(f"{op.name}: known_drift[({surface!r}, {param_name!r})]")
     assert not bad, (
         "known_drift entries reference unknown params:\n  "
+        + "\n  ".join(bad)
+    )
+
+
+def test_surface_realizations_name_a_real_param_and_capability() -> None:
+    """``surface_realizations`` must name a real param and a live capability.
+
+    Both halves matter.  The first entry in this registry rotted precisely
+    because nothing checked it: it carried an issue number from a private
+    tracker that resolved, in the public one, to an unrelated closed issue, and
+    the parity test reported that number for months.  A declaration nothing
+    verifies is a comment with a data structure's punctuation.
+    """
+    bad: list[str] = []
+    for op in REGISTRY:
+        canonical_names = {cp.name for cp in op.canonical_params}
+        for (surface, param_name), capability in op.surface_realizations.items():
+            key = f"{op.name}: surface_realizations[({surface!r}, {param_name!r})]"
+            if param_name not in canonical_names:
+                bad.append(f"{key} names no canonical param")
+            if surface not in _LIVE_CAPABILITIES:
+                bad.append(f"{key} targets surface {surface!r}, which is not introspectable")
+                continue
+            if capability not in _LIVE_CAPABILITIES[surface]():
+                bad.append(f"{key} = {capability!r} is not present on {surface}")
+    assert not bad, (
+        "surface_realizations entries do not describe reality:\n  "
         + "\n  ".join(bad)
     )
 

@@ -69,6 +69,9 @@ _SWEPT_TEST_FILES: tuple[str, ...] = (
     "tests/test_session_end_status_line.py",
     "tests/test_session_end_timeout.py",
     "tests/integration/test_session_end_e2e_l1_l3.py",
+    "tests/test_archive_on_demand_664.py",
+    "tests/test_archive_recall_485.py",
+    "tests/test_ttl_archive_482.py",
 )
 
 _TEXT_MODE_TEMPFILE = {"NamedTemporaryFile", "TemporaryFile", "SpooledTemporaryFile"}

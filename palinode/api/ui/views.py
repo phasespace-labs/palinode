@@ -362,6 +362,19 @@ def build_quality_view(lint: dict[str, Any]) -> dict[str, Any]:
     # missing-extraction-metadata is keyed off the same scanned file set the
     # lint counts use (passed in by the router as ``no_extraction_meta``).
     no_extraction = _files(lint.get("no_extraction_meta", []))
+    # stale backing: the dependent side of `backed_by` propagation — the
+    # detail names which source was retired and how.
+    stale_backing = _files(lint.get("stale_backing", []))
+    _sb_detail = {
+        it.get("file"): ", ".join(
+            f"{e.get('ref')} ({e.get('op')})" for e in it.get("stale_backing", [])
+        )
+        for it in lint.get("stale_backing", [])
+        if isinstance(it, dict)
+    }
+    for row in stale_backing:
+        if _sb_detail.get(row["path"]):
+            row["detail"] = f"backed by {_sb_detail[row['path']]}"
 
     queues = [
         {
@@ -397,6 +410,13 @@ def build_quality_view(lint: dict[str, Any]) -> dict[str, Any]:
             "label": "No extraction metadata",
             "blurb": "extraction provenance not yet captured (G2)",
             "rows": no_extraction,
+            "kind": "files",
+        },
+        {
+            "key": "stale_backing",
+            "label": "Stale backing",
+            "blurb": "a backed_by source was superseded, retracted, archived or merged — re-verify",
+            "rows": stale_backing,
             "kind": "files",
         },
     ]

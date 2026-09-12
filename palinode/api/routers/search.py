@@ -7,11 +7,12 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from palinode.core import store, embedder
 from palinode.core.config import config
-from palinode.core.parity import CATEGORIES, MEMORY_TYPES
+from palinode.core.parity import CATEGORIES, MEMORY_TYPES, TIERS
 from palinode.core.path_guard import to_rel_path
 from palinode.api._util import _retrieval_logger, _safe_500
 from palinode.api.rate_limit import _RATE_LIMIT_SEARCH, _check_rate_limit
 from palinode.api.search_helpers import (
+    _apply_tier,
     _compute_effective_date_after,
     _embedding_candidates,
     _enrich_with_rel_path,
@@ -135,6 +136,10 @@ class SearchRequest(BaseModel):
     # ADR-015 §2.3: None → default hard-exclude of telemetry; [] → include
     # telemetry when the caller passes the explicit override.
     include_telemetry: bool | None = False
+    # How much of each hit to render — "abstract" (summary-first, ~300
+    # chars), "overview" (frontmatter + head of body), or "full". Omitted keeps
+    # the snippet + content shape search returned before tiers existed.
+    tier: Literal[*TIERS] | None = None
     # filter by memory `type` frontmatter (one of PersonMemory, Decision,
     # ProjectSnapshot, Insight, ResearchRef, ActionItem). Independent of `category`
     # which filters by directory. Applied as a post-fetch filter; pass multiple
@@ -294,6 +299,7 @@ def search_api(req: SearchRequest, request: Request = None) -> list[dict[str, An
             recent = recent[:limit]
             # enrich with snippet so MCP callers stay within budget.
             _enrich_with_snippets(recent, "", _resolve_snippet_max_chars(req.max_chars))
+            _apply_tier(recent, req.tier)
             _enrich_with_rel_path(recent)
             return recent
 
@@ -305,8 +311,20 @@ def search_api(req: SearchRequest, request: Request = None) -> list[dict[str, An
             if project_names:
                 embed_query = f"In the context of {', '.join(project_names)}: {req.query}"
 
-        query_emb = embedder.embed(embed_query)
-        if not query_emb:
+        try:
+            query_emb: list[float] | None = embedder.embed(embed_query)
+        except embedder.EmbeddingInputError as e:
+            # Per-input embed rejection (e.g. bge-m3 emitting NaN for this
+            # exact string): the backend is healthy and the index is intact,
+            # so degrade this one query to the keyword arm instead of failing
+            # it. text_len only — the log never carries the query text.
+            logger.warning(
+                "query embed rejected; keyword fallback op=search "
+                "outcome=keyword_fallback text_len=%d error=%r",
+                e.text_len, e.ollama_message,
+            )
+            query_emb = None
+        if query_emb is not None and not query_emb:
             return []
 
         use_hybrid = req.hybrid if req.hybrid is not None else config.search.hybrid_enabled
@@ -328,7 +346,21 @@ def search_api(req: SearchRequest, request: Request = None) -> list[dict[str, An
             req.threshold if req.threshold is not None else config.search.api_threshold
         )
 
-        if use_hybrid:
+        if query_emb is None:
+            # Keyword fallback: BM25 only, in FTS rank order. Skips the hybrid
+            # ranker's decay/priority/context shaping (its weights assume
+            # cosine-scale scores) but flows through the same visibility gate,
+            # type filters, and snippet enrichment below. Each hit is marked
+            # `mode: keyword-fallback` so callers can see the degraded mode.
+            def _run(n: int, record_access: bool = True) -> list[dict[str, Any]]:
+                hits = store.search_fts(
+                    req.query, category=req.category, top_k=n,
+                    kind_exclude_list=kind_exclude_list,
+                )
+                for h in hits:
+                    h["mode"] = "keyword-fallback"
+                return hits
+        elif use_hybrid:
             def _run(n: int, record_access: bool = True) -> list[dict[str, Any]]:
                 return store.search_hybrid(
                     query_text=req.query,
@@ -396,6 +428,7 @@ def search_api(req: SearchRequest, request: Request = None) -> list[dict[str, An
         # `content` is preserved untouched for CLI/API consumers.
         # Per-request max_chars overrides config default when supplied.
         _enrich_with_snippets(final, req.query, _resolve_snippet_max_chars(req.max_chars))
+        _apply_tier(final, req.tier)
         _enrich_with_rel_path(final)
 
         # Issue emit retrieval events (explicit — came in via /search API).
@@ -417,6 +450,8 @@ def search_api(req: SearchRequest, request: Request = None) -> list[dict[str, An
             session_id=req.session_id,
         )
         return final
+    except embedder.EmbeddingInputError:
+        raise  # typed 422 via the app-level handler in server.py
     except embedder.EmbeddingUnavailable:
         raise  # typed 503 via the app-level handler in server.py
     except Exception as e:
@@ -509,6 +544,8 @@ def dedup_suggest_api(req: DedupSuggestRequest) -> list[dict[str, Any]]:
         for r in ranked:
             r["strong_dup"] = r["similarity"] >= strong_threshold
         return ranked
+    except embedder.EmbeddingInputError:
+        raise  # typed 422 via the app-level handler in server.py
     except embedder.EmbeddingUnavailable:
         raise  # typed 503 via the app-level handler in server.py
     except Exception as e:
@@ -553,6 +590,8 @@ def orphan_repair_api(req: OrphanRepairRequest) -> list[dict[str, Any]]:
             min_similarity=min_similarity,
             top_k=top_k,
         )
+    except embedder.EmbeddingInputError:
+        raise  # typed 422 via the app-level handler in server.py
     except embedder.EmbeddingUnavailable:
         raise  # typed 503 via the app-level handler in server.py
     except Exception as e:
@@ -648,6 +687,8 @@ def cluster_neighbors_api(req: ClusterNeighborsRequest) -> list[dict[str, Any]]:
         for r in ranked:
             r["score"] = r["similarity"]
         return ranked
+    except embedder.EmbeddingInputError:
+        raise  # typed 422 via the app-level handler in server.py
     except embedder.EmbeddingUnavailable:
         raise  # typed 503 via the app-level handler in server.py
     except Exception as e:
@@ -705,6 +746,8 @@ def topic_coverage_api(req: TopicCoverageRequest) -> dict[str, Any]:
                 "similarity": best["similarity"],
             }
         return {"covered": False, "best_match": None, "similarity": 0.0}
+    except embedder.EmbeddingInputError:
+        raise  # typed 422 via the app-level handler in server.py
     except embedder.EmbeddingUnavailable:
         raise  # typed 503 via the app-level handler in server.py
     except Exception as e:

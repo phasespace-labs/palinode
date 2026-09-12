@@ -1,14 +1,17 @@
 from __future__ import annotations
 import logging
 import os
+from datetime import datetime
 from typing import Any, Iterable, Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from palinode.core import store
 from palinode.core.config import config
-from palinode.core.parity import CATEGORIES, MEMORY_TYPES
+from palinode.core.parity import CATEGORIES, MEMORY_TYPES, TIERS
+from palinode.core.tiers import apply_tier
 from palinode.core.parser import VALID_EPISTEMICS, VALID_UPDATE_POLICIES
 from palinode.core.scope import ScopeChain
+from palinode.core.expiry import core_has_expired
 from palinode.core.visibility import is_visible
 from palinode.api._util import (
     _auto_summary_state, _retrieval_logger, _safe_500, _utc_now,
@@ -31,7 +34,11 @@ router = APIRouter()
 
 
 @router.get("/read")
-def read_api(file_path: str, meta: bool = False) -> dict[str, Any]:
+def read_api(
+    file_path: str,
+    meta: bool = False,
+    tier: Literal[*TIERS] | None = None,
+) -> dict[str, Any]:
     from palinode.core import parser
 
     candidates = [file_path]
@@ -61,14 +68,28 @@ def read_api(file_path: str, meta: bool = False) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="File not found")
 
     try:
-        result = {
-            "file": file_path,
-            "content": content,
-            "size_bytes": len(content.encode("utf-8")),
-        }
-
+        # `meta` keeps parse_markdown as its source so the frontmatter shape
+        # callers already depend on is untouched; the abstract tier only needs
+        # the raw frontmatter, so it uses the cheaper splitter when `meta` is
+        # off rather than paying for chunking.
+        metadata: dict[str, Any] | None = None
         if meta:
             metadata, _ = parser.parse_markdown(content)
+        elif tier == "abstract":
+            metadata, _ = parser.parse_frontmatter(content)
+
+        # `size_bytes` stays the size of the FILE, not of the tiered view —
+        # a caller asking for an abstract still wants to know what opening
+        # the full record would cost.
+        result = {
+            "file": file_path,
+            "content": apply_tier(tier, content, metadata),
+            "size_bytes": len(content.encode("utf-8")),
+        }
+        if tier is not None:
+            result["tier"] = tier
+
+        if meta:
             result["frontmatter"] = metadata
 
         # Issue emit retrieval event (explicit — direct /read call).
@@ -238,6 +259,13 @@ class SaveRequest(BaseModel):
 _DEFAULT_LIST_SKIP_DIRS = frozenset({"daily", "archive", "inbox", "logs", "prompts"})
 
 
+def _iso_or_none(value: Any) -> str | None:
+    """Frontmatter ``expires_at`` as a JSON-safe string (YAML may yield a datetime)."""
+    if value is None or value == "":
+        return None
+    return value.isoformat() if isinstance(value, datetime) else str(value)
+
+
 def collect_memory_files(
     category: str | None = None,
     core_only: bool = False,
@@ -308,6 +336,11 @@ def collect_memory_files(
             metadata, _ = parser.parse_frontmatter(content)
 
             is_core = bool(metadata.get("core", False))
+            # An expired core memory stays listed and searchable but no
+            # longer acts: it is not core for injection purposes, so the
+            # session-start hook and the plugins (core_only=true) skip it.
+            if is_core and core_has_expired(rel_path, metadata):
+                is_core = False
             if core_only and not is_core:
                 continue
 
@@ -329,6 +362,8 @@ def collect_memory_files(
                 "category": metadata.get("category", parts[0]),
                 "core": is_core,
                 "scope": explicit_scope,
+                "expires_at": _iso_or_none(metadata.get("expires_at")),
+                "authority": metadata.get("authority"),
                 "summary": metadata.get("summary", ""),
                 "last_updated": metadata.get("last_updated", ""),
                 "entities": metadata.get("entities", []),

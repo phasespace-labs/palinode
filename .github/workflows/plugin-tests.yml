@@ -1,0 +1,76 @@
+# Harness-plugin test suites — one lane per package, hosted runners only.
+#
+# This file is the SAME on the development repo and the public repo. It
+# references nothing outside the shipping tree — no private scripts, no
+# self-hosted runners, no issue numbers — so the sync copies it verbatim and
+# a diff between the two copies is a bug. Keep it that way.
+#
+# Why a separate workflow rather than jobs in ci.yml: ci.yml legitimately
+# differs between the two repos (the public one has no self-hosted lanes and
+# none of the release-gate jobs), so anything living there is maintained twice
+# and the copies drift — which is how the Node suites came to run on one repo
+# and not the other. A workflow that is one file on both sides is maintained
+# once.
+#
+# One lane per package, deliberately: the packages have independent lockfiles,
+# and a red suite must not hide behind a green one.
+#
+#   plugin-tests        — OpenClaw plugin (plugin/): type-check + vitest. The
+#                          suite includes the openclaw.plugin.json drift check
+#                          and the cross-language parity test; `pretest`
+#                          regenerates plugin/parity-registry.json with a bare
+#                          python3 (palinode/core/parity.py is stdlib-only —
+#                          tests/test_parity_is_dependency_free.py keeps it so).
+#   pi-extension-tests  — Pi extension (plugins/pi/): type-check + vitest
+#   plugin-core-tests   — shared TS core (plugins/core/): type-check + vitest
+#   cline-plugin-tests  — Cline plugin (plugins/cline/): type-check + vitest
+
+name: Plugin Tests
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    name: ${{ matrix.job }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - job: plugin-tests
+            package: plugin
+          - job: pi-extension-tests
+            package: plugins/pi
+          - job: plugin-core-tests
+            package: plugins/core
+          - job: cline-plugin-tests
+            package: plugins/cline
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: ${{ matrix.package }}/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+        working-directory: ${{ matrix.package }}
+
+      - name: Type-check
+        run: npx tsc --noEmit -p tsconfig.json
+        working-directory: ${{ matrix.package }}
+
+      - name: Run test suite
+        run: npm test
+        working-directory: ${{ matrix.package }}

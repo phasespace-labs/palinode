@@ -1,0 +1,11 @@
+{
+  "memory_type": "palinode",
+  "memory_params": {
+    "workspace_root": "palinode_workspace",
+    "top_k": 6,
+    "fts_mode": "and",
+    "neighbor_radius": 1,
+    "extract": true,
+    "notes_top_k": 6
+  }
+}

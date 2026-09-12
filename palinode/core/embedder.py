@@ -10,6 +10,7 @@ from typing import Optional
 from palinode.core.config import config
 from palinode.core.ollama_client import (
     EmbeddingContextError,
+    EmbeddingInputError,
     OllamaError,
     OllamaRole,
     _is_ctx_overflow_message,  # noqa: F401  — deliberate re-export, see below
@@ -25,8 +26,10 @@ logger = logging.getLogger(__name__)
 # EmbeddingContextError` imports keep working (Phase 3).
 __all__ = [
     "EmbeddingContextError",
+    "EmbeddingInputError",
     "EmbeddingUnavailable",
     "embed",
+    "embed_many",
     "check_model_context",
 ]
 
@@ -110,14 +113,78 @@ def _notice_keyword_only_once() -> None:
         if _keyword_only_notice_done:
             return
         _keyword_only_notice_done = True
+    if config.embeddings.primary.dialect == "openai":
+        fix = (
+            "confirm the OpenAI-compatible server at embeddings.primary.url "
+            "answers POST /v1/embeddings for this model (llama.cpp: "
+            "`llama-server --embedding`; vLLM / LM Studio: the model is loaded)"
+        )
+    else:
+        fix = (
+            "`ollama pull bge-m3` (or point embeddings.primary.url at a working "
+            "Ollama host)"
+        )
     logger.warning(
         "Embeddings unavailable — running in keyword-only mode (BM25/FTS5). "
         "Save, search, and audit still work; semantic recall is off until an "
-        "embedder is reachable. To enable it: `ollama pull bge-m3` (or point "
-        "embeddings.primary.url at a working Ollama host). "
-        "op=embed outcome=keyword_only_mode model=%s",
+        "embedder is reachable. To enable it: %s. "
+        "op=embed outcome=keyword_only_mode model=%s dialect=%s",
+        fix,
         config.embeddings.primary.model,
+        config.embeddings.primary.dialect,
     )
+
+
+def _parse_num_ctx(parameters: object) -> int | None:
+    """Return the runtime ``num_ctx`` from an ``/api/show`` ``parameters`` field.
+
+    Ollama serialises ``parameters`` as the modelfile's PARAMETER lines — a
+    newline-delimited ``"key<spaces>value"`` string. Older builds returned a
+    mapping. Anything else (absent, malformed, non-numeric) is ``None`` so the
+    caller falls back to the capability value or skips the check.
+    """
+    if parameters is None:
+        return None
+    if isinstance(parameters, dict):
+        value = parameters.get("num_ctx")
+    elif isinstance(parameters, str):
+        value = None
+        for line in parameters.splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[0] == "num_ctx":
+                value = parts[1]
+                break
+    else:
+        return None
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _capability_ctx(model_info: object) -> int | None:
+    """Return the architecture context length from ``/api/show`` ``model_info``.
+
+    The key is ``"<architecture>.context_length"`` — ``llama.context_length``
+    for GGUF llama-family models, ``bert.context_length`` for bge-m3 — so any
+    ``*.context_length`` suffix counts. The canonical ``llama.`` key is preferred
+    when several are present.
+    """
+    if not isinstance(model_info, dict):
+        return None
+    candidates = {
+        key: value for key, value in model_info.items()
+        if isinstance(key, str) and key.endswith(".context_length") and value is not None
+    }
+    if not candidates:
+        return None
+    value = candidates.get("llama.context_length", next(iter(candidates.values())))
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def check_model_context(
@@ -137,20 +204,36 @@ def check_model_context(
     if model is None:
         model = config.embeddings.primary.model
 
+    dialect = config.embeddings.primary.dialect
+    if dialect != "ollama":
+        # /api/show is Ollama-native; an OpenAI-compatible server (llama.cpp,
+        # vLLM, LM Studio) has no equivalent, so the ctx guard is simply not
+        # available there. Skip rather than log a spurious "check skipped".
+        logger.debug(
+            "embed preflight: /api/show not available for dialect=%s — skipping "
+            "op=preflight model=%s",
+            dialect, model,
+        )
+        return
+
     try:
         # Phase 3: route /api/show through the centralized client (EMBED
         # role). retries=0 — preflight is best-effort and must not amplify load.
         data = get_ollama_client().show(model, role=OllamaRole.EMBED, retries=0)
-        # Ollama /api/show returns model_info with key "llama.context_length"
-        # for GGUF models. For bge-m3 the key is typically under model_info.
-        model_info = data.get("model_info", {})
-        # Try the canonical key first, then the legacy parameters dict.
-        ctx = model_info.get(
-            "llama.context_length",
-            data.get("parameters", {}).get("num_ctx", None)
-        )
+        # Two distinct numbers can come back, and they mean different things:
+        #   - `parameters` carries the *runtime* num_ctx the model is actually
+        #     loaded with. Ollama returns it as a newline-delimited
+        #     "key value" string (a mapping in some older builds).
+        #   - `model_info["<arch>.context_length"]` is the architecture's
+        #     *capability* — "llama." for GGUF llama-family models, "bert."
+        #     for bge-m3. It says what the model could do, not what it is
+        #     configured to do.
+        # The runtime value wins when present: a model that reports an 8192
+        # capability but runs at 4096 truncates at 4096.
+        runtime_ctx = _parse_num_ctx(data.get("parameters"))
+        capability_ctx = _capability_ctx(data.get("model_info"))
+        ctx = runtime_ctx if runtime_ctx is not None else capability_ctx
         if ctx is None:
-            # Some Ollama versions embed num_ctx in the "details" block.
             # We can't guarantee a key across all versions — skip the check.
             logger.debug(
                 "embed preflight: could not read num_ctx from /api/show for model=%s "
@@ -161,12 +244,17 @@ def check_model_context(
 
         ctx_int = int(ctx)
         if ctx_int < min_ctx:
+            capability_note = (
+                " (the model itself supports %d)" % capability_ctx
+                if capability_ctx is not None and capability_ctx != ctx_int
+                else ""
+            )
             logger.warning(
                 "embed preflight: model=%s has num_ctx=%d which is below the "
-                "recommended minimum of %d. Inputs longer than %d tokens will "
+                "recommended minimum of %d%s. Inputs longer than %d tokens will "
                 "silently fail or be truncated. Fix: create a custom Ollama "
                 "modelfile with 'PARAMETER num_ctx %d' and rebuild the model.",
-                model, ctx_int, min_ctx, ctx_int, min_ctx,
+                model, ctx_int, min_ctx, capability_note, ctx_int, min_ctx,
             )
         else:
             logger.debug(
@@ -201,6 +289,10 @@ def embed(text: str) -> list[float]:
         EmbeddingContextError: When Ollama explicitly rejects the input due to
             context-window overflow. Callers that want to handle truncation
             specially should catch this specifically.
+        EmbeddingInputError: When the backend deterministically rejects this
+            one input (e.g. a NaN vector it cannot serialise) while remaining
+            healthy for every other input. Callers should degrade per-input
+            (FTS-only index, keyword-only answer), not per-backend.
         EmbeddingUnavailable: When the local backend cannot be reached, times
             out, or errors (connectivity/HTTP/circuit-open). Replaces the old
             silent-``[]`` contract — callers that want graceful degradation
@@ -210,13 +302,34 @@ def embed(text: str) -> list[float]:
     return _embed_local(text)
 
 
+def embed_many(texts: list[str]) -> list[list[float]]:
+    """Generate one ordered embedding per input in a single backend call.
+
+    The whole result is validated by :class:`OllamaClient` before it is
+    returned. Typed context and per-input failures propagate unchanged;
+    backend failures become :class:`EmbeddingUnavailable`, matching
+    :func:`embed`.
+    """
+    return _embed_many_local(texts)
+
+
 def _run_preflight_once() -> None:
     """Run the context preflight check exactly once per process."""
     global _preflight_done
     with _preflight_lock:
         if not _preflight_done:
             _preflight_done = True
-            check_model_context()
+            try:
+                check_model_context()
+            except Exception as e:  # noqa: BLE001 — preflight must never take an embed down
+                # check_model_context already swallows the expected failure
+                # classes; this is the floor under everything else. Preflight
+                # is best-effort by contract, so a defect in it must cost one
+                # log line, never the payload the caller is embedding.
+                logger.warning(
+                    "embed preflight: check raised and was ignored op=preflight error=%r",
+                    str(e),
+                )
 
 
 def _embed_local(text: str) -> list[float]:
@@ -257,6 +370,12 @@ def _embed_local(text: str) -> list[float]:
     except EmbeddingContextError:
         # Typed signal — propagate so callers can truncate / split.
         raise
+    except EmbeddingInputError:
+        # Typed per-input signal (e.g. bge-m3 NaN vector) — propagate so
+        # callers can degrade this one input (FTS-only index, keyword-only
+        # answer). Deliberately NOT wrapped as EmbeddingUnavailable and NOT
+        # triggering the keyword-only-mode notice: the backend is healthy.
+        raise
     except OllamaError as e:
         # Connect/timeout/HTTP/circuit-open/unexpected-shape. text_len, not
         # raw text, so logs never carry user content. Structured key=value
@@ -272,4 +391,30 @@ def _embed_local(text: str) -> list[float]:
         _notice_keyword_only_once()
         raise EmbeddingUnavailable(
             backend="local", model=model, text_len=len(text), cause=str(e)
+        ) from e
+
+
+def _embed_many_local(texts: list[str]) -> list[list[float]]:
+    """Embed ``texts`` through the local provider's ordered batch boundary."""
+    if not texts:
+        return []
+
+    _run_preflight_once()
+    model = config.embeddings.primary.model
+    text_len = sum(len(text) for text in texts)
+    try:
+        return get_ollama_client().embed_many(texts)
+    except EmbeddingContextError:
+        raise
+    except EmbeddingInputError:
+        raise
+    except OllamaError as e:
+        logger.warning(
+            "batch embed failed; raising EmbeddingUnavailable "
+            "op=embed_many model=%s inputs=%d text_len=%d outcome=error error=%r",
+            model, len(texts), text_len, str(e),
+        )
+        _notice_keyword_only_once()
+        raise EmbeddingUnavailable(
+            backend="local", model=model, text_len=text_len, cause=str(e)
         ) from e

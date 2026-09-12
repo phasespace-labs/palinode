@@ -1,6 +1,6 @@
 {
   "name": "openclaw-palinode",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Palinode memory system for OpenClaw",
   "main": "./dist/index.js",
@@ -21,7 +21,8 @@
     "build": "tsc",
     "prepublishOnly": "tsc",
     "pretest": "python3 ../scripts/dump-parity-registry.py > parity-registry.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "manifest": "tsc && node dist/scripts/write-manifest.js"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

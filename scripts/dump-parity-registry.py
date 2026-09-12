@@ -47,7 +47,7 @@ def _canonical_param_to_dict(cp: Any) -> dict[str, Any]:
 
 
 def _operation_to_dict(op: Any) -> dict[str, Any]:
-    """Serialize an Operation including known_drift, normalized for JSON."""
+    """Serialize an Operation including its drift and realization entries."""
     drift_entries = sorted(
         (
             {
@@ -56,6 +56,17 @@ def _operation_to_dict(op: Any) -> dict[str, Any]:
                 "issue": issue,
             }
             for (surface, param_name), issue in op.known_drift.items()
+        ),
+        key=lambda d: (d["surface"], d["param"]),
+    )
+    realization_entries = sorted(
+        (
+            {
+                "surface": surface,
+                "param": param_name,
+                "capability": capability,
+            }
+            for (surface, param_name), capability in op.surface_realizations.items()
         ),
         key=lambda d: (d["surface"], d["param"]),
     )
@@ -68,6 +79,7 @@ def _operation_to_dict(op: Any) -> dict[str, Any]:
         "plugin_tool": op.plugin_tool,
         "exempt_surfaces": sorted(op.exempt_surfaces),
         "known_drift": drift_entries,
+        "surface_realizations": realization_entries,
     }
 
 

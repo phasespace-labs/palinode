@@ -42,7 +42,7 @@ from typing import Any
 
 from palinode.core import embedder as _embedder
 from palinode.core import parser, store
-from palinode.core.embedder import EmbeddingUnavailable
+from palinode.core.embedder import EmbeddingInputError, EmbeddingUnavailable
 from palinode.core.hashing import stable_md5_hexdigest
 from palinode.core.ollama_client import get_ollama_client
 
@@ -271,8 +271,14 @@ def apply(p: Plan, embedder: Any = _embedder) -> Diff:
     """Embed and write a plan in one transaction. Fail-closed on embed outage.
 
     In embedding mode, every section in ``to_index`` must embed; the first
-    failure rolls the whole transaction back so the on-disk file is retried
-    intact and the index is never left half-applied. In cold-defer mode no
+    *backend* failure (``EmbeddingUnavailable``) rolls the whole transaction
+    back so the on-disk file is retried intact and the index is never left
+    half-applied. A typed *per-input* rejection (``EmbeddingInputError``,
+    e.g. a NaN vector for one pathological string) does not abort: that
+    section alone is written FTS-only — the same keyword-searchable shape the
+    deferred path writes — and the rest of the file indexes normally. The
+    vector-less chunk is re-planned as REEMBED on later passes, so it heals
+    itself if the model stops rejecting the input. In cold-defer mode no
     embed is attempted — all sections are written FTS-only and the pass
     commits, which is the designed keyword-searchable-now degradation, not a
     failure.
@@ -296,23 +302,86 @@ def apply(p: Plan, embedder: Any = _embedder) -> Diff:
             # vector is in hand (or we are deferring embeds entirely).
             embeddings: dict[str, list[float]] = {}
             if not deferred:
-                for pw in p.to_index:
+                use_scalar_fallback = True
+                embed_many = getattr(embedder, "embed_many", None)
+                if p.to_index and callable(embed_many):
                     try:
-                        emb = embedder.embed(pw.section.content)
-                    except EmbeddingUnavailable as e:
-                        # Backend failure, typed at the embedder boundary. The
-                        # watcher/indexer path wants retry-and-continue, not a
-                        # crash: fold it into the same fail-closed abort a
-                        # falsy `[]` used to trigger, so the file is retried
-                        # intact on the next pass.
-                        raise _EmbedOutage(
-                            diff.embed_failures + 1, pw.section.section_id
-                        ) from e
-                    if not emb:
-                        raise _EmbedOutage(
-                            diff.embed_failures + 1, pw.section.section_id
+                        batch = embed_many([
+                            pw.section.content for pw in p.to_index
+                        ])
+                    except EmbeddingInputError:
+                        # A batch rejection proves at least one deterministic
+                        # per-input failure but cannot identify which section.
+                        # Retry individually so only the poisoned section loses
+                        # its vector and healthy sections still index normally.
+                        logger.info(
+                            "batch embed rejected an input; retrying sections "
+                            "individually op=index file_path=%s sections=%d",
+                            state.file_path, len(p.to_index),
                         )
-                    embeddings[pw.section.chunk_id] = emb
+                    except EmbeddingUnavailable as e:
+                        raise _EmbedOutage(
+                            diff.embed_failures + 1,
+                            p.to_index[0].section.section_id,
+                        ) from e
+                    else:
+                        valid_batch = (
+                            isinstance(batch, list)
+                            and len(batch) == len(p.to_index)
+                            and all(isinstance(vector, list) and vector for vector in batch)
+                        )
+                        if not valid_batch:
+                            actual = len(batch) if isinstance(batch, list) else None
+                            logger.warning(
+                                "batch embed returned an invalid response "
+                                "op=index file_path=%s expected=%d actual=%s",
+                                state.file_path, len(p.to_index), actual,
+                            )
+                            raise _EmbedOutage(
+                                diff.embed_failures + 1,
+                                p.to_index[0].section.section_id,
+                            )
+                        embeddings.update({
+                            pw.section.chunk_id: vector
+                            for pw, vector in zip(p.to_index, batch, strict=True)
+                        })
+                        use_scalar_fallback = False
+
+                if use_scalar_fallback:
+                    for pw in p.to_index:
+                        try:
+                            emb = embedder.embed(pw.section.content)
+                        except EmbeddingInputError as e:
+                            # Per-input failure on a healthy backend (e.g. bge-m3
+                            # NaN vector for this exact string). Aborting the
+                            # whole file here made the note vanish from recall
+                            # entirely — not even FTS. Degrade just this section
+                            # to the FTS-only shape the deferred path already
+                            # writes; the rest of the file indexes normally.
+                            logger.warning(
+                                "embed rejected this input; section written "
+                                "FTS-only op=index file_path=%s section_id=%s "
+                                "text_len=%d error=%r",
+                                state.file_path, pw.section.section_id,
+                                len(pw.section.content), e.ollama_message,
+                            )
+                            diff.embed_failures += 1
+                            diff.vec_ok = False
+                            continue
+                        except EmbeddingUnavailable as e:
+                            # Backend failure, typed at the embedder boundary. The
+                            # watcher/indexer path wants retry-and-continue, not a
+                            # crash: fold it into the same fail-closed abort a
+                            # falsy `[]` used to trigger, so the file is retried
+                            # intact on the next pass.
+                            raise _EmbedOutage(
+                                diff.embed_failures + 1, pw.section.section_id
+                            ) from e
+                        if not emb:
+                            raise _EmbedOutage(
+                                diff.embed_failures + 1, pw.section.section_id
+                            )
+                        embeddings[pw.section.chunk_id] = emb
 
             for pw in p.to_index:
                 vec_ok, fts_ok = store.write_chunk_row(

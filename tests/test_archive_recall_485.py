@@ -78,7 +78,7 @@ def memory_file(tmp_path, monkeypatch):
 
     monkeypatch.setattr(config, "memory_dir", str(tmp_path))
     path = os.path.join(str(tmp_path), "foo-status.md")
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(
             "---\nid: foo\ncategory: project\n---\n\n"
             "# Foo\n\n"
@@ -92,7 +92,7 @@ def test_archive_history_file_is_status_archived(memory_file):
     apply_operations(memory_file, [{"op": "ARCHIVE", "id": "f2", "reason": "wrong"}])
     history_file = memory_file.replace("-status.md", "-history.md")
     assert os.path.exists(history_file)
-    hist = open(history_file).read()
+    hist = open(history_file, encoding="utf-8").read()
     assert "status: archived" in hist
     assert "An obsolete claim that is wrong" in hist
 
@@ -104,7 +104,7 @@ def test_supersede_history_file_is_status_archived(memory_file):
     )
     history_file = memory_file.replace("-status.md", "-history.md")
     assert os.path.exists(history_file)
-    assert "status: archived" in open(history_file).read()
+    assert "status: archived" in open(history_file, encoding="utf-8").read()
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +135,7 @@ def test_archived_fact_excluded_from_default_recall_but_retrievable(isolated_sto
 
     obsolete = "An obsolete claim that is wrong"
     src = os.path.join(isolated_store, "projects", "foo-status.md")
-    with open(src, "w") as f:
+    with open(src, "w", encoding="utf-8") as f:
         f.write(
             "---\nid: foo\ncategory: project\n---\n\n"
             "# Foo\n\n"

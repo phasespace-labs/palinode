@@ -42,7 +42,8 @@ logger = logging.getLogger("palinode.cross_refs")
 
 # Directories that are not first-class memories to cross-link (mirrors the
 # watcher ignore set + lint skip set). ``daily`` notes are excluded as both
-# source and target — they are episodic and would create churn.
+# source and target — they are episodic and would create churn. Matched against
+# EVERY directory segment of a path, not just the first — see :func:`_is_skipped`.
 SKIP_DIRS: frozenset[str] = frozenset(
     {"daily", "archive", "logs", "inbox", "prompts", ".obsidian", ".git"}
 )
@@ -89,6 +90,22 @@ def _whole_match(candidate: str, text_lower: str) -> bool:
     return _candidate_pattern(candidate).search(text_lower) is not None
 
 
+def _is_skipped(rel_path: str) -> bool:
+    """True when ANY directory segment of ``rel_path`` is in :data:`SKIP_DIRS`.
+
+    Testing only the first segment let the store's own prompt copies at
+    ``specs/prompts/*.md`` through — ``parts[0] == "specs"`` — so the auto-updater
+    rewrote their frontmatter and committed it, and ``prompt sync``, which compares
+    a whole-file sha256 against ``shipped-hashes.json``, then read every store
+    prompt as operator-edited and refused to refresh it.
+
+    Only *directory* segments are considered, so a memory named ``logs.md`` is
+    still linkable; ``daily/2026-06-28.md`` and everything else previously
+    skipped is skipped exactly as before.
+    """
+    return any(part in SKIP_DIRS for part in rel_path.split(os.sep)[:-1])
+
+
 def path_to_ref(rel_path: str) -> str:
     """``decisions/drop-legacy.md`` → ``decisions/drop-legacy`` (OS-agnostic)."""
     stem = rel_path[:-3] if rel_path.endswith(".md") else rel_path
@@ -120,8 +137,10 @@ def build_registry(
 ) -> dict[str, dict[str, str]]:
     """Map every linkable memory's ``category/slug`` ref → ``{slug, title}``.
 
-    Reads each memory's frontmatter (title/name). Files under :data:`SKIP_DIRS`
-    are excluded. ``exclude_ref`` (the scanned file's own ref) is omitted so a
+    Reads each memory's frontmatter (title/name). Files with any directory
+    segment in :data:`SKIP_DIRS` are excluded (see :func:`_is_skipped`), so
+    ``specs/prompts/compaction.md`` is never offered as a link target.
+    ``exclude_ref`` (the scanned file's own ref) is omitted so a
     memory never cross-links to itself.
 
     O(N) ``stat`` calls per call; frontmatter is parsed only for files whose
@@ -134,7 +153,7 @@ def build_registry(
     for filepath in glob.glob(pattern, recursive=True):
         rel = os.path.relpath(filepath, memory_dir)
         parts = rel.split(os.sep)
-        if parts[0] in SKIP_DIRS:
+        if _is_skipped(rel):
             continue
         ref = path_to_ref(rel)
         slug = parts[-1][:-3] if parts[-1].endswith(".md") else parts[-1]
@@ -216,7 +235,7 @@ def update_file_cross_refs(
         result["error"] = "outside memory_dir"
         return result
     parts = rel.split(os.sep)
-    if not parts or parts[0] in SKIP_DIRS or parts[0].startswith(".."):
+    if not parts or _is_skipped(rel) or parts[0].startswith(".."):
         return result
 
     try:

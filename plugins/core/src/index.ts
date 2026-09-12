@@ -14,6 +14,8 @@
  *   - recall → injection TEXT (triggers + strict search, bounded)
  *   - session-start priming digest
  *   - the capture-floor payload for /session-end
+ *   - the reversal client (restore / unretract / forget-withdraw), so a
+ *     binding that exposes archival can expose its undo on the same path
  *
  * Design contract (shared with the Claude Code hooks — same knobs, same
  * semantics, same env var names):
@@ -178,9 +180,19 @@ interface SearchHit {
   /** Post-fusion rank value — ~1.0 for any query's top hit. Display fallback only. */
   score?: number;
   /** Raw cosine — the scale the threshold knob filters on. Preferred for display. */
-  raw_score?: number;
+  raw_score?: number | null;
   snippet?: string;
   content?: string;
+}
+
+/** Keep aligned with palinode/core/scoring.py; the packages remain independently deployable. */
+function describeMatch(result: SearchHit): string {
+  const rank = (result.score ?? 0).toFixed(2);
+  if (result.raw_score === null) return `keyword match, rank ${rank}`;
+  if (typeof result.raw_score === "number") {
+    return `${Math.round(result.raw_score * 100)}% match`;
+  }
+  return `rank ${rank}`;
 }
 
 interface FiredTrigger {
@@ -238,12 +250,8 @@ export async function buildRecallContext(
     const lines = results
       .map((r) => {
         const path = r.rel_path ?? r.file_path ?? "?";
-        // raw_score, not score: the fused rank value reads ~100% for the
-        // top hit of ANY query; raw cosine is the threshold knob's scale,
-        // so showing it makes the lever tunable from what the user sees.
-        const pct = Math.floor((r.raw_score ?? r.score ?? 0) * 100);
         const body = (r.snippet ?? r.content ?? "").replace(/\n/g, " ");
-        return `- [${path}] (${pct}%) ${body}`;
+        return `- [${path}] (${describeMatch(r)}) ${body}`;
       })
       .join("\n");
     return `\n### Related memories\n${lines}\n`;
@@ -408,4 +416,83 @@ export async function postSessionCapture(
 ): Promise<boolean> {
   const res = await apiJson(cfg, fetchFn, "/session-end", { body: payload });
   return res !== null;
+}
+
+// ---------------------------------------------------------------------------
+// Reversal client — the inverse of archival and retraction, over the REST
+// API. Plain fail-open calls: the result object on 2xx, null otherwise. Each
+// maps 1:1 to the registered operation in palinode/core/parity.py so a
+// binding exposing them inherits the canonical parameter names.
+// ---------------------------------------------------------------------------
+
+export interface RestoreResult {
+  file: string;
+  /** "active" when restored; "not_archived" when there was nothing to undo. */
+  status: string;
+  restored_from?: string | null;
+  restored_at?: string;
+  history_file?: string | null;
+  chunks_updated?: number;
+  /** Present when the memory still carries a TTL the sweep will act on. */
+  expires_at?: string;
+}
+
+/** Bring one archived memory back into default recall (inverse of /archive). */
+export async function restoreMemory(
+  filePath: string,
+  cfg: PalinodeConfig,
+  fetchFn: FetchFn = fetch,
+  reason?: string,
+): Promise<RestoreResult | null> {
+  const body: Record<string, unknown> = { file_path: filePath };
+  if (reason !== undefined) body.reason = reason;
+  const res = await apiJson(cfg, fetchFn, "/restore", { body });
+  return (res as RestoreResult | null) ?? null;
+}
+
+export interface UnretractResult {
+  file: string;
+  /** "unretracted", or "not_retracted" when the pref was not on record. */
+  status: string;
+  mentions: number;
+  retraction_id?: string;
+  history_file?: string | null;
+  index_error?: string;
+}
+
+/** Withdraw one pref's mention-level retraction from one memory. */
+export async function unretractMentions(
+  filePath: string,
+  pref: string,
+  cfg: PalinodeConfig,
+  fetchFn: FetchFn = fetch,
+  reason?: string,
+): Promise<UnretractResult | null> {
+  const body: Record<string, unknown> = { file_path: filePath, pref };
+  if (reason !== undefined) body.reason = reason;
+  const res = await apiJson(cfg, fetchFn, "/unretract", { body });
+  return (res as UnretractResult | null) ?? null;
+}
+
+export interface ForgetWithdrawResult {
+  file: string;
+  status: string;
+  pref: string;
+  restored: string[];
+  unretracted: Array<{ path: string; mentions: number }>;
+  requests_archived: string[];
+  failed?: Array<{ path: string; op: string }>;
+}
+
+/** Take a forget request back: restore + unretract its targets, archive the record. */
+export async function withdrawForgetRequest(
+  filePath: string,
+  cfg: PalinodeConfig,
+  fetchFn: FetchFn = fetch,
+  reason?: string,
+): Promise<ForgetWithdrawResult | null> {
+  const body: Record<string, unknown> = { file_path: filePath };
+  if (reason !== undefined) body.reason = reason;
+  const res = await apiJson(cfg, fetchFn, "/forget-withdraw", { body });
+  return (res as ForgetWithdrawResult | null) ?? null;
 }

@@ -115,6 +115,30 @@ def _warm_embed_gate(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _bridge_scalar_embed_test_doubles(monkeypatch):
+    """Keep existing scalar embed test doubles valid after batching.
+
+    Write-path tests historically replace the public ``embed()`` seam to
+    model success, outage, and partial failure. Production reconciliation now
+    calls ``embed_many()``; when a test replaces ``embed()``, route the batch
+    dynamically through that replacement so the test still exercises its
+    intended condition instead of contacting a developer's Ollama instance.
+    Tests that patch ``embed_many()`` directly override this bridge normally.
+    """
+    from palinode.core import embedder
+
+    original_embed = embedder.embed
+    original_embed_many = embedder.embed_many
+
+    def embed_many(texts):
+        if embedder.embed is not original_embed:
+            return [embedder.embed(text) for text in texts]
+        return original_embed_many(texts)
+
+    monkeypatch.setattr(embedder, "embed_many", embed_many)
+
+
+@pytest.fixture(autouse=True)
 def _isolated_rate_counters(request: pytest.FixtureRequest) -> dict:
     """Clear the process-wide limiter while arming restoration first."""
     from palinode.api import rate_limit
@@ -154,6 +178,26 @@ def _isolate_db_path(tmp_path, monkeypatch):
     from palinode.core.config import config
 
     monkeypatch.setattr(config, "db_path", str(tmp_path / ".palinode.db"))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_memory_dir(tmp_path, monkeypatch):
+    """Point ``config.memory_dir`` at this test's ``tmp_path`` by default.
+
+    The ``_isolate_db_path`` argument, one directory up. The process default
+    is the developer's real memory store (``~/palinode``), and a command that
+    writes into ``config.memory_dir`` without being told otherwise writes
+    *there*. That stayed invisible while nothing but the database was written
+    outside a fixture's ``tmp_path``; ``palinode init`` provisioning
+    ``specs/prompts/`` into the store is the first command that does, and
+    every existing ``init`` test invokes it.
+
+    Same override rule as ``db_path``: a test that patches ``memory_dir``
+    itself runs afterwards and wins.
+    """
+    from palinode.core.config import config
+
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
 
 
 @pytest.fixture(scope="session")

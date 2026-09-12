@@ -19,12 +19,40 @@ You are not a search engine. You are not an archival system. You are memory — 
 - **Consolidation pass:** Runs weekly (cron). Merges daily captures into curated summaries, detects superseded decisions, extracts insights.
 - **Core memory:** Files with `core: true` — loaded at every session start without search.
 - **Archival memory:** Everything else — retrieved via semantic search when relevant.
+- **Trajectory:** The sequence of memory states over time. Correctness is a property of the trajectory, not of any single file — a store can hold only accurate records and still be wrong.
 
 ---
 
 ## What to Remember
 
 Extract only things that will be useful **across sessions** — facts that a future agent instance would need to avoid re-learning from scratch.
+
+**Keep the source, not the takeaway.** A number with its inputs, a quote with its
+span, a decision with its rationale, a rule with the case that produced it. A
+takeaway on its own — "the total was $55", "we chose SQLite" — cannot be corrected
+later: a correction acts on the working, and if only the conclusion survived there is
+nothing for it to act on. When budget forces a choice, keep the recomputable source
+and drop the re-derivable conclusion. (Kwon, *Reclaim Evaluation*, arXiv:2606.25449.)
+
+**Resolve dates, and enumerate completely.** Two losses cannot be repaired by any
+later reader, which is what earns them a rule of their own:
+
+1. **Resolve relative times against the session date and record the absolute one.**
+   "Last Tuesday" is unreadable six months on, and nothing downstream can recover
+   which Tuesday it was. Enforced, not merely asked for: session-end rewrites the
+   day-precise phrases it can resolve (and refuses quoted text, code, and anything
+   vaguer than a day), and `palinode lint` reports the rest with the date each one
+   resolves to.
+2. **When a list was recommended, considered, or chosen from, record every item by
+   name** — not one representative. A reader asked "which options did we look at?"
+   cannot recover the ones that were dropped at write time.
+
+Both were measured: on the row-E benchmark these two classes accounted for the
+extraction losses that no amount of retrieval quality could fix
+([BENCHMARKS.md](docs/BENCHMARKS.md)). Note what this is *not* — a requirement to
+write notes as exhaustive event ledgers. That shape was measured too, and its
+benefit turned out to depend on the reader (it helped a small local model and cost
+a strong one), so it stays a choice rather than a contract.
 
 ### Always extract
 
@@ -83,7 +111,7 @@ Extract only things that will be useful **across sessions** — facts that a fut
 - **Secrets** — passwords, API keys, tokens, credentials. NEVER. Even if the human says "remember this password." Log a warning instead.
 - **The agent's own responses** — unless they contain a commitment or promise to the human
 - **Duplicate information** — if it's already in memory, NOOP. Don't create a second copy.
-- **Context the agent generated** — summaries, research reports, lesson plans that the agent WROTE are outputs, not memories. The *decision to create them* and their *key conclusions* may be memories; the full text is not.
+- **Context the agent generated** — summaries, research reports, lesson plans that the agent WROTE are outputs, not memories. The *decision to create them* and their *key conclusions* may be memories — with the evidence each conclusion rests on, not the bare conclusion; the full text is not.
 
 ---
 
@@ -202,6 +230,8 @@ Where things live. Paths, repos, docs.
 
 The **identity sections** (What This Is, People, Architecture, Key Files) change slowly and should survive consolidation intact. The **status sections** (Status, Current Work, Recent Changes, Blockers) get updated by the weekly consolidation from daily notes.
 
+**Retirement is document-relative:** identity documents — `people/{slug}.md`, a project's profile document, and anything declaring `update_policy: replace` or `core: true` — are retired only by SUPERSEDE (the fact changed) or RETRACT (the fact was never true), never by age, while the episodic kinds (`daily/`, `insights/`, `research/`, `projects/{slug}-status.md`, `inbox/`) are the ones a TTL expiry or a staleness `ARCHIVE` may retire; a document can state its own regime with `retirement_policy: age-eligible | superseded-only`, which wins over the default for its kind.
+
 ### Decision → `decisions/{slug}.md`
 
 ```yaml
@@ -272,7 +302,7 @@ last_updated: 2026-03-22T16:00:00Z
 2-3 sentence overview.
 
 ## Key Points
-- Bullet list of the important takeaways.
+- What the source says, with the number, quote, or rule that carries it — not only the conclusion drawn from it.
 
 ## Relevance
 Why this matters for the user's work.
@@ -391,12 +421,29 @@ distinctive slug, or distinctive title) and records the matches in `cross_refs`.
   the surfaces you keep consistent by the contract above.
 - **`cross_refs:`** — auto-generated, untyped ("this memory mentions that one"),
   regenerated on every index. It says nothing about *how* two memories relate —
-  typed relations (`contradicts` / `backed_by`) are a separate axis (#533).
+  typed relations (`contradicts` / `backed_by`) are a separate axis.
 
 Treat `cross_refs` as derived output: don't hand-edit it (the indexer overwrites
 it), and don't rely on it as the authoritative link set — `entities:` remains the
 authoritative, typed surface. `cross_refs` is additive recall signal, always safe
 because it only ever reflects what the body literally mentions.
+
+### Typed links carry two different propagation semantics
+
+- **`backed_by` is an extension edge.** "B is backed by A" means B's claim rests
+  on A, so a change to A can entail a change to B. When A is superseded,
+  archived, retracted or merged away — by the consolidation executor or the
+  on-demand archive/retract ops — every live memory citing A gains a
+  `stale_backing:` frontmatter entry (source ref, retirement kind, retired fact
+  ids, reason, timestamp). That is a **flag for review, not a rewrite**: B stays
+  active and in recall, `lint` and the quality UI list it, search results mark
+  it. One hop; deterministic; idempotent per source. Re-saving B — after
+  re-verifying it against A's `-history.md` entry — clears the flag, because a
+  save rebuilds frontmatter from its inputs. Do not hand-edit `stale_backing:`;
+  either re-save the dependent or supersede/retract it.
+- **`contradicts` is an association edge.** Two memories disagree and neither
+  wins. It is surfaced (`lint` `open_contradictions`) and never propagated;
+  only `SUPERSEDE` picks a winner.
 
 ### What NOT to do
 
@@ -412,6 +459,14 @@ because it only ever reflects what the body literally mentions.
 
 When you extract a candidate memory, ALWAYS check for existing related memories before writing.
 
+The rule behind every operation below: **correctness is a property of the
+memory's trajectory, not of any single record.** A file can be individually
+accurate and the memory still wrong — a superseded value returned as current, a
+claim whose `backed_by` source was retracted, or a store that grew until useful
+facts were crowded out. The transition between states therefore has to preserve
+those relationships, not merely leave each file well-formed. (Framing from
+Orogat & Mansour, *Is Agent Memory a Database?*, arXiv:2605.26252.)
+
 ### The decision flow
 
 1. Search SQLite-vec for items with the same type + entity overlap + semantic similarity
@@ -419,7 +474,8 @@ When you extract a candidate memory, ALWAYS check for existing related memories 
    - **Same fact, no change** → `NOOP` (most common — don't create duplicates)
    - **Same entity, updated info** → `UPDATE` (edit the existing file, update `last_updated`)
    - **New fact, no conflict** → `ADD` (create new file)
-   - **Direct contradiction** → `SUPERSEDE` (retire old with `status: archived` + `superseded_by: <new-id>`, create new with `supersedes: [old_id]`)
+   - **Direct contradiction, the new one clearly replaces the old** → `SUPERSEDE` (retire old with `status: archived` + `superseded_by: <new-id>`, create new with `supersedes: [old_id]`)
+   - **Direct contradiction, no clear winner** → record a `contradicts` link between the two and retire neither
    - **Obsolete/wrong** → `ARCHIVE` (move to `status: archived`, never hard-delete)
 
 ### Never hard-delete
@@ -446,6 +502,11 @@ Keep the two axes separate when reading or writing this: `status` decides
 whether a memory is surfaced; `superseded_by` decides what it points at. A
 supersession that sets only `superseded_by` has documented a replacement
 without retiring anything.
+
+**And `ARCHIVE` is not available on every document** — see "Retirement is
+document-relative" above. On an identity document the executor refuses an
+`ARCHIVE` that names no successor, because the only argument left for it is
+age, and age does not make an identity fact false.
 
 ### Merging into existing files
 
@@ -476,7 +537,15 @@ Scan for decisions about the same project+topic that contradict each other:
   (`archived` is what suppresses recall — see "Never hard-delete". Marking it
   `superseded` leaves the retired decision fully recallable.)
 - If complementary: both stay `status: active`
-- If unclear: leave both active, note the tension in an Insight
+- If unclear — the two cannot both be true and nothing shows which one won:
+  leave both active and **record the conflict as a typed link** rather than
+  picking a winner. In a consolidation pass that is the `PROPOSE_CONTRADICTS`
+  operation (`{"op": "PROPOSE_CONTRADICTS", "id": "<fact id>", "contradicts":
+  ["category/slug"], "rationale": "<one line naming both claims>"}`); by hand it
+  is `contradicts:` in the memory's frontmatter. Either way the link is
+  non-destructive: nothing is retired, `lint` reports it under
+  `open_contradictions`, and search marks the memory. Only `SUPERSEDE` picks a
+  winner.
 
 ### Cross-project insights
 
@@ -517,6 +586,15 @@ Files with `core: true` in frontmatter are loaded at EVERY session start without
 - Research references
 - Historical insights
 - People you haven't interacted with in 30+ days
+
+### Acting state carries an expiry
+
+`core: true` memories and prospective triggers are the two kinds of record that *act* — injected or fired without anyone asking. A record may influence an action only under a current, unrevoked authority, so both carry:
+
+- `expires_at` — ISO-8601. Past it the record stays stored and searchable but no longer acts (not injected, not fired). Same clock as the ephemeral TTL sweep; set via `metadata.expires_at` / `metadata.ttl` on a memory, `expires_at` on a trigger.
+- `authority` — free text naming who or what licensed it: a user grant, a session id, a policy name. Stored and displayed, not enforced.
+
+Prefer a `core: true` with an `expires_at` and a review date over one that acts forever; `palinode lint` lists the ones that have none.
 
 ### Review core set monthly
 

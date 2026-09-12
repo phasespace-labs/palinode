@@ -57,6 +57,17 @@ leave an uncommitted body mutation on disk; the index outcome is surfaced in
 the result (``indexed_vec`` / ``indexed_fts`` / ``index_error``) exactly as
 the save path surfaces it, because ``index_file`` reports embedder outages
 in its return value rather than raising.
+
+UNRETRACT IS THE INVERSE. :func:`unretract_mentions` un-strikes every span
+carrying this pref's ``r:<id>`` marker — the id is a stable function of the
+normalized pref, so the pref names exactly its own markers and never another
+pref's — and removes the pref from ``retracted_prefs``, which is the record
+resolution consults. Both halves matter: the markers are what the reader
+sees, the record is what keeps a later same-pref request from striking the
+file again. A record with no surviving markers (a hand edit removed them) is
+still cleared, so the file ends consistent either way. ``status`` is never
+touched — un-striking a strand in an archived file does not unarchive it;
+that is :func:`palinode.consolidation.archive.restore_memory`'s job.
 """
 from __future__ import annotations
 
@@ -324,6 +335,16 @@ def retract_mentions(
 
     outcome = index_file(abs_path)
 
+    # Memories whose `backed_by` cites this one are flagged for review (one
+    # hop, flag-only, its own commit). The reason is the opaque `r:<id>`, never
+    # the pref text — the same discipline as the in-body marker, so a flag can
+    # never feed the pref back into a later forget pass's matching.
+    from palinode.consolidation.propagate import flag_dependents
+
+    review_flagged = flag_dependents(
+        abs_path, ops=["retract"], reason=f"retracted {mentions} mention(s) r:{rid}"
+    )
+
     logger.info("Retracted %d mention(s) in %s [r:%s]", mentions, rel, rid)
     result: dict[str, Any] = {
         "file": rel,
@@ -334,10 +355,106 @@ def retract_mentions(
         "committed": committed,
         "indexed_vec": bool(outcome.get("indexed_vec", True)),
         "indexed_fts": bool(outcome.get("indexed_fts", True)),
+        "review_flagged": review_flagged,
     }
     if outcome.get("error"):
         result["index_error"] = outcome["error"]
     return result
 
 
-__all__ = ["normalize_pref", "retract_mentions", "retraction_id"]
+def _unstrike_re(rid: str) -> re.Pattern[str]:
+    """Match one struck span carrying this retraction id, capturing the text."""
+    return re.compile(
+        r"~~(.+?)~~ \[RETRACTED \d{4}-\d{2}-\d{2} r:" + re.escape(rid) + r"\]\."
+    )
+
+
+def unretract_mentions(
+    file_path: str,
+    pref: str,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    """Withdraw one pref's retraction from one memory: un-strike its markers,
+    clear its ``retracted_prefs`` record.
+
+    Returns a summary dict keyed by ``status``:
+
+    - ``"unretracted"`` — the record was cleared and ``mentions`` spans were
+      un-struck (possibly 0 when a hand edit already removed the markers);
+      the file was written, audited, committed and re-indexed, with the
+      index outcome in ``indexed_vec`` / ``indexed_fts`` / ``index_error``.
+    - ``"not_retracted"`` — this pref is not in the file's ``retracted_prefs``
+      record; nothing touched. Markers are never sniffed as a substitute
+      for the record (the same tracked-state rule as retraction).
+
+    The file's ``status`` frontmatter is never changed.
+
+    Raises:
+        ValueError: the path is malformed or escapes ``memory_dir``.
+        FileNotFoundError: no such memory file.
+    """
+    from palinode.consolidation.executor import append_to_history
+
+    rel, abs_path = resolve_memory_ref(file_path)
+    if not os.path.isfile(abs_path):
+        raise FileNotFoundError(rel)
+
+    with open(abs_path, encoding="utf-8") as f:
+        post = frontmatter.load(f)
+
+    norm = normalize_pref(pref)
+    recorded = post.metadata.get("retracted_prefs") or []
+    if not isinstance(recorded, list) or norm not in recorded:
+        return {"file": rel, "status": "not_retracted", "mentions": 0}
+
+    rid = retraction_id(pref)
+    new_body, mentions = _unstrike_re(rid).subn(r"\1", post.content)
+
+    post.content = new_body
+    remaining = [p for p in recorded if p != norm]
+    if remaining:
+        post["retracted_prefs"] = remaining
+    else:
+        post.metadata.pop("retracted_prefs", None)
+    git_tools.write_memory_file(abs_path, frontmatter.dumps(post) + "\n")
+
+    audit_id = str(post.metadata.get("id") or "").strip() or (
+        os.path.splitext(os.path.basename(rel))[0]
+    )
+    entry = f'Unretracted {mentions} mention(s) [r:{rid}]: "{pref}"'
+    if reason:
+        entry = f"{entry} (reason: {reason})"
+    history_abs = append_to_history(abs_path, audit_id, entry)
+    history_rel = os.path.relpath(history_abs, config.memory_dir)
+
+    # Same contract as retract_mentions: commit before re-index.
+    message = f"{config.git.commit_prefix} unretract: {rel} ({mentions} mentions)"
+    committed = git_tools.commit_memory_files([abs_path, history_abs], message)
+
+    from palinode.indexer.index_file import index_file
+
+    outcome = index_file(abs_path)
+
+    logger.info("Unretracted %d mention(s) in %s [r:%s]", mentions, rel, rid)
+    result: dict[str, Any] = {
+        "file": rel,
+        "status": "unretracted",
+        "mentions": mentions,
+        "retraction_id": rid,
+        "reason": reason,
+        "history_file": history_rel,
+        "committed": committed,
+        "indexed_vec": bool(outcome.get("indexed_vec", True)),
+        "indexed_fts": bool(outcome.get("indexed_fts", True)),
+    }
+    if outcome.get("error"):
+        result["index_error"] = outcome["error"]
+    return result
+
+
+__all__ = [
+    "normalize_pref",
+    "retract_mentions",
+    "retraction_id",
+    "unretract_mentions",
+]

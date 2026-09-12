@@ -100,6 +100,7 @@ artifacts/public-sync-*-repo/
 artifacts/public-review-tree-*-payload/
 artifacts/*-cut-source/
 artifacts/*-wheel-verify/
+artifacts/*-public-repo/
 
 # Test-rig deploy-key material (.claude/plans/test-rigs/) — never commit secrets
 .claude/plans/test-rigs/group_vars/all.vault.yml

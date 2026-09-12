@@ -92,6 +92,19 @@ def test_build_registry_excludes_self_and_skip_dirs(tmp_path):
     assert reg["insights/b"]["title"] == "Beta Insight"
 
 
+def test_build_registry_skips_nested_skip_dir(tmp_path):
+    """A skip dir at any depth is skipped — store prompts live at
+    ``specs/prompts/*.md``, so a ``parts[0]`` test never excluded them."""
+    _write(tmp_path / "projects" / "x.md", "Project Ecks")
+    _write(tmp_path / "specs" / "prompts" / "compaction.md", "Compaction Prompt")
+    _write(tmp_path / "specs" / "amr.md", "Auditable Memory Record")
+
+    reg = cross_refs.build_registry(str(tmp_path))
+    assert "specs/prompts/compaction" not in reg
+    # Only the `prompts` segment is skipped; `specs/` itself stays linkable.
+    assert set(reg.keys()) == {"projects/x", "specs/amr"}
+
+
 # ── update_file_cross_refs (file mutation) ───────────────────────────────────
 
 @pytest.fixture()
@@ -163,6 +176,35 @@ def test_update_respects_disabled_config(memdir, monkeypatch):
     res = cross_refs.update_file_cross_refs(str(src))
     assert res["changed"] is False
     assert "cross_refs" not in _meta(src)
+
+
+def test_update_skips_store_prompts_and_never_links_to_them(memdir):
+    """Store prompts at ``specs/prompts/*.md`` are outside the cross-ref world.
+
+    The old ``parts[0]`` skip test missed them (``parts[0] == "specs"``), so the
+    auto-updater rewrote their frontmatter — changing the whole-file sha256 that
+    ``prompt sync`` compares against ``shipped-hashes.json``, which made every
+    store prompt look operator-edited and unrefreshable.
+    """
+    _write(memdir / "decisions" / "drop-legacy-browser.md", "Drop Legacy Browser")
+    prompt = memdir / "specs" / "prompts" / "compaction.md"
+    _write(prompt, "Compaction Prompt",
+           body="Apply decisions/drop-legacy-browser when compacting projects/x.")
+    before = prompt.read_bytes()
+
+    res = cross_refs.update_file_cross_refs(str(prompt))
+    assert res["changed"] is False
+    assert res["refs"] == []
+    assert prompt.read_bytes() == before  # byte-identical: the shipped hash holds
+
+    # A real memory still cross-links — and is never offered the prompt as a target.
+    src = memdir / "projects" / "x.md"
+    _write(src, "Project Ecks",
+           body="Per specs/prompts/compaction, see decisions/drop-legacy-browser.")
+    res = cross_refs.update_file_cross_refs(str(src))
+    assert res["changed"] is True
+    assert res["refs"] == ["decisions/drop-legacy-browser"]
+    assert _meta(src)["cross_refs"] == ["decisions/drop-legacy-browser"]
 
 
 def test_update_excludes_self_reference(memdir):

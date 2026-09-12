@@ -21,4 +21,4 @@ def archive_expired(dry_run, fmt):
                 console.print(f"  {path}")
     except Exception as e:
         console.print(f"[red]Error archiving expired memories: {str(e)}[/red]")
-        click.Abort()
+        raise click.Abort()

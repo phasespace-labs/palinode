@@ -133,7 +133,7 @@ def _write_and_index(memory_dir: str, relpath: str, body: str, frontmatter: dict
     path = os.path.join(memory_dir, relpath)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fm = yaml.safe_dump(frontmatter, default_flow_style=False)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(f"---\n{fm}---\n\n{body}\n")
     index_file(path)
     return path
@@ -178,7 +178,7 @@ def test_archive_expired_suppresses_from_recall_but_retains(isolated_store):
 
     # File frontmatter is now archived.
     from palinode.core import parser
-    with open(os.path.join(isolated_store, "inbox/probe-incident.md")) as f:
+    with open(os.path.join(isolated_store, "inbox/probe-incident.md"), encoding="utf-8") as f:
         meta, _ = parser.parse_markdown(f.read())
     assert meta["status"] == "archived"
 
@@ -226,7 +226,7 @@ def test_archive_expired_dry_run_writes_nothing(isolated_store):
     )
     result = ttl.archive_expired(dry_run=True)
     assert result["count"] == 1 and result["dry_run"] is True
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         meta, _ = parser.parse_markdown(f.read())
     assert meta.get("status") != "archived"  # untouched
 
@@ -264,7 +264,7 @@ def test_save_resolves_ttl_to_expires_at(api_client):
         "metadata": {"kind": "telemetry", "ttl": "1h"},
     })
     assert resp.status_code == 200, resp.text
-    with open(os.path.join(memory_dir, "inbox", "ttl-probe.md")) as f:
+    with open(os.path.join(memory_dir, "inbox", "ttl-probe.md"), encoding="utf-8") as f:
         meta, _ = parser.parse_markdown(f.read())
     assert "expires_at" in meta and "ttl" not in meta
     # roughly now + 1h
@@ -307,6 +307,6 @@ def test_archive_expired_endpoint(api_client):
     live = client.post("/archive-expired", json={"dry_run": False}).json()
     assert live["count"] == 1
     from palinode.core import parser
-    with open(os.path.join(memory_dir, "inbox", "endpoint-expired.md")) as f:
+    with open(os.path.join(memory_dir, "inbox", "endpoint-expired.md"), encoding="utf-8") as f:
         meta, _ = parser.parse_markdown(f.read())
     assert meta["status"] == "archived"

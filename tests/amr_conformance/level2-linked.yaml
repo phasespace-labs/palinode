@@ -1,0 +1,96 @@
+# Auditable Memory (AMR) conformance — Level 2, Linked (SPEC §3 ref syntax, §4.5, §7)
+#
+# Two things are under test: ref hygiene (a malformed ref must never resolve to
+# a path outside a storage root) and the non-resolving semantics of `contradicts`.
+spec_version: "0.1.0"
+suite: level2-linked
+
+cases:
+  - id: l2-001
+    why: "A well-formed ref list is accepted on both typed-link fields."
+    input:
+      backed_by: ["research/medical-cpi-2026"]
+      contradicts: ["research/pharma-pricing-brief-2025"]
+    expect: { valid: true }
+
+  - id: l2-002
+    why: "Nested subdirectories and a trailing .md are both permitted."
+    input: { backed_by: ["research/2026/q1/pricing.md"] }
+    expect: { valid: true }
+
+  - id: l2-003
+    why: "Path traversal is rejected. A ref must never escape a storage root."
+    input: { backed_by: ["../../etc/passwd"] }
+    expect: { valid: false, error: "malformed ref" }
+
+  - id: l2-004
+    why: "Traversal embedded mid-ref is rejected too, not just at the start."
+    input: { backed_by: ["research/../../../etc/passwd"] }
+    expect: { valid: false, error: "malformed ref" }
+
+  - id: l2-005
+    why: "Absolute paths are rejected."
+    input: { contradicts: ["/etc/passwd"] }
+    expect: { valid: false, error: "malformed ref" }
+
+  - id: l2-006
+    why: "A ref must start with an alphanumeric — no leading dot, slash, or dash."
+    input: { backed_by: [".hidden/thing"] }
+    expect: { valid: false, error: "malformed ref" }
+
+  - id: l2-007
+    why: "Whitespace and control characters are rejected."
+    input: { backed_by: ["research/some thing"] }
+    expect: { valid: false, error: "malformed ref" }
+
+  - id: l2-008
+    why: "Empty string is not a ref."
+    input: { contradicts: [""] }
+    expect: { valid: false, error: "malformed ref" }
+
+  - id: l2-009
+    why: >
+      A one-sided link is valid. Implementations SHOULD write the reciprocal
+      back-link but MUST tolerate its absence.
+    input:
+      record: { ref: "a", contradicts: ["b"] }
+      other: { ref: "b" }
+    expect: { valid: true, note: "b need not declare contradicts: [a]" }
+
+  - id: l2-010
+    why: >
+      THE LOAD-BEARING CASE. `contradicts` is non-resolving. After declaring the
+      conflict, BOTH records must remain retrievable. An implementation that
+      deletes, overwrites, hides, or auto-supersedes either side fails Level 2.
+    input:
+      record: { ref: "a", contradicts: ["b"] }
+      other: { ref: "b" }
+    expect:
+      valid: true
+      a_retrievable: true
+      b_retrievable: true
+      must_not: ["delete b", "overwrite b", "suppress b from retrieval", "mark b superseded"]
+
+  - id: l2-011
+    why: >
+      Declared relations must be queryable AS relations — "what does record a
+      contradict?" must be answerable directly, not approximated by similarity
+      search over text.
+    input: { record: { ref: "a", contradicts: ["b", "c"] } }
+    expect:
+      valid: true
+      query: "contradicts_of(a)"
+      returns: ["b", "c"]
+      note: "exact set, not a ranked similarity list"
+
+  - id: l2-012
+    why: >
+      Inferred relations must NOT be serialized into these fields. A link derived
+      from embedding proximity, co-occurrence, or entity overlap is not a declared
+      relation and writing it here is a conformance failure (§4.5).
+    input:
+      derivation: "cosine similarity 0.91 between record a and record d"
+      attempted: { backed_by: ["d"] }
+    expect:
+      valid: false
+      error: "inferred relation serialized as declared typed link"

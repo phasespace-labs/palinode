@@ -1,8 +1,14 @@
 import os
 import httpx
+from typing import Any
 from palinode.core.auth import load_api_token
 from palinode.core.config import config
-from palinode.core.defaults import SAVE_SOURCE_HEADER, SESSION_END_TIMEOUT_SECONDS, _SESSION_END_TIMEOUT_SENTINEL
+from palinode.core.defaults import (
+    CONSOLIDATION_TIMEOUT_SECONDS,
+    SAVE_SOURCE_HEADER,
+    SESSION_END_TIMEOUT_SECONDS,
+    _SESSION_END_TIMEOUT_SENTINEL,
+)
 from palinode.core.write_input import SAVE_PARAMS, SESSION_END_PARAMS, build_payload
 
 # Cross-surface drift guard: all three entry points (CLI, MCP, hook) must
@@ -30,6 +36,23 @@ assert SESSION_END_TIMEOUT_SECONDS == _SESSION_END_TIMEOUT_SENTINEL or os.enviro
 HTTPStatusError = httpx.HTTPStatusError
 RequestError = httpx.RequestError
 ReadTimeout = httpx.ReadTimeout
+
+
+# ── Budgets for routes that outlive the default request timeout ──────────────
+#
+# The client default below (30 s) is a budget for the deterministic routes.
+# Consolidation is not one, and it is not a CLI-only problem: MCP posts the
+# same route. The budget and its ``PALINODE_CONSOLIDATE_TIMEOUT`` override
+# therefore live in ``core.defaults`` with the rest of the cross-surface
+# contract (ADR-010) and are re-exported here, so the CLI keeps reading it
+# through this module's attribute — which is what makes a test (or an
+# operator's override) visible to both the request and the timeout message.
+
+#: Store-wide deterministic sweeps (``/bootstrap-fact-ids``): no model call,
+#: but one parse + rewrite + git commit per memory file, so wall time scales
+#: with the store rather than with any fixed budget. 600 s matches ``/reindex``,
+#: the other whole-store sweep.
+STORE_SWEEP_TIMEOUT_SECONDS: float = 600.0
 
 
 def _client_headers() -> dict[str, str]:
@@ -84,10 +107,13 @@ class PalinodeAPI:
         date_before: str | None = None,
         include_daily: bool | None = None,
         include_telemetry: bool | None = None,
-    ):
+        tier: str | None = None,
+    ) -> list[dict[str, Any]]:
         # ADR-010: forward the full canonical search surface.
         # Non-None params land in the body verbatim; None means "API default".
         payload: dict = {"query": query, "limit": limit}
+        if tier:
+            payload["tier"] = tier
         if category:
             payload["category"] = category
         if context:
@@ -134,7 +160,7 @@ class PalinodeAPI:
         epistemic: str | None = None,
         contradicts: list[str] | None = None,
         backed_by: list[str] | None = None,
-    ):
+    ) -> dict[str, Any]:
         # One inclusion rule, shared with MCP via core/write_input.py: a param
         # is sent when it is not None, so an explicitly-empty ``contradicts=[]``
         # reaches the server as the assertion the caller made rather than being
@@ -175,12 +201,12 @@ class PalinodeAPI:
         response.raise_for_status()
         return response.json()
 
-    def get_status(self):
+    def get_status(self) -> dict[str, Any]:
         response = self.client.get("/status")
         response.raise_for_status()
         return response.json()
 
-    def read(self, file_path: str, meta: bool = False):
+    def read(self, file_path: str, meta: bool = False, tier: str | None = None) -> dict[str, Any]:
         """Read a memory file via the API.
 
         Returns ``{file, content, size_bytes, [frontmatter]}``.  When
@@ -189,11 +215,13 @@ class PalinodeAPI:
         params: dict = {"file_path": file_path}
         if meta:
             params["meta"] = "true"
+        if tier:
+            params["tier"] = tier
         response = self.client.get("/read", params=params)
         response.raise_for_status()
         return response.json()
 
-    def list_files(self, category: str | None = None, core_only: bool | None = None):
+    def list_files(self, category: str | None = None, core_only: bool | None = None) -> list[dict[str, Any]]:
         """List memory files via the API.  ADR-010."""
         params: dict = {}
         if category:
@@ -204,17 +232,43 @@ class PalinodeAPI:
         response.raise_for_status()
         return response.json()
 
-    def lint(self):
+    def lint(
+        self,
+        propose: bool = False,
+        apply: bool = False,
+        deep_contradictions: bool = False,
+        max_llm_calls: int | None = None,
+        similarity_threshold: float | None = None,
+    ) -> dict[str, Any]:
         """Run the memory lint pass via the API.  ADR-010.
+
+        ``propose`` adds the deterministic finding→operation proposal set (a dry
+        run); ``apply`` runs the applicable proposals through the executor path.
+        ``deep_contradictions`` includes the LLM-confirmed semantic pass so its
+        findings can be proposed too.
 
         Raises ``RequestError`` if the API is unreachable; the CLI catches
         this to fall back to a local in-process lint pass.
         """
-        response = self.client.post("/lint", timeout=30.0)
+        params: dict[str, Any] = {}
+        if propose:
+            params["propose"] = "true"
+        if apply:
+            params["apply"] = "true"
+        if deep_contradictions:
+            params["deep_contradictions"] = "true"
+            if max_llm_calls is not None:
+                params["max_llm_calls"] = max_llm_calls
+            if similarity_threshold is not None:
+                params["similarity_threshold"] = similarity_threshold
+        # Applying can archive documents and write commits; the propose pass may
+        # run an LLM check. Both outlast the report-only timeout.
+        timeout = 300.0 if (apply or deep_contradictions) else 30.0
+        response = self.client.post("/lint", params=params or None, timeout=timeout)
         response.raise_for_status()
         return response.json()
 
-    def review(self, project: str | None = None):
+    def review(self, project: str | None = None) -> dict[str, Any]:
         """Run the advisory project-memory review via the API.
 
         Raises ``RequestError`` if the API is unreachable; the CLI catches
@@ -227,7 +281,7 @@ class PalinodeAPI:
         response.raise_for_status()
         return response.json()
 
-    def list_prompts(self, task: str | None = None):
+    def list_prompts(self, task: str | None = None) -> list[dict[str, Any]]:
         """List stored prompt versions.  ADR-010."""
         params: dict = {}
         if task:
@@ -236,25 +290,25 @@ class PalinodeAPI:
         response.raise_for_status()
         return response.json()
 
-    def get_prompt(self, name: str):
+    def get_prompt(self, name: str) -> dict[str, Any]:
         """Read a specific prompt by name.  ADR-010."""
         response = self.client.get(f"/prompts/{name}")
         response.raise_for_status()
         return response.json()
 
-    def activate_prompt(self, name: str):
+    def activate_prompt(self, name: str) -> dict[str, Any]:
         """Activate a prompt version.  ADR-010."""
         response = self.client.post(f"/prompts/{name}/activate")
         response.raise_for_status()
         return response.json()
 
-    def ingest_inbox(self):
+    def ingest_inbox(self) -> dict[str, str]:
         """Process files in the inbox directory.  ADR-010."""
         response = self.client.post("/ingest", timeout=60.0)
         response.raise_for_status()
         return response.json()
 
-    def ingest_url(self, url: str, name: str | None = None):
+    def ingest_url(self, url: str, name: str | None = None) -> dict[str, str]:
         """Fetch and save a URL as a research reference.  ADR-010."""
         payload: dict = {"url": url}
         if name:
@@ -278,7 +332,7 @@ class PalinodeAPI:
         duration_seconds: int | None = None,
         push: bool | None = None,
         dry_run: bool = False,
-    ):
+    ) -> dict[str, Any]:
         """Capture session outcomes via the API. ADR-010 (the project-slug derivation work
 fields, the session-end hook audit push)."""
         # `is not None`, not truthiness. An empty list means "considered, none
@@ -311,7 +365,7 @@ fields, the session-end hook audit push)."""
         response.raise_for_status()
         return response.json()
 
-    def get_diff(self, days: int = 7, paths: str = None):
+    def get_diff(self, days: int = 7, paths: str = None) -> dict[str, Any]:
         params: dict = {"days": days}
         if paths:
             params["paths"] = paths
@@ -325,13 +379,22 @@ fields, the session-end hook audit push)."""
         dry_run: bool = False,
         nightly: bool = False,
         sources: list[str] | None = None,
-    ):
-        body: dict = {"dry_run": dry_run, "nightly": nightly}
+        respect_gate: bool = False,
+    ) -> dict[str, Any]:
+        body: dict = {
+            "dry_run": dry_run,
+            "nightly": nightly,
+            "respect_gate": respect_gate,
+        }
         # Omitted rather than sent as null so the server's default stays the
         # single definition of "which corpus".
         if sources:
             body["sources"] = list(sources)
-        response = self.client.post("/consolidate", json=body)
+        # Resolved from the module global at call time so an override reaches
+        # both the request and the budget the CLI names in its timeout message.
+        response = self.client.post(
+            "/consolidate", json=body, timeout=CONSOLIDATION_TIMEOUT_SECONDS
+        )
         response.raise_for_status()
         return response.json()
 
@@ -340,17 +403,46 @@ fields, the session-end hook audit push)."""
         file_path: str,
         reason: str | None = None,
         superseded_by: str | None = None,
-    ):
+    ) -> dict[str, Any]:
         payload: dict = {"file_path": file_path}
         if reason is not None:
             payload["reason"] = reason
         if superseded_by is not None:
             payload["superseded_by"] = superseded_by
-        response = self.client.post("/archive", json=payload)
+        # No model call, but a single archive writes the memory, appends to its
+        # history sibling, flags dependents, updates the chunk index and commits
+        # — enough work on a large store to outrun the 30 s default.
+        response = self.client.post("/archive", json=payload, timeout=120.0)
         response.raise_for_status()
         return response.json()
 
-    def archive_expired(self, dry_run: bool = False):
+    def restore(self, file_path: str, reason: str | None = None):
+        payload: dict = {"file_path": file_path}
+        if reason is not None:
+            payload["reason"] = reason
+        response = self.client.post("/restore", json=payload)
+        response.raise_for_status()
+        return response.json()
+
+    def unretract(self, file_path: str, pref: str, reason: str | None = None):
+        payload: dict = {"file_path": file_path, "pref": pref}
+        if reason is not None:
+            payload["reason"] = reason
+        response = self.client.post("/unretract", json=payload)
+        response.raise_for_status()
+        return response.json()
+
+    def forget_withdraw(self, file_path: str, reason: str | None = None):
+        payload: dict = {"file_path": file_path}
+        if reason is not None:
+            payload["reason"] = reason
+        response = self.client.post(
+            "/forget-withdraw", json=payload, timeout=120.0
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def archive_expired(self, dry_run: bool = False) -> dict[str, Any]:
         response = self.client.post("/archive-expired", json={"dry_run": dry_run})
         response.raise_for_status()
         return response.json()
@@ -362,7 +454,9 @@ fields, the session-end hook audit push)."""
         threshold: float | None = None,
         cooldown_hours: int | None = None,
         trigger_id: str | None = None,
-    ):
+        expires_at: str | None = None,
+        authority: str | None = None,
+    ) -> dict[str, Any]:
         # ADR-010: forward all four canonical params. Defaults live
         # in palinode.core.defaults so the CLI can show them in --help.  We
         # only include them in the body when non-None so the API still
@@ -377,47 +471,61 @@ fields, the session-end hook audit push)."""
             payload["cooldown_hours"] = cooldown_hours
         if trigger_id is not None:
             payload["trigger_id"] = trigger_id
+        if expires_at is not None:
+            payload["expires_at"] = expires_at
+        if authority is not None:
+            payload["authority"] = authority
         response = self.client.post("/triggers", json=payload)
         response.raise_for_status()
         return response.json()
 
-    def trigger_list(self):
+    def trigger_list(self) -> list[dict[str, Any]]:
         response = self.client.get("/triggers")
         response.raise_for_status()
         return response.json()
 
-    def trigger_remove(self, trigger_id: str):
+    def trigger_remove(self, trigger_id: str) -> dict[str, str]:
         response = self.client.delete(f"/triggers/{trigger_id}")
         response.raise_for_status()
         return response.json()
 
-    def reindex(self):
+    def reindex(self) -> dict[str, Any]:
         response = self.client.post("/reindex", timeout=600.0)
         response.raise_for_status()
         return response.json()
 
-    def rebuild_fts(self):
+    def rebuild_fts(self) -> dict[str, Any]:
         response = self.client.post("/rebuild-fts", timeout=60.0)
         response.raise_for_status()
         return response.json()
 
-    def split_layers(self):
+    def split_layers(self) -> dict[str, Any]:
         response = self.client.post("/split-layers", timeout=120.0)
         response.raise_for_status()
         return response.json()
 
-    def bootstrap_ids(self):
-        response = self.client.post("/bootstrap-fact-ids", timeout=120.0)
+    def bootstrap_ids(self) -> dict[str, Any]:
+        response = self.client.post(
+            "/bootstrap-fact-ids", timeout=STORE_SWEEP_TIMEOUT_SECONDS
+        )
         response.raise_for_status()
         return response.json()
 
-    def get_history(self, file_path: str, limit: int = 20, detail: str = "summary"):
+    def bootstrap_ids_file(self, file_path: str) -> dict[str, Any]:
+        """Tag one memory file (``palinode bootstrap-ids --file <rel-path>``)."""
+        response = self.client.post(
+            "/bootstrap-fact-ids", json={"file": file_path}, timeout=120.0
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def get_history(self, file_path: str, limit: int = 20, detail: str = "summary") -> dict[str, Any]:
         params: dict = {"limit": limit, "detail": detail}
         response = self.client.get(f"/history/{file_path}", params=params, timeout=10.0)
         response.raise_for_status()
         return response.json()
 
-    def get_entities(self, entity: str = None):
+    def get_entities(self, entity: str = None) -> list[dict[str, Any]] | dict[str, Any]:
         if entity:
             response = self.client.get(f"/entities/{entity}", timeout=10.0)
         else:
@@ -425,7 +533,7 @@ fields, the session-end hook audit push)."""
         response.raise_for_status()
         return response.json()
 
-    def context_prime(self, cwd: str = None, project: str = None):
+    def context_prime(self, cwd: str = None, project: str = None) -> dict[str, Any]:
         payload: dict = {}
         if cwd:
             payload["cwd"] = cwd
@@ -435,7 +543,7 @@ fields, the session-end hook audit push)."""
         response.raise_for_status()
         return response.json()
 
-    def blame(self, file_path: str, search: str = None, claims: bool = False):
+    def blame(self, file_path: str, search: str = None, claims: bool = False) -> dict[str, Any]:
         params: dict = {}
         if search:
             params["search"] = search
@@ -445,12 +553,12 @@ fields, the session-end hook audit push)."""
         response.raise_for_status()
         return response.json()
 
-    def trace(self, file_path: str):
+    def trace(self, file_path: str) -> dict[str, Any]:
         response = self.client.get(f"/trace/{file_path}", timeout=15.0)
         response.raise_for_status()
         return response.json()
 
-    def rollback(self, file_path: str, commit: str = None, dry_run: bool = True):
+    def rollback(self, file_path: str, commit: str = None, dry_run: bool = True) -> dict[str, Any]:
         params: dict = {"file_path": file_path, "dry_run": dry_run}
         if commit:
             params["commit"] = commit
@@ -458,7 +566,7 @@ fields, the session-end hook audit push)."""
         response.raise_for_status()
         return response.json()
 
-    def push(self):
+    def push(self) -> dict[str, Any]:
         response = self.client.post("/push", timeout=60.0)
         response.raise_for_status()
         return response.json()
@@ -468,7 +576,7 @@ fields, the session-end hook audit push)."""
         content: str,
         min_similarity: float | None = None,
         top_k: int | None = None,
-    ):
+    ) -> list[dict[str, Any]]:
         """Find existing files semantically near draft content.
 
         Defaults applied server-side.  Returns the same shape as
@@ -489,7 +597,7 @@ fields, the session-end hook audit push)."""
         broken_link: str,
         min_similarity: float | None = None,
         top_k: int | None = None,
-    ):
+    ) -> list[dict[str, Any]]:
         """Find files semantically near a broken `[[wikilink]]` target."""
         payload: dict = {"broken_link": broken_link}
         if min_similarity is not None:
@@ -505,7 +613,7 @@ fields, the session-end hook audit push)."""
         file_path: str,
         min_similarity: float | None = None,
         top_k: int | None = None,
-    ):
+    ) -> list[dict[str, Any]]:
         """Find semantically related files not already linked to/from file_path."""
         payload: dict = {"file_path": file_path}
         if min_similarity is not None:
@@ -520,7 +628,7 @@ fields, the session-end hook audit push)."""
         self,
         query: str,
         min_similarity: float | None = None,
-    ):
+    ) -> dict[str, Any]:
         """Check whether any wiki page already covers a topic phrase."""
         payload: dict = {"query": query}
         if min_similarity is not None:

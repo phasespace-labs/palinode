@@ -72,6 +72,37 @@ def _is_replace_policy(content: str) -> bool:
     return protected
 
 
+def _superseded_only_signal(file_path: str, content: str) -> str | None:
+    """Name the rule making this document superseded-only, or ``None``.
+
+    ADR-020: identity/profile documents (``people/``, a project's profile doc,
+    a living ``update_policy: replace`` doc, a ``core: true`` doc, or any doc
+    declaring ``retirement_policy: superseded-only``) retire by supersession or
+    retraction, never by age. The classification lives in
+    :mod:`palinode.consolidation.retirement` so the executor and the TTL sweep
+    cannot drift on what an identity document is.
+
+    Parses defensively and falls open to "no protection" on a garbled file, for
+    the same reason the ``update_policy: replace`` guard does: a malformed
+    frontmatter must never block consolidation entirely.
+    """
+    try:
+        from palinode.core.parser import parse_markdown
+
+        metadata, _ = parse_markdown(content)
+    except Exception as exc:  # noqa: BLE001 — defensive: never let the guard raise
+        logger.warning(
+            "retirement-guard: unexpected error parsing frontmatter — "
+            "falling open to no-protection (doc may be unprotected): %s",
+            exc,
+        )
+        metadata = {}
+    from palinode.consolidation.retirement import SUPERSEDED_ONLY, classify
+
+    policy, signal = classify(file_path, metadata)
+    return signal if policy == SUPERSEDED_ONLY else None
+
+
 def _normalize_fact_text(text: str) -> str:
     """Normalize LLM-proposed fact text to list-item content only."""
     normalized = text.strip()
@@ -122,7 +153,9 @@ def _atomic_write_text(file_path: str, content: str) -> None:
     git_tools.write_memory_file(file_path, content)
 
 
-def apply_operations(file_path: str, operations: list[dict], *, nightly_policy: bool = False) -> dict:
+def apply_operations(file_path: str, operations: list[dict], *,
+                     nightly_policy: bool = False,
+                     applied_merges: list[int] | None = None) -> dict:
     """Apply a list of operations to a memory file.
 
     Args:
@@ -132,6 +165,12 @@ def apply_operations(file_path: str, operations: list[dict], *, nightly_policy: 
             only facts sharing the same ``[YYYY-MM-DD]`` date prefix may be
             merged.  Cross-date or undated MERGE proposals are rejected with a
             log warning and counted as ``merge_rejected``.
+        applied_merges: Optional out-parameter. When given, the index into
+            ``operations`` of every MERGE the executor actually applied is
+            appended to it. A caller that records an audit line per operation
+            (the runner's Consolidation Log) can then record the outcome
+            rather than the proposal — a MERGE that retired nothing must not
+            leave a line saying a merge happened.
 
     Returns:
         Stats dict: {kept, updated, merged, superseded, archived, retracted,
@@ -144,7 +183,11 @@ def apply_operations(file_path: str, operations: list[dict], *, nightly_policy: 
                      both were silent. This is distinct from
                      ``merge_rejected``, which counts a MERGE deliberately
                      refused by the nightly same-day policy — a rejection
-                     with a reason, not a drop.
+                     with a reason, not a drop. ``protected_rejected`` counts
+                     ops the target document's own declared regime refused:
+                     the ADR-015 ``update_policy: replace`` guard, and the
+                     ADR-020 guard that forbids retiring an identity/profile
+                     document by age (an ARCHIVE with no ``superseded_by``).
     """
     with open(file_path, encoding="utf-8") as f:
         content = f.read()
@@ -169,9 +212,27 @@ def apply_operations(file_path: str, operations: list[dict], *, nightly_policy: 
     # consolidation entirely.
     is_replace_doc = _is_replace_policy(content)
 
-    stats = {"kept": 0, "updated": 0, "merged": 0, "superseded": 0, "archived": 0, "retracted": 0, "merge_rejected": 0, "protected_rejected": 0, "contradicts_proposed": 0, "unmatched": 0}
+    # ADR-020: retirement policy is document-relative. An identity/profile
+    # document — a person, a project's profile doc, a living doc, a `core: true`
+    # doc, or one declaring `retirement_policy: superseded-only` — may still be
+    # retired, but only for a stated reason other than age. ARCHIVE is the one
+    # op that removes a fact from recall with no retrievable trace in the main
+    # file, and the compaction prompt's staleness rule is what proposes it, so
+    # ARCHIVE here is allowed only when the op names a successor
+    # (`superseded_by`). SUPERSEDE and RETRACT are untouched: both state a
+    # reason that is not age.
+    superseded_only_signal = _superseded_only_signal(file_path, content)
 
-    for op in operations:
+    stats = {"kept": 0, "updated": 0, "merged": 0, "superseded": 0, "archived": 0, "retracted": 0, "merge_rejected": 0, "protected_rejected": 0, "contradicts_proposed": 0, "unmatched": 0, "review_flagged": 0}
+
+    # Every op that retires a fact's current text — SUPERSEDE, ARCHIVE, RETRACT,
+    # MERGE — is recorded here as (kind, fact ids, reason) so that, once the
+    # file is written, the memories whose `backed_by` cites it can be flagged
+    # for review. Collected across the loop and propagated once per call: one
+    # scan of the store, one commit, whatever the number of ops.
+    retirements: list[tuple[str, list[str], str]] = []
+
+    for op_index, op in enumerate(operations):
         if not isinstance(op, dict):
             logger.warning(f"Malformed operation (expected dict, got {type(op).__name__}): {op}")
             continue
@@ -192,6 +253,29 @@ def apply_operations(file_path: str, operations: list[dict], *, nightly_policy: 
                 op_type,
                 op.get("id"),
                 file_path,
+            )
+            stats["protected_rejected"] += 1
+            continue
+
+        # ADR-020 age-retirement guard. An ARCHIVE carrying `superseded_by` is
+        # a stated supersession and is applied; one without it is retirement
+        # argued from age/staleness alone, which this document's regime
+        # forbids. Counted with the replace-guard's rejections — both are the
+        # document refusing an op, with the reason in the log line.
+        if (
+            superseded_only_signal is not None
+            and op_type == "ARCHIVE"
+            and not str(op.get("superseded_by") or "").strip()
+        ):
+            logger.warning(
+                "ARCHIVE rejected by retirement_policy=superseded-only guard "
+                "(%s): age/staleness is not a retirement reason for this "
+                "document — use SUPERSEDE, RETRACT, or an ARCHIVE naming "
+                "superseded_by: %s on %s (rationale: %r)",
+                superseded_only_signal,
+                op.get("id"),
+                file_path,
+                op.get("rationale", op.get("reason", "")),
             )
             stats["protected_rejected"] += 1
             continue
@@ -225,6 +309,7 @@ def apply_operations(file_path: str, operations: list[dict], *, nightly_policy: 
         elif op_type == "MERGE":
             ids = op.get("ids", [])
             new_text = op.get("new_text", "")
+            reason = op.get("rationale", op.get("reason", ""))
             if ids and new_text:
                 if nightly_policy and not _nightly_merge_allowed(body, ids):
                     id_list = ", ".join(ids)
@@ -234,13 +319,17 @@ def apply_operations(file_path: str, operations: list[dict], *, nightly_policy: 
                     )
                     stats["merge_rejected"] += 1
                     continue
-                merged_body = _merge_facts(body, ids, new_text)
+                merged_body = _merge_facts(body, ids, new_text, reason, file_path)
                 if merged_body != body:
                     body = merged_body
                     stats["merged"] += 1
+                    retirements.append(("merge", list(ids), reason))
+                    if applied_merges is not None:
+                        applied_merges.append(op_index)
                 else:
                     logger.warning(
-                        "MERGE unmatched: fact id(s)=%r not found in %s",
+                        "MERGE unmatched: fact id(s)=%r not found, or nothing "
+                        "left to retire, in %s",
                         ids, file_path,
                     )
                     stats["unmatched"] += 1
@@ -261,6 +350,7 @@ def apply_operations(file_path: str, operations: list[dict], *, nightly_policy: 
                 if superseded_body != body:
                     body = superseded_body
                     stats["superseded"] += 1
+                    retirements.append(("supersede", [fact_id], reason))
                 else:
                     logger.warning(
                         "SUPERSEDE unmatched: fact id=%r not found in %s",
@@ -283,6 +373,7 @@ def apply_operations(file_path: str, operations: list[dict], *, nightly_policy: 
                 if archived_body != body:
                     body = archived_body
                     stats["archived"] += 1
+                    retirements.append(("archive", [fact_id], reason))
                 else:
                     logger.warning(
                         "ARCHIVE unmatched: fact id=%r not found in %s",
@@ -304,6 +395,7 @@ def apply_operations(file_path: str, operations: list[dict], *, nightly_policy: 
                 if retracted_body != body:
                     body = retracted_body
                     stats["retracted"] += 1
+                    retirements.append(("retract", [fact_id], reason))
                 else:
                     logger.warning(
                         "RETRACT unmatched: fact id=%r not found in %s",
@@ -352,6 +444,26 @@ def apply_operations(file_path: str, operations: list[dict], *, nightly_policy: 
     # Write back
     _atomic_write_text(file_path, frontmatter_block + body)
 
+    # `backed_by` propagation (one hop, flag-only): now that the retirements
+    # are on disk, every live memory citing this file as a source gets a
+    # `stale_backing` entry. Deterministic, idempotent per source, its own
+    # commit. The dependents are not rewritten — that is the next
+    # consolidation pass's job, with the flag as its input.
+    if retirements:
+        from palinode.consolidation.propagate import flag_dependents
+
+        reasons: list[str] = []
+        for _, _, r in retirements:
+            if r and r not in reasons:
+                reasons.append(r)
+        flagged = flag_dependents(
+            file_path,
+            ops=[kind for kind, _, _ in retirements],
+            facts=[fid for _, ids, _ in retirements for fid in ids],
+            reason="; ".join(reasons),
+        )
+        stats["review_flagged"] = len(flagged)
+
     return stats
 
 
@@ -365,32 +477,78 @@ def _update_fact(content: str, fact_id: str, new_text: str) -> str:
     return pattern.sub(replacement, content, count=1)
 
 
-def _merge_facts(content: str, ids: list[str], new_text: str) -> str:
-    """Remove all source facts and insert merged fact at first occurrence."""
+def _merge_facts(content: str, ids: list[str], new_text: str,
+                 reason: str, file_path: str) -> str:
+    """Remove all source facts and insert merged fact at first occurrence.
+
+    Every source fact's original text — ``ids[0]``, whose text is replaced,
+    and ``ids[1:]``, whose lines are removed — is appended verbatim to the
+    ``-history.md`` sibling before the body is mutated. MERGE was the
+    one op whose sources leave the main file entirely, so without this the
+    only copy of the working behind a merged conclusion was in ``git log``,
+    which recall cannot address.
+
+    When ``new_text`` is the surviving fact's own text, the proposal is
+    "``ids[1:]`` are already said by ``ids[0]``" — a legitimate merge whose
+    conclusion happens to need no rewriting, not a failed one. That case keeps
+    ``ids[0]`` byte-identical (nothing is rewritten, so nothing is renamed) and
+    retires ``ids[1:]`` to history exactly as the rewriting path does. It used
+    to abort on the unchanged-content check, leaving the duplicates in the file
+    with no history entry.
+    """
     first_id = ids[0]
     merged_id = f"merged-{ids[0]}"
-    
-    # Replace first with merged text
-    updated_content = _update_fact(content, first_id, new_text)
-    if updated_content == content:
-        return content
-    content = updated_content
-    # Update the fact ID to the merged ID
-    content = re.sub(
-        r"<!-- fact:" + re.escape(first_id) + r" -->",
-        f"<!-- fact:{merged_id} -->",
-        content,
-        count=1,
-    )
-    
-    # Remove remaining source facts
-    for fid in ids[1:]:
-        pattern = re.compile(
-            r'^[\s]*[-*]\s+.*?<!-- fact:' + re.escape(fid) + r' -->\n?',
-            re.MULTILINE
+    now = _utc_now().strftime("%Y-%m-%d")
+
+    def fact_pattern(fid: str) -> re.Pattern[str]:
+        return re.compile(
+            r'^([\s]*[-*]\s+)(.*?)(<!-- fact:' + re.escape(fid) + r' -->)\n?',
+            re.MULTILINE,
         )
+
+    def record(fid: str, old_text: str, target_id: str) -> None:
+        append_to_history(
+            file_path, fid,
+            f"Merged into {target_id} ({now}): {old_text} (reason: {reason})",
+        )
+
+    first_match = fact_pattern(first_id).search(content)
+    if first_match is None:
+        return content
+
+    unchanged = first_match.group(2).strip() == _normalize_fact_text(new_text)
+    if unchanged:
+        # The survivor keeps its text and its id, so the remaining sources are
+        # merged *into* ``first_id``. Removing by id would take the survivor's
+        # own line with it (no `merged-` rename happened), so a source that
+        # repeats ``ids[0]`` is left alone rather than deleted.
+        surviving_id = first_id
+        remaining = [fid for fid in ids[1:] if fid != first_id]
+    else:
+        # Replace first with merged text
+        updated_content = _update_fact(content, first_id, new_text)
+        if updated_content == content:
+            return content
+        record(first_id, first_match.group(2).strip(), merged_id)
+        content = updated_content
+        # Update the fact ID to the merged ID
+        content = re.sub(
+            r"<!-- fact:" + re.escape(first_id) + r" -->",
+            f"<!-- fact:{merged_id} -->",
+            content,
+            count=1,
+        )
+        surviving_id = merged_id
+        remaining = list(ids[1:])
+
+    # Remove remaining source facts. Every removed line is recorded, not just
+    # the first match — a duplicate id is still a fact leaving the file.
+    for fid in remaining:
+        pattern = fact_pattern(fid)
+        for m in pattern.finditer(content):
+            record(fid, m.group(2).strip(), surviving_id)
         content = pattern.sub('', content)
-    
+
     return content
 
 

@@ -72,6 +72,24 @@ def _last_status_line(status_text: str) -> str:
     return lines[-1]
 
 
+_FACT_MARKER_RE = re.compile(r" <!-- fact:\S+ -->$")
+
+
+def _rendered(line: str) -> str:
+    """The appended line minus its fact marker — the part a human reads.
+
+    Session-end mints a ``<!-- fact:id -->`` suffix on every line it appends so
+    consolidation can address it: the runner harvests only marked bullets, and
+    without one this file was a log the compactor could not see. The marker is
+    machine-facing, so the assertions below are made against the rendered
+    one-liner with it removed — and the ``count == 1`` is what pins "a suffix,
+    exactly one, nothing else changed".
+    """
+    stripped, count = _FACT_MARKER_RE.subn("", line)
+    assert count == 1, f"the appended line carries no fact marker: {line!r}"
+    return stripped
+
+
 # ── 1. Arrays survive to every writer ────────────────────────────────────────
 
 
@@ -158,7 +176,7 @@ def test_no_arrays_keeps_the_line_clean(tmp_path, monkeypatch):
     """A caller that passes no arrays gets the before the session-end array-drop fix shape back: one dated
     line, no annotation. The fix must not add noise where nothing was lost."""
     _, status = _run_session_end(tmp_path, monkeypatch, summary="Plain session")
-    line = _last_status_line(status)
+    line = _rendered(_last_status_line(status))
     assert line.endswith("Plain session"), line
     assert "→" not in line and "decision" not in line, line
 
@@ -185,7 +203,7 @@ def test_long_summary_truncation_is_marked_and_word_aligned(tmp_path, monkeypatc
     assert len(summary) > STATUS_SUMMARY_MAX_CHARS
 
     _, status = _run_session_end(tmp_path, monkeypatch, summary=summary)
-    line = _last_status_line(status)
+    line = _rendered(_last_status_line(status))
 
     assert line.endswith("..."), line
     body = line.split("] ", 1)[1][: -len("...")]
@@ -199,7 +217,7 @@ def test_long_summary_truncation_is_marked_and_word_aligned(tmp_path, monkeypatc
 
 def test_short_summary_is_never_marked(tmp_path, monkeypatch):
     _, status = _run_session_end(tmp_path, monkeypatch, summary="Short and complete")
-    assert _last_status_line(status).endswith("Short and complete")
+    assert _rendered(_last_status_line(status)).endswith("Short and complete")
 
 
 @pytest.mark.parametrize(

@@ -40,10 +40,11 @@
     ]
   },
   "palinode_consolidate": {
-    "description": "Run a manual knowledge consolidation pass.  Set `dry_run=true` to preview the proposed operations without applying them.",
+    "description": "Run a manual knowledge consolidation pass.  Set `dry_run=true` to preview the proposed operations without applying them.  A pass that reaches the LLM can run for minutes and may outlast your client's own tool-call timeout; the server finishes it either way and holds a run lock while it does, so a retry returns 409 rather than starting again.",
     "params": {
       "dry_run": {},
       "nightly": {},
+      "respect_gate": {},
       "sources": {}
     },
     "required": []
@@ -92,6 +93,16 @@
     },
     "required": []
   },
+  "palinode_forget_withdraw": {
+    "description": "Take a forget request back. Given the memory that holds the request ('please forget that I\u2026'), restores every memory it archived, un-strikes every mention it retracted, and archives the request record(s) so they stop acting as the retraction. Each step is its own audited commit; failures are reported per target.",
+    "params": {
+      "file_path": {},
+      "reason": {}
+    },
+    "required": [
+      "file_path"
+    ]
+  },
   "palinode_history": {
     "description": "Show the change history of a memory file. Tracks renames (--follow) and includes diff stats per commit. Use detail='full' for the commit-level evolution view.",
     "params": {
@@ -120,7 +131,9 @@
   },
   "palinode_lint": {
     "description": "Scan memory for health issues: orphaned files, stale active files (>90 days), missing frontmatter fields, and potential contradictions. Returns a report without modifying files.",
-    "params": {},
+    "params": {
+      "propose": {}
+    },
     "required": []
   },
   "palinode_list": {
@@ -184,7 +197,24 @@
     "description": "Read the full contents of a memory file. Use after palinode_list or palinode_search to see the complete content of a specific file.",
     "params": {
       "file_path": {},
-      "meta": {}
+      "meta": {},
+      "tier": {
+        "enum": [
+          "abstract",
+          "overview",
+          "full"
+        ]
+      }
+    },
+    "required": [
+      "file_path"
+    ]
+  },
+  "palinode_restore": {
+    "description": "Bring one archived memory back into default recall \u2014 the inverse of `palinode_archive` for every archive path (on-demand, forget request, TTL expiry, consolidation). Flips `status` back to `active`, drops `superseded_by`, records `restored_at` / `restored_from` provenance and a history line, and commits. Does not un-strike retraction markers (use `palinode_unretract`) or re-enable triggers.",
+    "params": {
+      "file_path": {},
+      "reason": {}
     },
     "required": [
       "file_path"
@@ -278,6 +308,13 @@
       "query": {},
       "since_days": {},
       "threshold": {},
+      "tier": {
+        "enum": [
+          "abstract",
+          "overview",
+          "full"
+        ]
+      },
       "types": {
         "items_enum": [
           "PersonMemory",
@@ -350,14 +387,28 @@
           "delete"
         ]
       },
+      "authority": {},
       "cooldown_hours": {},
       "description": {},
+      "expires_at": {},
       "memory_file": {},
       "threshold": {},
       "trigger_id": {}
     },
     "required": [
       "action"
+    ]
+  },
+  "palinode_unretract": {
+    "description": "Withdraw one preference's mention-level retraction from one memory: un-strikes every `~~\u2026~~ [RETRACTED \u2026]` span the pref produced and removes the pref from the file's `retracted_prefs` record, so a later forget request for the same pref can strike again. Pass the pref phrase as recorded in the file's history sibling. The file's `status` is never changed.",
+    "params": {
+      "file_path": {},
+      "pref": {},
+      "reason": {}
+    },
+    "required": [
+      "file_path",
+      "pref"
     ]
   }
 }

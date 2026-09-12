@@ -198,8 +198,11 @@ The three `ServerAlive*` / `TCPKeepAlive` options keep the SSH session alive acr
 | `palinode_review` | Advisory project-memory review: composes health signals, proposes corrective ops (read-only) |
 | `palinode_trigger` | Register prospective memory triggers |
 | `palinode_prompt` | Manage versioned LLM prompt files |
-| `palinode_consolidate` | Run memory consolidation |
+| `palinode_consolidate` | Run memory consolidation (long-running — see below) |
 | `palinode_archive` | Retire one specific memory — archive it, or supersede it with a named replacement |
+| `palinode_restore` | Bring an archived memory back into default recall — the inverse of `palinode_archive` |
+| `palinode_unretract` | Withdraw one preference's mention-level retraction from one memory |
+| `palinode_forget_withdraw` | Take a forget request back — restore what it archived, un-strike what it retracted |
 | `palinode_archive_expired` | Archive ephemeral memories whose TTL has expired |
 | `palinode_session_end` | Capture session outcomes to daily notes |
 | `palinode_dedup_suggest` | Pre-write check: existing files semantically near a draft (Obsidian wiki contract) |
@@ -209,6 +212,10 @@ The three `ServerAlive*` / `TCPKeepAlive` options keep the SSH session alive acr
 | `palinode_doctor` | Fast diagnostic pass — checks paths, services, config, and index health |
 | `palinode_doctor_deep` | Full diagnostic with canary write test (~10–15s) |
 | `palinode_depends` | Dependency tree for a milestone/task slug; `unblocked=true` lists ready-to-start items |
+
+### `palinode_consolidate` can outlast your client
+
+A consolidation pass calls the LLM once per project group, and the server gives each call up to 600 s. The MCP server therefore waits `PALINODE_CONSOLIDATE_TIMEOUT` seconds (default 900) instead of the 30 s it uses for deterministic routes — but **your MCP client applies its own tool-call timeout on top of that, and it is usually shorter**. Either way the pass is not cancelled: the API runs it to completion, holds `.palinode/consolidation.lock` until it finishes (so a retry returns 409), and writes the result to the API log and `logs/consolidation.log`. When Palinode's own budget is the one exceeded, the tool returns `{"status": "timeout", "server_still_running": true, …}` saying exactly that rather than a bare error. For a store large enough to hit the ceiling regularly, run the pass from cron or `palinode consolidate` rather than from a chat client.
 
 ### Obsidian wiki-maintenance tools
 

@@ -29,7 +29,7 @@ def trace(file_path, fmt):
         data = api_client.trace(file_path)
     except Exception as e:
         console.print(f"[red]Error tracing: {str(e)}[/red]")
-        return
+        raise SystemExit(1)
 
     if output_fmt == OutputFormat.JSON:
         # click.echo (not console.print): machine-readable JSON must not pass

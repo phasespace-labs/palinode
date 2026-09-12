@@ -122,6 +122,17 @@ def test_server_json_package_versions_match_pyproject():
         )
 
 
+def test_server_json_release_metadata_matches_pyproject():
+    """Publisher-provided release metadata must name the canonical release."""
+    version = _registry_version(_load_pyproject_version())
+    metadata = _load_server_json()["_meta"][
+        "io.modelcontextprotocol.registry/publisher-provided"
+    ]
+
+    assert metadata["release"] == f"v{version}"
+    assert metadata["release_notes_url"].endswith(f"/releases/tag/v{version}")
+
+
 def test_server_json_is_valid_json():
     """server.json must be parseable JSON — a corrupt file means no version check fires.
 

@@ -118,6 +118,18 @@ def _propose_ops(findings: dict[str, list[Any]]) -> list[dict[str, Any]]:
             "reason": "Orphaned — no entities and unreferenced. Add entity tags or "
                       "wikilinks so it is reachable, or archive it.",
         })
+    for it in findings.get("stale_backing", []):
+        f = _finding_file(it)
+        refs = ", ".join(
+            f"{e.get('ref')} ({e.get('op')})"
+            for e in (it.get("stale_backing", []) if isinstance(it, dict) else [])
+        )
+        ops.append({
+            "op": "PROPOSE_UPDATE", "file": f,
+            "reason": f"Backing withdrawn: [{refs}] — re-verify against the "
+                      "retired source's history and re-save, or supersede/"
+                      "retract the dependent. Never auto-retracted.",
+        })
     return ops
 
 
@@ -149,6 +161,7 @@ def run_review(project: str | None = None) -> dict[str, Any]:
         "orphaned": _filter(lint.get("orphaned_files", []), scope),
         "missing_descriptions": _filter(lint.get("missing_descriptions", []), scope),
         "wiki_drift": _filter(lint.get("wiki_drift", []), scope),
+        "stale_backing": _filter(lint.get("stale_backing", []), scope),
     }
     proposed_ops = _propose_ops(findings)
 

@@ -51,16 +51,17 @@ from palinode.core.lint import check_relative_dates, run_lint_pass
 def test_check_relative_dates_matches_specified_expressions(expression):
     body = f"First line.\nWe wrote {expression} in a memory."
 
-    assert check_relative_dates(body) == [{"line": "2", "expression": expression}]
+    assert [
+        (f["line"], f["expression"]) for f in check_relative_dates(body)
+    ] == [("2", expression)]
 
 
 def test_check_relative_dates_is_case_insensitive_and_flags_quoted_text():
     body = 'She said, "YESTERDAY we decided it."\nRIGHT NOW it still applies.'
 
-    assert check_relative_dates(body) == [
-        {"line": "1", "expression": "YESTERDAY"},
-        {"line": "2", "expression": "RIGHT NOW"},
-    ]
+    assert [
+        (f["line"], f["expression"]) for f in check_relative_dates(body)
+    ] == [("1", "YESTERDAY"), ("2", "RIGHT NOW")]
 
 
 @pytest.mark.parametrize(
@@ -93,12 +94,13 @@ def test_lint_relative_dates_exempts_daily_logs(tmp_path, monkeypatch):
 
     result = run_lint_pass()
 
-    assert result["relative_dates"] == [
-        {
-            "file": "insights/drifting.md",
-            "matches": [{"line": "2", "expression": "Tomorrow"}],
-        }
+    assert [item["file"] for item in result["relative_dates"]] == [
+        "insights/drifting.md"
     ]
+    assert [
+        (m["line"], m["expression"])
+        for m in result["relative_dates"][0]["matches"]
+    ] == [("2", "Tomorrow")]
 
 
 def test_lint_cli_renders_relative_dates(monkeypatch):
@@ -122,7 +124,7 @@ def test_lint_cli_renders_relative_dates(monkeypatch):
             }
         ],
     }
-    monkeypatch.setattr(lint_module.api_client, "lint", lambda: data)
+    monkeypatch.setattr(lint_module.api_client, "lint", lambda **_kwargs: data)
 
     result = CliRunner().invoke(lint_module.lint, ["--format", "text"])
 
@@ -132,7 +134,8 @@ def test_lint_cli_renders_relative_dates(monkeypatch):
 
 
 def _run_lint_text(monkeypatch):
-    monkeypatch.setattr(api_client, "lint", run_lint_pass)
+    # The client takes the propose/apply options; this stub ignores them.
+    monkeypatch.setattr(api_client, "lint", lambda **_kwargs: run_lint_pass())
     result = CliRunner().invoke(lint_command, ["--format", "text"])
     assert result.exit_code == 0, result.output
     return result.output
@@ -457,12 +460,14 @@ def test_lint_text_represents_every_lint_result_key(tmp_path, monkeypatch):
         "missing_entities": "All files have entity refs",
         "missing_descriptions": "All files have descriptions",
         "missing_priority": "All core and Decision memories have priority",
+        "missing_expiry": "All core memories carry an expires_at",
         "wiki_drift": "No wiki drift",
         "relative_dates": "No relative dates",
         "source_anchor_issues": "No source-anchor issues",
         "claim_anchor_issues": "No claim-anchor issues",
         "stale_open_questions": "No stale open questions",
         "open_contradictions": "No open contradictions",
+        "stale_backing": "No stale backing",
         "entity_aliases": "No entity-alias candidates",
         "core_count": "No core files found",
     }
@@ -470,3 +475,101 @@ def test_lint_text_represents_every_lint_result_key(tmp_path, monkeypatch):
     assert set(data) == set(output_markers)
     for key, marker in output_markers.items():
         assert marker in output, f"{key} is absent from text output"
+
+
+# ---------------------------------------------------------------------------
+# Staleness date parsing
+# https://github.com/phasespace-labs/palinode/issues/180
+#
+# Both staleness blocks in run_lint_pass used to wrap the whole parse-and-check
+# in `except Exception: pass`. That skipped files with an unparseable date, as
+# intended, but it also swallowed genuine bugs in the block (an AttributeError
+# from a typo, say) and dropped the file from the report with no signal. The
+# guarded step is now only the `fromisoformat` parse: a bad date string or a
+# non-date value is skipped, anything else propagates.
+# ---------------------------------------------------------------------------
+
+_STALE_AGE_DAYS = 200
+
+
+def _write_dated(path, name, *, marker, last_updated, quote=False):
+    value = f'"{last_updated}"' if quote else last_updated
+    (path / name).write_text(
+        f"---\nid: people-{name[:-3]}\ncategory: people\ntype: Person\n"
+        f"{marker}\nlast_updated: {value}\n---\nBody",
+        encoding="utf-8",
+    )
+
+
+def _old_date():
+    return (datetime.now(timezone.utc) - timedelta(days=_STALE_AGE_DAYS)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+
+
+@pytest.mark.parametrize(
+    ("marker", "bucket"),
+    [
+        ("status: active", "stale_files"),
+        ("epistemic: open_question", "stale_open_questions"),
+    ],
+)
+def test_stale_check_reports_a_well_formed_old_date(tmp_path, monkeypatch, marker, bucket):
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    people = tmp_path / "people"
+    people.mkdir()
+    _write_dated(people, "old.md", marker=marker, last_updated=_old_date())
+
+    result = run_lint_pass()
+
+    assert any(entry["file"].endswith("old.md") for entry in result[bucket])
+
+
+@pytest.mark.parametrize(
+    ("marker", "bucket"),
+    [
+        ("status: active", "stale_files"),
+        ("epistemic: open_question", "stale_open_questions"),
+    ],
+)
+def test_stale_check_skips_unparseable_and_non_date_values(tmp_path, monkeypatch, marker, bucket):
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    people = tmp_path / "people"
+    people.mkdir()
+    _write_dated(people, "old.md", marker=marker, last_updated=_old_date())
+    _write_dated(people, "malformed.md", marker=marker, last_updated="not-a-date")
+    _write_dated(people, "numeric.md", marker=marker, last_updated="12345")
+
+    result = run_lint_pass()
+
+    flagged = [entry["file"] for entry in result[bucket]]
+    assert any(f.endswith("old.md") for f in flagged)
+    assert not any(f.endswith("malformed.md") for f in flagged)
+    assert not any(f.endswith("numeric.md") for f in flagged)
+
+
+@pytest.mark.parametrize(
+    ("marker", "bucket"),
+    [
+        ("status: active", "stale_files"),
+        ("epistemic: open_question", "stale_open_questions"),
+    ],
+)
+def test_stale_check_does_not_swallow_unexpected_errors(tmp_path, monkeypatch, marker, bucket):
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    people = tmp_path / "people"
+    people.mkdir()
+    # Quoted so the value stays a string and reaches the fromisoformat call.
+    _write_dated(people, "old.md", marker=marker, last_updated=_old_date(), quote=True)
+
+    import palinode.core.lint as lint_module
+
+    class _ExplodingDatetime(lint_module.datetime):
+        @classmethod
+        def fromisoformat(cls, value):
+            raise AttributeError("simulated bug in the staleness block")
+
+    monkeypatch.setattr(lint_module, "datetime", _ExplodingDatetime)
+
+    with pytest.raises(AttributeError):
+        run_lint_pass()

@@ -13,6 +13,7 @@ from palinode.cli.diff import diff
 from palinode.cli.consolidate import consolidate
 from palinode.cli.archive import archive
 from palinode.cli.archive_expired import archive_expired
+from palinode.cli.restore import restore, unretract, forget_withdraw
 from palinode.cli.trigger import trigger
 from palinode.cli.doctor import doctor
 from palinode.cli.manage import reindex, rebuild_fts, split_layers, bootstrap_ids
@@ -80,6 +81,9 @@ main.add_command(consolidate)
 main.add_command(consolidate, name="dream")
 main.add_command(archive)
 main.add_command(archive_expired)
+main.add_command(restore)
+main.add_command(unretract)
+main.add_command(forget_withdraw)
 main.add_command(trigger)
 main.add_command(doctor)
 
@@ -193,7 +197,7 @@ def stop(watcher, api):
     
     if not shutil.which("systemctl"):
         console.print("[red]Error: 'systemctl' not found. This command requires systemd (Linux).[/red]")
-        return
+        raise SystemExit(1)
         
     services = []
     if api:
@@ -204,13 +208,18 @@ def stop(watcher, api):
     if not services:
         return
         
+    failed = False
     for svc in services:
         console.print(f"[yellow]Stopping {svc}...[/yellow]")
         try:
             subprocess.run(["sudo", "systemctl", "stop", svc], check=True)
             console.print(f"[green]✓ {svc} stopped.[/green]")
         except subprocess.CalledProcessError as e:
+            failed = True
             console.print(f"[red]✗ Failed to stop {svc}: {e}[/red]")
+
+    if failed:
+        raise SystemExit(1)
 
 @main.group()
 def config_cmd():
@@ -269,13 +278,14 @@ def config_edit():
         config_file = os.path.join(config.memory_dir, "palinode.config.yaml")
         if not os.path.exists(config_file):
              console.print("[red]Error: Config file not found at default locations.[/red]")
-             return
-             
+             raise SystemExit(1)
+
     editor = os.environ.get("EDITOR", "vi")
     try:
         subprocess.run([editor, config_file], check=True)
     except Exception as e:
         console.print(f"[red]Error opening editor: {e}[/red]")
+        raise SystemExit(1)
 
 main.add_command(config_cmd, name="config")
 

@@ -312,6 +312,9 @@ def split_all_core_files() -> dict:
                         store.add_trigger(trigger_id, desc, rel_path, emb)
                         stats["triggers_registered"] += 1
                 except Exception as e:
-                    print(f"Failed to auto-register trigger for {f}: {e}")
+                    # Optional enrichment: the sweep continues without it.
+                    logger.warning(
+                        "Failed to auto-register trigger for %s: %s", f, e
+                    )
     
     return stats

@@ -1,11 +1,13 @@
 """``palinode/core/parity.py`` must import nothing outside the standard library.
 
 `plugin/test/parity.test.ts` regenerates `plugin/parity-registry.json` from
-`core/parity.py` at `pretest`, using a bare `python` inside a Node-only CI job
-where none of palinode's Python dependencies are installed. A third-party
-import in `parity.py` — direct, or transitive through another palinode module —
-therefore fails the TypeScript half of the ADR-010 parity contract with a
-`ModuleNotFoundError` that has nothing to do with parity.
+`core/parity.py` at `pretest`, using a bare `python3` inside the `plugin-tests`
+lane of `.github/workflows/plugin-tests.yml` — a Node-only job, present on
+both the development and the public repo, where none of palinode's Python
+dependencies are installed. A third-party import in `parity.py` — direct, or
+transitive through another palinode module — therefore fails the TypeScript
+half of the ADR-010 parity contract with a `ModuleNotFoundError` that has
+nothing to do with parity.
 
 This is not hypothetical. Registering the `epistemic` param initially pulled
 `VALID_EPISTEMICS` in via `from palinode.core.parser import ...`; `parser.py`

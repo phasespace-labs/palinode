@@ -97,6 +97,83 @@ def test_summarize_counts_queries_and_score_ranges():
     }
 
 
+def test_summary_counts_results_reached_through_bm25_alone():
+    """A merged result with no raw cosine came from the FTS arm."""
+    observations = [
+        {"kind": "absent_natural", "returned_count": 2, "top_score": 1.0,
+         "top_raw_score": 0.42, "true_match": None, "fts_only_count": 1},
+        {"kind": "control_exact", "returned_count": 1, "top_score": 1.0,
+         "top_raw_score": 0.91, "true_match": True, "fts_only_count": 0},
+    ]
+
+    assert abstention.summarize_observations(observations)["fts_only_results"] == 1
+
+
+def test_summary_tolerates_observations_without_arm_provenance():
+    observations = [
+        {"kind": "absent_natural", "returned_count": 0, "top_score": None,
+         "top_raw_score": None, "true_match": None},
+    ]
+
+    assert abstention.summarize_observations(observations)["fts_only_results"] == 0
+
+
+def _measurement(mode, threshold, rows, fts_only=0):
+    return {
+        "mode": mode,
+        "threshold": threshold,
+        "summary": {"fts_only_results": fts_only},
+        "observations": [
+            {"case_id": case_id, "result_keys": keys} for case_id, keys in rows
+        ],
+    }
+
+
+def test_compare_arms_separates_a_reorder_from_a_membership_change():
+    """The counted metrics cannot see either; this is the point of the table."""
+    vector = _measurement(
+        "vector",
+        0.40,
+        [
+            ("same", ["a#1", "b#1"]),
+            ("reordered", ["a#1", "b#1"]),
+            ("membership", ["a#1", "b#1"]),
+        ],
+    )
+    hybrid = _measurement(
+        "hybrid",
+        0.40,
+        [
+            ("same", ["a#1", "b#1"]),
+            ("reordered", ["b#1", "a#1"]),
+            ("membership", ["a#1", "c#1"]),
+        ],
+        fts_only=1,
+    )
+
+    comparison = abstention.compare_arms(vector, hybrid)
+
+    assert comparison == {
+        "threshold": 0.40,
+        "cases": 3,
+        "cases_differing": 2,
+        "cases_reordered_only": 1,
+        "cases_membership_changed": 1,
+        "fts_only_results": 1,
+    }
+
+
+def test_compare_arms_reports_no_difference_when_bm25_changes_nothing():
+    rows = [("only", ["a#1"])]
+    comparison = abstention.compare_arms(
+        _measurement("vector", 0.50, rows), _measurement("hybrid", 0.50, rows)
+    )
+
+    assert comparison["cases_differing"] == 0
+    assert comparison["cases_reordered_only"] == 0
+    assert comparison["cases_membership_changed"] == 0
+
+
 def test_evaluate_runs_real_store_and_preserves_controls(monkeypatch):
     """The evaluation uses real SQLite while the embedder is deterministic."""
     from palinode.core.config import config
@@ -152,8 +229,15 @@ def test_evaluate_runs_real_store_and_preserves_controls(monkeypatch):
     assert vector_summaries[0.5]["controls"]["exact"]["true_hits"] == 1
     assert vector_summaries[0.5]["controls"]["paraphrase"]["true_hits"] == 1
 
+    arm_rows = {row["threshold"]: row for row in results["arm_comparison"]}
+    assert set(arm_rows) == {0.0, 0.5}
+    assert arm_rows[0.5]["cases"] == 3
+    assert results["runs"][0]["fts_candidates"]["cases"] == 3
+
     report = abstention.render_markdown(results)
     report.encode("ascii")
     assert "# Palinode abstention evaluation" in report
     assert "No-answer queries returning a hit" in report
     assert "Production defaults changed: **no**" in report
+    assert "## BM25 arm contribution" in report
+    assert "Results from BM25 alone" in report

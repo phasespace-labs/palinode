@@ -421,6 +421,12 @@ def test_build_quality_view_buckets():
         "missing_descriptions": ["d.md"],
         "contradictions": [{"entity": "projects/p", "issue": "two active"}],
         "no_extraction_meta": [{"file": "s.md"}, {"file": "o.md"}],
+        "stale_backing": [
+            {"file": "insights/b.md",
+             "stale_backing": [{"ref": "insights/a", "op": "supersede"}]},
+            {"file": "insights/b-history.md",
+             "stale_backing": [{"ref": "insights/a", "op": "supersede"}]},
+        ],
     }
     view = build_quality_view(lint)
     keys = {q["key"]: q for q in view["queues"]}
@@ -430,6 +436,10 @@ def test_build_quality_view_buckets():
     assert keys["missing_description"]["rows"][0]["id"] == "d"
     assert keys["contradictions"]["rows"][0]["entity"] == "projects/p"
     assert keys["no_extraction_meta"]["rows"][0]["id"] == "s"
+    # Stale backing: linkable, names the retired source; the history sibling
+    # is filtered out like every other file-bearing queue.
+    assert [r["id"] for r in keys["stale_backing"]["rows"]] == ["insights/b"]
+    assert keys["stale_backing"]["rows"][0]["detail"] == "backed by insights/a (supersede)"
 
 
 def test_recent_commits_repo_wide(tmp_path):

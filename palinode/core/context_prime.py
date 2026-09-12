@@ -31,6 +31,7 @@ import os
 from typing import Any
 
 from palinode.core.config import config
+from palinode.core.expiry import core_has_expired
 
 #: Bounded digest sizes — the digest rides the session cold-start path.
 MAX_CORE_MEMORIES = 10
@@ -145,7 +146,12 @@ def build_context_digest(
         if is_visible(scope_chain, m["file"], metadata=m["meta"])
     ]
 
-    core = [m for m in memories if m["meta"].get("core") is True]
+    # Authority monotonicity: a core memory past its expires_at is withheld
+    # from the digest (still searchable). Reported once per process.
+    core = [
+        m for m in memories
+        if m["meta"].get("core") is True and not core_has_expired(m["file"], m["meta"])
+    ]
     core.sort(key=lambda m: m["mtime"], reverse=True)
 
     recent_decisions: list[dict[str, Any]] = []

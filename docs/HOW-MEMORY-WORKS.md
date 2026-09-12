@@ -51,7 +51,9 @@ graph TD
 
 **Hook:** `before_agent_start` in the OpenClaw plugin
 
-Every time you send a message, Palinode injects relevant context **before the agent sees your message**. This happens in four phases:
+Every time you send a message, Palinode injects relevant context **before the agent sees your message**. This happens in four phases.
+
+To see the session-start digest yourself — the same one the SessionStart hook warms and the MCP `session_init` tool returns — run `palinode prime` from the project directory (see [CLI.md](CLI.md#palinode-prime)).
 
 ### Phase 1: Core Memory (always injected)
 
@@ -76,15 +78,33 @@ Core memory persists in the model's context window from turn 1 until OpenClaw co
 - `projects/palinode.md` — memory system status
 - `projects/infrastructure.md` — infrastructure notes and service status
 
+**Core memory can expire.** A `core: true` memory is *acting* state — it is injected without anyone asking — so it may carry the same `expires_at` (ISO-8601) that ephemeral memories use for the TTL sweep, plus an optional free-text `authority` naming who or what licensed it to act (`"paul: standing"`, a session id, a policy name). Set both through `metadata` at save time (`metadata: {expires_at: ..., authority: ...}`, or `metadata.ttl` for a duration). Past its `expires_at` a core memory stays on disk, in git, and searchable — it just stops being injected: `GET /list?core_only=true` (the session-start hook and the harness plugins) and `/context/prime` (`palinode_session_init`, `palinode prime`) both withhold it, and the lapse is logged once. `authority` is stored and displayed, not enforced. `palinode lint` lists core memories with no `expires_at`.
+
 ### Phase 2: Topic-Specific Search (per message)
 
 After core injection, Palinode searches for context relevant to **what you just said**.
 
-- Uses hybrid search: BM25 keyword matching + BGE-M3 vector similarity + RRF merge
+- Uses hybrid search: BM25 keyword matching + BGE-M3 vector similarity + RRF merge. In
+  practice the arms split the work by query shape: a full-sentence question is retrieved
+  almost entirely by the vector arm (FTS5's implicit AND requires every query token to
+  co-occur in a document, which natural-language questions rarely satisfy), while BM25
+  carries exact terms and identifiers that embeddings blur. The combined system measures
+  0.981 evidence recall@10 on LongMemEval_S — see [BENCHMARKS](BENCHMARKS.md). If the
+  keyword arm errors, search degrades to vector-only and logs a warning rather than failing.
 - Results are adjusted by **Temporal Decay**, bumping up scores for recently updated and highly important memories.
 - Returns top 5 results, 700 chars each
 - **Skipped for trivial messages** (< 15 chars, or acks like "ok", "sure", "thanks")
 - Searches across all memory types: projects, decisions, insights, daily notes, research
+- **Tiered views** — `read` and `search` take a `tier` of `abstract`, `overview`, or
+  `full` on every surface (CLI `--tier`, MCP `tier`, REST `tier`). `abstract` is the
+  file's `summary:` frontmatter, falling back to `canonical_question:` and then the
+  first paragraph, capped at ~300 characters — enough to decide whether a hit is worth
+  opening. `overview` is the frontmatter block plus the head of the body, capped at
+  4,000 characters (`read.abstract_max_chars` / `read.overview_max_chars` in
+  `palinode.config.yaml`). `full` is the whole record. Tiers are computed
+  deterministically at read time from content already in hand — no LLM, and no second
+  content store: the markdown file remains the only place content lives. Omitting
+  `tier` returns exactly what the surface returned before tiers existed.
 
 ### Phase 3: Associative Context (Spreading Activation)
 
@@ -93,6 +113,8 @@ If your message discusses known entities (people, projects), Palinode searches t
 ### Phase 4: Prospective Triggers
 
 Palinode maintains a background index of "triggers" (specific situational contexts). Every message is checked against this list. If the semantic meaning of your message matches a trigger description, the associated memory file is forcibly injected into the context. This allows the agent to essentially leave a "note to self" to remember a specific file the next time a specific situation arises.
+
+A trigger acts under whatever authority existed when it was written, so it can carry an expiry: `palinode_trigger create` (MCP), `palinode trigger add --expires-at ... --authority ...` (CLI) and `POST /triggers` all accept `expires_at` (ISO-8601) and a free-text `authority`. An expired trigger is skipped at check time and logged once — not once per prompt — and the `archive-expired` sweep that ages out ephemeral memories also flips it to `enabled: 0`, so `palinode trigger list` shows the lapse. A trigger without `expires_at` never expires, exactly as before.
 
 **What the agent sees (wrapped in `<palinode-memory>` tags):**
 
@@ -184,10 +206,18 @@ Alice wants async check-ins instead of meetings -es
 
 **Script:** `palinode/consolidation/runner.py`  
 **LLM:** OLMo 3.1:32b via Ollama (localhost:11434)
-**Schedule:** `0 3 * * 0` (crontab)  
+**Schedule:** `0 3 * * 0` (crontab) — an upper bound, not the trigger
 **Prompt:** `specs/prompts/consolidation.md`
 
 The consolidation cron is where raw daily logs become curated memory.
+
+The crontab entry decides how often the pass may be *considered*; the activity
+gate decides whether it runs. A pass fires when at least 24 h have elapsed
+**and** at least 5 sessions have been recorded since the last one — or when the
+7-day ceiling passes, whichever comes first. So a busy week consolidates
+mid-week and an idle one does not burn an LLM pass over nothing. Thresholds,
+the ceiling, and how to turn the gate off are in
+[OPERATIONS.md § Consolidation scheduling](OPERATIONS.md#consolidation-scheduling).
 
 ### What It Does
 
@@ -209,8 +239,8 @@ graph LR
    - Entity tags in frontmatter (`entities: [project/my-app]`)
    - Keyword fallback (scans content for project names, tool names, etc.)
 3. **Analyze** — for each project, sends notes + current summary + existing decisions to the LLM (OLMo 3.1:32b) with the compaction prompt to determine what facts are relevant
-4. **Determine Operations** — the LLM returns structured JSON operations (`KEEP`, `UPDATE`, `MERGE`, `SUPERSEDE`, `ARCHIVE`) determining the fate of each active fact
-5. **Execute Compaction** — the Compaction Executor runs deterministically to modify or move facts:
+4. **Determine Operations** — the LLM returns a structured JSON array holding only the operations that *change* something (`UPDATE`, `MERGE`, `SUPERSEDE`, `ARCHIVE`, `RETRACT`, `PROPOSE_CONTRADICTS`). Any fact it does not name is kept as it stands, and an empty array means nothing needed changing — so the response size follows the number of judgments, not the size of the document
+5. **Apply Changes** — modify or move the named facts:
    - Updated/Merged facts are preserved in the Identity or Status layers.
    - Superseded or Archived facts are moved to the History layer (`{name}-history.md`) with a rationale and timestamp ensuring data is never lost.
 6. **Assign IDs** — any newly generated facts get a deterministic `<!-- fact:slug -->` ID block for tracking.
@@ -233,7 +263,7 @@ assistant: Updating My App with testing progress.
 
 ## Session 2026-03-29T16:12:25Z  
 user: run the consolidation
-assistant: Processed 18 notes, My App summary updated via 5 KEEP, 2 UPDATE, 1 ARCHIVE ops...
+assistant: Processed 18 notes, My App summary updated via 2 UPDATE, 1 ARCHIVE ops...
 ```text
 
 **After consolidation (projects/my-app-status.md):**
@@ -326,6 +356,8 @@ The entity index is a reverse lookup: given an entity, find all files that menti
 **API:** `GET /entities/person/alice` → returns all files referencing Alice
 
 **Entity graph:** shows which entities co-occur. If `person/alice` and `project/checkout` always appear together, the system knows they're related.
+
+**CLI:** `palinode entities` lists every tracked entity; `palinode entities person/alice` returns the files that reference it (see [CLI.md](CLI.md#palinode-entities)).
 
 **Currently 20 entities tracked** across 219 files.
 
@@ -435,6 +467,18 @@ status: in_progress  # in_progress | done | blocked
 - Quality standards
 
 The consolidation runner uses the prompt in `specs/prompts/compaction.md`. To change consolidation behavior, edit that file — no code changes needed. (PROGRAM.md documents overall agent behavior, not the consolidation runner specifically.)
+
+That file lives in your **memory store**, not in the installed package.
+`palinode init` puts it there, copied from the prompts that ship inside
+palinode, and never overwrites an existing one — so an edit survives every
+re-run of `init`, with or without `--force`. If the store has no copy, the
+runner reads the packaged one and logs that it did; nothing silently skips.
+
+The flip side of owning the file: a palinode release that improves a prompt
+does not reach you until you take it. `palinode doctor` flags the gap
+(`prompts_current`) and `palinode prompt sync` closes it — it replaces only the
+copies that still match a version palinode shipped, and reports the ones you
+have edited instead of overwriting them.
 
 ---
 

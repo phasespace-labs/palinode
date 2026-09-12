@@ -2,7 +2,7 @@
 
 Per-harness smoke checklist for validating Palinode MCP connectivity.
 Each harness runs the same 5-call sequence for cross-comparison.
-Tracked at issue #345 (parent #342).
+Tracked internally.
 
 ---
 

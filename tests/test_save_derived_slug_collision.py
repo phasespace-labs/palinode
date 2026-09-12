@@ -52,6 +52,17 @@ def test_colliding_derived_slugs_do_not_overwrite(mock_memory_dir):
 
     rel_paths = [r["rel_path"] for r in results]
     assert len(set(rel_paths)) == 3, f"expected 3 distinct paths, got {rel_paths}"
+    original_slug = os.path.splitext(os.path.basename(rel_paths[0]))[0]
+    assert [r["save_outcome"] for r in results] == [
+        "created",
+        "disambiguated",
+        "disambiguated",
+    ]
+    assert [r["disambiguated_from"] for r in results] == [
+        None,
+        original_slug,
+        original_slug,
+    ]
 
     for marker, result in zip(markers, results, strict=True):
         with open(result["file_path"], "r", encoding="utf-8") as fh:
@@ -65,6 +76,10 @@ def test_identical_content_is_not_duplicated(mock_memory_dir):
     second = _save(content)
 
     assert first["rel_path"] == second["rel_path"]
+    assert first["save_outcome"] == "created"
+    assert second["save_outcome"] == "resaved"
+    assert first["disambiguated_from"] is None
+    assert second["disambiguated_from"] is None
     directory = os.path.dirname(first["file_path"])
     assert len(os.listdir(directory)) == 1
 
@@ -82,6 +97,13 @@ def test_resaving_a_suffixed_memory_reuses_its_own_file(mock_memory_dir):
 
     assert second["rel_path"] != first["rel_path"]
     assert again["rel_path"] == second["rel_path"]
+    assert first["save_outcome"] == "created"
+    assert second["save_outcome"] == "disambiguated"
+    assert second["disambiguated_from"] == os.path.splitext(
+        os.path.basename(first["rel_path"])
+    )[0]
+    assert again["save_outcome"] == "resaved"
+    assert again["disambiguated_from"] is None
 
     directory = os.path.dirname(first["file_path"])
     assert sorted(os.listdir(directory)) == sorted(
@@ -98,6 +120,10 @@ def test_explicit_slug_still_overwrites(mock_memory_dir):
     second = _save("second body", slug="pinned-note")
 
     assert first["rel_path"] == second["rel_path"]
+    assert first["save_outcome"] == "created"
+    assert second["save_outcome"] == "replaced"
+    assert first["disambiguated_from"] is None
+    assert second["disambiguated_from"] is None
     with open(second["file_path"], "r", encoding="utf-8") as fh:
         body = fh.read()
     assert "second body" in body

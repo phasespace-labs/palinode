@@ -208,6 +208,10 @@ def summarize_observations(
         },
         "no_answer_by_kind": by_kind,
         "controls": controls,
+        # Results that reached the merged set through BM25 alone. Zero in the
+        # vector arm by construction, and the number that says whether the
+        # hybrid arm added anything at this floor.
+        "fts_only_results": sum(row.get("fts_only_count") or 0 for row in observations),
         "false_positive_scores": {
             "fused": _score_stats(
                 [
@@ -229,6 +233,11 @@ def summarize_observations(
 
 def _matches_topic(result: dict[str, Any], expected_topic: str) -> bool:
     return expected_topic.casefold() in str(result.get("content", "")).casefold()
+
+
+def _result_key(result: dict[str, Any]) -> str:
+    """The identity the ranker fuses and dedups on."""
+    return f"{result['file_path']}#{result.get('section_id', 'root')}"
 
 
 def _observation(case: QueryCase, results: list[dict[str, Any]]) -> dict[str, Any]:
@@ -267,6 +276,14 @@ def _observation(case: QueryCase, results: list[dict[str, Any]]) -> dict[str, An
         else None,
         "true_match_rank": true_match_rank,
         "best_true_raw_score": best_true_raw_score,
+        # What the arms actually returned, in order. The counted metrics above
+        # are blind to a reordering, so without these the vector and hybrid
+        # rows are identical whenever BM25 changes rank but not membership.
+        "result_keys": [_result_key(result) for result in results],
+        # rank_hybrid attaches raw_score only to candidates the vector arm
+        # produced, so a result without one reached the merged set through
+        # BM25 alone.
+        "fts_only_count": sum(1 for result in results if result.get("raw_score") is None),
     }
 
 
@@ -300,6 +317,90 @@ def _measure(
     }
 
 
+def _fts_candidate_stats(
+    cases: Sequence[QueryCase], *, top_k: int
+) -> dict[str, Any]:
+    """The BM25 candidate scores the per-arm floor is applied to.
+
+    ``search_fts`` normalizes BM25 as ``min(abs(rank) / 25.0, 1.0)``, a scale
+    with no relation to the cosine similarity the vector arm is scored on.
+    One threshold is applied to both, so this records where BM25 actually
+    lands on that shared axis.
+    """
+    from palinode.core import store
+
+    scores: list[float] = []
+    cases_with_candidates = 0
+    for case in cases:
+        rows = store.search_fts(case.query, top_k=top_k * 2)
+        if not rows:
+            continue
+        cases_with_candidates += 1
+        scores.extend(float(row.get("score", 0.0)) for row in rows)
+    return {
+        "cases": len(cases),
+        "cases_with_candidates": cases_with_candidates,
+        "candidates": len(scores),
+        "score_stats": _score_stats(scores),
+    }
+
+
+def compare_arms(
+    vector_measurement: dict[str, Any], hybrid_measurement: dict[str, Any]
+) -> dict[str, Any]:
+    """How the hybrid arm differs from the vector arm at one floor.
+
+    The counted metrics cannot see this. Two arms that return the same number
+    of results for every case, with the same control hits, produce identical
+    summary rows whether BM25 changed the ordering or was dropped entirely.
+    """
+    vector_rows = {row["case_id"]: row for row in vector_measurement["observations"]}
+    hybrid_rows = {row["case_id"]: row for row in hybrid_measurement["observations"]}
+    shared = sorted(vector_rows.keys() & hybrid_rows.keys())
+
+    differing = 0
+    reordered = 0
+    membership_changed = 0
+    for case_id in shared:
+        vector_keys = vector_rows[case_id]["result_keys"]
+        hybrid_keys = hybrid_rows[case_id]["result_keys"]
+        if vector_keys == hybrid_keys:
+            continue
+        differing += 1
+        if set(vector_keys) == set(hybrid_keys):
+            reordered += 1
+        else:
+            membership_changed += 1
+
+    return {
+        "threshold": vector_measurement["threshold"],
+        "cases": len(shared),
+        "cases_differing": differing,
+        "cases_reordered_only": reordered,
+        "cases_membership_changed": membership_changed,
+        "fts_only_results": hybrid_measurement["summary"]["fts_only_results"],
+    }
+
+
+def _arm_comparisons(
+    measurements: Sequence[dict[str, Any]], thresholds: Sequence[float]
+) -> list[dict[str, Any]]:
+    comparisons = []
+    for threshold in thresholds:
+        vector_measurement = next(
+            row
+            for row in measurements
+            if row["mode"] == "vector" and row["threshold"] == threshold
+        )
+        hybrid_measurement = next(
+            row
+            for row in measurements
+            if row["mode"] == "hybrid" and row["threshold"] == threshold
+        )
+        comparisons.append(compare_arms(vector_measurement, hybrid_measurement))
+    return comparisons
+
+
 def _aggregate(
     runs: Sequence[dict[str, Any]], thresholds: Sequence[float]
 ) -> list[dict[str, Any]]:
@@ -322,6 +423,33 @@ def _aggregate(
                     "summary": summarize_observations(observations),
                 }
             )
+    return aggregate
+
+
+def _aggregate_arm_comparisons(
+    runs: Sequence[dict[str, Any]], thresholds: Sequence[float]
+) -> list[dict[str, Any]]:
+    """Sum the per-seed arm comparisons at each floor."""
+    aggregate = []
+    for threshold in thresholds:
+        rows = [
+            row
+            for run in runs
+            for row in run["arm_comparison"]
+            if row["threshold"] == threshold
+        ]
+        aggregate.append(
+            {
+                "threshold": threshold,
+                "cases": sum(row["cases"] for row in rows),
+                "cases_differing": sum(row["cases_differing"] for row in rows),
+                "cases_reordered_only": sum(row["cases_reordered_only"] for row in rows),
+                "cases_membership_changed": sum(
+                    row["cases_membership_changed"] for row in rows
+                ),
+                "fts_only_results": sum(row["fts_only_results"] for row in rows),
+            }
+        )
     return aggregate
 
 
@@ -404,6 +532,8 @@ def evaluate(
                     "num_files": generated.num_files,
                     "num_chunks": indexed.num_facts,
                     "measurements": measurements,
+                    "arm_comparison": _arm_comparisons(measurements, thresholds),
+                    "fts_candidates": _fts_candidate_stats(cases, top_k=top_k),
                 }
             )
 
@@ -429,6 +559,7 @@ def evaluate(
         "runs": runs,
     }
     results["aggregate"] = _aggregate(runs, thresholds)
+    results["arm_comparison"] = _aggregate_arm_comparisons(runs, thresholds)
     return results
 
 
@@ -491,6 +622,52 @@ def render_markdown(results: dict[str, Any]) -> str:
                 f"| {_format_score_stats(summary['false_positive_scores']['raw'])} |"
             )
         lines.extend(["", "Scores describe only false-positive result sets.", ""])
+
+    lines.extend(
+        [
+            "## BM25 arm contribution",
+            "",
+            "The two arms are scored on different axes and share one floor: real cosine "
+            "similarity for the vector arm, `min(abs(bm25) / 25.0, 1.0)` for BM25. This "
+            "table is what separates the arms; the counted metrics above cannot, because "
+            "they are blind to a reordering.",
+            "",
+            "| Threshold | Cases where hybrid differs from vector | Reordered only | Membership changed | Results from BM25 alone |",
+            "|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for row in results.get("arm_comparison", []):
+        lines.append(
+            f"| {row['threshold']:.2f} "
+            f"| {row['cases_differing']}/{row['cases']} "
+            f"| {row['cases_reordered_only']} "
+            f"| {row['cases_membership_changed']} "
+            f"| {row['fts_only_results']} |"
+        )
+
+    runs_with_candidates = [
+        run for run in results.get("runs", []) if run.get("fts_candidates")
+    ]
+    if runs_with_candidates:
+        lines.extend(
+            [
+                "",
+                "Normalized BM25 candidate scores per seed, before any floor is applied "
+                "(min / median / max):",
+                "",
+                "| Seed | Queries with a BM25 candidate | Candidates | Score min / median / max |",
+                "|---:|---:|---:|---:|",
+            ]
+        )
+        for run in runs_with_candidates:
+            candidates = run["fts_candidates"]
+            lines.append(
+                f"| {run['seed']} "
+                f"| {candidates['cases_with_candidates']}/{candidates['cases']} "
+                f"| {candidates['candidates']} "
+                f"| {_format_score_stats(candidates['score_stats'])} |"
+            )
+        lines.append("")
 
     return "\n".join(lines)
 

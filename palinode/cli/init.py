@@ -8,6 +8,11 @@ Creates:
   - .claude/hooks/palinode-user-prompt-submit.sh  (per-turn implicit recall — triggers + strict search)
   - .mcp.json  (MCP server block for palinode, if --mcp given)
 
+Also provisions, in the *memory store* rather than the project:
+  - $PALINODE_DIR/specs/prompts/*.md  (the consolidation prompts, from the
+    copies packaged with palinode — an install had none of them before, so a
+    fresh store could not consolidate at all)
+
 With --obsidian, additionally writes:
   - .obsidian/app.json       (file recovery, daily/ default location, wikilinks)
   - .obsidian/graph.json     (pre-tuned graph: collapsed dirs, color groups)
@@ -544,18 +549,27 @@ if [ "$MAX_RESULTS" -gt 0 ]; then
     # is a hard jq ERROR (not null), so `.results // .` dies on the real
     # response shape and fail-open turns the crash into permanent silence.
     LINES=$(echo "$HITS" | jq -r '
+      def fmt2: (. * 100 | round) as $c
+        | (($c / 100) | floor | tostring) + "." + ((($c % 100) + 100 | tostring)[1:]);
+      def describe:
+        if (has("raw_score") | not) then "rank " + ((.score // 0) | fmt2)
+        elif .raw_score == null then "keyword match, rank " + ((.score // 0) | fmt2)
+        else ((.raw_score * 100 | round | tostring) + "% match") end;
       (if type == "object" then (.results // []) else . end) as $r
       | if ($r | type) == "array" and ($r | length) > 0 then
           $r | map("- [" + (.rel_path // .file_path // "?") + "] ("
-                   + ((.raw_score // .score // 0) * 100 | floor | tostring) + "%) "
+                   + describe + ") "
                    + ((.snippet // .content // "") | gsub("\\n"; " ")))
              | join("\\n")
         else empty end' 2>/dev/null) || LINES=""
-  # raw_score, not score: `score` is the post-fusion RANK value — the top hit
-  # reads ~100% even for an irrelevant query — while `raw_score` is the cosine
-  # the THRESHOLD knob filters on. Showing the knob's own scale is what makes
-  # the lever tunable from what the user sees. (`.score` fallback: pre-0.12
-  # servers without raw_score.)
+  # `score` is the post-fusion RANK value: the top hit reads ~100% even for an
+  # irrelevant query. `raw_score` is the cosine the THRESHOLD knob filters on,
+  # so showing the knob's own scale is what makes the lever tunable from what
+  # the user sees. The two missing cases are not the same. A null raw_score is
+  # a BM25-only hit the ranker marked, and it has no similarity to report, so
+  # none is claimed. An absent raw_score is a pre-0.12 server, where the arm is
+  # unknown and the rank is all that can be said. Same three cases as
+  # describe_match in palinode/core/scoring.py.
     if [ -n "$LINES" ]; then
       SECTIONS="${SECTIONS}
 ### Related memories
@@ -626,6 +640,12 @@ Call `palinode_session_end` with `push: true` and:
   next session needs to pick up
 - `project` — the project slug from `.claude/CLAUDE.md` (or the directory
   name if no slug is set)
+
+Two things across all three fields, because a later reader cannot repair either:
+write **absolute dates**, resolving "yesterday" / "last week" against today's
+date; and when something was chosen from a set of options, name **every option
+considered**, not just the one that won. A note that says "picked the second
+approach" is unreadable once the list is gone.
 
 This writes and commits the daily note, the project status line, and an
 individual indexed memory file, then — because of `push: true` — pushes the
@@ -713,7 +733,9 @@ the workspace `CLAUDE.md`.
 
 **Step 4 — Archive the session (LAST).**
 Call `palinode_session_end` with `push: true` and `summary`, `decisions`,
-`blockers`, and `project` (the slug from `.claude/CLAUDE.md`). Fired last so the
+`blockers`, and `project` (the slug from `.claude/CLAUDE.md`). Write absolute
+dates rather than relative ones, and when a decision chose between options,
+name every option considered — neither is recoverable later. Fired last so the
 record captures the post-merge SHAs, the freshly-filed issue numbers, and the
 papercut/INBOX updates — reference *what the wrap did* (merged #X, pushed Y,
 filed #Z, appended N items), not just the work. `push: true` ships the note in
@@ -1230,8 +1252,8 @@ visually while your AI agents read and write through the CLI or MCP server.
 - Wikilinks (`[[like this]]`) are first-class — Palinode reads and writes them.
 - Do not edit files under `.palinode/` — that directory is managed by the daemon.
 - The graph view collapses `archive/`, `logs/`, and `.palinode/` by default.
-- Re-run `palinode init --obsidian <vault-path>` to restore scaffolded files
-  if they are accidentally deleted (user-edited files are preserved).
+- Re-run `palinode init --obsidian --dir <vault-path>` to restore scaffolded
+  files if they are accidentally deleted (user-edited files are preserved).
 """
 
 
@@ -1251,6 +1273,48 @@ def _write_text_file(path: Path, content: str, force: bool) -> str:
         return "skipped (exists)"
     path.write_text(content, encoding="utf-8")
     return "created"
+
+
+def _write_store_prompt(source: Path, dest: Path) -> str:
+    """Provision one consolidation prompt into the memory store.
+
+    Never overwrites, and deliberately does not honour ``--force``: unlike
+    everything else `init` writes, these are files the operator is invited to
+    edit (`docs/HOW-MEMORY-WORKS.md` says so), and they live in the memory
+    store rather than in the scaffolded project. A flag whose job is "redo the
+    scaffolding" must not be able to discard tuning. `palinode prompt sync` is
+    the sanctioned refresh path — it can tell a pristine copy from an edited
+    one, and this cannot.
+    """
+    _ensure_parent(dest)
+    if dest.exists():
+        return "skipped (exists)"
+    dest.write_bytes(source.read_bytes())
+    return "created"
+
+
+def _prompts_plan(memory_dir: Path) -> list[PlannedWrite]:
+    """One entry per packaged consolidation prompt, into the memory store.
+
+    Consolidation reads ``<memory_dir>/specs/prompts/*.md``. Before this, a
+    `pip install` + `palinode init` store had none of them and the first
+    `palinode consolidate` raised — the prompts only ever arrived by cloning
+    the repo. The runner now falls back to the packaged copies, so this is
+    about the *editable* copy: provisioning the store is what makes "tune the
+    prompt" a thing an operator can do.
+    """
+    from palinode.prompts import iter_packaged_prompts, store_prompts_dir
+
+    dest_dir = store_prompts_dir(memory_dir)
+    return [
+        PlannedWrite(
+            f"prompt {source.name}",
+            dest_dir / source.name,
+            "consolidation prompt (memory store)",
+            lambda source=source: _write_store_prompt(source, dest_dir / source.name),
+        )
+        for source in iter_packaged_prompts()
+    ]
 
 
 # The standard memory category directories so the Obsidian graph has seed
@@ -1370,6 +1434,11 @@ class InitOptions:
     obsidian: bool
     force: bool
     force_obsidian: bool
+    #: Where to provision ``specs/prompts/`` — the memory store, not the
+    #: project. ``None`` skips it (``--no-prompts``). Passed in rather than
+    #: read from config inside `build_plan()` so the plan stays a pure
+    #: function of its inputs and tests can point it at a tmp_path.
+    prompts_dir: Path | None = None
 
 
 def build_plan(target: Path, opts: InitOptions) -> list[PlannedWrite]:
@@ -1467,6 +1536,9 @@ def build_plan(target: Path, opts: InitOptions) -> list[PlannedWrite]:
 
     if opts.obsidian:
         plan.extend(_obsidian_plan(target, opts.force, opts.force_obsidian))
+
+    if opts.prompts_dir is not None:
+        plan.extend(_prompts_plan(opts.prompts_dir))
 
     return plan
 
@@ -1610,6 +1682,16 @@ def _display_path(path: Path, target: Path) -> str:
     ),
 )
 @click.option(
+    "--prompts/--no-prompts",
+    default=True,
+    help=(
+        "Provision the consolidation prompts into the memory store "
+        "($PALINODE_DIR/specs/prompts/). Existing files are never overwritten, "
+        "with or without --force — use `palinode prompt sync` to refresh them. "
+        "Default: on."
+    ),
+)
+@click.option(
     "--force",
     is_flag=True,
     help="Overwrite existing files (default: preserve / append / skip)",
@@ -1635,6 +1717,7 @@ def init(
     user_skill,
     obsidian,
     force_obsidian,
+    prompts,
     force,
     dry_run,
 ):
@@ -1654,6 +1737,12 @@ def init(
       .claude/skills/palinode-session/SKILL.md — ambient memory skill (plus
                                                 .cursor/skills/ and .agent/skills/ when
                                                 detected; --user for ~/.claude/skills/)
+
+    And, in the memory store (not the project):
+      $PALINODE_DIR/specs/prompts/*.md        — the consolidation prompts, copied
+                                                from the ones packaged with palinode.
+                                                Never overwritten; `palinode prompt sync`
+                                                refreshes them. --no-prompts skips.
 
     With --obsidian, additionally writes:
       .obsidian/app.json       — wikilinks, daily/ as default file location
@@ -1711,6 +1800,16 @@ def init(
             if (target / ".agent").is_dir():
                 session_skill_roots.append(("agent-dir", target / ".agent" / "skills"))
 
+    # The prompts go into the memory store, which is usually somewhere else
+    # entirely than the project being scaffolded. Config is imported here
+    # rather than at module scope so `palinode init --no-prompts` and the
+    # scaffolding tests keep working without a resolvable memory dir.
+    prompts_dir: Path | None = None
+    if prompts:
+        from palinode.core.config import config as _config
+
+        prompts_dir = Path(_config.memory_dir)
+
     opts = InitOptions(
         slug=slug,
         claudemd=claudemd,
@@ -1725,6 +1824,7 @@ def init(
         obsidian=obsidian,
         force=force,
         force_obsidian=force_obsidian,
+        prompts_dir=prompts_dir,
     )
     plan = build_plan(target, opts)
 

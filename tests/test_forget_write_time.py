@@ -357,23 +357,34 @@ def test_repeat_request_never_archives_a_retracted_file(
     assert post.content.count("[RETRACTED") == 2
 
 
-def test_retraction_frees_target_slots_for_new_memories(
+def test_retraction_frees_target_slots_for_older_memories(
         api_client, monkeypatch):
-    """The slot-starvation regression: after a dense file is retracted, a NEW
-    establishing memory for the same pref must still be reachable on a later
-    request — the retracted file no longer consumes a max_targets slot."""
+    """The slot-starvation regression: after a dense file is retracted, an
+    establishing memory for the same pref that the first pass could not reach
+    (``max_targets`` exhausted) must be reachable on a later request — the
+    retracted file no longer consumes a slot. The unreached memory predates
+    the request: a request only ever resolves what existed when it was made
+    (``tests/test_restore_surface_903.py`` covers the after-the-fact case)."""
     client, memory_dir = api_client
     monkeypatch.setattr(config.consolidation.forget, "enabled", True)
+    monkeypatch.setattr(config.consolidation.forget, "max_targets", 1)
 
     _save(client, _DENSE_SNAPSHOT, "moonrise-closeout")
-    _save(client, "Please forget that I know Wilhelmina Cragg.",
-          "forget-wilhelmina")
     _save(client, "Met Wilhelmina Cragg at the fair; she judges the "
                   "Moonrise panel.", "pref-wilhelmina")
+    first = _save(client, "Please forget that I know Wilhelmina Cragg.",
+                  "forget-wilhelmina")
+    handled_first = set(first["forget"]["archived"]) | {
+        r["path"] for r in first["forget"].get("retracted", [])}
+    assert len(handled_first) == 1
 
     out = _save(client, "Please forget that I know Wilhelmina Cragg.",
                 "forget-wilhelmina-again")
-    assert "insights/pref-wilhelmina.md" in out["forget"]["archived"]
+    handled_second = set(out["forget"]["archived"]) | {
+        r["path"] for r in out["forget"].get("retracted", [])}
+    assert len(handled_second) == 1
+    assert handled_first | handled_second == {
+        "insights/moonrise-closeout.md", "insights/pref-wilhelmina.md"}
 
 
 def test_granularity_router_floor_zero_restores_whole_file_archival(

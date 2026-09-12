@@ -93,6 +93,27 @@ describe("beforeModel — the prompt-cache invariant", () => {
     expect(await p.hooks.beforeModel(request([user(PROMPT)]))).toBeUndefined();
   });
 
+  it("labels a BM25-only hit as rank rather than similarity", async () => {
+    const p = make({
+      ...QUIET,
+      "/search": {
+        results: [
+          {
+            rel_path: "notes/keyword.md",
+            score: 1.0,
+            raw_score: null,
+            snippet: "literal term",
+          },
+        ],
+      },
+    });
+    const result = await p.hooks.beforeModel(request([user(PROMPT)]));
+    const text = (result!.messages![1].content[0] as { text: string }).text;
+
+    expect(text).toContain("[notes/keyword.md] (keyword match, rank 1.00) literal term");
+    expect(text).not.toContain("(100%)");
+  });
+
   it("keeps the injected prefix byte-stable across iterations and later turns", async () => {
     const calls: Calls = [];
     const p = make(HIT, calls);

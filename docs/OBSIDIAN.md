@@ -251,7 +251,7 @@ By design. Obsidian's search is full-text and exact; Palinode's is BM25 + vector
 
 ### Git auto-commits make the timeline noisy
 
-Palinode commits on every save for audit history. Within a few sessions you'll have dozens of commits with messages like `palinode auto-save: decisions/foo.md`. This is the feature, not the bug — it's what makes `palinode_blame`, `palinode_diff`, `palinode_history`, and `palinode_rollback` work. If you want a friendlier overview, `palinode log` shows a summarised history; the raw `git log` is always there if you want every event.
+Palinode commits on every save for audit history. Within a few sessions you'll have dozens of commits with messages like `palinode auto-save: decisions/foo.md`. This is the feature, not the bug — it's what makes `palinode_blame`, `palinode_diff`, `palinode_history`, and `palinode_rollback` work. If you want a friendlier overview, `palinode history <file>` shows a summarised history (`--detail full` for the full patch); the raw `git log` is always there if you want every event.
 
 ### Bases requires a recent Obsidian
 

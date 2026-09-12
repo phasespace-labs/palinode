@@ -77,6 +77,7 @@ These live under `plugins.entries.openclaw-palinode` alongside the `hooks` block
 | `palinodeDir` | `~/palinode` | Path to your Palinode memory directory |
 | `autoRecall` | `true` | Inject core memory + semantic recall before each agent turn |
 | `autoCapture` | `true` | Append session summaries to `daily/` at agent end |
+| `midTurnMode` | `none` | Core-memory injection on turns after the first: `none` (skip), `summary` (one line per core file), `full` (whole files) |
 | `recallProfile` | `coding` | Named recall preset: `coding`, `monitoring`, `investigation`, `writing`, `conversation`, `minimal`, `off` |
 | `recallProfileConfig` | — | Per-field overrides on top of the named preset |
 | `promptsDir` | `specs/prompts` | Path to extraction prompts, relative to `palinodeDir` |

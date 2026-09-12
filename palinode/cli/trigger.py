@@ -33,8 +33,17 @@ def trigger():
     "trigger_id",
     help="Stable trigger ID (UUID or slug).  Useful for re-creation / dedup.",
 )
+@click.option(
+    "--expires-at",
+    "expires_at",
+    help="ISO-8601 timestamp after which the trigger no longer fires (default: never).",
+)
+@click.option(
+    "--authority",
+    help="Who or what licensed this trigger to act (user grant, session id, policy name).",
+)
 @click.option("--format", "fmt", type=click.Choice(["json", "text"]), help="Output format")
-def trigger_add(description, memory_file, threshold, cooldown_hours, trigger_id, fmt):
+def trigger_add(description, memory_file, threshold, cooldown_hours, trigger_id, expires_at, authority, fmt):
     """Register a new auto-surface trigger."""
     try:
         result = api_client.trigger_add(
@@ -43,6 +52,8 @@ def trigger_add(description, memory_file, threshold, cooldown_hours, trigger_id,
             threshold=threshold,
             cooldown_hours=cooldown_hours,
             trigger_id=trigger_id,
+            expires_at=expires_at,
+            authority=authority,
         )
         
         output_fmt = OutputFormat(fmt) if fmt else get_default_format()
@@ -52,7 +63,7 @@ def trigger_add(description, memory_file, threshold, cooldown_hours, trigger_id,
             console.print(f"[green]Trigger added (id: {result['id']})[/green]")
     except Exception as e:
         console.print(f"[red]Error adding trigger: {str(e)}[/red]")
-        click.Abort()
+        raise click.Abort()
 
 @trigger.command(name="list")
 @click.option("--format", "fmt", type=click.Choice(["json", "text"]), help="Output format")
@@ -74,19 +85,26 @@ def trigger_list(fmt):
             table.add_column("Description")
             table.add_column("Target File")
             table.add_column("Threshold")
-            
+            table.add_column("Expires")
+            table.add_column("Authority")
+
             for t in triggers:
+                expires = t.get("expires_at") or "—"
+                if not t.get("enabled", 1):
+                    expires = f"{expires} (disabled)"
                 table.add_row(
-                    t['id'], 
-                    t['description'], 
+                    t['id'],
+                    t['description'],
                     t.get('memory_file', t.get('file', '')),
-                    f"{t['threshold']:.2f}"
+                    f"{t['threshold']:.2f}",
+                    expires,
+                    t.get("authority") or "—",
                 )
             
             console.print(table)
     except Exception as e:
         console.print(f"[red]Error listing triggers: {str(e)}[/red]")
-        click.Abort()
+        raise click.Abort()
 
 @trigger.command(name="remove")
 @click.argument("trigger_id")
@@ -103,4 +121,4 @@ def trigger_remove(trigger_id, fmt):
             console.print("[green]Trigger removed.[/green]")
     except Exception as e:
         console.print(f"[red]Error removing trigger: {str(e)}[/red]")
-        click.Abort()
+        raise click.Abort()

@@ -87,7 +87,7 @@ That's the entire client config. Works with Claude Code, Claude Desktop, Cursor,
 
 **Index** — A file watcher embeds with BGE-M3 and indexes with FTS5 as you save. Content-hash dedup skips re-embedding unchanged files (~90% savings). Single SQLite file, zero external services.
 
-**Search** — Hybrid BM25 + vector search merged with Reciprocal Rank Fusion. Keyword precision when you need exact terms, semantic recall when you don't. Optional associative entity graph and prospective triggers.
+**Search** — Hybrid BM25 + vector search merged with Reciprocal Rank Fusion. The two arms have different jobs: on full-sentence questions the vector arm does nearly all the retrieval (FTS5 requires every query token to co-occur, which questions rarely satisfy), while BM25 catches the exact terms and identifiers embeddings blur. Measured together: 0.981 evidence recall@10 on LongMemEval_S ([benchmarks](docs/BENCHMARKS.md)). Optional associative entity graph and prospective triggers.
 
 **Compact** — Weekly consolidation where an LLM returns structured operations and Palinode validates and applies them. Every compaction is a git commit you can review, blame, or revert.
 
@@ -205,6 +205,8 @@ Projects that use other harnesses get the same memory instructions automatically
 
 ## Usage Examples
 
+A few common flows. Every command and option is in [docs/CLI.md](docs/CLI.md).
+
 ### Save a decision, recall it later
 
 ```bash
@@ -283,7 +285,9 @@ palinode archive insights/stale-finding.md --reason "superseded by the re-run" \
 | `topic_coverage` | Given a short topic phrase, return whether any existing wiki page already covers it (binary `covered` / `best_match` / `similarity`) |
 | `depends` | Dependency tree (or unblocked-items list) from `depends_on` / `blocks` / `parallel_with` frontmatter on ProjectSnapshots |
 
-Every tool is accessible as `palinode_<name>` via MCP, `palinode <name>` via CLI, or `POST/GET /<name>` via the REST API.
+Every tool is accessible as `palinode_<name>` via MCP, `palinode <name>` via CLI (hyphenated: `palinode archive-expired`; `session_init` is `palinode prime`; `doctor_deep` has no separate CLI command), or `POST/GET /<name>` via the REST API.
+
+The CLI has more commands than the tool list — service control, migration, repair, and wiki-maintenance helpers. **[docs/CLI.md](docs/CLI.md) is the full command reference**, one entry per command with options, defaults, and output behaviour.
 
 ---
 
@@ -294,7 +298,7 @@ Every tool is accessible as `palinode_<name>` via MCP, `palinode <name>` via CLI
 | Source of truth | Markdown + YAML frontmatter | Human-readable, git-versioned, portable |
 | Vector index | SQLite-vec (embedded) | No server, single file, zero config |
 | Keyword index | SQLite FTS5 (embedded) | BM25 for exact terms, zero dependencies |
-| Embeddings | BGE-M3 via Ollama | Local, private, no API key needed |
+| Embeddings | BGE-M3 via Ollama, or any OpenAI-compatible `/v1/embeddings` server | Local, private, no API key needed |
 | API | FastAPI | Lightweight, async, one process |
 | MCP | Python MCP SDK (Streamable HTTP) | Works with every IDE over the network |
 | CLI | Click (wraps REST API) | Shell-native, TTY-aware output |
@@ -381,6 +385,17 @@ consolidation:
 
 All models are swappable. Any Ollama embedding model, any OpenAI-compatible chat endpoint. See [palinode.config.yaml.example](palinode.config.yaml.example) for the full reference.
 
+**Embeddings without Ollama.** llama.cpp (`llama-server --embedding`), vLLM, and LM Studio all expose the OpenAI-compatible `/v1/embeddings` shape; select it with `dialect: openai` (default `ollama`, so existing setups are unchanged). Retry, circuit breaker, and per-input error handling are identical to the Ollama path. The Ollama tag `bge-m3` is not a llama-server model name — point llama-server at a BGE-M3 GGUF instead:
+
+```yaml
+embeddings:
+  primary:
+    dialect: openai
+    url: "http://localhost:8080"   # a trailing /v1 is fine too
+    model: "bge-m3"                # llama-server ignores it; vLLM / LM Studio match it
+    dimensions: 1024
+```
+
 When exposing the API beyond loopback (`PALINODE_API_HOST` other than `127.0.0.1`), set `PALINODE_API_TOKEN` — the server refuses to start unauthenticated on a non-loopback bind unless you opt out explicitly with `PALINODE_API_ALLOW_UNAUTH=1`. See [SECURITY.md](SECURITY.md#api-authentication) for the bearer-token auth model and the bind gate.
 
 ---
@@ -436,6 +451,9 @@ When exposing the API beyond loopback (`PALINODE_API_HOST` other than `127.0.0.1
 - **4-phase injection** — Core (always) + Topic (per-turn search) + Associative (entity graph) + Triggered (prospective recall).
 - **Multi-transport MCP** — stdio for local, Streamable HTTP for remote. One server, any IDE on any machine.
 - **If everything crashes, `cat` still works.**
+
+Measured, not asserted: [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) has LongMemEval results
+with methodology, cost, and the losses.
 
 ---
 

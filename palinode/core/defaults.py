@@ -105,6 +105,31 @@ SESSION_END_DEDUP_WINDOW_MINUTES: int = 60
 SESSION_END_DEDUP_THRESHOLD: float = 0.85
 
 
+# ── Consolidation timeout ────────────────────────────────────────────────────
+
+#: HTTP request timeout (in seconds) for ``POST /consolidate`` on every surface
+#: that calls it over HTTP (CLI, MCP).
+#:
+#: The 30 s (CLI) / 30 s (MCP) client defaults are budgets for *deterministic*
+#: routes.  Consolidation is not one: the server gives the model 600 s per
+#: project group (``_call_llm_with_fallback``) and calls it once per group, so
+#: any pass that reaches a model outlives a default-budget client.  Giving up
+#: first cancels nothing — the API keeps running, keeps the store's run lock,
+#: and the next invocation gets a 409 while the first run's result is visible
+#: only in the server log.
+#:
+#: 900 s is the server's per-call budget plus margin for embed + git on a
+#: multi-group pass.  It is a ceiling on *waiting*, not a fix: a store with
+#: many project groups can still exceed it.  The durable fix is a job id the
+#: caller polls; until that exists, ``PALINODE_CONSOLIDATE_TIMEOUT`` raises the
+#: ceiling.  Surfaces read it through their own module attribute at call time,
+#: never captured as a default argument, so an override is visible to the
+#: message they print on timeout.
+CONSOLIDATION_TIMEOUT_SECONDS: float = float(
+    __import__("os").environ.get("PALINODE_CONSOLIDATE_TIMEOUT", "900")
+)
+
+
 # ── Path validation ──────────────────────────────────────────────────────────
 
 #: Allowed memory-file extensions accepted by ``read``/``list`` and the like.
@@ -125,5 +150,6 @@ __all__ = [
     "_SESSION_END_TIMEOUT_SENTINEL",
     "SESSION_END_DEDUP_WINDOW_MINUTES",
     "SESSION_END_DEDUP_THRESHOLD",
+    "CONSOLIDATION_TIMEOUT_SECONDS",
     "ALLOWED_MEMORY_EXTENSIONS",
 ]

@@ -425,6 +425,7 @@ VALID_STATUSES: tuple[str, ...] = VALID_LIFECYCLES + VALID_INCIDENT_STATUSES
 #                   `unmarked` (no claim at all). The prime candidate to acquire
 #                   a `backed_by` link and graduate toward `fact`.
 from palinode.core.parity import VALID_EPISTEMICS  # noqa: E402,F401
+from palinode.core.parity import AMR_SPEC_VERSION, VALID_AMR_VERSIONS  # noqa: E402,F401
 
 # The ABSENCE of the field is its own state — `unmarked`: no epistemic claim was
 # made. Crucially this is NOT equated with `fact`; for an audit-grade store,

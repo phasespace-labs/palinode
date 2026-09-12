@@ -1,0 +1,208 @@
+# Auditable Memory (AMR) conformance — Level 3, Cited (SPEC §4.3, §4.4, §5, §6, §7)
+#
+# The four verification outcomes are the heart of this suite. Collapsing them
+# into a boolean is the most common way to fail Level 3, because
+# `anchor_tampered` and `source_drifted` look identical to a "citation invalid"
+# check and mean opposite things.
+#
+# All hashes below are real sha256 digests of the normalized quote and can be
+# recomputed: sha256(normalize(quote)).
+spec_version: "0.1.0"
+suite: level3-cited
+
+fixtures:
+  quote_11pct: "list prices for insulin products rose 11% between 2024 and 2026"
+  hash_11pct: "sha256:029a3c30f5e0939075dea1e1e64c18a3b108f2e724c2f0a4b85d1bd7d267e48a"
+  quote_9pct: "list prices for insulin products rose 9% between 2024 and 2026"
+  hash_9pct: "sha256:615af438521b9428e1173b6e3b37f7f9749ed9a28438eb0e9242fbabbd956a16"
+
+cases:
+  - id: l3-001
+    why: "Baseline — stored hash matches stored quote, and the quote is present in the source."
+    source_contains: "…the report found that list prices for insulin products rose 11% between 2024 and 2026, outpacing…"
+    input:
+      sources:
+        - ref: "sources/kff-report-2026.md"
+          quote: "list prices for insulin products rose 11% between 2024 and 2026"
+          quote_hash: "sha256:029a3c30f5e0939075dea1e1e64c18a3b108f2e724c2f0a4b85d1bd7d267e48a"
+    expect: { status: "ok" }
+
+  - id: l3-002
+    why: >
+      ANCHOR_TAMPERED. The stored hash does not match the stored quote — the
+      record's own citation is internally inconsistent. Someone edited the quote
+      without recomputing the hash. This impugns THE RECORD. Note the source is
+      untouched and still contains the quote: an implementation that checks only
+      "is the quote in the source?" reports `ok` here and is wrong.
+    source_contains: "list prices for insulin products rose 11% between 2024 and 2026"
+    input:
+      sources:
+        - ref: "sources/kff-report-2026.md"
+          quote: "list prices for insulin products rose 11% between 2024 and 2026"
+          quote_hash: "sha256:615af438521b9428e1173b6e3b37f7f9749ed9a28438eb0e9242fbabbd956a16"
+    expect:
+      status: "anchor_tampered"
+      must_not_report: ["ok", "source_drifted"]
+
+  - id: l3-003
+    why: >
+      SOURCE_DRIFTED. The stored hash matches the stored quote — the record is
+      internally honest — but the source no longer contains those words. This
+      EXONERATES the record and impugns the source. Opposite remedy to l3-002.
+    source_contains: "list prices for insulin products rose 9% between 2024 and 2026"
+    input:
+      sources:
+        - ref: "sources/kff-report-2026.md"
+          quote: "list prices for insulin products rose 11% between 2024 and 2026"
+          quote_hash: "sha256:029a3c30f5e0939075dea1e1e64c18a3b108f2e724c2f0a4b85d1bd7d267e48a"
+    expect:
+      status: "source_drifted"
+      must_not_report: ["ok", "anchor_tampered"]
+
+  - id: l3-004
+    why: "SOURCE_MISSING. The cited source cannot be resolved; nothing can be concluded."
+    source_exists: false
+    input:
+      sources:
+        - ref: "sources/deleted-report.md"
+          quote: "list prices for insulin products rose 11% between 2024 and 2026"
+          quote_hash: "sha256:029a3c30f5e0939075dea1e1e64c18a3b108f2e724c2f0a4b85d1bd7d267e48a"
+    expect:
+      status: "source_missing"
+      must_not_report: ["ok", "source_drifted", "anchor_tampered"]
+
+  - id: l3-005
+    why: >
+      Verification is normalization-insensitive. The source uses curly quotes and
+      a line break where the stored quote uses ASCII and a space; after
+      normalization (§4) they are the same passage and this must verify `ok`.
+    source_contains: "the patient’s chart\n  was updated"
+    input:
+      sources:
+        - ref: "sources/notes.md"
+          quote: "the patient's chart was updated"
+    expect: { status: "ok" }
+
+  - id: l3-005b
+    why: >
+      ABSENT quote_hash (§6.1). quote_hash is optional, so only the drift axis is
+      decidable. A verifier MUST NOT report anchor_tampered — there is no stored
+      hash to disagree with the quote — and SHOULD signal the check was partial.
+    source_contains: "list prices for insulin products rose 11% between 2024 and 2026"
+    input:
+      sources:
+        - ref: "sources/kff-report-2026.md"
+          quote: "list prices for insulin products rose 11% between 2024 and 2026"
+    expect:
+      status: "ok"
+      partial: true
+      must_not_report: ["anchor_tampered"]
+
+  - id: l3-005c
+    why: "Absent hash, and the source has moved: drift is still decidable."
+    source_contains: "list prices for insulin products rose 9% between 2024 and 2026"
+    input:
+      sources:
+        - ref: "sources/kff-report-2026.md"
+          quote: "list prices for insulin products rose 11% between 2024 and 2026"
+    expect:
+      status: "source_drifted"
+      partial: true
+      must_not_report: ["anchor_tampered"]
+
+  - id: l3-006
+    why: >
+      A bare unprefixed digest is deprecated but MAY be accepted. It is resolved
+      BY LENGTH, not by assumption: 32 hex chars is md5 (§5).
+    input:
+      sources:
+        - ref: "sources/legacy.md"
+          quote: "some legacy quote"
+          quote_hash: "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+    expect:
+      valid: true
+      interpreted_as: "md5"
+      warning: "unprefixed digest is deprecated; emit <algorithm>:<hex>"
+
+  - id: l3-006b
+    why: "A bare 64-hex digest is sha256 by length — NOT md5. Assuming md5 here is a bug."
+    input:
+      sources:
+        - ref: "sources/legacy.md"
+          quote: "some legacy quote"
+          quote_hash: "029a3c30f5e0939075dea1e1e64c18a3b108f2e724c2f0a4b85d1bd7d267e48a"
+    expect:
+      valid: true
+      interpreted_as: "sha256"
+      must_not_interpret_as: "md5"
+
+  - id: l3-006c
+    why: "A bare digest of implausible length is rejected rather than guessed at (§5)."
+    input:
+      sources:
+        - ref: "sources/legacy.md"
+          quote: "some legacy quote"
+          quote_hash: "deadbeef"
+    expect: { valid: false, error: "unrecognized bare digest length" }
+
+  - id: l3-007
+    why: "An unknown hash algorithm prefix is rejected rather than guessed at."
+    input:
+      sources:
+        - ref: "sources/x.md"
+          quote: "some quote"
+          quote_hash: "crc32:deadbeef"
+    expect: { valid: false, error: "unsupported hash algorithm" }
+
+  - id: l3-008
+    why: >
+      claim_id derivation (§4.4.1) is content-addressed and salted with the
+      containing record's ref: hex(sha256("<record_ref>:" + normalize(text)))[:16].
+      This digest is real and recomputable.
+    input:
+      record_ref: "research/insulin-pricing-2026"
+      claim_text: "insulin list prices outpaced general medical inflation over the period"
+    expect: { claim_id: "b37ec4bc03f4347d" }
+
+  - id: l3-009
+    why: >
+      The same claim text in a DIFFERENT record yields a different claim_id — the
+      ref salt prevents accidental cross-record aliasing.
+    input:
+      record_ref: "research/some-other-record"
+      claim_text: "insulin list prices outpaced general medical inflation over the period"
+    expect: { claim_id_differs_from: "b37ec4bc03f4347d" }
+
+  - id: l3-010
+    why: "A claim must name a source; a claim with span but no source_id is malformed."
+    input:
+      claims:
+        - text: "prices rose"
+          span: { quote: "list prices for insulin products rose 11% between 2024 and 2026" }
+    expect: { valid: false, error: "claim missing source_id" }
+
+  - id: l3-011
+    why: "anchor_id is opaque — carried verbatim, never parsed or interpreted (§4.4)."
+    input:
+      claims:
+        - text: "prices rose"
+          source_id: "sources/kff-report-2026.md"
+          anchor_id: "p12#para-4::offset(88,151)"
+          span: { quote: "list prices for insulin products rose 11% between 2024 and 2026" }
+    expect:
+      valid: true
+      anchor_id_roundtrips_verbatim: true
+
+  - id: l3-012
+    why: >
+      THE LOAD-BEARING CASE. Independent verifiability. A third party holding only
+      the record and the source must reach the same verdict as the implementation
+      that wrote the record, without trusting it or running its code. If your
+      verification depends on internal state not present in the record, you do not
+      meet Level 3.
+    input:
+      given: ["the record as serialized", "the cited source"]
+      withheld: ["the writing implementation", "its database", "its logs"]
+    expect:
+      verifiable: true
+      note: "the record must carry everything needed to check it"

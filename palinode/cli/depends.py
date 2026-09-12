@@ -41,6 +41,7 @@ def depends(slug, unblocked, fmt):
                     console.print(f"  [cyan]{item['slug']}[/cyan]{status_str}")
         except Exception as e:
             console.print(f"[red]Error fetching unblocked items: {e}[/red]")
+            raise SystemExit(1)
         return
 
     if not unblocked and not slug:
@@ -83,3 +84,4 @@ def depends(slug, unblocked, fmt):
 
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
+        raise SystemExit(1)

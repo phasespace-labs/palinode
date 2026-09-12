@@ -3,7 +3,8 @@ import click
 from palinode.cli._api import HTTPStatusError, api_client
 from palinode.cli._format import print_result, console, OutputFormat, get_default_format
 from palinode.core.config import config
-from palinode.core.parity import CATEGORIES, MEMORY_TYPES
+from palinode.core.parity import CATEGORIES, MEMORY_TYPES, TIERS
+from palinode.core.scoring import describe_match
 
 
 def _cli_resolve_context() -> list[str] | None:
@@ -78,6 +79,15 @@ def _cli_resolve_context() -> list[str] | None:
         "Default: hard-excluded from recall (ADR-015)."
     ),
 )
+@click.option(
+    "--tier",
+    type=click.Choice(list(TIERS)),
+    default=None,
+    help=(
+        "How much of each hit to return: abstract (~300 chars, summary first), "
+        "overview (frontmatter + head of body), or full. Default: snippet view."
+    ),
+)
 @click.option("--format", "fmt", type=click.Choice(["json", "text"]), help="Output format")
 @click.option("--score/--no-score", default=False, help="Show relevance scores")
 @click.option("--no-context", is_flag=True, help="Disable ambient context boost")
@@ -93,6 +103,7 @@ def search(
     date_before,
     include_daily,
     include_telemetry,
+    tier,
     fmt,
     score,
     no_context,
@@ -113,6 +124,7 @@ def search(
             date_before=date_before,
             include_daily=include_daily or None,
             include_telemetry=include_telemetry or None,
+            tier=tier,
         )
         
         output_fmt = OutputFormat(fmt) if fmt else get_default_format()
@@ -125,7 +137,7 @@ def search(
                 return
             
             for res in results:
-                score_str = f"[{res['score']:.2f}] " if score else ""
+                score_str = f"[{describe_match(res)}] " if score else ""
                 title = res.get("file", "Untitled")
                 # prefer the API-provided snippet — already match-windowed
                 # and bounded. Fall back to the legacy blind-truncation path
@@ -148,7 +160,7 @@ def search(
         except Exception:
             pass
         console.print(f"[red]Error searching memory:[/red] {detail or str(e)}")
-        click.Abort()
+        raise click.Abort()
     except Exception as e:
         console.print(f"[red]Error searching memory: {str(e)}[/red]")
-        click.Abort()
+        raise click.Abort()

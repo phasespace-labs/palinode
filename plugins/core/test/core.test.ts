@@ -6,7 +6,10 @@ import {
   configFromEnv,
   postSessionCapture,
   PROFILES,
+  restoreMemory,
+  unretractMentions,
   userEntries,
+  withdrawForgetRequest,
   type FetchFn,
   type PalinodeConfig,
 } from "../src/index.js";
@@ -64,7 +67,7 @@ describe("the invariant the core owns", () => {
 });
 
 describe("buildRecallContext", () => {
-  it("renders search hits as bounded snippet lines", async () => {
+  it("describes cosine, keyword-only, and legacy search hits without treating rank as similarity", async () => {
     const fetchFn = stubFetch({
       "/check-triggers": [],
       "/search": {
@@ -73,12 +76,18 @@ describe("buildRecallContext", () => {
           // is the cosine the threshold knob filters on. Display must use
           // raw_score so the on-screen number matches the tunable scale.
           { rel_path: "decisions/deploy-rollback.md", score: 1.0, raw_score: 0.62, snippet: "git revert + reindex" },
+          { rel_path: "notes/keyword.md", score: 0.98, raw_score: null, snippet: "literal term" },
+          { rel_path: "notes/legacy.md", score: 0.75, snippet: "old server" },
         ],
       },
     });
     const ctx = await buildRecallContext(PROMPT, CFG, fetchFn);
-    expect(ctx).toContain("[decisions/deploy-rollback.md] (62%) git revert + reindex");
+    expect(ctx).toContain("[decisions/deploy-rollback.md] (62% match) git revert + reindex");
+    expect(ctx).toContain("[notes/keyword.md] (keyword match, rank 0.98) literal term");
+    expect(ctx).toContain("[notes/legacy.md] (rank 0.75) old server");
     expect(ctx).not.toContain("(100%)");
+    expect(ctx).not.toContain("(98%)");
+    expect(ctx).not.toContain("(75%)");
     expect(ctx).toContain("Related memories");
     expect(ctx).toContain("may be stale");
   });
@@ -365,5 +374,71 @@ describe("configFromEnv", () => {
     expect(cfg.recallProfile).toBe("writing");
     expect(cfg.maxResults).toBe(0);
     expect(cfg.coreMaxFiles).toBe(10);
+  });
+});
+
+describe("reversal client (restore / unretract / forget-withdraw)", () => {
+  it("restoreMemory posts the canonical params to /restore and returns the result", async () => {
+    const calls: Array<{ url: string; body?: unknown }> = [];
+    const fetchFn = stubFetch(
+      { "/restore": { file: "insights/x.md", status: "active", restored_from: "archived", chunks_updated: 2 } },
+      calls,
+    );
+    const out = await restoreMemory("insights/x.md", CFG, fetchFn, "wrongly retired");
+    expect(out).toMatchObject({ file: "insights/x.md", status: "active", restored_from: "archived" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("http://test:6340/restore");
+    expect(calls[0].body).toEqual({ file_path: "insights/x.md", reason: "wrongly retired" });
+  });
+
+  it("restoreMemory omits reason when not given", async () => {
+    const calls: Array<{ url: string; body?: unknown }> = [];
+    await restoreMemory("insights/x.md", CFG, stubFetch({ "/restore": { file: "insights/x.md", status: "not_archived" } }, calls));
+    expect(calls[0].body).toEqual({ file_path: "insights/x.md" });
+  });
+
+  it("unretractMentions posts file_path + pref to /unretract", async () => {
+    const calls: Array<{ url: string; body?: unknown }> = [];
+    const out = await unretractMentions(
+      "projects/closeout.md",
+      "I know Wilhelmina Cragg",
+      CFG,
+      stubFetch({ "/unretract": { file: "projects/closeout.md", status: "unretracted", mentions: 2 } }, calls),
+    );
+    expect(out).toMatchObject({ status: "unretracted", mentions: 2 });
+    expect(calls[0].url).toBe("http://test:6340/unretract");
+    expect(calls[0].body).toEqual({ file_path: "projects/closeout.md", pref: "I know Wilhelmina Cragg" });
+  });
+
+  it("withdrawForgetRequest posts the request path to /forget-withdraw", async () => {
+    const calls: Array<{ url: string; body?: unknown }> = [];
+    const out = await withdrawForgetRequest(
+      "insights/forget-sneakers.md",
+      CFG,
+      stubFetch(
+        {
+          "/forget-withdraw": {
+            file: "insights/forget-sneakers.md",
+            status: "withdrawn",
+            pref: "I collect vintage sneakers",
+            restored: ["insights/pref-sneakers.md"],
+            unretracted: [],
+            requests_archived: ["insights/forget-sneakers.md"],
+          },
+        },
+        calls,
+      ),
+    );
+    expect(out?.restored).toEqual(["insights/pref-sneakers.md"]);
+    expect(calls[0].url).toBe("http://test:6340/forget-withdraw");
+    expect(calls[0].body).toEqual({ file_path: "insights/forget-sneakers.md" });
+  });
+
+  it("all three fail open: API down or HTTP error resolves to null, never throws", async () => {
+    expect(await restoreMemory("insights/x.md", CFG, failingFetch)).toBeNull();
+    expect(await unretractMentions("insights/x.md", "p", CFG, failingFetch)).toBeNull();
+    expect(await withdrawForgetRequest("insights/x.md", CFG, failingFetch)).toBeNull();
+    const notFound = stubFetch({}); // unrouted → 404
+    expect(await restoreMemory("insights/x.md", CFG, notFound)).toBeNull();
   });
 });

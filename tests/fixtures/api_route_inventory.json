@@ -104,6 +104,12 @@
     ]
   ],
   [
+    "/forget-withdraw",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/generate-summaries",
     [
       "POST"
@@ -232,6 +238,12 @@
     ]
   ],
   [
+    "/restore",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/review",
     [
       "POST"
@@ -355,6 +367,12 @@
     "/ui/quality",
     [
       "GET"
+    ]
+  ],
+  [
+    "/unretract",
+    [
+      "POST"
     ]
   ]
 ]

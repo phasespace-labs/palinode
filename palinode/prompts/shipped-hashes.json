@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "_note": "Every sha256 palinode has ever shipped for each prompt, newest first. `palinode prompt sync` refreshes a store copy only when its hash appears here - i.e. it is a pristine copy of some release, not an operator edit. When you change a prompt, prepend its new hash; the previous one is already listed. tests/test_packaged_prompts_match_source.py enforces it.",
+  "prompts": {
+    "compaction.md": [
+      "61bf616b4f72afcadc2863aaeb1e9bd17faf5b99c429403092abafe78185bf60",
+      "0e8c28550b0fa9a9da48253eeaa36ecd6251e5d3532455c4ff5d7d9adf0ecc54",
+      "5285de3ca04f24f2593c05a80869242a0b1d7f8e2bd3bc3533114717f9fe7209",
+      "294d4c773657cd3f4c9a5d8d6096c7d534a9a5f3c84784e9f89af4e1ad4918c4",
+      "4327aa0fd8d307d0ca484fe70c8db1384d57847def17a6c3e486f528cc950c7e"
+    ],
+    "consolidation.md": [
+      "29366116e7a704d8d88a3a1c074694d0b7c6094162bc048d72f47d9cbcab36bc",
+      "bdb36ba2b3a31df62fda2832d1b47432882bf815da9d3b94d3f23c7e71bfb0c1",
+      "036999d7320ff9a8ac6f15397b881fe674fbc509244b7ecdf774f9a54a05c3ed"
+    ],
+    "context-assembly.md": [
+      "7d988c761b4b8db214a99b928f111f9d93c3df075703e15f719f7c6c14f973ee",
+      "effe0cd3c9d2765f2ea944674974dd44be78c9dc2fbd9f1d9da66c7b9146c014",
+      "32eb732c940086fdba0a2d846e4c7785a91ab251b5b44e442d41a7dc0eaa1ae0",
+      "bb1ebe678430c48843a490953cee574e64d34d99643e971f968c26b14335d6bd",
+      "4ddfdf449da074058ec9ba7264f7d7edf2900fed8363dfa34d54dde8f108ea7d"
+    ],
+    "digest.md": [
+      "a3d2a3be6f82026946e06df2341b9f1160ba63a0079053709cb4e6514e38c82d",
+      "57cb7f8ee3dcdc5e6bb33ab42338fa0f9769fec60158931608116969f1499232",
+      "dc0b683e0d354e50023802388417aa6b7b98afdec6fa448a322d32e262532344"
+    ],
+    "extraction.md": [
+      "9a62bd8970a88f5cb5f94b3666cd83c66bfe87f6e5b42d5eb9be365c2f231b25",
+      "595722c3cdaa546a3411dceb5509559d66119c00d6a2a995bdbc3f4719e0efa1",
+      "1c50e86ef5d85d6930ef78d86607dc7ac1f1c6a43b5dd9fa5a63f5365c514b7c",
+      "762496c70ca1e0bdd0d17d748a00c13ac0d72f4baf640dd8a3ef4e78c1ff0638"
+    ],
+    "ingestion.md": [
+      "025f0d6fa7934561e9045ff1e2f5080a739be59093c37f5a84529610600aaf5d",
+      "b182e10c8f0da71f4eca6c7b5abbb91aed7f7e1fbb313d1c859de16d87a71f9d",
+      "0d60a99a2069a1c04e0881ff3d2022640f84806cc3e1e51e7fb1048e544ba302",
+      "34dda642d7942bcb45f164e8af68053e31fac04c59cdee9e42c0200824aca201"
+    ],
+    "nightly-consolidation.md": [
+      "c2c391adffab60768340699a7b62d97408eeda8cdf20a2a936bed74806eaea26",
+      "6763325b121dabb497f3256cb4d3ef2d1498b74000c4576c8f8f6eaeabd2f1f3",
+      "6a7d44d5a5c8bad99790826bb08da00790e994f2554c7dff54f9a528d39b23a7"
+    ],
+    "trajectory-extraction.md": [
+      "b7618ee9a2c260d69aedebeb3182f281eb2f095b4d368d7d14c40d1f504efe71",
+      "7db19cf03cd546b71c052e653bc2be30101c806d71eaa96ac55a4a92450ba092"
+    ],
+    "update.md": [
+      "0cee7e1639c2093aae18feefcf27a8f0852c66dd6d7c359b88c1afc5fdb563cd",
+      "58e2087400ff708e0e907ccfb3cf5ae216091a0a45a3eaf39ae5dbf5db2ff905",
+      "16336fd339a944086b761c61eb5acda77cfeb2ae7b2c2ef33cc79e28682a06f1",
+      "8754c06878c3da4cbedf2b4b099e35148ffdb0be3e9b649d4991b95fa8f52f10"
+    ]
+  }
+}
