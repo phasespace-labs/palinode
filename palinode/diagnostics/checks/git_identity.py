@@ -52,7 +52,6 @@ def git_commit_ready(ctx: DoctorContext) -> CheckResult:
             severity="info",
             passed=True,
             message="git.auto_commit is disabled; saves are not git-versioned.",
-            linked_issue="#1025",
         )
 
     memory_dir = str(Path(ctx.config.memory_dir).expanduser().resolve())
@@ -66,7 +65,6 @@ def git_commit_ready(ctx: DoctorContext) -> CheckResult:
             passed=False,
             message="git binary not found; auto-commit cannot run.",
             remediation="Install git, or set git.auto_commit: false in palinode.config.yaml.",
-            linked_issue="#1025",
         )
     except subprocess.TimeoutExpired:
         return CheckResult(
@@ -74,7 +72,6 @@ def git_commit_ready(ctx: DoctorContext) -> CheckResult:
             severity="info",
             passed=True,
             message="git rev-parse timed out in memory_dir; skipping identity check.",
-            linked_issue="#1025",
         )
 
     if repo.returncode != 0 or repo.stdout.strip() != "true":
@@ -90,7 +87,6 @@ def git_commit_ready(ctx: DoctorContext) -> CheckResult:
                 f"Run 'git -C {memory_dir} init' (and set user.name / user.email) "
                 "so saves are versioned, or set git.auto_commit: false."
             ),
-            linked_issue="#1025",
         )
 
     # ``git var GIT_COMMITTER_IDENT`` applies exactly the predicate ``git
@@ -117,7 +113,6 @@ def git_commit_ready(ctx: DoctorContext) -> CheckResult:
                 f"'git -C {memory_dir} config user.email \"palinode@localhost\"' "
                 "(or set them globally for the service user)."
             ),
-            linked_issue="#1025",
         )
 
     return CheckResult(
@@ -125,5 +120,4 @@ def git_commit_ready(ctx: DoctorContext) -> CheckResult:
         severity="warn",
         passed=True,
         message=f"memory_dir is a git repository with a commit identity: {memory_dir}",
-        linked_issue="#1025",
     )

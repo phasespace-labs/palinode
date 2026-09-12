@@ -294,6 +294,46 @@ def test_no_issue_refs_in_ci_workflows() -> None:
     )
 
 
+def _string_constant_refs_in(path: Path) -> list[tuple[int, str]]:
+    """(line, ref_text) for every string constant in *path* carrying an issue ref."""
+    import ast
+
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except SyntaxError:  # pragma: no cover — a broken file fails elsewhere
+        return []
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if _issue_refs(node.value):
+                found.append((getattr(node, "lineno", 1), node.value))
+    return found
+
+
+def test_no_issue_refs_in_diagnostics_strings() -> None:
+    """String constants in ``palinode/diagnostics/`` must not carry bare issue refs.
+
+    Scoped strictly to ``palinode/diagnostics/``: diagnostic check results and
+    remediation messages are surfaced directly to the user during health
+    checks, so unfollowable private issue references in string constants or
+    check-linked issues mislead users or link to unrelated issues on the public
+    tracker.
+    """
+    repo_root = Path(__file__).resolve().parent.parent
+    offenders: list[str] = []
+    diag_root = repo_root / "palinode" / "diagnostics"
+    for py in sorted(diag_root.rglob("*.py")):
+        for line, text in _string_constant_refs_in(py):
+            rel = py.relative_to(repo_root)
+            offenders.append(f"  {rel}:{line}: {_issue_refs(text)}  →  {text.strip()[:70]}")
+
+    assert not offenders, (
+        "Unfollowable issue refs found in diagnostics string constants. A bare "
+        "number cannot be followed by a public reader — use the full public issue "
+        "URL, or name the change instead:\n" + "\n".join(offenders)
+    )
+
+
 # ── What counts as an unfollowable reference ─────────────────────────────────
 # The guards above are only as good as this distinction, and it is the part a
 # contributor actually collides with, so it is pinned directly.
