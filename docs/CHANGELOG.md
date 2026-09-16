@@ -22,6 +22,10 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- Failed writes to a read-only destination on Windows clean up the temporary
+  file without changing the destination's contents or permissions. Cleanup
+  failures are logged without masking the original write error.
+
 ### Removed
 
 ### Security

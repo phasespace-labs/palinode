@@ -12,6 +12,7 @@ import os
 import random
 import re
 import subprocess
+import stat
 import tempfile
 import threading
 import time
@@ -213,9 +214,20 @@ def write_memory_file(file_path: str, content: str) -> None:
         if fd != -1:
             os.close(fd)
         try:
-            os.unlink(tmp_path)
+            try:
+                os.unlink(tmp_path)
+            except PermissionError:
+                if not _is_windows():
+                    raise
+                # An overwrite copies the destination's read-only attribute to
+                # our temporary file. Clear it only on that temporary file so
+                # cleanup can succeed without changing the destination.
+                os.chmod(tmp_path, os.stat(tmp_path).st_mode | stat.S_IWRITE)
+                os.unlink(tmp_path)
         except FileNotFoundError:
             pass
+        except OSError:
+            logger.warning("Temporary-file cleanup failed: %s", tmp_path, exc_info=True)
         raise
 
 
