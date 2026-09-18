@@ -1,0 +1,203 @@
+name: First-use report
+description: You ran the Harbor Notes first-use walkthrough alone. Paste what the run left behind.
+title: "First-use report: <your handle>, <Claude Code | Codex CLI>, <OS>"
+labels: ["first-use-study"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        We are evaluating a setup flow, not you. Everything below is
+        pasted by you and is public on this tracker. Use fictional Harbor Notes
+        material only, and look over every block before you submit. Partial
+        reports are welcome and are complete reports: only the stage you
+        reached, the assistance field, and the consent boxes are required.
+        Everything else, fill if you have it.
+
+  - type: checkboxes
+    id: eligibility
+    attributes:
+      label: Eligibility
+      options:
+        - label: I have never installed Palinode before this run.
+          required: false
+
+  - type: checkboxes
+    id: consent
+    attributes:
+      label: Consent
+      description: All four are required to submit.
+      options:
+        - label: I understand this is an evaluation of the setup flow, not of me, and I can stop at any point.
+          required: true
+        - label: I used fictional Harbor Notes material only, and I reviewed every pasted block before submitting.
+          required: true
+        - label: I understand this report is public and contains only what I pasted.
+          required: true
+        - label: I understand no diagnostics are requested and nothing is uploaded automatically.
+          required: true
+
+  - type: input
+    id: checkout
+    attributes:
+      label: Checkout pointer
+      description: The tag or commit named in the recruitment issue that you installed.
+      placeholder: "v0.21.0"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: client
+    attributes:
+      label: Coding client
+      options:
+        - Claude Code (hook opt-in + MCP)
+        - Codex CLI (MCP + project instructions)
+        - Other (say which below)
+    validations:
+      required: false
+
+  - type: dropdown
+    id: experience
+    attributes:
+      label: Your experience with command-line developer tooling
+      description: Self-rated. Recorded so the result can say who the completions were; it does not change eligibility.
+      options:
+        - New to it (under a year of regular use)
+        - Comfortable (a few years)
+        - Expert (I maintain or teach this kind of tooling)
+    validations:
+      required: false
+
+  - type: input
+    id: environment
+    attributes:
+      label: Client version, OS, and Python version
+      description: "Paste the output of: \"$PALINODE_BIN/palinode\" --version ; python3 --version ; plus your OS and client version."
+      placeholder: "palinode 0.21.0 · Python 3.12.4 · macOS 15.6 · Codex CLI 0.xx"
+    validations:
+      required: false
+
+  - type: input
+    id: setup_start
+    attributes:
+      label: Setup start (UTC)
+      description: The time you noted by hand before step 1. The only hand-recorded time.
+      placeholder: "2026-09-20T14:05Z"
+    validations:
+      required: false
+
+  - type: textarea
+    id: gitlog
+    attributes:
+      label: Memory store Git log
+      description: "Paste the output of: git -C \"$PALINODE_DIR\" log --format='%ci %s' --reverse"
+      render: text
+      placeholder: |
+        2026-09-20 07:12:41 -0700 palinode auto-save: decisions/harbor-notes-storage.md
+        2026-09-20 07:20:03 -0700 palinode auto-save: decisions/harbor-notes-timestamps.md
+        2026-09-20 07:20:31 -0700 palinode auto-save: decisions/harbor-notes-concurrent-write-requirement.md
+        2026-09-20 07:21:02 -0700 palinode auto-save: decisions/harbor-notes-storage-shared.md
+        2026-09-20 07:21:40 -0700 palinode supersede: decisions/harbor-notes-storage.md -> decisions/harbor-notes-storage-shared.md
+    validations:
+      required: false
+
+  - type: textarea
+    id: retrievals
+    attributes:
+      label: Filtered retrieval log (or the NO RETRIEVAL LOG line)
+      description: |
+        Paste the output of the python3 snippet from the recruitment issue (timestamp, source, store-relative ref, disposition, scope, query). It reads "$PALINODE_DIR/.audit/retrievals.jsonl" and prints the refs of your fictional Harbor Notes records (for example decisions/harbor-notes-storage), never absolute paths or your home directory.
+      render: text
+    validations:
+      required: false
+
+  - type: input
+    id: fresh_recall
+    attributes:
+      label: Fresh recall — what the client answered
+      description: One line. Did it say SQLite, and did it show the source?
+    validations:
+      required: false
+
+  - type: input
+    id: corrected_recall
+    attributes:
+      label: Fresh corrected recall — what the client answered
+      description: One line. Did it say PostgreSQL, show the source, and leave the UTC decision unchanged?
+    validations:
+      required: false
+
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Furthest stage reached
+      options:
+        - 1 Setup and early controls
+        - 2 Save the first decision
+        - 3 Connect the client
+        - 4 Fresh recall and inspection
+        - 5 Supporting requirement and correction (required journey complete)
+        - 6–8 Optional sections
+        - Stopped before step 1
+    validations:
+      required: true
+
+  - type: textarea
+    id: stuck
+    attributes:
+      label: Where it stuck, or what was confusing
+      description: What happened, what you expected instead. Paste error text if you have it (check it for anything non-fictional first).
+    validations:
+      required: false
+
+  - type: textarea
+    id: assistance
+    attributes:
+      label: Anything used beyond the Quickstart and the recruitment issue
+      description: Another document, a web search, a person, the source code, or the coding client itself (asking Claude Code or Codex to explain an error or suggest a step). Declaring it scores the run "assisted"; it is never excluded. "None" is a fine answer.
+    validations:
+      required: true
+
+  - type: textarea
+    id: q1
+    attributes:
+      label: In your own words — what is Palinode configured to capture on your machine? Give one concrete example from your run.
+    validations:
+      required: false
+
+  - type: textarea
+    id: q2
+    attributes:
+      label: In your own words — where can captured content go? Name one specific place from your run.
+    validations:
+      required: false
+
+  - type: textarea
+    id: q3
+    attributes:
+      label: In your own words — what did pausing capture and recall stop, and what did it not stop? One example of each.
+    validations:
+      required: false
+
+  - type: textarea
+    id: q4
+    attributes:
+      label: In your own words — after a correction, what remains stored, and who could still read it? Point at one thing you saw.
+    validations:
+      required: false
+
+  - type: textarea
+    id: optional_sections
+    attributes:
+      label: Optional sections 6–8, if attempted
+      description: Brief notes on the licensing question, the north/south conflict, and the linked-worktree scope the client reported.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: followup
+    attributes:
+      label: Optional follow-up
+      options:
+        - label: I would like an optional check-in on this issue after two weeks. Declining is fine.
+          required: false
