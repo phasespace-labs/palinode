@@ -386,7 +386,14 @@ consolidation:
       url: "http://localhost:11434"
 ```
 
-All models are swappable. Any Ollama embedding model, any OpenAI-compatible chat endpoint. See [palinode.config.yaml.example](palinode.config.yaml.example) for the full reference.
+All models are swappable. Any Ollama embedding model, any OpenAI-compatible chat endpoint. The default search floors (`search.mcp_threshold=0.4` and `search.api_threshold=0.5`) were measured against real `bge-m3` embeddings; if you change the embedding model, re-check those floors and review any trigger threshold separately — the trigger default was not part of this calibration.
+
+To re-check the search floors against your configured embedding endpoint, run
+`python -m bench.abstention`. It measures false positives for no-answer queries
+and retention of true results for answer-present controls as per-arm search
+thresholds increase; it does not calibrate trigger thresholds. See
+[palinode.config.yaml.example](palinode.config.yaml.example) for the full
+reference.
 
 **Embeddings without Ollama.** llama.cpp (`llama-server --embedding`), vLLM, and LM Studio all expose the OpenAI-compatible `/v1/embeddings` shape; select it with `dialect: openai` (default `ollama`, so existing setups are unchanged). Retry, circuit breaker, and per-input error handling are identical to the Ollama path. The Ollama tag `bge-m3` is not a llama-server model name — point llama-server at a BGE-M3 GGUF instead:
 

@@ -147,6 +147,8 @@ search:
   hybrid_enabled: true
   # Balance: 0.0 = vector only, 1.0 = BM25 only, 0.5 = equal weight
   hybrid_weight: 0.5
+  # These two search floors were measured against real bge-m3 embeddings.
+  # Re-check them if you change the embedding model.
   # Default threshold for MCP server searches (lower = more results)
   mcp_threshold: 0.4
   # Default threshold for FastAPI searches (higher = more precision)
