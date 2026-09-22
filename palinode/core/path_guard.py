@@ -93,12 +93,6 @@ def to_rel_path(
     install), and mis-split when a directory segment repeated (e.g.
     ``.../palinode/palinode/``).
 
-    Never raises. Normalizes newly computed relative subpaths and
-    already-relative paths to POSIX forward slashes (``/``). Returns
-    ``file_path`` unchanged as an absolute path when it is falsy, on a
-    different drive (Windows), or genuinely outside the base directory
-    (``os.path.relpath`` would otherwise happily walk ``../`` out of it,
-    which is misleading for what is meant to be a memory-relative path).
     Normalizes computed and already-relative paths to POSIX forward slashes.
     Returns an empty string unchanged. Absolute paths on another Windows
     drive or outside the base directory are returned unchanged. Inputs
@@ -106,7 +100,6 @@ def to_rel_path(
     ``TypeError``.
     """
     if not file_path:
-        return "" if file_path == "" else os.fspath(file_path)
         return os.fspath(file_path)
     path_str = os.fspath(file_path)
     if not os.path.isabs(path_str):
