@@ -10,6 +10,7 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- SQLite embedding indexes now record the embedding model and dimensions and reject startup when the active embedding space does not match the stored provenance. Legacy databases adopt the active configuration with an explicit unverifiable-vector warning, and `palinode doctor` reports mismatches ([#222](https://github.com/phasespace-labs/palinode/issues/222)).
 - Vault imports now preserve distinct wikilink targets when source filenames share a slug, prefer exact source-stem matches, and report unresolved slug collisions instead of silently resolving them by iteration order.
 - `to_rel_path()` now consistently normalizes relative paths to POSIX forward slashes across all platforms, fixing backslash-separated paths on Windows in API and MCP outputs ([#214](https://github.com/phasespace-labs/palinode/issues/214)).
 

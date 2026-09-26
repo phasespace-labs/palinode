@@ -333,6 +333,174 @@ def _validated_embedding_dimensions() -> int:
     return dimensions
 
 
+_VECTOR_TABLES = ("chunks_vec", "triggers_vec")
+
+_VECTOR_DIMENSIONS_RE = re.compile(
+    r"\bembedding\s+FLOAT\s*\[\s*(\d+)\s*\]",
+    re.IGNORECASE,
+)
+
+
+def _declared_vector_dimensions(
+    db: sqlite3.Connection,
+    table_name: str,
+) -> int | None:
+    """Return the embedding width declared by an existing sqlite-vec table."""
+    row = db.execute(
+        """
+        SELECT sql
+        FROM sqlite_master
+        WHERE type = 'table'
+          AND name = ?
+        """,
+        (table_name,),
+    ).fetchone()
+
+    if row is None:
+        return None
+
+    sql = row[0]
+    if not sql:
+        raise RuntimeError(
+            f"Could not determine embedding dimensions for {table_name}"
+        )
+
+    match = _VECTOR_DIMENSIONS_RE.search(sql)
+    if match is None:
+        raise RuntimeError(
+            f"Could not determine embedding dimensions for {table_name}"
+        )
+
+    return int(match.group(1))
+
+
+def _embedding_space_mismatch(
+    database_space: str,
+    configured_model: str,
+    configured_dimensions: int,
+) -> RuntimeError:
+    return RuntimeError(
+        "Embedding space mismatch: "
+        f"{database_space}, but active configuration uses "
+        f"model={configured_model!r}, "
+        f"dimensions={configured_dimensions}. "
+        "Vectors from different embedding spaces cannot be compared safely. "
+        "To recover, delete .palinode.db and run `palinode reindex`. "
+        "Warning: deleting the database also removes DB-only state, including "
+        "registered triggers and recall reinforcement state "
+        "(importance, last_recalled, recall_count)."
+    )
+
+
+def _ensure_embedding_space(
+    db: sqlite3.Connection,
+    dimensions: int,
+) -> None:
+    """Record and verify the embedding space used by this database."""
+    configured_model = config.embeddings.primary.model
+
+    metadata_table_exists = (
+        db.execute(
+            """
+            SELECT 1
+            FROM sqlite_master
+            WHERE type = 'table'
+              AND name = 'embedding_space'
+            """
+        ).fetchone()
+        is not None
+    )
+
+    existing_row = None
+
+    if metadata_table_exists:
+        existing_row = db.execute(
+            """
+            SELECT model, dimensions
+            FROM embedding_space
+            WHERE id = 1
+            """
+        ).fetchone()
+
+    had_existing_vector_index = False
+
+    # A database without provenance is either fresh or legacy.
+    # Existing sqlite-vec tables still expose their declared dimensions,
+    # so verify those before adopting the active configuration.
+    if existing_row is None:
+        for table_name in _VECTOR_TABLES:
+            declared_dimensions = _declared_vector_dimensions(
+                db,
+                table_name,
+            )
+
+            if declared_dimensions is None:
+                continue
+
+            had_existing_vector_index = True
+
+            if declared_dimensions != dimensions:
+                raise _embedding_space_mismatch(
+                    (
+                        f"existing {table_name} declares "
+                        f"dimensions={declared_dimensions}"
+                    ),
+                    configured_model,
+                    dimensions,
+                )
+
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS embedding_space (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            model TEXT NOT NULL,
+            dimensions INTEGER NOT NULL
+        )
+    """)
+
+    cursor = db.execute(
+        """
+        INSERT OR IGNORE INTO embedding_space (id, model, dimensions)
+        VALUES (1, ?, ?)
+        """,
+        (configured_model, dimensions),
+    )
+
+    if cursor.rowcount == 1 and had_existing_vector_index:
+        _store_logger.warning(
+            "Adopting embedding model=%s for an existing database with "
+            "verified dimensions=%d. The model used to create existing "
+            "vectors cannot be independently verified.",
+            configured_model,
+            dimensions,
+        )
+
+    row = db.execute(
+        """
+        SELECT model, dimensions
+        FROM embedding_space
+        WHERE id = 1
+        """
+    ).fetchone()
+
+    if row is None:
+        raise RuntimeError("Embedding space metadata could not be initialized")
+
+    recorded_model = row["model"]
+    recorded_dimensions = int(row["dimensions"])
+
+    if (
+        recorded_model != configured_model
+        or recorded_dimensions != dimensions
+    ):
+        raise _embedding_space_mismatch(
+            (
+                f"database uses model={recorded_model!r}, "
+                f"dimensions={recorded_dimensions}"
+            ),
+            configured_model,
+            dimensions,
+        )
+
 def _parameterize_in_clause(values: Sequence[Any]) -> tuple[str, tuple[Any, ...]]:
     """Build placeholder-only IN clauses while keeping values parameterized."""
     params = tuple(values)
@@ -356,6 +524,12 @@ def init_db() -> None:
     # the default DELETE journal. Leaves ``.db-wal`` / ``.db-shm`` sidecars
     # next to the DB while any connection is open; both are gitignored.
     db.execute("PRAGMA journal_mode=WAL")
+
+    try:
+        _ensure_embedding_space(db, dimensions)
+    except Exception:
+        db.close()
+        raise
     db.execute("""
         CREATE TABLE IF NOT EXISTS chunks (
             id TEXT PRIMARY KEY,

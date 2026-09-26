@@ -6,6 +6,7 @@ check module listed here.  Add new check modules by importing them below.
 """
 from palinode.diagnostics.checks import memory_dir  # noqa: F401
 from palinode.diagnostics.checks import db_path  # noqa: F401
+from palinode.diagnostics.checks import embedding_space  # noqa: F401
 from palinode.diagnostics.checks import phantom_db  # noqa: F401
 from palinode.diagnostics.checks import multiple_dirs  # noqa: F401
 from palinode.diagnostics.checks import service  # noqa: F401
