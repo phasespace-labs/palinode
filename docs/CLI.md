@@ -161,6 +161,96 @@ normalizes and rejects unsafe input rather than treating it as an exclusion.
 
 Output: **auto**.
 
+### `palinode aliases`
+
+```
+palinode aliases [OPTIONS] COMMAND [ARGS]...
+```
+
+List, edit and check the store's curated entity aliases: the groups in
+`entity-aliases.yaml` at the root of the memory directory that make several
+spellings of one subject count as one, for entity lookup and for project
+isolation. Every subcommand goes through the API; the server decides the file's
+path, writes it sorted and commits it in the store's git. Memory files are
+never rewritten. See [ENTITY-ALIASES.md](ENTITY-ALIASES.md) for the format and
+for which spellings to merge.
+
+There is no MCP tool for this command, by design: alias groups decide what a
+project-scoped session recalls, so changing them stays with the operator.
+
+#### `palinode aliases list`
+
+```
+palinode aliases list [OPTIONS]
+```
+
+Every group, the canonical ref first, each ref with the number of indexed files
+tagged with exactly that spelling. Counts show `?` when there is no index.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--format [json\|text]` | auto | Output format |
+
+Output: **auto**.
+
+#### `palinode aliases add`
+
+```
+palinode aliases add [OPTIONS] CANONICAL MEMBERS...
+```
+
+Create the group `CANONICAL`, or add `MEMBERS` to it. Applies by default;
+`--dry-run` prints the diff of the file and writes nothing. A member that
+already belongs to another group is refused unless `--move`, which takes it out
+of that group (a group left empty is removed). A ref that is another group's
+canonical is always refused. Project refs compare case-insensitively for these
+rules, as they do in recall isolation. The file is rewritten in a fixed order,
+so comments in a hand-edited file are not kept; a malformed file is refused.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--move` | off | Take a member out of the group it already belongs to |
+| `--dry-run` | off | Show the change; write nothing |
+| `--format [json\|text]` | auto | Output format |
+
+```bash
+palinode aliases add project/orbit-app project/orbitapp project/Orbit_App --dry-run
+```
+
+Output: **auto**.
+
+#### `palinode aliases remove`
+
+```
+palinode aliases remove [OPTIONS] MEMBER
+```
+
+Drop `MEMBER` from its group; a group left with no members is removed. A
+group's canonical cannot be removed this way: remove its members instead.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--dry-run` | off | Show the change; write nothing |
+| `--format [json\|text]` | auto | Output format |
+
+Output: **auto**.
+
+#### `palinode aliases check`
+
+```
+palinode aliases check [OPTIONS]
+```
+
+Run the alias lint (the same candidates `palinode lint` reports under
+`entity_aliases`) over the index, marking each cluster that one group already
+covers, and the `project_tags_unmapped` doctor check. Reports only; exits 0.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--format [json\|text]` | auto | Output format |
+
+Output: **auto**.
+
 ### `palinode archive`
 
 ```
@@ -170,14 +260,20 @@ palinode archive [OPTIONS] FILE_PATH
 Retire a specific memory: archive it, or supersede it with a replacement. Sets
 `status: archived` so the memory leaves default recall, records the reason in
 the `-history.md` audit sibling, and commits both. Never hard-deletes — the
-content stays on disk, in git, and in the index. The inverse is
-[`palinode restore`](#palinode-restore). See
-[DATA-LIFECYCLE.md](DATA-LIFECYCLE.md) for how archival relates to erasure.
+content stays on disk, in git, and in the index, and it does not reach memories
+that *quote*, cite or link this one: the result names those (bounded, with an
+explicit "N more"; ones you may not see are counted, not named) and leaves them
+in recall, unchanged. The inverse is [`palinode restore`](#palinode-restore).
+See [DATA-LIFECYCLE.md](DATA-LIFECYCLE.md#four-operations-not-one) for how
+archiving, correcting, restoring and erasing differ, and
+[the lifecycle in one paragraph](DATA-LIFECYCLE.md#the-lifecycle-in-one-paragraph)
+for the short version.
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--reason TEXT` | none | Why this memory is being retired |
 | `--superseded-by TEXT` | none | Slug or path of the replacement (makes it a SUPERSEDE) |
+| `--dry-run` | off | Preview the frontmatter delta, the relation recorded, the retained copies and the recovery command; write nothing |
 | `--format [json\|text]` | auto | Output format |
 
 ```bash
@@ -352,7 +448,7 @@ and [EXECUTOR-SPEC.md](EXECUTOR-SPEC.md). `palinode dream` is an alias.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--nightly` | off | Lightweight nightly pass (today only, UPDATE/SUPERSEDE) |
+| `--nightly` | off | Lightweight nightly pass (everything not yet consolidated, UPDATE/SUPERSEDE) |
 | `--dry-run` | off | Preview the proposed operations without applying |
 | `--source DIR` | `daily/` | Memory directory to consolidate; repeatable |
 | `--respect-gate` | off | Apply the activity gate the cron path uses; skip and report when a pass is not yet due |
@@ -363,6 +459,11 @@ This command runs unconditionally. The activity gate
 governs the automatic cron path, not an operator who has asked for a pass;
 `--respect-gate` opts this run into the same policy and reports
 `{"status": "deferred", "gate": {…}}` when the gate is unmet.
+
+`--nightly` selects the notes written since each project's last successful
+pass — a watermark, not a window — so a hand-run after a failed night picks up
+exactly what the failure left behind and nothing else. See
+[OPERATIONS.md](OPERATIONS.md#the-nightly-does-not-have-a-window).
 
 ```bash
 palinode consolidate --dry-run
@@ -382,6 +483,172 @@ consolidate` returns `409 Consolidation is already running (pid=…)` in the
 meantime, and that run's result is only in the API log and
 `logs/consolidation.log`. The command says so and exits 1; under `--format
 json` it emits `{"status": "timeout", "server_still_running": true, …}`.
+
+Output: **auto**.
+
+### `palinode corrections`
+
+```
+palinode corrections [OPTIONS]
+```
+
+List correction candidates mined from harness session transcripts: moments a
+user overturned a decision, rejected an approach and said why, or asked for
+something to be remembered. Every candidate is a **proposal** — nothing is
+applied, and no memory is written. See
+[HARNESSES.md — mining transcripts for corrections](HARNESSES.md#mining-transcripts-for-corrections)
+for what is read, what is stored, and how to turn it on.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--project SLUG` | all | Only candidates scoped to this project |
+| `--since N` | all | Only candidates from the last N days; also narrows a `--scan` lookback |
+| `--scan` | off | Run a detection pass over the configured transcript paths before listing |
+| `--format [json\|text]` | auto | Output format |
+
+The source is **off by default**: without `capture.transcripts.enabled` and a
+`capture.transcripts.harness_paths` entry, `--scan` reads nothing, sends nothing
+and the list is empty.
+
+Classification is a **third, separate opt-in** (`capture.transcripts.classify`,
+also off by default) and is the only part that transmits anything. With it off,
+`--scan` runs the deterministic stage locally, makes no request to any model,
+and queues every candidate as `needs_review`; the report says `detection only;
+nothing was sent to a model`. With it on, each candidate's bounded window (≤5
+turns, ≤400 characters each, your own turns and ordinary assistant replies only)
+goes to the configured consolidation endpoint — remote if you configured a remote
+one — and the report names the model and role it used. `palinode controls status`
+names the destination. There is deliberately **no flag to enable classification
+for one call**; it is a config decision. Listing without `--scan` sends nothing
+either way. A scan honours `palinode controls` exactly as every other automatic
+capture source does — paused capture stops it, an excluded project or path skips
+those transcripts — and its lookback window and candidate cap report what they
+skipped rather than truncating quietly.
+
+```bash
+palinode corrections --scan --since 7
+palinode corrections --project checkout --format json
+```
+
+Output: **auto**.
+
+#### `palinode corrections list`
+
+```
+palinode corrections list [OPTIONS]
+```
+
+The same listing bare `palinode corrections` prints, spelled explicitly. Takes
+the identical options.
+
+Output: **auto**.
+
+#### `palinode corrections preview`
+
+```
+palinode corrections preview [OPTIONS]
+```
+
+Show exactly what correcting or retiring one memory would change — and change
+nothing. Prints the old text, the proposed new text, the target's exact source
+revision, the rationale, where the correction came from, the project scope, the
+`supersedes` / `superseded_by` relation that would be recorded, every other
+record that quotes or derives from the target (**reported, never rewritten**),
+and the recovery command. It ends with the `apply` invocation, with the
+revision baked in.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--target REF` | — | Memory to correct: `decisions/x.md`, `decisions/x`, or a bare slug |
+| `--claim ID` | whole document | Narrow the correction to one `<!-- fact:id -->` claim |
+| `--replacement TEXT` | — | The text that would stand instead; include untouched claims |
+| `--allow-content-loss` | false | Explicitly permit dropping the original text listed by preview |
+| `--action [supersede\|retire]` | derived | `retire` withdraws the target with no successor |
+| `--reason TEXT` | — | Why. Recorded in the history sibling and the commit subject |
+| `--candidate ID` | — | The queued candidate this correction came from |
+| `--project SLUG` | inferred | Project scope for the replacement |
+| `--type TYPE` | inherited | Memory type for the replacement |
+| `--slug SLUG` | derived | Slug for the replacement |
+| `--format [json\|text]` | auto | Output format |
+
+A bare slug that names two memories is **refused with both**, never guessed; so
+is a claim id that names two lines. A correction whose source named no target
+is refused too — an absent relation is the honest record of "the user did not
+say which memory", and the reviewer chooses.
+
+```bash
+palinode corrections preview --target decisions/harbor-notes-storage \
+  --replacement 'Use the hosted service for shared writes.' \
+  --reason 'concurrent writers need transactional coordination'
+```
+
+Output: **auto**.
+
+#### `palinode corrections apply`
+
+```
+palinode corrections apply --expect-revision REV --confirm [OPTIONS]
+```
+
+Apply a previewed correction. Takes every `preview` option plus
+`--expect-revision` (required) and `--confirm` (required) — apply is never the
+default on any surface. A target that changed since the preview is refused with
+both revisions rather than merged.
+
+Writes only through the paths that already exist: the replacement goes through
+the same save `palinode save` uses, and the original is archived with
+`superseded_by`, so it stays on disk, in git and retrievable as history. The
+commit subject and the `-history.md` line name the actor as a reviewed
+correction, and carry the candidate id when one was the source.
+
+```bash
+palinode corrections apply --target decisions/harbor-notes-storage \
+  --replacement 'Use the hosted service for shared writes.' \
+  --reason 'concurrent writers need transactional coordination' \
+  --expect-revision 9f2c… --confirm
+```
+
+Output: **auto**.
+
+#### `palinode corrections dismiss`
+
+```
+palinode corrections dismiss --candidate ID --reason TEXT [OPTIONS]
+```
+
+Record that a reviewer looked at a candidate and declined it. Writes no memory:
+the queue row is marked `dismissed`, with the reason, and **kept** — which is
+what stops the next transcript scan proposing the same span again. A reason is
+required, because a dismissal with none is indistinguishable from a candidate
+nobody ever looked at.
+
+Output: **auto**.
+
+#### `palinode corrections undo`
+
+```
+palinode corrections undo --target REF [OPTIONS]
+```
+
+Preview (default) or apply the undo of a correction. Without `--confirm` this
+reads: it states what would be restored, what would **not** be deleted, and
+what cannot be reached at all.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--target REF` | — | The archived memory to restore |
+| `--expect-revision REV` | — | The revision the undo preview showed; required with `--confirm` |
+| `--confirm` | off | Required to write. Preview is the default |
+| `--reason TEXT` | — | Why the correction is being undone |
+| `--format [json\|text]` | auto | Output format |
+
+Three different things, named separately in the output because only the first
+is on offer: **restoring a previous assertion** (this command), **deleting
+history** (not offered — the commits, the `-history.md` sibling and the
+replacement record all remain), and **undoing an agent's external actions**
+(impossible — code written, messages sent and requests made are outside this
+store). It refuses to resurrect a record that was separately retracted or
+withdrawn by a forget request; those have their own commands.
 
 Output: **auto**.
 
@@ -517,6 +784,40 @@ palinode entities project/checkout
 
 Output: **auto**.
 
+### `palinode explain`
+
+```
+palinode explain [OPTIONS] BUNDLE_ID
+```
+
+Explain one delivery of context. `BUNDLE_ID` is the reference a delivery handed
+back — the receipt's `bundle_id` (the bundle's `receipt_ref`). The command reads
+the rows that delivery wrote to `.audit/retrievals.jsonl` and reports which
+memories were supplied, the exact revision each was supplied at and whether that
+source has changed since, the server-resolved scope, the calling surface and
+demand, each record's disposition, the delivery's coverage qualifiers and its
+evaluation time. Resolve receipts also retain output budget, selection steps,
+record roles and qualifiers, including evidence references.
+
+Every field the log never recorded is shown as `unavailable` with the reason,
+never guessed — including the difference between "no rows carry this reference"
+and "this surface writes no rows at all". A search that delivered nothing is
+explained as exactly that. Which surfaces can be explained after the fact, and
+for how long, is in [DELIVERY-RECEIPTS.md](DELIVERY-RECEIPTS.md#explaining-a-delivery-after-the-fact).
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--limit INTEGER` | 20 | Supplied records to show; the rest are counted, not hidden |
+| `--diagnostics` | off | Also show the delivery's query prose and session id. Served only on a loopback-bound API, or when `--session-id` matches the delivery's own; otherwise both come back withheld with the reason printed |
+| `--session-id TEXT` | none | Resolve this session's scope chain; records it may not see stay redacted. Also unlocks `--diagnostics` against a remote API for that session's own deliveries |
+| `--format [text\|json]` | auto | Output format |
+
+```bash
+palinode explain 3f9a1c2d5b7e4a60
+```
+
+Output: **auto**.
+
 ### `palinode forget-withdraw`
 
 ```
@@ -533,6 +834,7 @@ failures are reported per target. Composes
 | Option | Default | Meaning |
 |---|---|---|
 | `--reason TEXT` | none | Why the forget request is being withdrawn |
+| `--dry-run` | off | Preview each step (restores, un-strikes, request records archived) and the retained copies; write nothing |
 | `--format [json\|text]` | auto | Output format |
 
 ```bash
@@ -666,6 +968,7 @@ current.
 | `--dir DIRECTORY` | current dir | Project directory to scaffold |
 | `--project TEXT` | directory name | Project slug |
 | `--mcp / --no-mcp` | on | Write `.mcp.json` |
+| `--pin-project` | off | Pin the project slug as the generated client's `PALINODE_PROJECT`, so every recall call from it resolves that project without passing one. Requires `--mcp`; without the flag the emitted block is unchanged. |
 | `--claudemd / --no-claudemd` | on | Write the memory block to `.claude/CLAUDE.md` |
 | `--agents / --no-agents` | auto | `AGENTS.md` block; auto-on when `AGENTS.md` or `.agent/` exists |
 | `--cursor / --no-cursor` | auto | `.cursor/rules/palinode.md`; auto-on when `.cursor/` exists |
@@ -798,13 +1101,14 @@ recipes in [MCP-INSTALL-RECIPES.md](MCP-INSTALL-RECIPES.md).
 | `--host TEXT` | placeholder | Host for `--http` |
 | `--port INTEGER` | 6341 | Streamable-HTTP MCP port for `--http` |
 | `--bearer TEXT` | none | Optional bearer token for `--http` |
-| `--project TEXT` | none | Safe project slug for a generated `--stdio` client; emitted as that client's `PALINODE_PROJECT`. Not available for HTTP. |
+| `--project TEXT` | none | Safe project slug for the generated client: emitted as `PALINODE_PROJECT` for `--stdio`, and as the `X-Palinode-Project` request header for `--http` (a remote server cannot see the client's directory). |
 | `--json` | off | Emit results as JSON |
 
 ```bash
 palinode mcp-config --diagnose
 palinode mcp-config --http --host memory.example.internal > ~/.cursor/mcp.json
 palinode mcp-config --stdio --project harbor-notes
+palinode mcp-config --http --host memory.example.internal --project harbor-notes
 ```
 
 Output: **`--json` flag, auto** — when piped, only the raw block is printed.
@@ -1239,6 +1543,7 @@ and commits. Retraction markers are not un-struck (that is
 | Option | Default | Meaning |
 |---|---|---|
 | `--reason TEXT` | none | Why this memory is being restored |
+| `--dry-run` | off | Preview the frontmatter delta, the relation removed, the backing that would be flagged and the recovery command; write nothing |
 | `--format [json\|text]` | auto | Output format |
 
 ```bash
@@ -1345,6 +1650,7 @@ Dry-run by default. See [GIT-MEMORY.md](GIT-MEMORY.md).
 | Option | Default | Meaning |
 |---|---|---|
 | `--dry-run / --no-dry-run` | `--dry-run` | Preview the change; `--no-dry-run` applies it |
+| `--undo-retirements` | off | Acknowledge that the rollback undoes a retirement. Without it, a rollback that would bring an archived, superseded or retracted record back as current is refused (exit 1) and writes nothing; the preview names each such retirement. See [DATA-LIFECYCLE.md](DATA-LIFECYCLE.md#recovery-and-what-it-is-incompatible-with) |
 
 ```bash
 palinode rollback decisions/auth-migration.md              # preview
@@ -1434,6 +1740,14 @@ palinode search "database decision for cache" --limit 5 --score
 palinode search "auth" --category decisions --since-days 30 --format json
 palinode search "which database do we use" --resolve full
 ```
+
+Text output opens with the scope the search ran under and the source that
+decided it — `Scope: project/harbor-notes (environment)` for a pinned
+`PALINODE_PROJECT`, `(git_origin)` for a repository-derived one, `Scope: none
+(none)` when nothing resolved. `--format json --diagnostics` returns the same
+two as `project` and `project_resolved_by`. Precedence and the full source
+vocabulary are in
+[HOW-MEMORY-WORKS.md](HOW-MEMORY-WORKS.md#choosing-the-project).
 
 `--resolve linked` follows each hit's `superseded_by`, `contradicts` and
 `backed_by` links forward and in reverse (which records name this one) under
@@ -1745,6 +2059,7 @@ history sibling. `status` is never changed — that is
 | Option | Default | Meaning |
 |---|---|---|
 | `--reason TEXT` | none | Why the retraction is being withdrawn |
+| `--dry-run` | off | Preview the spans that would be un-struck and the `retracted_prefs` delta; write nothing |
 | `--format [json\|text]` | auto | Output format |
 
 ```bash

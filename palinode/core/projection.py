@@ -18,6 +18,14 @@ marker; everything else is preserved byte-for-byte:
 * A line that :func:`~palinode.core.lifecycle.is_retired_fact_text` recognises
   (with its list marker stripped) is removed whole — the fact-level SUPERSEDE
   and RETRACT tombstones, and a mention-level strike that is the entire item.
+* The auto-generated ``## See also`` footer — the
+  :data:`~palinode.core.embedding_preprocess.AUTO_FOOTER_MARKER` line and
+  everything after it, plus the heading that introduces it. The footer is
+  materialized from ``entities:`` frontmatter by the save path, so indexing it
+  makes every note that links the same entities keyword- and vector-match the
+  same slugs; a section that is *only* a footer ranked first for queries its
+  record cannot answer. The wikilinks stay in the file, which is where the
+  entity graph and ``cross_refs`` read them from.
 * A mention-level strike that sits *inside* otherwise-current text
   (:data:`~palinode.core.lifecycle.RETIRED_MENTION_RE`, the ``r:<id>`` form
   ``consolidation.retract`` writes mid-paragraph) removes just that span; the
@@ -44,13 +52,16 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from palinode.core.embedding_preprocess import AUTO_FOOTER_MARKER
 from palinode.core.lifecycle import RETIRED_MENTION_RE, is_retired_fact_text
 from palinode.core.parser import split_frontmatter
 
 #: Version of the projection rules. Stored on every derived chunk; a row on
 #: another version (or none) is re-derived on the next reconcile even when the
 #: raw section bytes are unchanged. Bump when the rules change.
-PROJECTION_VERSION = 1
+#:
+#: 2 — the auto-generated ``## See also`` footer is projected out.
+PROJECTION_VERSION = 2
 
 # A markdown list marker at the head of a line, captured with its indentation
 # so an affected item can be reassembled with the marker it came with.
@@ -66,6 +77,10 @@ _INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
 # A struck mention with the whitespace that joined it to the previous
 # sentence, so removing it closes the gap instead of leaving a double space.
 _MENTION_SPAN_RE = re.compile(r"\s*" + RETIRED_MENTION_RE.pattern)
+
+# The heading the save path writes above the auto-footer marker. Dropped with
+# the block so no orphan heading is left behind.
+_FOOTER_HEADING_RE = re.compile(r"^\s*##\s+See also\s*$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -105,6 +120,23 @@ def _strip_mention_spans(text: str) -> tuple[str, list[str]]:
     return "".join(pieces), removed
 
 
+def _drop_footer(
+    out: list[str], rest: list[str], removed: list[str]
+) -> None:
+    """Drop the auto-footer block ``out``/``rest`` straddle, in place.
+
+    ``out`` holds the lines already kept, ``rest`` the marker line and
+    everything after it. The heading and the blank lines that separated the
+    footer from the body go too, so a section that was *only* a footer projects
+    to the empty string and ``indexer.reconcile`` gives it no row at all.
+    """
+    while out and (not out[-1].strip() or _FOOTER_HEADING_RE.match(out[-1])):
+        dropped = out.pop()
+        if dropped.strip():
+            removed.append(dropped.rstrip("\r\n"))
+    removed.extend(line.rstrip("\r\n") for line in rest)
+
+
 def project_current_text(markdown: str) -> Projected:
     """Project ``markdown`` to its current-state text. Pure; see the module doc."""
     head, body = split_frontmatter(markdown)
@@ -112,7 +144,8 @@ def project_current_text(markdown: str) -> Projected:
     removed: list[str] = []
     fence: str | None = None
 
-    for line in body.splitlines(keepends=True):
+    lines = body.splitlines(keepends=True)
+    for index, line in enumerate(lines):
         bare = line.rstrip("\r\n")
         ending = line[len(bare):]
         stripped = bare.strip()
@@ -129,6 +162,17 @@ def project_current_text(markdown: str) -> Projected:
         if fence is not None:
             out.append(line)
             continue
+
+        if stripped == AUTO_FOOTER_MARKER:
+            # The recognizer is line-anchored and fence-aware where
+            # ``strip_auto_footer`` (the dedup/orphan-repair side) finds the
+            # marker anywhere in the text. Both are correct for their job:
+            # there a false positive costs one similarity comparison, here it
+            # would silently drop authored content — a note *about* the footer
+            # format, quoting the marker in a fenced example — out of the
+            # index. A real footer is always a bare line at the end.
+            _drop_footer(out, lines[index:], removed)
+            break
 
         list_match = _LIST_MARKER_RE.match(bare)
         prefix = list_match.group(1) if list_match else ""

@@ -35,6 +35,10 @@ def _decay_and_context_off(monkeypatch):
     monkeypatch.setattr(config.context, "enabled", False)
     monkeypatch.setattr(config.search, "daily_penalty", 1.0)
     monkeypatch.setattr(config.search, "dedup_score_gap", 0.05)
+    # The slates below pick per-arm scores to exercise fusion, dedup and the
+    # ABSOLUTE floor, not to be competitive with each other; the vector arm's
+    # relative floor is pinned in test_vector_arm_relative_floor.py.
+    monkeypatch.setattr(config.search, "vector_relative_floor", 0.0)
 
 
 def _run(vec, fts, **kw):

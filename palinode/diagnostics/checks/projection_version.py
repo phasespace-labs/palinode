@@ -6,14 +6,16 @@ projection (:mod:`palinode.core.projection`) and how many are still on an
 older version or none at all.
 
 The indexer projects the consolidation executor's retirement tombstones
-(``~~old~~ [superseded …]`` / ``[RETRACTED …]``) out of the text it hands to
-FTS and the embedder, and stamps every derived row with the
-``PROJECTION_VERSION`` it used.  A row without that stamp — a store indexed
-before the projection existed, or one indexed under earlier rules — still
-carries the retired wording in its keyword and vector index, so an old
-assertion can rank beside its successor.  Reconcile re-derives such rows as
-it visits their files (the watcher, a save, or ``palinode reindex``), so the
-count here is migration progress: it falls to zero as the store converges.
+(``~~old~~ [superseded …]`` / ``[RETRACTED …]``) and the generated
+``## See also`` footer out of the text it hands to FTS and the embedder, and
+stamps every derived row with the ``PROJECTION_VERSION`` it used.  A row
+without that stamp — a store indexed before the projection existed, or one
+indexed under earlier rules — still carries the retired wording, or the
+footer's wikilink slugs, in its keyword and vector index: an old assertion can
+rank beside its successor, and a footer-only chunk can rank for a question its
+record does not answer.  Reconcile re-derives such rows as it visits their
+files (the watcher, a save, or ``palinode reindex``), so the count here is
+migration progress: it falls to zero as the store converges.
 
 Severity: warn
   Read-only, local, no network.  Passes when every chunk is on the current
@@ -129,10 +131,10 @@ def projection_current(ctx: DoctorContext) -> CheckResult:
         passed=False,
         message=(
             f"{behind} of {total} indexed chunks are on an older text projection "
-            f"than v{PROJECTION_VERSION} (or none).  Retired facts in those chunks "
-            "can still rank in keyword and vector search beside their successors.  "
-            "Reconcile converges them as their files are visited; the count is "
-            "migration progress."
+            f"than v{PROJECTION_VERSION} (or none).  Retired facts and generated "
+            "'## See also' footers in those chunks can still rank in keyword and "
+            "vector search.  Reconcile converges them as their files are visited; "
+            "the count is migration progress."
         ),
         remediation=(
             "Run 'palinode reindex' to re-derive the remaining chunks in one pass.\n"

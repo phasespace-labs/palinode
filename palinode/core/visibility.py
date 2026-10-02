@@ -24,6 +24,14 @@ the parent directory name, so the same root-level memory infers
 divergence that hides a memory on one surface and leaks it on the next. Every
 path is normalized to memory-dir-relative before any inference.
 
+**Project isolation lives here too.** A chain carrying a project hides
+records tagged to a *different* project (:func:`palinode.core.scope.
+other_project`); records naming no project stay visible as global. Search,
+resolve (seeds and every evidence expansion) and the prime all reach it
+through this module, so no surface reimplements it. A request opts out with
+``ScopeChain.include_other_projects``; :func:`filter_visible` counts what
+isolation withheld so a scoped empty result can say why.
+
 Internal / maintenance callers (consolidation, dedup-suggest, orphan-repair,
 ``search_internal``) deliberately do **not** route through here: they must see
 every memory to do their job, and they never return content to a session.
@@ -35,7 +43,13 @@ import os
 from typing import Any, Iterable
 
 from palinode.core.config import config
-from palinode.core.scope import ScopeChain, access_allows, visible_on_chain
+from palinode.core.scope import (
+    ScopeChain,
+    access_allows,
+    other_project,
+    project_entities,
+    visible_on_chain,
+)
 
 logger = logging.getLogger("palinode.visibility")
 
@@ -80,6 +94,82 @@ def _read_frontmatter(file_path: str) -> dict[str, Any]:
     except (OSError, ValueError, UnicodeDecodeError):
         return _UNREADABLE
     return meta if isinstance(meta, dict) else {}
+
+
+def _evaluated_metadata(
+    file_path: str | None,
+    *,
+    metadata: dict[str, Any] | None,
+    fallback_metadata: dict[str, Any] | None,
+    cache: dict[str, dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    """The frontmatter :func:`is_visible` decides on, or ``None`` for none.
+
+    Precedence as :func:`is_visible` documents it: caller-supplied live
+    metadata, then the file, then the cached fallback.
+    """
+    meta = metadata
+    if meta is None and file_path:
+        if cache is not None and file_path in cache:
+            meta = cache[file_path]
+        else:
+            meta = _read_frontmatter(file_path)
+            if cache is not None:
+                cache[file_path] = meta
+    if meta is None or meta is _UNREADABLE:
+        if fallback_metadata is not None:
+            logger.debug(
+                "visibility: %r unreadable — falling back to cached metadata",
+                file_path,
+            )
+            return fallback_metadata
+        return None
+    return meta
+
+
+def withheld_as_other_project(
+    chain: ScopeChain | None,
+    file_path: str | None,
+    *,
+    metadata: dict[str, Any] | None = None,
+    fallback_metadata: dict[str, Any] | None = None,
+    cache: dict[str, dict[str, Any]] | None = None,
+) -> bool:
+    """Was this memory left out *because* it is tagged to another project?
+
+    The count a delivery reports so that an empty scoped result explains
+    itself. Only project isolation is counted — a ``private`` or
+    ``restricted`` memory hidden by access control is never counted or named
+    here, exactly as before. Call it for a record :func:`is_visible` refused.
+    """
+    if chain is None or chain.include_other_projects:
+        return False
+    meta = _evaluated_metadata(
+        file_path, metadata=metadata, fallback_metadata=fallback_metadata, cache=cache,
+    )
+    return meta is not None and other_project(chain, meta)
+
+
+def other_project_refs(
+    chain: ScopeChain | None,
+    file_path: str | None,
+    *,
+    fallback_metadata: dict[str, Any] | None = None,
+) -> list[str]:
+    """The record's own ``project/*`` refs when it belongs to another project.
+
+    Empty when the record is global, names the chain's project, or the chain
+    has no project. The label an opted-in (``include_other_projects``)
+    delivery puts beside such a record; the opt-in itself is not consulted.
+    """
+    if chain is None or not chain.project:
+        return []
+    meta = _evaluated_metadata(
+        file_path, metadata=None, fallback_metadata=fallback_metadata, cache=None,
+    )
+    if meta is None or not other_project(chain, meta):
+        return []
+    return project_entities(meta)
 
 
 def is_visible(
@@ -128,24 +218,12 @@ def is_visible(
     """
     rel = normalize_memory_path(file_path) if file_path else None
 
-    meta = metadata
-    if meta is None and file_path:
-        if cache is not None and file_path in cache:
-            meta = cache[file_path]
-        else:
-            meta = _read_frontmatter(file_path)
-            if cache is not None:
-                cache[file_path] = meta
-    if meta is None or meta is _UNREADABLE:
-        if fallback_metadata is not None:
-            logger.debug(
-                "visibility: %r unreadable — falling back to cached metadata",
-                file_path,
-            )
-            meta = fallback_metadata
-        else:
-            logger.debug("visibility: nothing to evaluate for %r — hiding", file_path)
-            return False
+    meta = _evaluated_metadata(
+        file_path, metadata=metadata, fallback_metadata=fallback_metadata, cache=cache,
+    )
+    if meta is None:
+        logger.debug("visibility: nothing to evaluate for %r — hiding", file_path)
+        return False
 
     if chain is None:
         return access_allows(meta, file_path=rel)
@@ -158,6 +236,7 @@ def filter_visible(
     *,
     path_key: str = "file_path",
     metadata_key: str = "metadata",
+    other_projects: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Filter search-result rows through :func:`is_visible`.
 
@@ -173,16 +252,21 @@ def filter_visible(
     no file behind it" state, whose behavior this layer deliberately does not
     change. Whenever the file is readable — the normal case — its live
     frontmatter is authoritative.
+
+    ``other_projects``, when given, collects the memory-dir-relative path of
+    every row left out by project isolation (a record tagged to a project
+    other than the chain's), so the caller can report how many it withheld.
     """
     cache: dict[str, dict[str, Any]] = {}
     out: list[dict[str, Any]] = []
     for row in rows:
         cached = row.get(metadata_key)
-        if is_visible(
-            chain,
-            row.get(path_key),
-            fallback_metadata=cached if isinstance(cached, dict) else {},
-            cache=cache,
-        ):
+        fallback = cached if isinstance(cached, dict) else {}
+        path = row.get(path_key)
+        if is_visible(chain, path, fallback_metadata=fallback, cache=cache):
             out.append(row)
+        elif other_projects is not None and withheld_as_other_project(
+            chain, path, fallback_metadata=fallback, cache=cache,
+        ):
+            other_projects.add(normalize_memory_path(path) or str(path))
     return out

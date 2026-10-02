@@ -329,10 +329,11 @@ def _fts_candidate_stats(
 ) -> dict[str, Any]:
     """The BM25 candidate scores its independent relative floor is applied to.
 
-    ``search_fts`` normalizes BM25 as ``min(abs(rank) / 25.0, 1.0)``, a scale
-    with no relation to the cosine similarity the vector arm is scored on. The
-    relative floor compares each score with the top score in the same slate, so
-    this records the absolute scores and corpus-size effects behind that ratio.
+    ``search_fts`` normalizes BM25 against what the query could score in this
+    index (``store.bm25_query_scale``), a scale with no relation to the cosine
+    similarity the vector arm is scored on. The relative floor compares each
+    score with the top score in the same slate, so this records the absolute
+    scores behind that ratio.
     """
     from palinode.core import store
 

@@ -341,11 +341,15 @@ function resolveWithin(baseDir: string, ...segments: string[]): string | null {
   return null;
 }
 
-async function palinodeFetch(
+// Reads the body whatever the status. Callers that only want the happy path
+// use `palinodeFetch` below; the one caller that needs a non-2xx payload — a
+// correction refusal or a partial apply, where the payload IS the answer —
+// uses this and decides for itself.
+async function palinodeFetchWithStatus(
   baseUrl: string,
   endpoint: string,
   options?: RequestInit,
-): Promise<any> {
+): Promise<{ ok: boolean; status: number; statusText: string; body: any }> {
   const headers = new Headers(options?.headers);
   headers.set("Content-Type", "application/json");
   // Same deployment credential as the shared Pi/Cline client.
@@ -355,32 +359,88 @@ async function palinodeFetch(
     ...options,
     headers,
   });
+  let body: any = null;
+  try {
+    body = await res.json();
+  } catch {
+    body = null;
+  }
+  return { ok: res.ok, status: res.status, statusText: res.statusText, body };
+}
+
+async function palinodeFetch(
+  baseUrl: string,
+  endpoint: string,
+  options?: RequestInit,
+): Promise<any> {
+  const res = await palinodeFetchWithStatus(baseUrl, endpoint, options);
   if (!res.ok) {
     throw new Error(`Palinode API ${endpoint}: ${res.status} ${res.statusText}`);
   }
-  return res.json();
+  return res.body;
 }
 
 type AutomaticScope = { cwd?: string; project?: string };
+
+/** A hit the caller asked for across projects carries its own project(s). */
+function otherProjectLabel(r: any): string {
+  return Array.isArray(r?.other_project) && r.other_project.length
+    ? ` [other project: ${r.other_project.join(", ")}]`
+    : "";
+}
 
 function automaticScope(event: any, context: any): AutomaticScope {
   const cwd = context?.workspaceDir ?? event?.cwd;
   return typeof cwd === "string" && path.isAbsolute(cwd) ? { cwd } : {};
 }
 
-async function automaticAllowed(
+async function automaticCheck(
   baseUrl: string, action: "capture" | "recall", scope: AutomaticScope,
-): Promise<boolean> {
-  if (!scope.cwd) return false;
+): Promise<{ allowed: boolean; project: string | null }> {
+  if (!scope.cwd) return { allowed: false, project: null };
   try {
     const result = await palinodeFetch(baseUrl, "/controls/check", {
       method: "POST", signal: AbortSignal.timeout(3000),
       body: JSON.stringify({ action, automatic: true, ...scope }),
     });
-    return result?.allowed === true;
+    return { allowed: result?.allowed === true, project: resolvedProject(result) };
   } catch {
-    return false;
+    return { allowed: false, project: null };
   }
+}
+
+function resolvedProject(result: any): string | null {
+  return typeof result?.project === "string" && result.project.trim()
+    ? result.project.trim().replace(/^project\//, "") : null;
+}
+
+async function automaticAllowed(
+  baseUrl: string, action: "capture" | "recall", scope: AutomaticScope,
+): Promise<boolean> {
+  return (await automaticCheck(baseUrl, action, scope)).allowed;
+}
+
+async function resolveClientProject(baseUrl: string, scope: AutomaticScope): Promise<string | null> {
+  if (!scope.cwd) return null;
+  // Only the automatic controls check resolves cwd. This is a scope lookup;
+  // the explicit /search request still applies its own recall policy.
+  const result = await palinodeFetch(baseUrl, "/controls/check", {
+    method: "POST", signal: AbortSignal.timeout(3000),
+    body: JSON.stringify({ action: "recall", automatic: true, ...scope }),
+  });
+  return resolvedProject(result);
+}
+
+// These endpoints have no context field. Apply project isolation using the
+// server's live listing before including content, paths, or trigger descriptions.
+function belongsToProject(file: any, project: string | null): boolean {
+  if (!project) return true;
+  const raw = file?.entities;
+  const entities = typeof raw === "string" ? [raw] : Array.isArray(raw) ? raw : [];
+  const projects = entities.filter((ref: unknown): ref is string =>
+    typeof ref === "string" && ref.trim().toLowerCase().startsWith("project/"),
+  ).map((ref: string) => ref.trim().toLowerCase());
+  return projects.length === 0 || projects.includes(`project/${project.toLowerCase()}`);
 }
 
 /** Keep aligned with palinode/core/scoring.py; OpenClaw has not migrated to the shared core yet. */
@@ -420,7 +480,7 @@ const palinodePlugin = {
     // ========================================================================
 
     api.registerTool(
-      {
+      (toolContext: { workspaceDir?: string }) => ({
         name: "palinode_search",
         label: "Palinode Search",
         description:
@@ -484,6 +544,21 @@ const palinodePlugin = {
                 "Default none.",
             }),
           ),
+          include_other_projects: Type.Optional(
+            Type.Boolean({
+              description:
+                "Also return memories tagged to other projects, each labelled " +
+                "with its project. Default false: a project-scoped search leaves " +
+                "them out.",
+            }),
+          ),
+          include_retired: Type.Optional(
+            Type.Boolean({
+              description:
+                "With resolve: also show retired records (archived, superseded, " +
+                "retracted, expired) in each hit's evidence, labelled. Default false.",
+            }),
+          ),
         }),
         async execute(_toolCallId: string, params: any) {
           try {
@@ -491,6 +566,10 @@ const palinodePlugin = {
               query: params.query,
               limit: params.limit || 5,
             };
+            const project = await resolveClientProject(
+              cfg.palinodeApiUrl, automaticScope(undefined, toolContext),
+            );
+            if (project) body.context = [`project/${project}`];
             if (params.category !== undefined) body.category = params.category;
             if (params.threshold !== undefined) body.threshold = params.threshold;
             if (params.since_days !== undefined) body.since_days = params.since_days;
@@ -502,6 +581,8 @@ const palinodePlugin = {
             if (params.include_telemetry !== undefined) body.include_telemetry = params.include_telemetry;
             if (params.tier !== undefined) body.tier = params.tier;
             if (params.resolve !== undefined && params.resolve !== "none") body.resolve = params.resolve;
+            if (params.include_other_projects) body.include_other_projects = true;
+            if (params.include_retired === true) body.include_retired = true;
             body.receipt = true;
             const payload = await palinodeFetch(
               cfg.palinodeApiUrl,
@@ -514,9 +595,35 @@ const palinodePlugin = {
 
             const results = Array.isArray(payload) ? payload : (payload?.results ?? []);
             const retrieval = payload?.receipt?.retrieval;
-            const diagnostic = retrieval
-              ? `Retrieval: ${retrieval.active_mode} · index: ${retrieval.index_state} · ${retrieval.outcome}\n`
+            // Which project the server scoped this delivery to, and the source
+            // that decided it (an argument, the pinned setting, git, or none).
+            // The server resolves it — this surface never re-derives scope.
+            const scope = Array.isArray(payload) || !payload?.project_resolved_by
+              ? ""
+              : `Scope: ${payload.project ?? "none"} (${payload.project_resolved_by})\n`;
+            // `outcome` says whether rows came back; `confidence` says whether
+            // any of them is worth treating as an answer, which the delivered
+            // score cannot say because it is a fused rank. A `none` verdict
+            // leads the text — the results are still listed, never withheld.
+            const verdict = retrieval?.confidence
+              ? ` · match confidence: ${retrieval.confidence}`
               : "";
+            // A scoped search that isolation left (nearly) empty says so, in
+            // the MCP surface's agent-facing words: no option name, because an
+            // agent told how to see another project's records fetches them and
+            // answers with them. Quiet otherwise.
+            const otherWithheld = Number(retrieval?.other_projects_withheld ?? 0);
+            const scopeRef = String(payload?.project ?? "none");
+            const withheldLine = otherWithheld >= 1 && (results?.length ?? 0) < 2
+              ? `${otherWithheld} ${otherWithheld === 1 ? "record" : "records"} from other projects withheld ` +
+                `(scope: ${scopeRef.startsWith("project/") ? scopeRef : `project/${scopeRef}`}). ` +
+                "They are about other projects, not this one.\n"
+              : "";
+            const diagnostic = scope + withheldLine + (retrieval
+              ? `Retrieval: ${retrieval.active_mode} · index: ${retrieval.index_state} · ${retrieval.outcome}${verdict}\n`
+              : "") + (retrieval?.confidence === "none"
+              ? "No confident match — the results below are the closest weak matches.\n"
+              : "");
 
             if (!results || results.length === 0) {
               return {
@@ -529,7 +636,7 @@ const palinodePlugin = {
             const text = results
               .map(
                 (r: any, i: number) =>
-                  `${i + 1}. [${r.category || "?"}] ${r.content.slice(0, 200)}${r.content.length > 200 ? "..." : ""} (${describeMatch(r)}, file: ${path.basename(r.file_path)})`,
+                  `${i + 1}. [${r.category || "?"}]${otherProjectLabel(r)} ${r.content.slice(0, 200)}${r.content.length > 200 ? "..." : ""} (${describeMatch(r)}, file: ${path.basename(r.file_path)})`,
               )
               .join("\n\n");
 
@@ -552,7 +659,7 @@ const palinodePlugin = {
             };
           }
         },
-      },
+      }),
       { name: "palinode_search" },
     );
 
@@ -837,6 +944,32 @@ const palinodePlugin = {
     }, { name: "palinode_blame" });
 
     api.registerTool({
+        name: "palinode_explain",
+        label: "Palinode Explain Delivery",
+        description: "Explain one delivery of context: given the bundle_id a search receipt returned, show which memories were supplied, the exact revision of each (and whether its source changed since), the resolved scope, the calling surface, each record's disposition and the coverage qualifiers. Fields that were never recorded are reported as unavailable with the reason, never guessed. Supplied context only — no evidence that anyone acted on it is recorded.",
+        parameters: Type.Object({
+            bundle_id: Type.String({ description: "Delivery reference from a receipt (the `bundle_id` / `receipt_ref`)." }),
+            limit: Type.Optional(Type.Number({ description: "Maximum supplied records to show; the rest are counted." })),
+        }),
+        async execute(_id: string, params: any) {
+            try {
+                // `view` is not offered here: the caller's own query prose is
+                // diagnostics-only, and reading it is an operator action on the
+                // CLI, the REST API or the local inspector.
+                const query = new URLSearchParams({ view: "public" });
+                if (params.limit !== undefined) query.set("limit", String(params.limit));
+                const res = await palinodeFetch(
+                    cfg.palinodeApiUrl,
+                    `/explain/${encodeURIComponent(params.bundle_id)}?${query.toString()}`,
+                );
+                return { content: [{ type: "text", text: JSON.stringify(res, null, 2) }] };
+            } catch (err) {
+                return { content: [{ type: "text", text: `Palinode explain failed: ${String(err)}` }] };
+            }
+        },
+    }, { name: "palinode_explain" });
+
+    api.registerTool({
         name: "palinode_depends",
         label: "Palinode Depends",
         description: "Return the dependency tree for a milestone or task slug, or list all unblocked (ready-to-start) items.",
@@ -864,6 +997,157 @@ const palinodePlugin = {
             }
         },
     }, { name: "palinode_depends" });
+
+    api.registerTool({
+        name: "palinode_corrections",
+        label: "Palinode Corrections",
+        description: "List correction candidates mined from harness session transcripts — moments a user overturned a decision, rejected an approach with a reason, or asked for something to be remembered. Advisory proposals, never applied; empty unless the store's operator enabled transcript capture.",
+        parameters: Type.Object({
+            project: Type.Optional(Type.String({ description: "Only candidates scoped to this project." })),
+            since_days: Type.Optional(Type.Number({ description: "Only candidates from the last N days." })),
+        }),
+        async execute(_id: string, params: any) {
+            try {
+                // `scan` is not offered here: running a pass over someone's
+                // transcripts is an operator action on the CLI or REST API.
+                const body: Record<string, unknown> = { scan: false };
+                if (params.project) body.project = params.project;
+                if (params.since_days !== undefined) body.since_days = params.since_days;
+                const res = await palinodeFetch(cfg.palinodeApiUrl, "/corrections", {
+                    method: "POST",
+                    body: JSON.stringify(body),
+                });
+                const candidates = res?.candidates || [];
+                if (candidates.length === 0) {
+                    const why = res?.enabled ? "" : " (transcript correction capture is disabled)";
+                    return { content: [{ type: "text", text: `No correction candidates${why}.` }] };
+                }
+                const lines = candidates.map((c: any) =>
+                    `${c.classification} · ${c.project || "unscoped"} · turn ${c.turn_index}: "${c.span}"`,
+                );
+                return { content: [{ type: "text", text: `${lines.join("\n")}\n\n${res.applied}` }] };
+            } catch (err) {
+                return { content: [{ type: "text", text: `Palinode corrections failed: ${String(err)}` }] };
+            }
+        },
+    }, { name: "palinode_corrections" });
+
+    // ========================================================================
+    // Correction review — preview → apply / dismiss, plus undo.
+    //
+    // A delivery adapter over the same four routes the CLI and MCP call
+    // (ADR-019). Preview reads; apply refuses without `confirm` and the
+    // revision preview returned; undo previews unless confirmed. A 409 is the
+    // contract working — a stale revision, an ambiguous target — so its
+    // payload is handed back rather than flattened into a status line.
+    // ========================================================================
+
+    const correctionCall = async (phase: string, body: Record<string, unknown>, label: string) => {
+        try {
+            const res = await palinodeFetchWithStatus(cfg.palinodeApiUrl, `/corrections/${phase}`, {
+                method: "POST",
+                body: JSON.stringify(body),
+            });
+            if (res.ok) {
+                return { content: [{ type: "text", text: JSON.stringify(res.body, null, 2) }] };
+            }
+            const detail = res.body?.detail;
+            if (res.status === 409 && detail && typeof detail === "object") {
+                // A partial is the opposite of a refusal: half of it landed.
+                // Leading with "refused" would invite a re-run instead of the
+                // one command that finishes the job.
+                const lead = detail.applied === "partial"
+                    ? `${label} PARTIALLY applied`
+                    : `${label} refused`;
+                return { content: [{ type: "text", text: `${lead}: ${JSON.stringify(detail, null, 2)}` }] };
+            }
+            return { content: [{ type: "text", text: `${label} failed: ${res.status} ${res.statusText}` }] };
+        } catch (err) {
+            return { content: [{ type: "text", text: `${label} failed: ${String(err)}` }] };
+        }
+    };
+
+    const correctionBody = (params: any, keys: string[]) => {
+        const body: Record<string, unknown> = {};
+        for (const key of keys) {
+            if (params[key] !== undefined && params[key] !== null) body[key] = params[key];
+        }
+        return body;
+    };
+
+    const CORRECTION_TARGET_PARAMS = {
+        allow_content_loss: Type.Optional(Type.Boolean({ description: "Explicitly permit dropping the original text listed by preview." })),
+        target: Type.Optional(Type.String({ description: "Memory to correct: 'decisions/x.md', 'decisions/x', or a bare slug." })),
+        claim_id: Type.Optional(Type.String({ description: "Narrow the correction to one '<!-- fact:id -->' claim in the target." })),
+        replacement: Type.Optional(Type.String({ description: "The text that stands instead. Omit to retire with no successor." })),
+        action: Type.Optional(Type.Union([Type.Literal("supersede"), Type.Literal("retire")], { description: "supersede or retire; derived from replacement when omitted." })),
+        reason: Type.Optional(Type.String({ description: "Why. Recorded in the history sibling and the commit subject." })),
+        candidate_id: Type.Optional(Type.String({ description: "The correction candidate this came from." })),
+        project: Type.Optional(Type.String({ description: "Project scope. Inferred from the target when omitted." })),
+        backed_by: Type.Optional(Type.Array(Type.String(), { description: "Records supporting the REPLACEMENT. The superseded original is never cited as support for its replacement." })),
+    };
+
+    const CORRECTION_KEYS = ["target", "claim_id", "replacement", "action", "reason", "candidate_id", "project", "backed_by", "allow_content_loss"];
+
+    api.registerTool({
+        name: "palinode_correction_preview",
+        label: "Palinode Correction Preview",
+        description: "Show what correcting or retiring one memory would change, and change nothing. Returns the old text, the proposed new text, the target's exact revision, the rationale, the correction's source, the scope, the supersedes/superseded_by relation that would be recorded, the records that reference the target (reported, never rewritten) and the recovery command.",
+        parameters: Type.Object({ ...CORRECTION_TARGET_PARAMS }),
+        async execute(_id: string, params: any) {
+            return correctionCall("preview", correctionBody(params, CORRECTION_KEYS), "Palinode correction preview");
+        },
+    }, { name: "palinode_correction_preview" });
+
+    api.registerTool({
+        name: "palinode_correction_apply",
+        label: "Palinode Correction Apply",
+        description: "Apply a correction that was previewed. Requires confirm=true and the expect_revision the preview returned; a target that changed since, or a ref matching more than one memory, is refused rather than guessed. The original is archived with superseded_by, never deleted. `applied: \"partial\"` means the replacement was saved and the original was NOT retired — run the complete_command it returns rather than re-running the correction.",
+        parameters: Type.Object({
+            ...CORRECTION_TARGET_PARAMS,
+            expect_revision: Type.String({ description: "The revision palinode_correction_preview returned." }),
+            confirm: Type.Boolean({ description: "Must be true. Nothing is written without it." }),
+        }),
+        async execute(_id: string, params: any) {
+            if (!params.confirm) {
+                return { content: [{ type: "text", text: "Palinode correction apply refused: confirm=true and the preview's expect_revision are both required." }] };
+            }
+            const body = correctionBody(params, [...CORRECTION_KEYS, "expect_revision"]);
+            body.confirm = true;
+            return correctionCall("apply", body, "Palinode correction apply");
+        },
+    }, { name: "palinode_correction_apply" });
+
+    api.registerTool({
+        name: "palinode_correction_dismiss",
+        label: "Palinode Correction Dismiss",
+        description: "Record that a correction candidate was reviewed and declined. Writes no memory: the queue row is marked dismissed with its reason and kept, which is what stops a later scan re-proposing the same span.",
+        parameters: Type.Object({
+            candidate_id: Type.String({ description: "The candidate id from palinode_corrections." }),
+            reason: Type.String({ description: "Why it was declined. This is the record." }),
+        }),
+        async execute(_id: string, params: any) {
+            if (!params.reason) {
+                return { content: [{ type: "text", text: "Palinode correction dismiss refused: a reason is required — it is the record." }] };
+            }
+            return correctionCall("dismiss", correctionBody(params, ["candidate_id", "reason"]), "Palinode correction dismiss");
+        },
+    }, { name: "palinode_correction_dismiss" });
+
+    api.registerTool({
+        name: "palinode_correction_undo",
+        label: "Palinode Correction Undo",
+        description: "Preview (default) or apply the undo of a correction. Restoring a previous assertion, deleting history and undoing an agent's external actions are three different things: the result names all three, does the first, refuses the second and cannot reach the third.",
+        parameters: Type.Object({
+            target: Type.String({ description: "The archived memory to restore." }),
+            expect_revision: Type.Optional(Type.String({ description: "The revision the undo preview returned. Required with confirm." })),
+            confirm: Type.Optional(Type.Boolean({ description: "Must be true to write. Preview is the default." })),
+            reason: Type.Optional(Type.String({ description: "Why the correction is being undone." })),
+        }),
+        async execute(_id: string, params: any) {
+            return correctionCall("undo", correctionBody(params, ["target", "expect_revision", "confirm", "reason"]), "Palinode correction undo");
+        },
+    }, { name: "palinode_correction_undo" });
 
     // ========================================================================
     // Quick-save flag: -es at end of message → save to Palinode
@@ -976,7 +1260,9 @@ const palinodePlugin = {
       api.on("before_prompt_build", async (event: any, context: any) => {
         if (!event.prompt || event.prompt.length < 3) return;
         const scope = automaticScope(event, context);
-        if (!await automaticAllowed(cfg.palinodeApiUrl, "recall", scope)) return;
+        const control = await automaticCheck(cfg.palinodeApiUrl, "recall", scope);
+        if (!control.allowed) return;
+        const project = control.project;
 
         sessionTurnCount++;
         const isFirstTurn = sessionTurnCount === 1;
@@ -1023,7 +1309,7 @@ const palinodePlugin = {
               if (!Array.isArray(files)) throw new Error("Invalid core selection response");
               for (const file of files) {
                 if (coreBudgetRemaining <= 0) break;
-                if (typeof file?.file !== "string" || file.core !== true) continue;
+                if (typeof file?.file !== "string" || file.core !== true || !belongsToProject(file, project)) continue;
                 const summary = typeof file.summary === "string" ? file.summary.trim() : "";
                 const source = `\n--- ${file.file} ---\n`;
                 let block: string;
@@ -1033,7 +1319,7 @@ const palinodePlugin = {
                 } else {
                   const result = await palinodeFetch(
                     cfg.palinodeApiUrl,
-                    `/read?file_path=${encodeURIComponent(file.file)}`,
+                    `/read?file_path=${encodeURIComponent(file.file)}&project=${encodeURIComponent(project ?? "")}&automatic=true`,
                     { signal },
                   );
                   if (typeof result?.content !== "string") throw new Error("Invalid core read response");
@@ -1067,6 +1353,7 @@ const palinodePlugin = {
                 query: event.prompt,
                 limit: profile.semanticLimit ?? 5,
               };
+              if (project) semBody.context = [`project/${project}`];
               // Forward type filters defensively — older Palinode servers ignore unknown keys.
               if (profile.typeAllow) semBody.type_allow = profile.typeAllow;
               if (profile.typeDeny)  semBody.type_deny  = profile.typeDeny;
@@ -1105,10 +1392,25 @@ const palinodePlugin = {
               };
               if (profile.typeAllow) assocBody.type_allow = profile.typeAllow;
               if (profile.typeDeny)  assocBody.type_deny  = profile.typeDeny;
-              const assoc = await palinodeFetch(cfg.palinodeApiUrl, "/search-associative", {
+              let assoc = await palinodeFetch(cfg.palinodeApiUrl, "/search-associative", {
                   method: "POST",
                   body: JSON.stringify(assocBody),
               });
+              if (project && Array.isArray(assoc) && assoc.length > 0) {
+                const files = await palinodeFetch(cfg.palinodeApiUrl, "/list", {
+                  signal: AbortSignal.timeout(5000),
+                });
+                if (!Array.isArray(files)) throw new Error("Invalid associative selection response");
+                const visiblePaths = new Set(files.filter((file: any) => belongsToProject(file, project))
+                  .map((file: any) => file.file));
+                assoc = assoc.filter((r: any) => {
+                  const relativePath = r.rel_path ?? r.file_path;
+                  if (typeof relativePath !== "string") return false;
+                  const file = path.isAbsolute(relativePath)
+                    ? path.relative(cfg.palinodeDir, relativePath) : relativePath;
+                  return visiblePaths.has(file);
+                });
+              }
               if (assoc && assoc.length > 0) {
                   const cap = profile.associativeMaxChars ?? 500;
                   assocContent = assoc.map((r: any) => {
@@ -1140,14 +1442,15 @@ const palinodePlugin = {
                   const signal = AbortSignal.timeout(5000);
                   const files = await palinodeFetch(cfg.palinodeApiUrl, "/list", { signal });
                   if (!Array.isArray(files)) throw new Error("Invalid trigger selection response");
-                  const visiblePaths = new Set(files.map((file: any) => file.file));
+                  const visiblePaths = new Set(files.filter((file: any) => belongsToProject(file, project))
+                    .map((file: any) => file.file));
                   const selected = triggers.filter((t: any) =>
                     typeof t.memory_file === "string" && visiblePaths.has(t.memory_file),
                   ).slice(0, nMax);
                   for (const t of selected) {
                     const result = await palinodeFetch(
                       cfg.palinodeApiUrl,
-                      `/read?file_path=${encodeURIComponent(t.memory_file)}`,
+                      `/read?file_path=${encodeURIComponent(t.memory_file)}&project=${encodeURIComponent(project ?? "")}&automatic=true`,
                       { signal },
                     );
                     if (typeof result?.content !== "string") throw new Error("Invalid trigger read response");
@@ -1262,9 +1565,11 @@ const palinodePlugin = {
           .option("--category <cat>", "Filter by category")
           .action(async (query: string, opts: any) => {
             try {
+              const project = await resolveClientProject(cfg.palinodeApiUrl, { cwd: process.cwd() });
               const results = await palinodeFetch(cfg.palinodeApiUrl, "/search", {
                 method: "POST",
                 body: JSON.stringify({
+                  ...(project ? { context: [`project/${project}`] } : {}),
                   query,
                   limit: parseInt(opts.limit, 10),
                   category: opts.category,

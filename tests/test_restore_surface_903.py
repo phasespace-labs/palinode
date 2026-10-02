@@ -636,15 +636,15 @@ class _FakeAPI:
         self._payload = payload
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
-    def restore(self, file_path, reason=None):
+    def restore(self, file_path, reason=None, dry_run=False):
         self.calls.append(("restore", {"file_path": file_path, "reason": reason}))
         return self._payload
 
-    def unretract(self, file_path, pref, reason=None):
+    def unretract(self, file_path, pref, reason=None, dry_run=False):
         self.calls.append(("unretract", {"file_path": file_path, "pref": pref, "reason": reason}))
         return self._payload
 
-    def forget_withdraw(self, file_path, reason=None):
+    def forget_withdraw(self, file_path, reason=None, dry_run=False):
         self.calls.append(("forget_withdraw", {"file_path": file_path, "reason": reason}))
         return self._payload
 
@@ -750,9 +750,13 @@ async def test_mcp_reversal_tools_registered_full_not_core(monkeypatch):
     monkeypatch.setenv("PALINODE_MCP_SURFACE", "full")
     full = {t.name: t for t in await list_tools()}
     assert full["palinode_restore"].input_schema["required"] == ["file_path"]
-    assert set(full["palinode_restore"].input_schema["properties"]) == {"file_path", "reason"}
+    assert set(full["palinode_restore"].input_schema["properties"]) == {
+        "file_path", "reason", "dry_run",
+    }
     assert full["palinode_unretract"].input_schema["required"] == ["file_path", "pref"]
-    assert set(full["palinode_unretract"].input_schema["properties"]) == {"file_path", "pref", "reason"}
+    assert set(full["palinode_unretract"].input_schema["properties"]) == {
+        "file_path", "pref", "reason", "dry_run",
+    }
     assert full["palinode_forget_withdraw"].input_schema["required"] == ["file_path"]
 
     monkeypatch.setenv("PALINODE_MCP_SURFACE", "core")

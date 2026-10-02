@@ -82,7 +82,13 @@ describe("openclaw.plugin.json", () => {
       "palinode_status",
       "palinode_diff",
       "palinode_blame",
+      "palinode_explain",
       "palinode_depends",
+      "palinode_corrections",
+      "palinode_correction_preview",
+      "palinode_correction_apply",
+      "palinode_correction_dismiss",
+      "palinode_correction_undo",
     ]);
   });
 });

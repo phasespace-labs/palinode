@@ -24,8 +24,23 @@ console = Console()
 )
 @click.option("--max-items", type=int, default=None, help="Max units in the answer.")
 @click.option("--max-chars", type=int, default=None, help="Max characters in the answer.")
+@click.option(
+    "--include-retired",
+    is_flag=True,
+    default=False,
+    help="Also show retired records (archived, superseded, expired), labelled as history.",
+)
+@click.option(
+    "--include-other-projects",
+    is_flag=True,
+    default=False,
+    help="Also show records tagged to other projects, labelled with their project.",
+)
 @click.option("--format", "fmt", type=click.Choice(["json", "text"]), help="Output format")
-def resolve(query, ref, context, intent, max_items, max_chars, fmt):
+def resolve(
+    query, ref, context, intent, max_items, max_chars, include_retired,
+    include_other_projects, fmt,
+):
     """Ask what memory currently holds about QUERY (or about one record).
 
     Returns the assertions that stand, what replaced what, conflicts with every
@@ -35,6 +50,15 @@ def resolve(query, ref, context, intent, max_items, max_chars, fmt):
     """
     if not query and not ref:
         raise click.UsageError("give a QUERY or --ref")
+    from palinode.cli.search import _cli_resolve_scope
+    from palinode.core.context_prime import InvalidProjectScope
+
+    # This shell's project, resolved here: the API may be on another machine,
+    # and its own directory says nothing about which project the caller is in.
+    try:
+        project = _cli_resolve_scope().project
+    except InvalidProjectScope as e:
+        raise click.ClickException(str(e))
     try:
         data = api_client.resolve(
             query=query,
@@ -43,6 +67,9 @@ def resolve(query, ref, context, intent, max_items, max_chars, fmt):
             intent=intent,
             max_items=max_items,
             max_chars=max_chars,
+            include_retired=include_retired,
+            project=project,
+            include_other_projects=include_other_projects,
         )
     except HTTPStatusError as e:
         console.print(f"[red]Error: API returned {e.response.status_code}[/red]")
@@ -67,8 +94,16 @@ def resolve(query, ref, context, intent, max_items, max_chars, fmt):
                 max_items=DEFAULT_MAX_ITEMS if max_items is None else max_items,
                 max_chars=DEFAULT_MAX_CHARS if max_chars is None else max_chars,
             ),
+            include_other_projects=include_other_projects,
+            include_retired=include_retired,
         )
-        data = build_bundle(request).to_dict()
+        from palinode.core.config import config
+        from palinode.core.scope import resolve_scope_chain
+
+        chain = resolve_scope_chain(
+            config, project=project.removeprefix("project/") if project else None,
+        )
+        data = build_bundle(request, chain=chain if chain.has_identity() else None).to_dict()
 
     output_fmt = OutputFormat(fmt) if fmt else get_default_format()
     if output_fmt == OutputFormat.JSON:

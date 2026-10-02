@@ -105,6 +105,86 @@ def _fallback_destinations(fallbacks: object) -> list[str]:
     ]
 
 
+def _transcript_correction_capture() -> dict[str, Any]:
+    """Name the transcript-mining source: what it reads, stores, and **sends**.
+
+    A capture source a caller cannot see is one they cannot refuse, and the part
+    hardest to infer is that classifying a candidate transmits conversation text
+    to the configured consolidation endpoint — which may not be on this machine.
+    That belongs in the disclosure next to the destination itself, in the same
+    payload that already reports ``consolidation_url``.
+
+    Disabled is stated as plainly as enabled: "no transcript path is read, and
+    nothing is sent" is the useful disclosure, and an absent key would read as
+    "not asked".
+    """
+    from palinode.corrections.classify import (
+        WINDOW_TURNS_AFTER,
+        WINDOW_TURNS_BEFORE,
+        WINDOW_TURN_CHARS,
+    )
+
+    settings = config.capture.transcripts
+    harnesses = sorted(
+        harness for harness, paths in (settings.harness_paths or {}).items() if paths
+    )
+    if not settings.enabled or not harnesses:
+        return {
+            "enabled": False,
+            "classify_enabled": bool(settings.classify),
+            "harnesses": [],
+            "configured_path_count": 0,
+            "reads": "no transcript path is read",
+            "stores": "nothing",
+            "sends": "nothing",
+            "sends_to": None,
+        }
+    window_turns = WINDOW_TURNS_BEFORE + WINDOW_TURNS_AFTER + 1
+    reads_and_stores = {
+        "enabled": True,
+        "classify_enabled": bool(settings.classify),
+        "harnesses": harnesses,
+        "configured_path_count": sum(
+            len(paths or []) for paths in settings.harness_paths.values()
+        ),
+        "reads": (
+            "user-typed turns in session transcripts under the configured paths, "
+            f"read-only, within a {settings.lookback_days}-day lookback"
+        ),
+        "stores": (
+            "bounded quoted spans plus their session/turn anchor, as review "
+            "candidates in the store's operational directory; never applied to memory"
+        ),
+    }
+    if not settings.classify:
+        # Reading is on, classification is not: the honest disclosure is that
+        # this source transmits nothing at all, and what it would take to change
+        # that. Reporting the "what is sent" paragraph here would describe
+        # traffic that does not happen.
+        return {
+            **reads_and_stores,
+            "sends": (
+                "nothing: detection is local and classification is off "
+                "(capture.transcripts.classify). Turning it on would send a bounded "
+                "window around each candidate to the configured consolidation endpoint."
+            ),
+            "sends_to": None,
+        }
+    return {
+        **reads_and_stores,
+        "sends": (
+            f"classifying a candidate SENDS up to {window_turns} turns of "
+            f"conversation around it (at most {WINDOW_TURN_CHARS} characters each) "
+            "to the consolidation model endpoint below: the user's own turns and "
+            "ordinary assistant replies, with quoted, pasted and harness-injected "
+            "regions removed, and every other kind of turn replaced by a "
+            "placeholder naming its kind. If that endpoint is not local, this text "
+            "leaves the machine. The deterministic detection pass sends nothing."
+        ),
+        "sends_to": redact_destination(config.consolidation.llm_url),
+    }
+
+
 def runtime_disclosure() -> dict[str, Any]:
     """Return configured server destinations for ``GET /status``.
 
@@ -130,6 +210,7 @@ def runtime_disclosure() -> dict[str, Any]:
         ),
         # TranscriptorConfig has a configured endpoint but no enabled flag.
         "transcriptor_url": redact_destination(config.ingestion.transcriptor.url),
+        "transcript_correction_capture": _transcript_correction_capture(),
         "git_remotes": _configured_git_remotes(),
         "git_push_policy": (
             "automatic after committed writes (git.auto_push=true)"

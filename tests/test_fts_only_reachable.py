@@ -5,9 +5,9 @@ The NaN-input fix made ``reconcile`` write a section FTS-only when the
 embedder rejects that one input (bge-m3's NaN vector), and
 ``EmbeddingInputError``'s recovery text promises the chunk "stays
 keyword-searchable". It did not: the chunk has no ``chunks_vec`` row, so the
-vector arm can never carry it, and its normalized BM25 score (``raw / 25.0``)
-never clears the shared per-arm floor that the BM25-arm measurement
-deliberately left in place for chunks that *have* a vector. The row was in
+vector arm can never carry it, and its normalized BM25 score (``raw / 25.0``
+at the time) never cleared the shared per-arm floor that the BM25-arm
+measurement deliberately left in place for chunks that *have* a vector. The row was in
 ``chunks``, in ``chunks_fts``, matched ``MATCH`` — and ``/search`` would not
 return it while a vector-bearing control in the same two-document store came
 back normally.
@@ -111,11 +111,15 @@ class TestStoreLevel:
             "Fungal hyphae trade phosphorus to host trees for carbon.", _VEC,
         )
 
-        # The test is only meaningful if the FTS arm alone would NOT clear
-        # the floor — the pre-fix mechanism.
+        # The keyword arm is the only arm that finds it. (This used to also
+        # assert the arm's score was under the cosine floor — the pre-fix
+        # mechanism. That score is no longer a fraction of a constant 25 but
+        # of what this query could score here, so it is not a number a cosine
+        # floor can be compared against at all; what keeps the chunk reachable
+        # is the vectorless exemption below, which the next test pins from the
+        # other side.)
         fts = store.search_fts(_KEYWORD_QUERY)
         assert [h["file_path"] for h in fts] == [poison_path]
-        assert fts[0]["score"] < config.search.mcp_threshold
 
         hits = store.search_hybrid(
             _KEYWORD_QUERY, _VEC, threshold=config.search.api_threshold,
@@ -143,7 +147,6 @@ class TestStoreLevel:
 
         fts = store.search_fts(_KEYWORD_QUERY)
         assert {h["file_path"] for h in fts} == {poison_path, vectored_path}
-        assert all(h["score"] < config.search.api_threshold for h in fts)
         by_path = {h["file_path"]: h["score"] for h in fts}
         assert by_path[vectored_path] < config.search.fts_threshold * by_path[poison_path]
 

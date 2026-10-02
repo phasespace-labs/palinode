@@ -326,6 +326,9 @@ palinode mcp-config --stdio
 
 # stdio pinned to one project, even when the client later opens a linked worktree:
 palinode mcp-config --stdio --project harbor-notes
+
+# HTTP scoped to one project (sent as the X-Palinode-Project header):
+palinode mcp-config --http --host <palinode-host> --project harbor-notes
 ```
 
 When piped, the command emits only the raw JSON block (so you can redirect it);
@@ -343,18 +346,42 @@ mutable session state. The resolver reports this as `environment` in
 `project_resolved_by`), while a `project` argument on that tool still wins as
 an explicit per-call override.
 
+For a project-local `.mcp.json`, `palinode init --pin-project` writes the same
+setting into the block it generates (the slug from `--project`, or the
+directory name); without that flag the emitted block is unchanged.
+
 Omit `--project` to retain normal resolution from the client's CWD, including
 Git origin/common-directory detection for linked worktrees. The option accepts
 only a plain slug, not `project/<slug>` or a path, so generated configuration
 cannot turn into a path-like project reference.
 
-`--project` intentionally rejects `--http`. An HTTP client connects to an
-already-running, potentially shared `palinode-mcp-http` process; putting an
-environment value in its client config cannot scope that remote process per
-client. For remote HTTP, use the `project` argument on an applicable tool call
-to make an explicit request, or configure the remote server's own environment
-only when every client is meant to share that default. Do not claim that an
-HTTP config fragment provides per-client persistent scope.
+### Explicit HTTP project scope
+
+An HTTP client connects to an already-running, possibly shared
+`palinode-mcp-http` process on another machine. That process cannot see the
+client's working directory or environment, and it never uses its own
+directory as the client's project: with nothing from the client, a call is
+unscoped (`Scope: none (none)`), unless the operator pinned the server's own
+`PALINODE_PROJECT` for every client.
+
+To scope an HTTP client, send its project in the `X-Palinode-Project` header on
+every request. `--project` emits it in the client's own header field:
+
+```bash
+palinode mcp-config --http --url http://<palinode-host>:6341/mcp/ --project harbor-notes
+```
+
+```json
+{ "type": "http", "url": "http://<palinode-host>:6341/mcp/",
+  "headers": { "X-Palinode-Project": "harbor-notes" } }
+```
+
+The header is that client's pinned setting, the HTTP counterpart of a stdio
+client's `PALINODE_PROJECT`, and is reported as `environment`. It wins over the
+server's own `PALINODE_PROJECT`, and a `project` argument on a tool call still
+wins over it. Two client configs with different headers share one server
+without sharing scope. The value must be a plain slug (or `project/<slug>`); an
+unusable one is refused, never silently replaced.
 
 ---
 

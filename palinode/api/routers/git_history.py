@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -10,6 +11,7 @@ from palinode.core.config import config
 from palinode.core.path_guard import PathTraversalError
 
 router = APIRouter()
+logger = logging.getLogger("palinode.api")
 
 
 def _http_path_error(exc: PathTraversalError) -> HTTPException:
@@ -143,15 +145,44 @@ def trace_api(file_path: str) -> dict[str, Any]:
 
 
 @router.post("/rollback")
-def rollback_api(file_path: str, commit: str | None = None, dry_run: bool = True) -> dict[str, Any]:
+def rollback_api(
+    file_path: str,
+    commit: str | None = None,
+    dry_run: bool = True,
+    undo_retirements: bool = False,
+) -> dict[str, Any]:
     """Revert a memory file to a previous version.
 
     Defaults to dry_run=True for safety. Set dry_run=False to actually revert.
+    A rollback that would undo a retirement is named in the preview and
+    refused (``status: refused``, nothing written) unless
+    ``undo_retirements=true``; an acknowledged one reports
+    ``status: undid_retirements`` and names each record in ``resurrected``.
     """
     try:
-        return {"result": git_tools.rollback(file_path, commit, dry_run)}
+        report = git_tools.rollback_report(
+            file_path, commit, dry_run, undo_retirements
+        )
     except PathTraversalError as exc:
         raise _http_path_error(exc)
+    if report["resurrected"]:
+        # The file is current again; make the index say so now rather than
+        # whenever the watcher gets to it, so search agrees with resolve and
+        # prime from the moment this call returns.
+        import os as _os
+
+        from palinode.indexer.index_file import index_file
+
+        try:
+            outcome = index_file(_os.path.join(config.memory_dir, file_path))
+            report["index_converged"] = bool(outcome.get("indexed"))
+        except Exception:  # noqa: BLE001 — the watcher converges it later
+            logger.warning(
+                "rollback reindex failed op=rollback file_path=%s", file_path,
+                exc_info=True,
+            )
+            report["index_converged"] = False
+    return report
 
 
 @router.post("/push")

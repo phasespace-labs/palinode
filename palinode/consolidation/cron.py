@@ -3,15 +3,25 @@ Palinode Consolidation Cron Entry Point
 
 Three-tier memory freshness:
   Tier 1: Session append (hook/MCP, every session, free — captures intent + result)
-  Tier 2: Nightly dedup (--nightly, UPDATE/SUPERSEDE only, 1-day lookback)
+  Tier 2: Nightly dedup (--nightly, UPDATE/SUPERSEDE only, per-project watermark)
   Tier 3: Weekly deep clean (full ops, 3-day lookback)
 
 Crontab examples (times in UTC, target 4am PT = 11:00 UTC during PDT):
-    # Nightly — lightweight dedup of today's sessions
-    0 11 * * * cd /path/to/palinode && PALINODE_DIR=~/.palinode venv/bin/python -m palinode.consolidation.cron --nightly --days 1
+    # Nightly — lightweight dedup of everything not yet consolidated
+    0 11 * * * cd /path/to/palinode && PALINODE_DIR=~/.palinode venv/bin/python -m palinode.consolidation.cron --nightly
 
     # Weekly — full compaction with MERGE/ARCHIVE
     0 11 * * 0 cd /path/to/palinode && PALINODE_DIR=~/.palinode venv/bin/python -m palinode.consolidation.cron --days 3
+
+``--days N`` means two different things, one per pass, and the nightly's changed:
+
+* **Weekly** — the lookback window, as it always was.
+* **Nightly** — the *catch-up bound*. The nightly selects notes newer than each
+  project's watermark, so a window no longer decides what it reads; ``--days N``
+  now bounds how far back a cold or long-failed mark may reach. Existing cron
+  lines keep working and cover at least what they used to: a line that widened
+  the window to self-heal skipped nights is now buying catch-up headroom
+  instead, and the pass says so in its log. The flag is not removed.
 
 The schedule above is now an upper bound, not the trigger: this entry point
 consults the activity gate (``consolidation.auto_gate``) first and exits 0
@@ -40,7 +50,8 @@ def main() -> None:
 
     nightly = "--nightly" in sys.argv
 
-    # Parse --days N for custom lookback (default: config value)
+    # Parse --days N (default: config value). Weekly: the lookback window.
+    # Nightly: the catch-up bound — see the module docstring.
     lookback = None
     if "--days" in sys.argv:
         try:
@@ -60,7 +71,18 @@ def main() -> None:
             logger.info("Skipping %s consolidation — %s", mode, decision.reason)
             sys.exit(0)
 
-    logger.info(f"Starting {mode} consolidation (lookback: {lookback or 'config default'} days)...")
+    if nightly:
+        # Said on every run, because the number in the cron line did not change
+        # when its meaning did: an operator reading this log after an upgrade
+        # must not conclude the pass is still reading a 3-day window.
+        logger.info(
+            "Starting nightly consolidation — per-project watermark selection; "
+            "%s days is the catch-up bound (how far back a cold or failed mark "
+            "may reach), not a lookback window",
+            lookback if lookback is not None else "the configured",
+        )
+    else:
+        logger.info(f"Starting {mode} consolidation (lookback: {lookback or 'config default'} days)...")
 
     try:
         if nightly:

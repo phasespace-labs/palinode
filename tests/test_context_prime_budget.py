@@ -112,6 +112,7 @@ def test_unset_budget_leaves_no_budget_keys_in_the_json(three_outcomes, monkeypa
     assert set(digest) == {
         "project", "project_resolved_by", "project_known", "core_memories", "recent_decisions",
         "open_action_items", "recent_snapshots", "_palinode_hint",
+        "other_projects_withheld",
     }
 
 

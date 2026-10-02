@@ -36,6 +36,12 @@ so on its own it cannot say *that a pass failed* — and a nightly that failed
 at the token cap was found by someone reading the cron log by hand.
 ``palinode doctor`` reads the history to report the last outcome and the
 length of any failure streak; nothing in the gate's decision reads it.
+
+A third key, ``watermarks``, holds the nightly pass's per-project high-water
+marks (:mod:`palinode.consolidation.watermark`). It shares this file because
+it is the same kind of thing — derived, operational, rebuildable state that
+must survive a restart and must never become memory content — and it reuses
+this module's atomic writer and timestamp parsing. The gate does not read it.
 """
 
 from __future__ import annotations
@@ -65,6 +71,14 @@ STATE_RELATIVE_PATH = Path(".palinode") / "consolidation-state.json"
 #: history only has to be longer than any streak worth reporting; a month of
 #: nightlies is plenty, and keeps the file a few KB.
 RUN_HISTORY_LIMIT = 30
+
+#: Outcome statuses meaning the pass finished with nothing left unconsolidated.
+#: The idle statuses belong here: nothing in the selection is nothing left
+#: behind. Read by ``palinode doctor`` (to end a failure streak) and by the
+#: watermark's cold start (to seed from the last pass that actually worked),
+#: which must agree about what "successful" means or the two disagree about
+#: the same history.
+SUCCESS_STATUSES = frozenset({"success", "no_new_notes", "no notes found"})
 
 #: The one heading ``POST /session-end`` writes into the day's daily note.
 #: The dash is an em dash today; the alternatives are accepted so a cosmetic

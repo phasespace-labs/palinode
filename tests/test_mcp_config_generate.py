@@ -164,14 +164,46 @@ def test_project_option_rejects_non_slug(value):
     assert "slug" in result.output
 
 
-@pytest.mark.parametrize("args", [
-    ["--project", "alpha"],
-    ["--http", "--project", "alpha"],
-])
-def test_project_option_is_stdio_only(args):
-    result = CliRunner().invoke(main, ["mcp-config", *args])
+def test_project_option_needs_a_transport():
+    result = CliRunner().invoke(main, ["mcp-config", "--project", "alpha"])
     assert result.exit_code == 2
-    assert "requires --stdio" in result.output
+    assert "requires --stdio or --http" in result.output
+
+
+@pytest.mark.parametrize("editor,path", [
+    ("generic", ("mcpServers", "palinode", "headers")),
+    ("claude-code", ("mcpServers", "palinode", "headers")),
+    ("codex", ("mcp_servers", "palinode", "http_headers")),
+    ("continue", ("mcpServers", 0, "requestOptions", "headers")),
+])
+def test_http_project_is_carried_in_the_project_header(editor, path):
+    """An HTTP server cannot see its client's directory or environment.
+
+    The project therefore rides on every request as a header, in each
+    client's own header field, and a bearer token still sits beside it.
+    """
+    args = ["mcp-config", "--http", "--editor", editor, "--project", "harbor-notes",
+            "--bearer", "tok"]
+    result = CliRunner().invoke(main, args)
+    assert result.exit_code == 0, result.output
+    if editor == "codex":
+        block = tomllib.loads(result.output)
+    elif editor == "continue":
+        block = yaml.safe_load(result.output)
+    else:
+        block = json.loads(result.output)
+    for key in path:
+        block = block[key]
+    assert block == {"Authorization": "Bearer tok", "X-Palinode-Project": "harbor-notes"}
+
+
+def test_http_project_header_is_not_redacted_as_a_credential():
+    from palinode.cli.mcp_config import _redact
+
+    entry = {"headers": {"Authorization": "Bearer tok", "X-Palinode-Project": "harbor-notes"}}
+    assert _redact(entry) == {
+        "headers": {"Authorization": "<redacted>", "X-Palinode-Project": "harbor-notes"},
+    }
 
 
 def test_generated_project_configs_isolate_clients_in_a_linked_worktree(

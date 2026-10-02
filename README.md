@@ -388,6 +388,13 @@ consolidation:
 
 All models are swappable. Any Ollama embedding model, any OpenAI-compatible chat endpoint. The default search floors (`search.mcp_threshold=0.4` and `search.api_threshold=0.5`) were measured against real `bge-m3` embeddings; if you change the embedding model, re-check those floors and review any trigger threshold separately — the trigger default was not part of this calibration.
 
+Every search delivery also reports a **match-confidence verdict** — `confident`,
+`weak` or `none` — in `receipt.retrieval`, read from each arm's own pre-fusion
+score rather than the fused rank, with the arm evidence beside it. Results are
+never withheld for it by default; `search.abstain_on_no_confident_match: true`
+opts the MCP surface into withholding a `none` slate. See
+[docs/lexical-retrieval.md](docs/lexical-retrieval.md#match-confidence).
+
 To re-check the search floors against your configured embedding endpoint, run
 `python -m bench.abstention`. It measures false positives for no-answer queries
 and retention of true results for answer-present controls as per-arm search
@@ -481,7 +488,9 @@ When exposing the API beyond loopback (`PALINODE_API_HOST` other than `127.0.0.1
 - **If everything crashes, `cat` still works.**
 
 Measured, not asserted: [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) has LongMemEval results
-with methodology, cost, and the losses.
+with methodology, cost, and the losses. For what Palinode does and does not guarantee
+about forged, planted, or borrowed-authority content reaching an agent through memory,
+see [SECURITY.md#memory-poisoning-and-trust-limitations](SECURITY.md#memory-poisoning-and-trust-limitations).
 
 ---
 

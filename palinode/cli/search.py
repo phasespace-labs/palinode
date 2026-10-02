@@ -101,11 +101,20 @@ def _resolution_lines(resolution: object) -> list[str]:
     return lines
 
 
-def _cli_resolve_context() -> list[str] | None:
-    """List view of the common ADR-008 resolver for ambient search."""
+def _cli_resolve_scope():
+    """This shell's project scope and the source that decided it.
+
+    The same shared resolver every other surface calls: an explicit setting
+    (``PALINODE_PROJECT``) before git/cwd inference, resolved per invocation.
+    """
     from palinode.core.context_prime import ambient_cwd, resolve_context
 
-    return resolve_context(cwd=ambient_cwd()).context
+    return resolve_context(cwd=ambient_cwd())
+
+
+def _cli_resolve_context() -> list[str] | None:
+    """List view of the common ADR-008 resolver for ambient search."""
+    return _cli_resolve_scope().context
 
 
 def _status_labels(res: dict) -> str:
@@ -135,6 +144,9 @@ def _status_labels(res: dict) -> str:
         bits.append("[red]" + escape(f"[⚠ retired{': ' + reason if reason else ''}]") + "[/red]")
     elif currency == "contested":
         bits.append("[yellow]" + escape("[⚠ contested]") + "[/yellow]")
+    other = res.get("other_project")
+    if other:
+        bits.append("[yellow]" + escape(f"[other project: {', '.join(other)}]") + "[/yellow]")
     return " ".join(bits)
 
 
@@ -213,9 +225,26 @@ def _status_labels(res: dict) -> str:
         "or insufficient evidence. Default: none."
     ),
 )
+@click.option(
+    "--include-retired",
+    is_flag=True,
+    default=False,
+    help=(
+        "With --resolve: also show retired records (archived, superseded, "
+        "expired) in each hit's evidence, labelled as history."
+    ),
+)
 @click.option("--format", "fmt", type=click.Choice(["json", "text"]), help="Output format")
 @click.option("--score/--no-score", default=False, help="Show relevance scores")
 @click.option("--no-context", is_flag=True, help="Disable ambient context boost")
+@click.option(
+    "--include-other-projects",
+    is_flag=True,
+    help=(
+        "Also return records tagged to other projects, labelled with their "
+        "project. Default: a project-scoped search leaves them out."
+    ),
+)
 @click.option("--diagnostics", is_flag=True, help="Include retrieval diagnostics and receipt in JSON output")
 def search(
     query,
@@ -231,14 +260,22 @@ def search(
     include_telemetry,
     tier,
     resolve,
+    include_retired,
     fmt,
     score,
     no_context,
+    include_other_projects,
     diagnostics,
 ):
     """Search memory by meaning or keyword."""
     try:
-        context = None if no_context else _cli_resolve_context()
+        from palinode.core.context_prime import ProjectResolution
+
+        scope = ProjectResolution(None, "none") if no_context else _cli_resolve_scope()
+        # Always stated, empty included — see the MCP surface: an absent
+        # context is the API's cue to apply its own pinned project, so
+        # --no-context (and a shell where nothing resolved) has to say so.
+        context = scope.context or []
         results, receipt = api_client.search(
             query,
             limit=limit,
@@ -255,6 +292,8 @@ def search(
             tier=tier,
             resolve=resolve,
             receipt=True,
+            include_other_projects=include_other_projects or None,
+            include_retired=include_retired,
         )
 
         output_fmt = OutputFormat(fmt) if fmt else get_default_format()
@@ -264,12 +303,28 @@ def search(
             # parses `palinode search --format json` keeps parsing it. The
             # receipt is rendered in text mode and returned in full by the
             # REST surface.
-            payload = {"results": results, "receipt": receipt} if diagnostics else results
+            payload = (
+                {"results": results, "receipt": receipt, **scope.fields()}
+                if diagnostics else results
+            )
             print_result(payload, fmt=output_fmt)
         else:
+            # Which project this search was scoped to, and why. First line:
+            # a search that found nothing in the wrong project is exactly when
+            # the reader needs it.
+            console.print("[dim]" + escape(scope.describe()) + "[/dim]")
             if receipt and receipt.get("retrieval"):
-                from palinode.core.scoring import describe_diagnostics
+                from palinode.core.scoring import (
+                    describe_diagnostics,
+                    describe_other_projects_withheld,
+                )
                 console.print(escape(describe_diagnostics(receipt["retrieval"])))
+                other = describe_other_projects_withheld(
+                    receipt["retrieval"].get("other_projects_withheld"),
+                    delivered=len(results), project=scope.project, human=True,
+                )
+                if other:
+                    console.print("[yellow]" + escape(other) + "[/yellow]")
             if not results:
                 console.print("[yellow]No results found.[/yellow]")
                 return

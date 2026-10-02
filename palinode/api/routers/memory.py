@@ -6,13 +6,16 @@ from typing import Any, Iterable, Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from palinode.core import store
+from palinode.core.agent_directed import read_notice, withhold_agent_directed
 from palinode.core.config import config
 from palinode.core.parity import CATEGORIES, MEMORY_TYPES, TIERS
 from palinode.core.tiers import apply_tier
 from palinode.core.parser import VALID_EPISTEMICS, VALID_UPDATE_POLICIES
-from palinode.core.scope import ScopeChain
+from palinode.core.scope import ScopeChain, other_project, resolve_scope_chain
+from palinode.core.cross_refs import filter_read_cross_refs
 from palinode.core.skip_dirs import is_skipped_path
 from palinode.core.expiry import core_has_expired
+from palinode.core.lifecycle import eligibility, retired_reason
 from palinode.core.visibility import is_visible
 from palinode.api._util import (
     _auto_summary_state, _retrieval_logger, _safe_500, _utc_now,
@@ -60,13 +63,26 @@ def _backfill_commit_message(kinds: dict[str, int]) -> str:
 router = APIRouter()
 
 
+def _delivered_summary(summary: Any) -> Any:
+    """A listed summary with text addressed to AI agents withheld."""
+    return withhold_agent_directed(summary)[0] if isinstance(summary, str) else summary
+
+
 @router.get("/read")
 def read_api(
     file_path: str,
     meta: bool = False,
     tier: Literal[*TIERS] | None = None,
+    project: str | None = None,
+    automatic: bool = False,
 ) -> dict[str, Any]:
     from palinode.core import parser
+    from palinode.core.context_prime import ProjectResolution, resolve_context
+
+    # Empty means the client resolved no project; absent uses the server pin.
+    scope = ProjectResolution(None, "none") if project == "" else resolve_context(project=project)
+    chain = resolve_scope_chain(config, project=scope.project.removeprefix("project/") if scope.project else None)
+    reader_chain = chain if chain.has_identity() else None
 
     candidates = [file_path]
     if not file_path.endswith(".md"):
@@ -95,6 +111,14 @@ def read_api(
         raise HTTPException(status_code=404, detail="File not found")
 
     try:
+        raw_metadata, _ = parser.parse_frontmatter(content)
+        # Automatic delivery (plugin core/trigger reads) is project-isolated.
+        # An explicit read stays allowed, as explicit search may cross
+        # projects; its automatic cross_refs are still filtered below.
+        if automatic and other_project(reader_chain, raw_metadata):
+            raise HTTPException(status_code=404, detail="Withheld: record belongs to another project")
+        size_bytes = len(content.encode("utf-8"))
+        content = filter_read_cross_refs(content, reader_chain)
         # `meta` keeps parse_markdown as its source so the frontmatter shape
         # callers already depend on is untouched; the abstract tier only needs
         # the raw frontmatter, so it uses the cheaper splitter when `meta` is
@@ -111,10 +135,16 @@ def read_api(
         result = {
             "file": file_path,
             "content": apply_tier(tier, content, metadata),
-            "size_bytes": len(content.encode("utf-8")),
+            "size_bytes": size_bytes,
         }
         if tier is not None:
             result["tier"] = tier
+        # An explicit read is how withheld text is inspected, so the content
+        # stays the file's; what the flagged part is travels beside it, only
+        # when there is one, for the reader surfaces to lead with.
+        notice = read_notice(content)
+        if notice:
+            result["agent_directed_notice"] = notice
 
         if meta:
             result["frontmatter"] = metadata
@@ -309,6 +339,7 @@ def collect_memory_files(
     *,
     skip_dirs: Iterable[str] | None = None,
     include_history: bool = True,
+    include_retired_core: bool = False,
 ) -> list[dict[str, Any]]:
     """Enumerate memory files as /list-shaped rows, newest first.
 
@@ -331,6 +362,23 @@ def collect_memory_files(
 
     Frontmatter parsed here is passed to the choke point directly — it is
     live (just read from disk), so no second read is needed.
+
+    A ``core: true`` record the lifecycle classifier
+    (:func:`palinode.core.lifecycle.eligibility`) calls **retired** — archived,
+    deprecated, superseded, retracted, past its ``expires_at``, or under
+    ``archive/`` — is not core for injection purposes: its row reports
+    ``core: false`` and names why in ``core_retired_reason``, exactly as an
+    expired core memory already did. The record stays listed,
+    readable and searchable; it just stops being asserted as current in a
+    fresh session.
+
+    ``include_retired_core`` is the browse escape hatch for the ``core_only``
+    filter: with it, retired core records are selected too (still
+    ``core: false``, still carrying ``core_retired_reason``), which is how
+    ``palinode list --core`` and ``palinode_list`` keep showing history. It
+    defaults to **off** so the fail-safe direction is the injection one — a
+    consumer that injects what this returns and does not know about the flag
+    gets the withholding behaviour, not the leak.
 
     ``skip_dirs`` replaces this surface's own skip dirs (``daily``,
     ``archive``, ``inbox``); the never-memory directories in
@@ -375,13 +423,23 @@ def collect_memory_files(
             metadata, _ = parser.parse_frontmatter(content)
 
             is_core = bool(metadata.get("core", False))
-            # An expired core memory stays listed and searchable but no
-            # longer acts: it is not core for injection purposes, so the
-            # session-start hook and the plugins (core_only=true) skip it.
-            if is_core and core_has_expired(rel_path, metadata):
-                is_core = False
+            # A retired core memory stays listed and searchable but no longer
+            # acts: it is not core for injection purposes, so the session-start
+            # hook and the plugins (core_only=true) skip it. One rule, the
+            # lifecycle classifier search and /resolve already answer with —
+            # expiry is one of its retired states, and `core_has_expired` is
+            # still called so the lapse is reported once per process, exactly
+            # as /context/prime does it.
+            core_retired_reason: str | None = None
+            if is_core:
+                core_has_expired(rel_path, metadata)
+                elig = eligibility(metadata, path=rel_path)
+                if elig.retired:
+                    core_retired_reason = retired_reason(elig)
+                    is_core = False
             if core_only and not is_core:
-                continue
+                if not (include_retired_core and core_retired_reason):
+                    continue
 
             if not is_visible(scope_chain, filepath, metadata=metadata):
                 continue
@@ -400,10 +458,12 @@ def collect_memory_files(
                 "type": metadata.get("type"),
                 "category": metadata.get("category", parts[0]),
                 "core": is_core,
+                "core_retired_reason": core_retired_reason,
                 "scope": explicit_scope,
                 "expires_at": _iso_or_none(metadata.get("expires_at")),
                 "authority": metadata.get("authority"),
-                "summary": metadata.get("summary", ""),
+                # The session-start hook injects this line as-is.
+                "summary": _delivered_summary(metadata.get("summary", "")),
                 "last_updated": metadata.get("last_updated", ""),
                 "entities": metadata.get("entities", []),
                 "size_bytes": os.path.getsize(filepath)
@@ -422,16 +482,26 @@ def collect_memory_files(
 
 @router.get("/list")
 def list_api(
-    category: Literal[*CATEGORIES] | None = None, core_only: bool = False
+    category: Literal[*CATEGORIES] | None = None,
+    core_only: bool = False,
+    include_retired_core: bool = False,
 ) -> list[dict[str, Any]]:
     """Browse memories, newest first.
 
     Never scope-filters (no session chain here — that's /context/prime's job),
     but ``private`` and ``restricted`` memories are always withheld: this is
     the endpoint the SessionStart hook injects from, so access control cannot
-    be optional here.
+    be optional here. For the same reason ``core_only=true`` selects only core
+    memories that still *stand* — a retired one (superseded, archived,
+    deprecated, retracted, expired) reports ``core: false`` with
+    ``core_retired_reason``, and ``include_retired_core=true`` is how a browse
+    caller asks for it anyway.
     """
-    return collect_memory_files(category=category, core_only=core_only)
+    return collect_memory_files(
+        category=category,
+        core_only=core_only,
+        include_retired_core=include_retired_core,
+    )
 
 
 @router.post("/save")

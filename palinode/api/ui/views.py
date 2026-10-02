@@ -450,3 +450,129 @@ def build_quality_view(lint: dict[str, Any]) -> dict[str, Any]:
     ]
     total = sum(len(q["rows"]) for q in queues)
     return {"queues": queues, "total": total}
+
+
+# ── Correction panel (read-only) ─────────────────────────────────────────────
+def build_correction_panel(
+    rel_path: str,
+    visibility: dict[str, Any],
+    *,
+    preview: Callable[[], dict[str, Any]],
+    candidates: Callable[[], list[dict[str, Any]]],
+) -> dict[str, Any]:
+    """Shape the fact page's "Correct or retire this" section. Reads only.
+
+    The inspector stays read-only in this release: no form posts, no
+    in-browser mutation, no new backend route. What it offers is the context a
+    correction needs — the record's exact revision, what else references it,
+    which queued candidates quote text that is in it — plus the copy-pasteable
+    CLI commands for preview, apply and undo, run where the caller's authority
+    is explicit.
+
+    **The visibility rule's third clause** (see
+    :mod:`palinode.api.ui.discovery`). For a record discovery would hide, the
+    section is replaced by a refusal. A hidden record is still *readable* here
+    and is labelled as hidden, but the page never established who is asking, so
+    it offers no way to change it — not even a command it claims is safe. The
+    refusal names the CLI and API instead.
+
+    ``preview`` and ``candidates`` are injected so this stays store-agnostic
+    and so a preview failure degrades to a stated reason rather than a 500.
+    """
+    if visibility.get("hidden"):
+        return {
+            "offered": False,
+            "refusal": (
+                "No correction or retirement is offered from the inspector for a "
+                "record the listing hides. This page never established who is "
+                "asking — it is loopback-only, which is not an authorization "
+                "boundary — so a mutation offered from here would be one nobody "
+                "authorized. Use the CLI or the API, where the caller's "
+                "authority is explicit."
+            ),
+            "refusal_reason": visibility.get("label"),
+            "where": [
+                f"palinode corrections preview --target {rel_path}",
+                f'POST /corrections/preview  {{"target": "{rel_path}"}}',
+            ],
+        }
+
+    try:
+        context = preview()
+    except Exception as error:  # noqa: BLE001 — a read must not 500 the page
+        return {
+            "offered": False,
+            "refusal": (
+                "The correction preview could not be built for this record "
+                f"({type(error).__name__}). Run the CLI preview to see why."
+            ),
+            "refusal_reason": None,
+            "where": [f"palinode corrections preview --target {rel_path}"],
+        }
+
+    target = context.get("target") or {}
+    revision = target.get("revision")
+    try:
+        queued = candidates()
+    except Exception:  # noqa: BLE001 — the queue is optional context
+        queued = []
+
+    return {
+        "offered": True,
+        "revision": revision,
+        "revision_basis": target.get("revision_basis"),
+        "update_policy": target.get("update_policy"),
+        "retirement_policy": target.get("retirement_policy"),
+        "status": target.get("status"),
+        "old_text": context.get("old_text"),
+        "referencing_records": context.get("referencing_records") or [],
+        "candidates": [
+            {
+                "candidate_id": row.get("candidate_id"),
+                "classification": row.get("classification"),
+                "span": row.get("span"),
+                "occurred_at": row.get("occurred_at"),
+                "project": row.get("project"),
+                "replaced": (row.get("relation") or {}).get("replaced"),
+                "replacement": (row.get("relation") or {}).get("replacement"),
+            }
+            for row in queued
+        ],
+        "commands": [
+            {
+                "label": "Preview a replacement",
+                "command": (
+                    f"palinode corrections preview --target {rel_path} "
+                    "--replacement '<the text that should stand>' --reason '<why>'"
+                ),
+            },
+            {
+                "label": "Preview a retirement (no successor)",
+                "command": (
+                    f"palinode corrections preview --target {rel_path} "
+                    "--action retire --reason '<why>'"
+                ),
+            },
+            {
+                "label": "Apply — needs this revision and --confirm",
+                "command": (
+                    f"palinode corrections apply --target {rel_path} "
+                    "--replacement '<the text that should stand>' --reason '<why>' "
+                    f"--expect-revision {revision} --confirm"
+                ),
+            },
+            {
+                "label": "Undo (previews first)",
+                "command": f"palinode corrections undo --target {rel_path}",
+            },
+            {
+                "label": "History",
+                "command": f"palinode history {rel_path} --detail full",
+            },
+        ],
+        "note": (
+            "The inspector is read-only. These commands run where the caller's "
+            "authority is explicit; nothing on this page writes. `apply` refuses "
+            "the revision above if the file changes before you confirm."
+        ),
+    }

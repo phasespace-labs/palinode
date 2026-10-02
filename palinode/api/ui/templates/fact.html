@@ -19,9 +19,75 @@
       {% if recall_count %}<span class="chip">recalled <b>{{ recall_count }}×</b></span>{% endif %}
       {% for chip in extra_chips %}<span class="chip">{{ chip.label }} <b>{{ chip.value }}</b></span>{% endfor %}
     </div>
+    {% if visibility and visibility.hidden %}
+    <div class="visibility-note">
+      <b>Hidden from discovery</b> — {{ visibility.label }}.
+      This page renders it because you asked for it by name; it is not listed on
+      the dashboard, in the memory list or in the recent panel.
+    </div>
+    {% endif %}
     <div class="body">
       {{ body_html | safe }}
     </div>
+
+    {% if correction %}
+    <section class="correction">
+      <h2>Correct or retire this</h2>
+      {% if not correction.offered %}
+      <p class="empty">{{ correction.refusal }}</p>
+      {% if correction.refusal_reason %}
+      <p class="empty">Reason: {{ correction.refusal_reason }}</p>
+      {% endif %}
+      <ul class="cmdlist">
+        {% for where in correction.where %}
+        <li><code>{{ where }}</code></li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="lede">{{ correction.note }}</p>
+      <div class="chips">
+        <span class="chip">revision <b class="mono">{{ correction.revision[:12] }}</b></span>
+        <span class="chip">basis <b>{{ correction.revision_basis }}</b></span>
+        <span class="chip">status <b>{{ correction.status }}</b></span>
+        <span class="chip">update_policy <b>{{ correction.update_policy or "none declared" }}</b></span>
+        <span class="chip">retirement <b>{{ correction.retirement_policy }}</b></span>
+      </div>
+
+      {% if correction.referencing_records %}
+      <h3>Other records that reference this one</h3>
+      <p class="lede">Reported, never changed by a correction.</p>
+      <ul class="flist">
+        {% for row in correction.referencing_records %}
+        <li><a href="{{ url_for('ui_memory', file_path=row.file) }}">{{ row.file }}</a>
+          <span class="meta">{{ row.relation }}</span></li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      {% if correction.candidates %}
+      <h3>Pending correction candidates naming this record</h3>
+      <p class="lede">Quoted from a user's own turn. Proposals — nothing is applied.</p>
+      <ul class="flist">
+        {% for row in correction.candidates %}
+        <li>
+          <span class="meta">{{ row.classification }} · {{ row.project or "unscoped" }} ·
+            {{ row.occurred_at or "undated" }}</span><br>
+          “{{ row.span }}”<br>
+          <span class="mono">{{ row.candidate_id }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      <h3>Commands</h3>
+      <ul class="cmdlist">
+        {% for row in correction.commands %}
+        <li>{{ row.label }}<br><code>{{ row.command }}</code></li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </section>
+    {% endif %}
   </article>
 
   <aside class="prov{% if broken_seal %} broken-seal{% endif %}">

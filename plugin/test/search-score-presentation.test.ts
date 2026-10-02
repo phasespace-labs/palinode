@@ -22,7 +22,8 @@ function captureSearchExecute(): Execute {
       midTurnMode: "none",
     },
     logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
-    registerTool: (tool: { name: string; execute: Execute }) => {
+    registerTool: (tool: any) => {
+      if (typeof tool === "function") tool = tool({});
       if (tool.name === "palinode_search") execute = tool.execute;
     },
     on: () => undefined,
@@ -74,10 +75,50 @@ describe("lexical retrieval diagnostics", () => {
     });
   }
 
+  for (const [verdict, banner] of [["none", true], ["weak", false], ["confident", false]] as const) {
+    it(`carries the ${verdict} match-confidence verdict from the receipt`, async () => {
+      global.fetch = async () =>
+        new Response(JSON.stringify({
+          results: [{ category: "decisions", content: "orionledger", file_path: "/memory/decision.md", score: 1, raw_score: 0.45 }],
+          receipt: { retrieval: { active_mode: "hybrid", index_state: "ready", outcome: "matched", confidence: verdict } },
+        }), { status: 200 });
+      const text = (await captureSearchExecute()("verdict", { query: "orionledger" })).content[0].text as string;
+      expect(text).toContain(`match confidence: ${verdict}`);
+      expect(text.includes("No confident match")).toBe(banner);
+      // The signal never withholds the rows on this surface.
+      expect(text).toContain("orionledger");
+    });
+  }
+
   it("keeps a backend failure distinct from no match", async () => {
     global.fetch = async () => new Response("Embedding backend unavailable", { status: 503 });
     const result = await captureSearchExecute()("outage", { query: "orionledger" });
     expect(result.content[0].text).toContain("search failed");
     expect(result.content[0].text).not.toContain("No relevant memories");
+  });
+});
+
+describe("project scope presentation", () => {
+  it("names the project the server scoped to and the source that decided it", async () => {
+    global.fetch = async () =>
+      new Response(JSON.stringify({
+        results: [],
+        receipt: { bundle_id: "b1", evaluated_at: "t1" },
+        project: "project/harbor-notes",
+        project_resolved_by: "environment",
+      }), { status: 200 });
+
+    const result = await captureSearchExecute()("scoped", { query: "storage" });
+    expect(result.content[0].text).toContain("Scope: project/harbor-notes (environment)");
+  });
+
+  it("says nothing about scope when the server reports none", async () => {
+    global.fetch = async () =>
+      new Response(JSON.stringify([
+        { category: "decisions", content: "vector", file_path: "/memory/vector.md", score: 1 },
+      ]), { status: 200 });
+
+    const result = await captureSearchExecute()("bare", { query: "storage" });
+    expect(result.content[0].text).not.toContain("Scope:");
   });
 });

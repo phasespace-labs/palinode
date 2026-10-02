@@ -327,7 +327,7 @@ def test_cli_text_names_the_flagged_sources():
                "committed": True, "stale_backing": ["insights/a", "insights/b"]}
 
     class _FakeAPI:
-        def restore(self, file_path, reason=None):
+        def restore(self, file_path, reason=None, dry_run=False):
             return payload
 
     with patch.object(mod, "api_client", _FakeAPI()):

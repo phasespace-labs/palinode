@@ -1,0 +1,535 @@
+# Relevance / abstention question set — SYNTHETIC, versioned.
+#
+# Four classes, matching the four the workstream names:
+#   release_state     what is the current release state
+#   rejected_approach what was turned down, and why
+#   changed_decision  a decision that changed; old versus new, where recency
+#                     alone must not settle it
+#   no_answer         nothing in the corpus answers this, including questions
+#                     about a project with no records at all
+#
+# Variants:
+#   base        the authored question
+#   paraphrase  a held-out rewording of a base question, sharing few content
+#               words with the record that answers it
+#   identifier  an exact-identifier query (tag, config key, filed number)
+#
+# Fields:
+#   relevant        record ids that answer the question. Empty = must abstain.
+#   tolerated       record ids that are on-topic support rather than the answer.
+#                   Not counted as an irrelevant injection, not counted as a hit.
+#   must_not_be_top record ids that must not be ranked first. Retired values and
+#                   newer-but-undecided material: the recency trap.
+
+question_set_version: 1
+
+questions:
+
+  # ── release_state ───────────────────────────────────────────────────────
+
+  - id: rel-01
+    cls: release_state
+    variant: base
+    project: harborlight
+    ask: What is the current Harborlight release?
+    relevant: [hl-release-4-2-0]
+    tolerated: [hl-release-notes-4-2-0, hl-release-4-2-0-restate]
+    must_not_be_top: [hl-release-3-8-0-old, hl-release-4-0-0-old]
+
+  - id: rel-02
+    cls: release_state
+    variant: base
+    project: harborlight
+    ask: Which Harborlight versions are still supported?
+    relevant: [hl-support-window]
+    tolerated: [hl-release-4-2-0]
+
+  - id: rel-03
+    cls: release_state
+    variant: base
+    project: harborlight
+    ask: How does Harborlight deploy to production today?
+    relevant: [hl-deploy-target]
+    must_not_be_top: [hl-release-4-0-0-old]
+
+  - id: rel-04
+    cls: release_state
+    variant: base
+    project: harborlight
+    ask: What is the current default sync batch window in Harborlight?
+    relevant: [hl-batch-window-current]
+    must_not_be_top: [hl-batch-window-old]
+
+  - id: rel-05
+    cls: release_state
+    variant: base
+    project: harborlight
+    ask: What is the Harborlight error budget?
+    relevant: [hl-error-budget-current]
+
+  - id: rel-06
+    cls: release_state
+    variant: base
+    project: harborlight
+    ask: What runtime baseline does Harborlight require now?
+    relevant: [hl-runtime-baseline]
+
+  - id: rel-07
+    cls: release_state
+    variant: base
+    project: harborlight
+    ask: Who owns the Harborlight on-call rotation right now?
+    relevant: [hl-oncall-rotation]
+
+  - id: rel-08
+    cls: release_state
+    variant: base
+    project: harborlight
+    ask: What shipped in the latest Harborlight release?
+    relevant: [hl-release-notes-4-2-0]
+    tolerated: [hl-release-4-2-0, hl-release-4-2-0-restate]
+
+  - id: rel-09
+    cls: release_state
+    variant: base
+    project: harborlight
+    ask: What is the current release state of Harborlight?
+    relevant: [hl-release-4-2-0]
+    tolerated: [hl-release-notes-4-2-0, hl-release-4-2-0-restate, hl-support-window]
+    must_not_be_top: [hl-release-3-8-0-old, hl-release-4-0-0-old]
+
+  - id: rel-10
+    cls: release_state
+    variant: base
+    project: harborlight
+    ask: Is Harborlight 4.0 still supported?
+    relevant: [hl-support-window]
+    must_not_be_top: [hl-release-4-0-0-old]
+
+  # ── rejected_approach ───────────────────────────────────────────────────
+
+  - id: rej-01
+    cls: rejected_approach
+    variant: base
+    project: harborlight
+    ask: Why did Harborlight reject dual-write replication?
+    relevant: [hl-rejected-dual-write]
+    tolerated: [hl-rejected-dual-write-restate]
+
+  - id: rej-02
+    cls: rejected_approach
+    variant: base
+    project: harborlight
+    ask: What replication approach did Harborlight turn down?
+    relevant: [hl-rejected-dual-write]
+    tolerated: [hl-rejected-dual-write-restate]
+
+  - id: rej-03
+    cls: rejected_approach
+    variant: base
+    project: harborlight
+    ask: Why was a cron-driven poller rejected for Harborlight?
+    relevant: [hl-rejected-cron-poller]
+
+  - id: rej-04
+    cls: rejected_approach
+    variant: base
+    project: harborlight
+    ask: Did Harborlight consider a managed queue vendor, and what happened?
+    relevant: [hl-rejected-vendor-queue]
+
+  - id: rej-05
+    cls: rejected_approach
+    variant: base
+    project: harborlight
+    ask: Why did Harborlight decide against inline payload compression?
+    relevant: [hl-rejected-inline-compression]
+
+  - id: rej-06
+    cls: rejected_approach
+    variant: base
+    project: harborlight
+    ask: What was the reason for rejecting client-side deduplication?
+    relevant: [hl-rejected-client-dedup]
+
+  - id: rej-07
+    cls: rejected_approach
+    variant: base
+    project: harborlight
+    ask: Which Harborlight approaches were rejected on cost grounds?
+    relevant: [hl-rejected-vendor-queue, hl-rejected-inline-compression]
+
+  - id: rej-08
+    cls: rejected_approach
+    variant: base
+    project: harborlight
+    ask: What did Harborlight decide not to do about clock skew between clients?
+    relevant: [hl-rejected-client-dedup]
+
+  - id: rej-09
+    cls: rejected_approach
+    variant: base
+    project: harborlight
+    ask: Was polling ever considered as the Harborlight sync trigger?
+    relevant: [hl-rejected-cron-poller]
+
+  - id: rej-10
+    cls: rejected_approach
+    variant: base
+    project: harborlight
+    ask: What made dual-write unattractive for Harborlight?
+    relevant: [hl-rejected-dual-write]
+    tolerated: [hl-rejected-dual-write-restate]
+
+  # ── changed_decision ────────────────────────────────────────────────────
+
+  - id: chg-01
+    cls: changed_decision
+    variant: base
+    project: harborlight
+    ask: What is Harborlight's current sync history retention period?
+    relevant: [hl-retention-new]
+    tolerated: [hl-retention-old]
+    must_not_be_top: [hl-retention-old, hl-retention-proposal]
+
+  - id: chg-02
+    cls: changed_decision
+    variant: base
+    project: harborlight
+    ask: Did the Harborlight retention policy change, and from what to what?
+    relevant: [hl-retention-new, hl-retention-old]
+    tolerated: [hl-retention-proposal]
+
+  - id: chg-03
+    cls: changed_decision
+    variant: base
+    project: harborlight
+    ask: What was the Harborlight retention window before it changed?
+    relevant: [hl-retention-old]
+    tolerated: [hl-retention-new]
+
+  - id: chg-04
+    cls: changed_decision
+    variant: base
+    project: harborlight
+    ask: What is the current Harborlight access token lifetime?
+    relevant: [hl-auth-ttl-new]
+    tolerated: [hl-auth-ttl-old]
+    must_not_be_top: [hl-auth-ttl-old, hl-auth-incident-note]
+
+  - id: chg-05
+    cls: changed_decision
+    variant: base
+    project: harborlight
+    ask: Has the Harborlight token lifetime been shortened?
+    relevant: [hl-auth-ttl-new, hl-auth-ttl-old]
+    tolerated: [hl-auth-incident-note]
+
+  - id: chg-06
+    cls: changed_decision
+    variant: base
+    project: harborlight
+    ask: Which schema version does Harborlight production run?
+    relevant: [hl-schema-v3-new]
+    tolerated: [hl-schema-v2-old]
+    must_not_be_top: [hl-schema-v2-old, hl-schema-staging-rollback]
+
+  - id: chg-07
+    cls: changed_decision
+    variant: base
+    project: harborlight
+    ask: What happened to Harborlight schema version 2?
+    relevant: [hl-schema-v2-old, hl-schema-v3-new]
+    tolerated: [hl-schema-staging-rollback]
+
+  - id: chg-08
+    cls: changed_decision
+    variant: base
+    project: harborlight
+    ask: What is the current Harborlight region topology?
+    relevant: [hl-region-two-new]
+    tolerated: [hl-region-single-old]
+    must_not_be_top: [hl-region-single-old, hl-region-cost-memo]
+
+  - id: chg-09
+    cls: changed_decision
+    variant: base
+    project: harborlight
+    ask: Was Harborlight ever single-region?
+    relevant: [hl-region-single-old]
+    tolerated: [hl-region-two-new, hl-region-cost-memo]
+
+  - id: chg-10
+    cls: changed_decision
+    variant: base
+    project: harborlight
+    ask: Has the proposal to cut Harborlight retention to 14 days been decided?
+    relevant: [hl-retention-proposal]
+    tolerated: [hl-retention-new, hl-retention-old]
+
+  # ── no_answer ───────────────────────────────────────────────────────────
+
+  - id: non-01
+    cls: no_answer
+    variant: base
+    project: harborlight
+    ask: Which region hosts the Harborlight disaster-recovery control plane?
+    relevant: []
+
+  - id: non-02
+    cls: no_answer
+    variant: base
+    project: marlinworks
+    ask: What is the Marlinworks release cadence?
+    relevant: []
+
+  - id: non-03
+    cls: no_answer
+    variant: base
+    project: marlinworks
+    ask: Who approved the Marlinworks security review?
+    relevant: []
+
+  - id: non-04
+    cls: no_answer
+    variant: base
+    project: harborlight
+    ask: What is the Harborlight payroll retention policy?
+    relevant: []
+
+  - id: non-05
+    cls: no_answer
+    variant: base
+    project: harborlight
+    ask: How many GPU nodes does Harborlight reserve for training?
+    relevant: []
+
+  - id: non-06
+    cls: no_answer
+    variant: base
+    project: harborlight
+    ask: What did the Harborlight compliance audit find?
+    relevant: []
+
+  - id: non-07
+    cls: no_answer
+    variant: base
+    project: harborlight
+    ask: When does the Harborlight mobile app enter beta?
+    relevant: []
+
+  - id: non-08
+    cls: no_answer
+    variant: base
+    project: marlinworks
+    ask: Which vendor supplies Marlinworks observability?
+    relevant: []
+
+  - id: non-09
+    cls: no_answer
+    variant: base
+    project: harborlight
+    ask: What is the Harborlight refund policy for enterprise customers?
+    relevant: []
+
+  - id: non-10
+    cls: no_answer
+    variant: base
+    project: harborlight
+    ask: Where are Harborlight customer encryption keys rotated?
+    relevant: []
+
+  # ── held-out paraphrases ────────────────────────────────────────────────
+
+  - id: rel-01-p
+    cls: release_state
+    variant: paraphrase
+    of: rel-01
+    project: harborlight
+    ask: Which build is live for Harborlight at the moment?
+    relevant: [hl-release-4-2-0]
+    tolerated: [hl-release-notes-4-2-0, hl-release-4-2-0-restate]
+    must_not_be_top: [hl-release-3-8-0-old, hl-release-4-0-0-old]
+
+  - id: rel-04-p
+    cls: release_state
+    variant: paraphrase
+    of: rel-04
+    project: harborlight
+    ask: How long does a fresh Harborlight install wait before closing a batch?
+    relevant: [hl-batch-window-current]
+    must_not_be_top: [hl-batch-window-old]
+
+  - id: rel-07-p
+    cls: release_state
+    variant: paraphrase
+    of: rel-07
+    project: harborlight
+    ask: If Harborlight pages tonight, whose rotation is it?
+    relevant: [hl-oncall-rotation]
+
+  - id: rej-01-p
+    cls: rejected_approach
+    variant: paraphrase
+    of: rej-01
+    project: harborlight
+    ask: Why is writing every Harborlight record to both stores off the table?
+    relevant: [hl-rejected-dual-write]
+    tolerated: [hl-rejected-dual-write-restate]
+
+  - id: rej-03-p
+    cls: rejected_approach
+    variant: paraphrase
+    of: rej-03
+    project: harborlight
+    ask: Why does Harborlight not check its sources on a fixed schedule?
+    relevant: [hl-rejected-cron-poller]
+
+  - id: rej-05-p
+    cls: rejected_approach
+    variant: paraphrase
+    of: rej-05
+    project: harborlight
+    ask: Why does Harborlight send payloads uncompressed as it writes them?
+    relevant: [hl-rejected-inline-compression]
+
+  - id: chg-01-p
+    cls: changed_decision
+    variant: paraphrase
+    of: chg-01
+    project: harborlight
+    ask: How far back can somebody look at Harborlight sync history today?
+    relevant: [hl-retention-new]
+    tolerated: [hl-retention-old]
+    must_not_be_top: [hl-retention-old, hl-retention-proposal]
+
+  - id: chg-04-p
+    cls: changed_decision
+    variant: paraphrase
+    of: chg-04
+    project: harborlight
+    ask: How long before a Harborlight credential stops working?
+    relevant: [hl-auth-ttl-new]
+    tolerated: [hl-auth-ttl-old]
+    must_not_be_top: [hl-auth-ttl-old, hl-auth-incident-note]
+
+  - id: chg-06-p
+    cls: changed_decision
+    variant: paraphrase
+    of: chg-06
+    project: harborlight
+    ask: What envelope format is live for Harborlight customers?
+    relevant: [hl-schema-v3-new]
+    tolerated: [hl-schema-v2-old]
+    must_not_be_top: [hl-schema-v2-old, hl-schema-staging-rollback]
+
+  - id: chg-08-p
+    cls: changed_decision
+    variant: paraphrase
+    of: chg-08
+    project: harborlight
+    ask: How many places does Harborlight run in right now?
+    relevant: [hl-region-two-new]
+    tolerated: [hl-region-single-old]
+    must_not_be_top: [hl-region-single-old, hl-region-cost-memo]
+
+  - id: non-01-p
+    cls: no_answer
+    variant: paraphrase
+    of: non-01
+    project: harborlight
+    ask: Where does Harborlight fail over if a whole site is lost to a disaster?
+    relevant: []
+
+  - id: non-05-p
+    cls: no_answer
+    variant: paraphrase
+    of: non-05
+    project: harborlight
+    ask: How much accelerator capacity is set aside for Harborlight model runs?
+    relevant: []
+
+  # ── exact identifiers ───────────────────────────────────────────────────
+
+  - id: idn-01
+    cls: release_state
+    variant: identifier
+    of: rel-01
+    project: harborlight
+    ask: HL-4.2.0
+    relevant: [hl-release-4-2-0]
+    tolerated: [hl-release-notes-4-2-0, hl-release-4-2-0-restate]
+
+  - id: idn-02
+    cls: release_state
+    variant: identifier
+    of: rel-04
+    project: harborlight
+    ask: sync.batch_window_ms
+    relevant: [hl-batch-window-current]
+    tolerated: [hl-batch-window-old]
+    must_not_be_top: [hl-batch-window-old]
+
+  - id: idn-03
+    cls: release_state
+    variant: identifier
+    of: rel-08
+    project: harborlight
+    ask: HL-E0447
+    relevant: [hl-release-notes-4-2-0]
+
+  - id: idn-04
+    cls: changed_decision
+    variant: identifier
+    of: chg-01
+    project: harborlight
+    ask: RFC-HARBOR-0142
+    relevant: [hl-retention-new]
+
+  - id: idn-05
+    cls: changed_decision
+    variant: identifier
+    of: chg-03
+    project: harborlight
+    ask: RFC-HARBOR-0088
+    relevant: [hl-retention-old]
+
+  - id: idn-06
+    cls: release_state
+    variant: identifier
+    of: rel-01
+    project: tidewater
+    ask: TW-2.1.0
+    relevant: [td-release-2-1-0]
+
+  - id: idn-07
+    cls: changed_decision
+    variant: identifier
+    of: chg-08
+    project: harborlight
+    ask: ADR-HARBOR-0031
+    relevant: [hl-region-two-new]
+
+  - id: idn-08
+    cls: changed_decision
+    variant: identifier
+    of: chg-06
+    project: harborlight
+    ask: schema_version=3
+    relevant: [hl-schema-v3-new]
+    tolerated: [hl-schema-v2-old]
+    must_not_be_top: [hl-schema-v2-old, hl-schema-staging-rollback]
+
+  - id: idn-09
+    cls: no_answer
+    variant: identifier
+    project: harborlight
+    ask: HL-E9911
+    relevant: []
+
+  - id: idn-10
+    cls: no_answer
+    variant: identifier
+    project: harborlight
+    ask: RFC-HARBOR-0500
+    relevant: []

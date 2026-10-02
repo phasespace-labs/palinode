@@ -13,7 +13,12 @@ from fastapi.testclient import TestClient
 
 from palinode.api.server import app
 from palinode.core.config import config
-from palinode.core.context_prime import build_context_digest, format_context_digest, resolve_context
+from palinode.core.context_prime import (
+    InvalidProjectScope,
+    build_context_digest,
+    format_context_digest,
+    resolve_context,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -222,9 +227,14 @@ async def test_mcp_session_init_forwards_each_stdio_environment_scope(repository
         assert f"Session context: project/{project}" in result[0].text
         assert f"{project} decision" in result[0].text
 
+    # The source rides along with the project: the API process cannot see the
+    # client's environment, so without it a pinned scope would be reported as
+    # an argument the caller typed.
     assert bodies == [
-        {"cwd": str(repository[1]), "project": "project/harbor-notes"},
-        {"cwd": str(repository[1]), "project": "project/field-journal"},
+        {"cwd": str(repository[1]), "project": "project/harbor-notes",
+         "project_resolved_by": "environment"},
+        {"cwd": str(repository[1]), "project": "project/field-journal",
+         "project_resolved_by": "environment"},
     ]
 
 
@@ -390,6 +400,364 @@ async def test_cli_mcp_session_end_use_the_same_worktree(repository, tmp_path, m
     })
     assert "projects/alpha-status.md" in result[0].text
     assert not list((tmp_path / "daily").glob("*.md"))
+
+
+# ── the durable pinned setting ───────────────────────────────────────────────
+#
+# A per-call project argument scopes that call and is deliberately forgotten
+# afterwards; the setting is what makes a whole client agree. These cover the
+# precedence between them, what each surface reports, and the refusal to
+# quietly substitute git inference for an unusable setting.
+
+
+class _RecordingAPI:
+    """Records request bodies and answers an empty delivery. No index needed."""
+
+    status_code = 200
+
+    def __init__(self) -> None:
+        self.bodies: list[dict] = []
+
+    def post(self, path, json=None, **kwargs):
+        self.bodies.append(json)
+        return self
+
+    def raise_for_status(self) -> None:
+        pass
+
+    def json(self):
+        return {"results": [], "receipt": {"bundle_id": "b1", "evaluated_at": "t1"}}
+
+
+@pytest.mark.asyncio
+async def test_pinned_setting_keeps_session_init_and_a_later_search_on_one_project(
+    repository, tmp_path, monkeypatch,
+):
+    """The reported scenario: an explicit setup, then a bare search, one project.
+
+    The MCP process runs in a git checkout that resolves to ``project/alpha``.
+    With the project pinned, both the session-init digest and the later search
+    resolve the pinned project — and each says which source decided it.
+    """
+    import palinode.mcp as mcp
+
+    seed(tmp_path / "decisions" / "harbor.md", type="Decision",
+         entities=["project/harbor-notes"], title="Harbor storage choice")
+    client = TestClient(app)
+
+    async def post_in_api_process(path, json=None, **kwargs):
+        with monkeypatch.context() as api_env:
+            api_env.delenv("PALINODE_PROJECT", raising=False)
+            return client.post(path, json=json)
+
+    monkeypatch.setattr(mcp, "_post", post_in_api_process)
+    monkeypatch.setattr(mcp, "_session_init_client_name", lambda: "test-client")
+    monkeypatch.setattr(config.auto_inject, "enabled", True)
+    monkeypatch.setenv("CWD", str(repository[1]))
+    monkeypatch.setenv("PALINODE_PROJECT", "harbor-notes")
+
+    digest = await mcp._dispatch_tool("palinode_session_init", {})
+    assert "Session context: project/harbor-notes (environment" in digest[0].text
+    assert "Harbor storage choice" in digest[0].text
+
+    recorder = _RecordingAPI()
+
+    async def post_search(path, json=None, **kwargs):
+        return recorder.post(path, json=json)
+
+    monkeypatch.setattr(mcp, "_post", post_search)
+    result = await mcp._dispatch_tool("palinode_search", {"query": "storage"})
+    assert recorder.bodies[0]["context"] == ["project/harbor-notes"]
+    assert result[0].text.startswith("Scope: project/harbor-notes (environment)")
+
+
+@pytest.mark.asyncio
+async def test_a_call_argument_scopes_that_call_only(repository, tmp_path, monkeypatch):
+    """Why the setting exists: the argument is not remembered for the next call.
+
+    ``session_init(project=…)`` scopes that one call. The search after it
+    resolves from git, exactly as before — no hidden per-session state — and
+    reports ``git_origin`` so the difference is visible rather than surprising.
+    """
+    import palinode.mcp as mcp
+
+    seed(tmp_path / "decisions" / "harbor.md", type="Decision",
+         entities=["project/harbor-notes"], title="Harbor storage choice")
+    client = TestClient(app)
+    recorder = _RecordingAPI()
+
+    async def post(path, json=None, **kwargs):
+        if path == "/search":
+            return recorder.post(path, json=json)
+        return client.post(path, json=json)
+
+    monkeypatch.setattr(mcp, "_post", post)
+    monkeypatch.setattr(mcp, "_session_init_client_name", lambda: "test-client")
+    monkeypatch.setattr(config.auto_inject, "enabled", True)
+    monkeypatch.setenv("CWD", str(repository[1]))
+
+    digest = await mcp._dispatch_tool("palinode_session_init", {"project": "harbor-notes"})
+    assert "Session context: project/harbor-notes (explicit" in digest[0].text
+
+    result = await mcp._dispatch_tool("palinode_search", {"query": "storage"})
+    assert recorder.bodies[0]["context"] == ["project/alpha"]
+    assert result[0].text.startswith("Scope: project/alpha (git_origin)")
+
+
+def test_precedence_argument_then_setting_then_git_then_none(repository, monkeypatch):
+    cwd = str(repository[1])
+    monkeypatch.setenv("PALINODE_PROJECT", "pinned")
+    argument = resolve_context(cwd=cwd, project="from-argument")
+    assert (argument.project, argument.basis) == ("project/from-argument", "explicit")
+    pinned = resolve_context(cwd=cwd)
+    assert (pinned.project, pinned.basis) == ("project/pinned", "environment")
+    monkeypatch.setitem(config.context.project_map, "alpha", "mapped")
+    assert resolve_context(cwd=cwd).project == "project/pinned", "setting outranks mappings"
+    monkeypatch.delenv("PALINODE_PROJECT")
+    monkeypatch.setattr(config.context, "project_map", {})
+    inferred = resolve_context(cwd=cwd)
+    assert (inferred.project, inferred.basis) == ("project/alpha", "git_origin")
+    nothing = resolve_context()
+    assert (nothing.project, nothing.basis) == (None, "none")
+
+
+def test_pinned_setting_and_worktree_resolution_both_hold(repository, monkeypatch):
+    """The setting applies everywhere; removing it restores worktree identity."""
+    monkeypatch.setenv("PALINODE_PROJECT", "harbor-notes")
+    for cwd in repository:
+        resolution = resolve_context(cwd=str(cwd))
+        assert (resolution.project, resolution.basis) == ("project/harbor-notes", "environment")
+    monkeypatch.delenv("PALINODE_PROJECT")
+    assert {resolve_context(cwd=str(cwd)).project for cwd in repository} == {"project/alpha"}
+
+
+@pytest.mark.parametrize("value", [
+    "../escape", "project/../../escape", "project/alpha/beta", "alpha\\beta",
+    "org/alpha", "two words",
+])
+@pytest.mark.asyncio
+async def test_an_unusable_pinned_setting_is_refused_not_quietly_replaced(
+    repository, monkeypatch, value,
+):
+    import palinode.mcp as mcp
+
+    monkeypatch.setenv("PALINODE_PROJECT", value)
+    monkeypatch.setenv("CWD", str(repository[1]))
+    with pytest.raises(InvalidProjectScope):
+        resolve_context(cwd=str(repository[1]))
+
+    response = TestClient(app).post("/search", json={"query": "anything"})
+    assert response.status_code == 400
+    assert "PALINODE_PROJECT" in response.json()["detail"]
+    assert value not in response.text, "an error body never reflects the value back"
+
+    result = await mcp._dispatch_tool("palinode_search", {"query": "anything"})
+    assert result[0].text.startswith("Error:")
+    assert "PALINODE_PROJECT" in result[0].text
+
+
+def test_generated_setup_pins_the_project_only_when_asked(tmp_path, monkeypatch):
+    """``init`` and ``mcp-config`` emit the setting on request, and only then."""
+    from palinode.cli import main
+
+    project = tmp_path / "harbor-notes"
+    project.mkdir()
+    runner = CliRunner()
+    base = ["init", "--dir", str(project), "--no-prompts", "--no-hook", "--skills", "none"]
+
+    unpinned = runner.invoke(main, [*base, "--dry-run"])
+    assert unpinned.exit_code == 0, unpinned.output
+    assert ".mcp.json  (MCP server block)" in unpinned.output
+
+    pinned = runner.invoke(main, [*base, "--dry-run", "--pin-project"])
+    assert pinned.exit_code == 0, pinned.output
+    assert ".mcp.json  (MCP server block, project pinned: harbor-notes)" in pinned.output
+
+    assert runner.invoke(main, base).exit_code == 0
+    written = json.loads((project / ".mcp.json").read_text())
+    assert written["mcpServers"]["palinode"]["env"] == {}
+
+    (project / ".mcp.json").unlink()
+    assert runner.invoke(main, [*base, "--pin-project"]).exit_code == 0
+    written = json.loads((project / ".mcp.json").read_text())
+    assert written["mcpServers"]["palinode"]["env"] == {"PALINODE_PROJECT": "harbor-notes"}
+    # The emitted setting is one a fresh client can actually resolve.
+    monkeypatch.setenv("PALINODE_PROJECT",
+                       written["mcpServers"]["palinode"]["env"]["PALINODE_PROJECT"])
+    assert resolve_context(cwd=str(project)).project == "project/harbor-notes"
+
+    monkeypatch.delenv("PALINODE_PROJECT")
+    executable = tmp_path / "bin" / "palinode-mcp"
+    executable.parent.mkdir()
+    executable.write_text("#!/bin/sh\nexit 0\n")
+    executable.chmod(0o755)
+    stdio = ["mcp-config", "--stdio", "--executable", str(executable)]
+    emitted = runner.invoke(main, [*stdio, "--project", "harbor-notes"])
+    assert emitted.exit_code == 0, emitted.output
+    assert '"PALINODE_PROJECT": "harbor-notes"' in emitted.output
+    plain = runner.invoke(main, stdio)
+    assert plain.exit_code == 0, plain.output
+    assert "PALINODE_PROJECT" not in plain.output
+
+
+def test_pinning_rejects_a_slug_a_client_could_not_resolve(tmp_path):
+    from palinode.cli import main
+
+    project = tmp_path / "harbor"
+    project.mkdir()
+    result = CliRunner().invoke(main, [
+        "init", "--dir", str(project), "--no-prompts", "--no-hook", "--skills", "none",
+        "--pin-project", "--project", "../escape",
+    ])
+    assert result.exit_code == 2
+    assert not (project / ".mcp.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_every_scoped_surface_reports_the_project_and_its_source(
+    repository, monkeypatch,
+):
+    import palinode.mcp as mcp
+    from palinode.cli._api import PalinodeAPI
+
+    monkeypatch.setenv("PALINODE_PROJECT", "harbor-notes")
+    recorder = _RecordingAPI()
+
+    async def post(path, json=None, **kwargs):
+        return recorder.post(path, json=json)
+
+    monkeypatch.setattr(mcp, "_post", post)
+    mcp_result = await mcp._dispatch_tool("palinode_search", {"query": "storage"})
+    assert "Scope: project/harbor-notes (environment)" in mcp_result[0].text
+
+    api = PalinodeAPI.__new__(PalinodeAPI)
+    api.client = recorder
+    search = importlib.import_module("palinode.cli.search")
+    monkeypatch.setattr(search, "api_client", api)
+    text = CliRunner().invoke(search.search, ["storage", "--format", "text"])
+    assert text.exit_code == 0, text.output
+    assert "Scope: project/harbor-notes (environment)" in text.output
+    piped = CliRunner().invoke(search.search, ["storage", "--format", "json", "--diagnostics"])
+    assert piped.exit_code == 0, piped.output
+    assert json.loads(piped.output)["project"] == "project/harbor-notes"
+    assert json.loads(piped.output)["project_resolved_by"] == "environment"
+
+    # REST — the shape the plugin renders from. An empty query is the
+    # recency path: a real delivery over the real store, no embedder.
+    from palinode.core import store
+
+    store.init_db()
+    envelope = TestClient(app).post("/search", json={"query": "", "receipt": True}).json()
+    assert envelope["project"] == "project/harbor-notes"
+    assert envelope["project_resolved_by"] == "environment"
+    assert isinstance(
+        TestClient(app).post("/search", json={"query": ""}).json(), list
+    ), "the bare array stays the frozen shape"
+
+
+@pytest.mark.parametrize("context, expected_project, expected_basis", [
+    (None, "project/harbor-notes", "environment"),
+    ([], None, "none"),
+    (["person/ada"], None, "none"),
+    (["person/ada", "project/other"], "project/other", "explicit"),
+])
+def test_reported_scope_is_the_scope_applied(
+    tmp_path, monkeypatch, context, expected_project, expected_basis,
+):
+    """What the envelope names is what the search boosted on. No third answer.
+
+    Only an absent ``context`` lets the server's pinned project in. A caller
+    that sent one — an empty list included — decided the scope itself, and the
+    pin neither replaces it nor is reported over it.
+    """
+    from palinode.api import _util
+    from palinode.api.routers import search as search_router
+    from palinode.core import store
+
+    monkeypatch.setenv("PALINODE_PROJECT", "harbor-notes")
+    store.init_db()
+    applied: list[list[str] | None] = []
+    original = search_router._delivery
+
+    def record(results, req, receipt, **kwargs):
+        applied.append(req.context)
+        return original(results, req, receipt, **kwargs)
+
+    monkeypatch.setattr(search_router, "_delivery", record)
+    body = {"query": "", "receipt": True}
+    if context is not None:
+        body["context"] = context
+    envelope = TestClient(app).post("/search", json=body).json()
+
+    assert envelope["project"] == expected_project
+    assert envelope["project_resolved_by"] == expected_basis
+    # The reported project is in the context the search actually ran with, and
+    # a report of "no project" means none was there to boost on.
+    boosted = applied[0] or []
+    assert [ref for ref in boosted if ref.startswith("project/")] == (
+        [expected_project] if expected_project else []
+    )
+    assert _util.effective_project_scope(context).fields() == {
+        "project": expected_project, "project_resolved_by": expected_basis,
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_surface_that_resolved_scope_always_states_it(repository, monkeypatch):
+    """A resolved "no project" is sent as such, so no pin substitutes for it.
+
+    The MCP and CLI resolve scope themselves and report what they resolved. An
+    omitted context is the API's cue to apply its own pinned project, so
+    omitting it would apply a scope the caller was told it did not have.
+    """
+    import palinode.mcp as mcp
+    from palinode.cli._api import PalinodeAPI
+
+    monkeypatch.setattr(config.context, "enabled", False)
+    recorder = _RecordingAPI()
+
+    async def post(path, json=None, **kwargs):
+        return recorder.post(path, json=json)
+
+    monkeypatch.setattr(mcp, "_post", post)
+    result = await mcp._dispatch_tool("palinode_search", {"query": "storage"})
+    assert recorder.bodies[-1]["context"] == []
+    assert "Scope: none (disabled)" in result[0].text
+
+    api = PalinodeAPI.__new__(PalinodeAPI)
+    api.client = recorder
+    search = importlib.import_module("palinode.cli.search")
+    monkeypatch.setattr(search, "api_client", api)
+    monkeypatch.setattr(config.context, "enabled", True)
+    monkeypatch.setenv("PALINODE_PROJECT", "harbor-notes")
+    monkeypatch.setenv("CWD", str(repository[1]))
+    opted_out = CliRunner().invoke(search.search, ["storage", "--no-context", "--format", "text"])
+    assert opted_out.exit_code == 0, opted_out.output
+    assert recorder.bodies[-1]["context"] == []
+    assert "Scope: none (none)" in opted_out.output
+
+
+def test_without_the_setting_every_surface_behaves_as_before(repository, monkeypatch):
+    """Regression: unset, resolution and the wire shape are exactly today's."""
+    monkeypatch.setenv("CWD", str(repository[2]))
+    import palinode.mcp as mcp
+    from palinode.cli.search import _cli_resolve_context
+
+    assert _cli_resolve_context() == mcp._resolve_context() == ["project/alpha"]
+    digest = TestClient(app).post("/context/prime", json={"cwd": str(repository[1])}).json()
+    assert digest["project"] == "project/alpha"
+    assert digest["project_resolved_by"] == "git_origin"
+    from palinode.core import store
+
+    store.init_db()
+    envelope = TestClient(app).post("/search", json={"query": "", "receipt": True}).json()
+    # The API never infers from its own directory; with no setting it has no
+    # project to apply, and says so rather than guessing one.
+    assert envelope["project"] is None
+    assert envelope["project_resolved_by"] == "none"
+    assert TestClient(app).post(
+        "/search", json={"query": "", "context": ["project/alpha"], "receipt": True},
+    ).json()["project_resolved_by"] == "explicit"
 
 
 @pytest.mark.asyncio

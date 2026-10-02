@@ -2,8 +2,8 @@
 
 Extracted from ``store.search_hybrid`` so the scoring stages — per-arm
 relevance floor, RRF fusion, demand-decay re-rank, the human-priority nudge,
-ambient-context boost, daily penalty, per-file dedup, and the date window —
-live behind one small interface, separable from the I/O around them.
+ambient-context boost, daily penalty, per-file dedup and cap, and the date
+window — live behind one small interface, separable from the I/O around them.
 ``store.search_hybrid`` stays the orchestrator: it does the two retrievals,
 resolves ``context_files`` from the entity index, and records recall +
 freshness on the ranked output. This module touches **no** database,
@@ -117,6 +117,7 @@ def rank_hybrid(
     date_after: str | None = None,
     date_before: str | None = None,
     fts_threshold: float | None = None,
+    vector_relative_floor: float | None = None,
 ) -> list[dict[str, Any]]:
     """Fuse and re-rank vector + BM25 candidate slates into the final hit list.
 
@@ -125,20 +126,37 @@ def rank_hybrid(
     ``context_files`` set (from the entity index), and ``priority_weight`` (the
     ``store``-owned tuning knob); everything else is read from ``config``.
 
-    Stages, in order: arm-specific relevance floors → Reciprocal Rank Fusion
+    Stages, in order: arm-specific relevance floors (each arm's absolute and
+    relative cutoff) → Reciprocal Rank Fusion
     (RRF, k=60) → demand-decay re-rank (ADR-007, when
     ``config.decay.enabled``) → human-priority nudge → ambient context boost
-    (ADR-008) → daily-file penalty → per-file dedup → date window → top_k.
+    (ADR-008) → daily-file penalty → per-file dedup and per-file cap
+    (``config.search.max_chunks_per_file``) → date window → top_k, with the
+    capped overflow backfilling a short slate.
     Date window runs BEFORE top_k, not after: filtering the already-truncated
     top-k slice silently under-returns whenever the top-scoring candidates
     skew outside the window.  Returns the merged, ranked result dicts (each
-    carrying ``score`` and ``raw_score``); recall + freshness are recorded by
+    carrying ``score`` plus its two pre-fusion arm scores, ``raw_score``
+    (cosine) and ``keyword_score`` (normalized BM25), either of which is
+    ``None`` when that arm never retrieved the row); recall + freshness are recorded by
     the caller on this output.
 
-    ``threshold`` filters ``vec_results`` by their real cosine score.
+    ``threshold`` filters ``vec_results`` by their real cosine score, and
+    ``vector_relative_floor`` (``config.search.vector_relative_floor`` when
+    ``None``) then filters what survives relative to the best cosine in that
+    same candidate set — the vector arm's counterpart to ``fts_threshold``,
+    because an absolute floor says only whether a candidate is plausible at
+    all, never whether it is plausible beside the match this query found. A
+    caller whose top hit is by construction a record it must discard passes
+    ``0.0``: a floor measured against that hit would cut the candidates it is
+    looking for (see ``consolidation.forget``).
     ``fts_threshold`` independently filters ``fts_results`` relative to the
-    best normalized BM25 score in the same slate. Both floors run BEFORE
-    fusion, so a candidate needs only one arm to admit it. The one exemption:
+    best normalized BM25 score in the same slate — a ratio, so it reads the
+    same whatever constant that score is divided by (see
+    :func:`palinode.core.store.bm25_query_scale`). Both arms' floors run BEFORE
+    fusion, so a candidate needs only one arm to admit it. Both relative
+    floors measure against the best candidate in their own arm, so the top
+    match always survives: they bound a slate, they never empty one. The one exemption:
     an FTS candidate carrying ``has_vector=False`` (the store's mark for a
     chunk with no ``chunks_vec`` row) is kept regardless of its BM25 score,
     because the keyword arm is its only retrieval path. ``threshold`` is
@@ -159,15 +177,33 @@ def rank_hybrid(
     """
     # Arm-specific relevance floors — see the docstring above. Apply them before
     # RRF so each retrieval method is judged only on its own score scale.
+    def _cosine(r: dict[str, Any]) -> float:
+        raw = r.get("raw_score")
+        return float(raw if raw is not None else r.get("score", 0.0))
+
     if threshold > 0.0:
-        vec_results = [
-            r for r in vec_results
-            if (r.get("raw_score") if r.get("raw_score") is not None else r.get("score", 0.0)) >= threshold
-        ]
+        vec_results = [r for r in vec_results if _cosine(r) >= threshold]
+    # The vector arm's own relative floor, on top of the absolute one: a
+    # candidate is delivered only when its cosine is within
+    # ``vector_relative_floor`` of the best cosine in the same candidate set.
+    # The absolute floor answers "is this plausible at all"; it cannot answer
+    # "is this plausible next to what this query actually found", so without
+    # this the arm hands fusion every candidate it retrieved above the floor
+    # and weak neighbours fill the slate. Relative to the best match, so the
+    # top candidate always clears it — this bounds the slate, it never
+    # abstains. ``None`` = the configured default; ``0.0`` = no relative floor.
+    vec_frac = (
+        config.search.vector_relative_floor
+        if vector_relative_floor is None
+        else vector_relative_floor
+    )
+    if vec_frac > 0.0 and vec_results:
+        top_vec = max(_cosine(r) for r in vec_results)
+        if top_vec > 0.0:
+            vec_results = [r for r in vec_results if _cosine(r) >= vec_frac * top_vec]
     # The FTS arm has its own floor, relative to its best candidate: normalized
-    # BM25 is not on the cosine scale and its magnitude moves with corpus size,
-    # so an absolute floor discards correct keyword hits (all of them at the
-    # cosine threshold; the small-store ones at any fixed value). See
+    # BM25 is not on the cosine scale, so an absolute floor at the cosine
+    # threshold discarded correct keyword hits. See
     # ``SearchConfig.fts_threshold`` for the measurement. ``None`` = the
     # configured default; ``0.0`` = no FTS floor.
     fts_frac = config.search.fts_threshold if fts_threshold is None else fts_threshold
@@ -189,6 +225,13 @@ def rank_hybrid(
     result_map: dict[str, dict] = {}
     # Track raw cosine similarity from vector search before RRF normalization
     raw_cosine: dict[str, float] = {}
+    # Same, for the keyword arm: normalized BM25 as ``search_fts`` scored it,
+    # captured here because the fused score overwrites ``score`` on the very
+    # dicts an FTS-only candidate is carried in. Both survive onto the merged
+    # rows so a caller can read each arm on its own scale
+    # (:mod:`palinode.core.confidence`) instead of on the rank the fusion
+    # leaves behind.
+    raw_keyword: dict[str, float] = {}
 
     # Score vector results
     vec_weight = 1.0 - hybrid_weight
@@ -203,6 +246,7 @@ def rank_hybrid(
     for rank, r in enumerate(fts_results):
         key = f"{r['file_path']}#{r.get('section_id', 'root')}"
         rrf_scores[key] = rrf_scores.get(key, 0) + bm25_weight * (1.0 / (K + rank + 1))
+        raw_keyword[key] = r.get("score", 0.0)
         if key not in result_map:
             result_map[key] = r
 
@@ -277,18 +321,34 @@ def rank_hybrid(
     # Deduplicate by file: suppress additional chunks that score far below
     # the file's best chunk. A second chunk from the same file is kept
     # only if its score is within dedup_score_gap of the file's best.
+    #
+    # ``max_chunks_per_file`` is the second, harder bound on the same
+    # redundancy. The gap above compares POST-FUSION scores, which are
+    # rank-derived (see the docstring), so adjacent ranks differ by a fraction
+    # of the gap and one file's chunks are never far enough apart for it to
+    # fire — measured as one file taking 3 of 5 slots. Chunks past the cap are
+    # *deferred*, not dropped: they go to ``overflow_keys`` and still fill the
+    # slate when the competitive candidates run out, so the cap decides which
+    # results fill ``top_k`` and never how many. A backfilled chunk lands
+    # behind results it outscores; that is the point of having capped it.
     file_best: dict[str, float] = {}
+    file_kept: dict[str, int] = {}
     deduped_keys: list[str] = []
+    overflow_keys: list[str] = []
     gap = config.search.dedup_score_gap
+    cap = config.search.max_chunks_per_file
     for key in sorted_keys:
         r = result_map[key]
         fp = r["file_path"]
         score = r.get("score", 0.0)
-        if fp not in file_best:
-            file_best[fp] = score
-            deduped_keys.append(key)
-        elif file_best[fp] - score <= gap:
-            deduped_keys.append(key)
+        if fp in file_best and file_best[fp] - score > gap:
+            continue
+        file_best.setdefault(fp, score)
+        if cap > 0 and file_kept.get(fp, 0) >= cap:
+            overflow_keys.append(key)
+            continue
+        file_kept[fp] = file_kept.get(fp, 0) + 1
+        deduped_keys.append(key)
 
     # Date window is applied to the FULL deduped candidate list, BEFORE the
     # top_k slice below — not after. Applying it after (the old order)
@@ -299,27 +359,35 @@ def rank_hybrid(
     # path's semantics, which filters inside the row loop before its own top_k
     # break.
     if date_after or date_before:
-        filtered_keys = []
-        for key in deduped_keys:
+        def _in_window(key: str) -> bool:
             r = result_map[key]
             meta = r.get("metadata", {})
             updated = meta.get("last_updated", r.get("created_at", ""))
-            if updated:
-                if date_after and updated < date_after:
-                    continue
-                if date_before and updated > date_before:
-                    continue
-            filtered_keys.append(key)
-        deduped_keys = filtered_keys
+            if not updated:
+                return True
+            if date_after and updated < date_after:
+                return False
+            return not (date_before and updated > date_before)
+
+        deduped_keys = [key for key in deduped_keys if _in_window(key)]
+        overflow_keys = [key for key in overflow_keys if _in_window(key)]
 
     # top_k is the sole cardinality control past this point — no post-fusion
     # score cutoff (see the ``threshold`` paragraph on the docstring above).
+    # The per-file overflow backfills only what the competitive candidates
+    # could not fill, so capping a file never shortens a slate.
+    selected = deduped_keys[:top_k]
+    if len(selected) < top_k:
+        selected += overflow_keys[: top_k - len(selected)]
+
     merged = []
-    for key in deduped_keys[:top_k]:
+    for key in selected:
         result = result_map[key]
-        # Attach raw cosine similarity from vector search.
-        # BM25-only results (no vector match) get raw_score=None.
+        # Attach each arm's own pre-fusion score. A result the other arm never
+        # retrieved gets None there — no similarity to report, which is not the
+        # same as a zero one (see ``scoring.describe_match``).
         result["raw_score"] = raw_cosine.get(key)
+        result["keyword_score"] = raw_keyword.get(key)
         merged.append(result)
 
     return merged

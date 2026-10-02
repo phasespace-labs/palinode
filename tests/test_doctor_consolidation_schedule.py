@@ -45,10 +45,16 @@ _WEEKLY = (
 )
 
 
-def _ctx(*, nightly: int = 1, weekly: int = 7) -> DoctorContext:
+def _ctx(*, nightly: int = 7, weekly: int = 7, max_hours_elapsed: float = 168) -> DoctorContext:
+    """Nightly defaults to 7 — the shipped default, and exactly the gate's
+    ``max_hours_elapsed=168`` ceiling in days — so a test not about the ceiling
+    check does not trip it incidentally. Tests of that check override one or
+    both explicitly.
+    """
     cfg = Config()
     cfg.consolidation.lookback_days = weekly
     cfg.consolidation.nightly.lookback_days = nightly
+    cfg.consolidation.auto_gate.max_hours_elapsed = max_hours_elapsed
     return DoctorContext(config=cfg)
 
 
@@ -141,15 +147,15 @@ class TestParsing:
 
 
 def test_cron_matching_config_passes_and_still_prints_the_effective_value(cron: Path) -> None:
-    _write(cron, _NIGHTLY.format(days=1), _WEEKLY.format(days=7))
+    _write(cron, _NIGHTLY.format(days=7), _WEEKLY.format(days=7))
 
-    result = consolidation_schedule_effective(_ctx(nightly=1, weekly=7))
+    result = consolidation_schedule_effective(_ctx(nightly=7, weekly=7))
 
     assert result.passed is True
     assert result.severity == "info"
-    assert "nightly" in result.message and "--days 1" in result.message
+    assert "nightly" in result.message and "--days 7" in result.message
     assert "weekly" in result.message and "--days 7" in result.message
-    assert "effective lookback 1 day(s)" in result.message
+    assert "effective catch-up bound 7 day(s)" in result.message
     assert "effective lookback 7 day(s)" in result.message
     assert "0 11 * * *" in result.message
     assert "0 11 * * 0" in result.message
@@ -164,11 +170,11 @@ def test_a_cron_line_with_no_days_hands_the_decision_back_to_the_config(cron: Pa
         "0 11 * * 0 root python -m palinode.consolidation.cron",
     )
 
-    result = consolidation_schedule_effective(_ctx(nightly=1, weekly=7))
+    result = consolidation_schedule_effective(_ctx(nightly=7, weekly=7))
 
     assert result.passed is True
     assert "passes no --days" in result.message
-    assert "consolidation.nightly.lookback_days=1 governs" in result.message
+    assert "consolidation.nightly.lookback_days=7 governs" in result.message
     assert "consolidation.lookback_days=7 governs" in result.message
 
 
@@ -188,7 +194,7 @@ def test_cron_wider_than_config_warns_and_names_the_winner(cron: Path) -> None:
     assert "runs --days 3" in result.message
     assert "consolidation.nightly.lookback_days=1" in result.message
     assert "the cron argument wins" in result.message
-    assert "effective lookback is 3 day(s), not 1" in result.message
+    assert "effective catch-up bound is 3 day(s), not 1" in result.message
     assert result.remediation
 
 
@@ -206,12 +212,101 @@ def test_cron_narrower_than_config_warns_the_same_way(cron: Path) -> None:
 
 
 def test_a_pass_with_no_cron_entry_is_named_without_failing(cron: Path) -> None:
-    _write(cron, _NIGHTLY.format(days=1))
+    _write(cron, _NIGHTLY.format(days=7))
 
-    result = consolidation_schedule_effective(_ctx(nightly=1, weekly=7))
+    result = consolidation_schedule_effective(_ctx(nightly=7, weekly=7))
 
     assert result.passed is True
     assert "weekly: no cron entry" in result.message
+
+
+# ---------------------------------------------------------------------------
+# 2b. Catch-up bound vs the gate's ceiling
+# ---------------------------------------------------------------------------
+
+
+def test_a_bound_below_the_gate_ceiling_warns_even_when_cron_matches_config(
+    cron: Path,
+) -> None:
+    """No cron/config mismatch at all — the ceiling problem is independent."""
+    _write(cron, _NIGHTLY.format(days=3), _WEEKLY.format(days=7))
+
+    result = consolidation_schedule_effective(
+        _ctx(nightly=3, weekly=7, max_hours_elapsed=168)
+    )
+
+    assert result.passed is False
+    assert result.severity == "warn"
+    assert "matching consolidation.nightly.lookback_days=3" in result.message
+    assert "3-day catch-up bound is tighter than" in result.message
+    assert "7-day (168 h) ceiling" in result.message
+    assert "consolidation.auto_gate.max_hours_elapsed" in result.message
+    assert "drops the notes it chose to wait on" in result.message
+    assert result.remediation
+    assert "max_hours_elapsed" in result.remediation
+
+
+def test_a_bound_matching_the_gate_ceiling_does_not_warn(cron: Path) -> None:
+    _write(cron, _NIGHTLY.format(days=7), _WEEKLY.format(days=7))
+
+    result = consolidation_schedule_effective(
+        _ctx(nightly=7, weekly=7, max_hours_elapsed=168)
+    )
+
+    assert result.passed is True
+    assert "tighter than" not in result.message
+
+
+def test_the_ceiling_check_reads_the_configured_gate_not_a_hardcoded_week(
+    cron: Path,
+) -> None:
+    """A 48 h gate makes a 2-day bound the ceiling — not the shipped 168 h/7 d."""
+    _write(cron, _NIGHTLY.format(days=2), _WEEKLY.format(days=7))
+
+    passes = consolidation_schedule_effective(
+        _ctx(nightly=2, weekly=7, max_hours_elapsed=48)
+    )
+
+    assert passes.passed is True
+
+
+def test_the_ceiling_check_warns_below_a_non_default_gate(cron: Path) -> None:
+    """Same 2-day bound as above, but the gate is a stricter 48 h: now a warn."""
+    _write(cron, _NIGHTLY.format(days=1), _WEEKLY.format(days=7))
+
+    warns = consolidation_schedule_effective(
+        _ctx(nightly=1, weekly=7, max_hours_elapsed=48)
+    )
+
+    assert warns.passed is False
+    assert "2-day (48 h) ceiling" in warns.message
+
+
+def test_no_cron_entry_at_all_still_flags_a_bound_below_the_ceiling(cron: Path) -> None:
+    """The smoke-observed case: no palinode cron, a tight nightly bound in config."""
+    _write(cron, "0 * * * * root /usr/bin/logrotate", name="logrotate")
+
+    result = consolidation_schedule_effective(
+        _ctx(nightly=3, weekly=7, max_hours_elapsed=168)
+    )
+
+    assert result.passed is False
+    assert result.severity == "warn"
+    assert "No consolidation cron entry found" in result.message
+    assert "3-day catch-up bound is tighter than" in result.message
+    assert result.remediation
+
+
+def test_no_cron_entry_at_all_with_a_compliant_bound_stays_not_applicable(
+    cron: Path,
+) -> None:
+    _write(cron, "0 * * * * root /usr/bin/logrotate", name="logrotate")
+
+    result = consolidation_schedule_effective(_ctx(nightly=7, weekly=7))
+
+    assert result.passed is True
+    assert result.severity == "info"
+    assert "tighter than" not in result.message
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +323,7 @@ def test_no_consolidation_entry_anywhere_is_not_applicable(cron: Path) -> None:
     assert result.severity == "info"
     assert "No consolidation cron entry found" in result.message
     assert str(cron) in result.message
-    assert "consolidation.nightly.lookback_days=1" in result.message
+    assert "consolidation.nightly.lookback_days=7" in result.message
     assert "consolidation.lookback_days=7" in result.message
 
 
@@ -256,7 +351,7 @@ def test_a_backup_file_cron_itself_ignores_is_not_read_as_live(cron: Path) -> No
     """A dot in the name makes cron skip the file; reporting it would be a lie."""
     _write(cron, _NIGHTLY.format(days=1), name="palinode.bak-20260531")
 
-    result = consolidation_schedule_effective(_ctx(nightly=1))
+    result = consolidation_schedule_effective(_ctx(nightly=7))
 
     assert result.passed is True
     assert "No consolidation cron entry found" in result.message
@@ -270,14 +365,14 @@ def test_a_backup_file_cron_itself_ignores_is_not_read_as_live(cron: Path) -> No
 
 
 def test_a_crontab_it_may_not_read_is_named_not_assumed_empty(cron: Path, monkeypatch) -> None:
-    _write(cron, _NIGHTLY.format(days=1), _WEEKLY.format(days=7))
+    _write(cron, _NIGHTLY.format(days=7), _WEEKLY.format(days=7))
     monkeypatch.setattr(
         check_module,
         "read_crontab",
         lambda user=None: (None, "crontab: must be privileged to use -u", False),
     )
 
-    result = consolidation_schedule_effective(_ctx(nightly=1, weekly=7))
+    result = consolidation_schedule_effective(_ctx(nightly=7, weekly=7))
 
     assert result.passed is True
     assert "Not read:" in result.message
@@ -289,12 +384,12 @@ def test_a_crontab_it_may_not_read_is_named_not_assumed_empty(cron: Path, monkey
     reason="root can read a mode-000 file, so there is nothing to degrade from",
 )
 def test_a_cron_d_file_it_cannot_open_is_named_not_skipped(cron: Path) -> None:
-    _write(cron, _NIGHTLY.format(days=1))
+    _write(cron, _NIGHTLY.format(days=7))
     secret = _write(cron, _WEEKLY.format(days=3), name="palinode-weekly")
     secret.chmod(0o000)
 
     try:
-        result = consolidation_schedule_effective(_ctx(nightly=1, weekly=7))
+        result = consolidation_schedule_effective(_ctx(nightly=7, weekly=7))
     finally:
         secret.chmod(0o644)
 
@@ -302,7 +397,7 @@ def test_a_cron_d_file_it_cannot_open_is_named_not_skipped(cron: Path) -> None:
     assert "Not read:" in result.message
     assert "palinode-weekly" in result.message
     # The readable half is still reported — a blind spot is not a blackout.
-    assert "effective lookback 1 day(s)" in result.message
+    assert "effective catch-up bound 7 day(s)" in result.message
 
 
 def test_an_unlistable_cron_d_is_not_applicable(tmp_path: Path, monkeypatch) -> None:
@@ -365,7 +460,7 @@ def test_the_attached_days_form_the_entry_point_cannot_read_is_flagged(cron: Pat
 
     assert result.passed is False
     assert "attached form" in result.message
-    assert "effective lookback 1 day(s)" in result.message
+    assert "effective catch-up bound 1 day(s)" in result.message
 
 
 def test_days_as_the_last_token_is_flagged(cron: Path) -> None:
@@ -385,7 +480,7 @@ def test_two_entries_for_one_pass_are_reported_as_ambiguous_not_guessed(cron: Pa
 
     assert result.passed is False
     assert "2 entries invoke the pass" in result.message
-    assert "no single effective lookback" in result.message
+    assert "no single effective catch-up bound" in result.message
     assert "--days 1" in result.message and "--days 3" in result.message
 
 

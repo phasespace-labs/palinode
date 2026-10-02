@@ -67,18 +67,34 @@ def history(file_path, limit, detail):
     default=True,
     help="Preview the change without applying.  Default: --dry-run.",
 )
-def rollback(file_path, commit, dry_run):
+@click.option(
+    "--undo-retirements",
+    is_flag=True,
+    default=False,
+    help=(
+        "Acknowledge that the rollback undoes a retirement (archive, "
+        "supersede, retraction) and brings the record back as current. "
+        "Without it such a rollback is refused; prefer `palinode restore`."
+    ),
+)
+def rollback(file_path, commit, dry_run, undo_retirements):
     """Revert a file to a previous commit.
 
     By default this is a dry run — pass ``--no-dry-run`` to actually
     apply the rollback.  ``COMMIT`` is optional; when omitted, rolls
-    back to the immediately previous version.
+    back to the immediately previous version.  A rollback that would
+    undo a retirement is named in the preview and refused unless
+    ``--undo-retirements`` is passed.
     """
     try:
-        data = api_client.rollback(file_path, commit, dry_run=dry_run)
-        console.print(data)
+        data = api_client.rollback(
+            file_path, commit, dry_run=dry_run, undo_retirements=undo_retirements
+        )
     except Exception as e:
         console.print(f"[red]Error rolling back: {str(e)}[/red]")
+        raise SystemExit(1)
+    console.print(data)
+    if isinstance(data, dict) and data.get("status") == "refused":
         raise SystemExit(1)
 
 @click.command()

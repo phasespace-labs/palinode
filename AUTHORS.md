@@ -36,6 +36,8 @@ Contributions welcome via pull request. Names appear here once a PR is merged.
 - [Utkarsh Arya](https://github.com/Utkarsh3725)
 - [Isha Zaka](https://github.com/Isha-Zaka)
 - [kevin-lozada-santos](https://github.com/kevin-lozada-santos)
+- [Tom Tang](https://github.com/TomTang701)
+- [NesrineGharbi77](https://github.com/NesrineGharbi77)
 
 ## Acknowledgements
 

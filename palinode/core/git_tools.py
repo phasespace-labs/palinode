@@ -286,14 +286,19 @@ def _git_failure_reason(result: subprocess.CompletedProcess) -> str:
     return f"exit {result.returncode}: {first_line or '(no output)'}"
 
 
-#: Serialises the stage-and-commit pair across threads in one process. The
-#: API's save path, its backfill, and a CLI-driven bootstrap can all commit
-#: from the same server at once; without this they race each other for
-#: ``.git/index.lock`` and the loser's file stays dirty. Cross-process
-#: contention (the watcher against the API) is what the retry below is for.
-_COMMIT_LOCK = threading.Lock()
+#: All commit sites share a lock for the canonical data-repository path.
+#: RLock lets push protect its status snapshot and call the same primitive.
+_COMMIT_LOCKS: dict[str, threading.RLock] = {}
+_COMMIT_LOCKS_GUARD = threading.Lock()
 
-#: Bounded backoff for an ``index.lock`` collision. Git holds the lock for
+
+def _repository_commit_lock() -> threading.RLock:
+    repo = os.path.normcase(os.path.realpath(config.memory_dir))
+    with _COMMIT_LOCKS_GUARD:
+        return _COMMIT_LOCKS.setdefault(repo, threading.RLock())
+
+
+#: Bounded backoff for index or reference lock contention. Git holds the lock for
 #: milliseconds per commit, so a handful of short waits covers the watcher
 #: committing a cross_refs update while the API commits a save. Base delays
 #: in seconds, each jittered by up to +50%; the sum caps the worst case near
@@ -313,8 +318,15 @@ def _is_index_lock_collision(result: subprocess.CompletedProcess) -> bool:
     return result.returncode == 128 and "index.lock" in (result.stderr or "")
 
 
+def _is_commit_lock_collision(result: subprocess.CompletedProcess) -> bool:
+    """Only retry git's index/ref contention signatures, never other errors."""
+    return _is_index_lock_collision(result) or (
+        result.returncode == 128 and "cannot lock ref '" in (result.stderr or "")
+    )
+
+
 def _run_git_retrying_lock(*args: str) -> subprocess.CompletedProcess:
-    """``_run_git`` that waits out a transient ``index.lock`` collision.
+    """``_run_git`` that waits out transient index or reference contention.
 
     Returns the last result either way: a success, a non-lock failure on the
     first try, or the final lock failure after the retries are spent — the
@@ -322,13 +334,14 @@ def _run_git_retrying_lock(*args: str) -> subprocess.CompletedProcess:
     """
     result = _run_git(*args)
     for attempt in range(_INDEX_LOCK_RETRIES):
-        if not _is_index_lock_collision(result):
+        if not _is_commit_lock_collision(result):
             break
         base = _INDEX_LOCK_BACKOFF[min(attempt, len(_INDEX_LOCK_BACKOFF) - 1)]
         delay = base * (1 + random.random() * 0.5)  # nosec B311 - jitter, not security
         logger.debug(
-            "git %s hit index.lock (attempt %d/%d); retrying in %.0f ms",
-            args[0], attempt + 1, _INDEX_LOCK_RETRIES, delay * 1000,
+            "git %s hit %s (attempt %d/%d); retrying in %.0f ms",
+            args[0], "index.lock" if _is_index_lock_collision(result) else "cannot lock ref",
+            attempt + 1, _INDEX_LOCK_RETRIES, delay * 1000,
         )
         time.sleep(delay)
         result = _run_git(*args)
@@ -340,8 +353,13 @@ def try_commit_memory_files(file_paths: list[str], message: str) -> CommitOutcom
 
     The single commit primitive. ``file_paths`` may be absolute or relative to
     the data repo; each is staged explicitly (never a ``git add *.md`` sweep),
-    so the commit captures exactly the files this mutation touched and nothing
-    else dirty in the working tree.
+    and the commit is limited to them with a pathspec (``git commit -m <msg>
+    -- <paths>``), so it holds exactly the files this mutation touched:
+    nothing else dirty in the working tree, and nothing another writer (an
+    operator's hand edit) had already staged. Such unrelated staged changes
+    stay staged, untouched. A path whose file is gone (a deletion, or the
+    source side of :func:`move_memory_file`) commits as a removal, since it
+    is still known to ``HEAD``.
 
     No-op (``committed=False, error=None``) when ``config.git.auto_commit`` is
     disabled or no paths are given. Otherwise the outcome is truthful: a
@@ -357,10 +375,10 @@ def try_commit_memory_files(file_paths: list[str], message: str) -> CommitOutcom
     exit of 1 followed by ``git diff --cached --quiet`` succeeding on the
     same paths means the index holds no change for them.
 
-    Concurrency: the stage-and-commit pair holds a process-wide lock, so
+    Concurrency: all commit sites share a process-wide lock per repository, so
     threads in one server never race each other for ``.git/index.lock``;
-    a collision with *another* process (the watcher committing while the
-    API commits) is waited out with a short bounded backoff before it is
+    index/ref contention with *another* process (the watcher committing while
+    the API commits) is waited out with a short bounded backoff before it is
     reported. A whole-store ``bootstrap-ids`` racing the watcher's
     cross_refs commits stranded 82 files as dirty before either existed.
     """
@@ -371,14 +389,29 @@ def try_commit_memory_files(file_paths: list[str], message: str) -> CommitOutcom
     for p in file_paths:
         rels.append(os.path.relpath(p, config.memory_dir) if os.path.isabs(p) else p)
 
+    return _try_commit_paths(rels, message)
+
+
+def _try_commit_paths(
+    rels: list[str], message: str, *, add_paths: list[str] | None = None,
+) -> CommitOutcome:
+    """Shared stage/commit transaction; push can omit already-staged deletions.
+
+    Each retry uses the original explicit paths. Failed changes remain on disk
+    and in the index for the next commit of those paths; no unrelated file is
+    swept in to recover them.
+    """
+    if add_paths is None:
+        add_paths = rels
     try:
-        with _COMMIT_LOCK:
-            add = _run_git_retrying_lock("add", "--", *rels)
-            if add.returncode != 0:
-                reason = _git_failure_reason(add)
-                logger.error("Git add failed for %r: %s", rels, reason)
-                return CommitOutcome(False, reason)
-            commit = _run_git_retrying_lock("commit", "-m", message)
+        with _repository_commit_lock():
+            if add_paths:
+                add = _run_git_retrying_lock("add", "--", *add_paths)
+                if add.returncode != 0:
+                    reason = _git_failure_reason(add)
+                    logger.error("Git add failed for %r: %s", add_paths, reason)
+                    return CommitOutcome(False, reason)
+            commit = _run_git_retrying_lock("commit", "-m", message, "--", *rels)
             if commit.returncode == 0:
                 return CommitOutcome(True)
             if commit.returncode == 1:
@@ -812,36 +845,223 @@ def last_commit(file_path: str) -> dict[str, str] | None:
     return {"hash": hash_short, "date": date, "author": author, "message": message}
 
 
-def rollback(file_path: str, commit: str | None = None, dry_run: bool = False) -> str:
-    """Revert a memory file to a previous version.
+def _retirement_markers(text: str, file_path: str) -> dict[str, dict[str, Any]]:
+    """Every retirement one version of a memory file carries, keyed for diffing.
 
-    Creates a new commit that restores the file. The old version
-    is preserved in git history (nothing is lost).
+    Record-level: the shared lifecycle classifier's verdict on the frontmatter
+    (``status: archived``, ``superseded_by``, retracted, expired, …) under one
+    key, ``record``. In-body: each retracted mention (keyed by its opaque
+    marker id) and each fact retired in place (keyed by its line). A key in
+    the live file and absent from the rollback target is a retirement the
+    rollback would undo.
+    """
+    import frontmatter as _frontmatter
 
-    Args:
-        file_path: Relative path within the data repo.
-        commit: Target commit hash. Defaults to HEAD~1 (previous version).
-        dry_run: If True, show what would change without applying.
+    from palinode.core.lifecycle import (
+        RETIRED_MENTION_RE,
+        contains_retired_fact_text,
+        eligibility,
+    )
 
-    Returns:
-        Description of what was (or would be) rolled back.
+    try:
+        post = _frontmatter.loads(text)
+        meta, body = dict(post.metadata), post.content
+    except Exception:
+        # Unparseable frontmatter is not retired on any surface that reads it,
+        # so it is not retired here either; the body is still scanned.
+        meta, body = {}, text
+
+    markers: dict[str, dict[str, Any]] = {}
+    verdict = eligibility(meta, path=file_path)
+    if verdict.retired:
+        relation = verdict.reason
+        if verdict.superseded_by and verdict.reason != "superseded_by":
+            relation = f"{relation}, superseded_by: {verdict.superseded_by}"
+        elif verdict.superseded_by:
+            relation = f"superseded_by: {verdict.superseded_by}"
+        markers["record"] = {
+            "relation": relation,
+            "superseded_by": verdict.superseded_by,
+        }
+    for match in RETIRED_MENTION_RE.finditer(body):
+        marker_id = match.group(0).rsplit("r:", 1)[-1].rstrip("].")
+        markers[f"mention:{marker_id}"] = {
+            "relation": f"retracted mention r:{marker_id}",
+            "superseded_by": None,
+        }
+    for line in body.splitlines():
+        # A line carrying a mention marker is already counted, by its id.
+        if contains_retired_fact_text(line) and not RETIRED_MENTION_RE.search(line):
+            markers[f"fact:{line.strip()}"] = {
+                "relation": "fact retired in place",
+                "superseded_by": None,
+            }
+    return markers
+
+
+def retirements_undone(file_path: str, target: str) -> list[dict[str, Any]]:
+    """The retirements rolling ``file_path`` back to ``target`` would undo.
+
+    ``rollback`` is a git-level revert and git does not know what a
+    retirement is: reverting the commit that archived or superseded a memory
+    deletes its ``status: archived`` / ``superseded_by`` with everything else,
+    and the record comes back unmarked, current again. This compares
+    the live file with its ``target`` version and returns one entry per
+    retirement present now and absent there: ``record`` (the file),
+    ``relation`` (what retired it), ``superseded_by``, and the ``commit`` /
+    ``commit_subject`` that retired it (both ``None`` when the retirement is
+    only in the uncommitted working tree).
+
+    A target version git cannot read returns ``[]``: the ``target:path`` that
+    ``git show`` cannot resolve, ``git checkout`` cannot restore either, so the
+    rollback fails before anything is written.
     """
     file_path = _resolve_memory_path(file_path)
+    shown = _run_git("show", f"{target}:{file_path}")
+    if shown.returncode != 0 or not isinstance(shown.stdout, str):
+        return []
+    with open(os.path.join(config.memory_dir, file_path), encoding="utf-8") as fh:
+        live = fh.read()
+    target_markers = _retirement_markers(shown.stdout, file_path)
+    live_markers = _retirement_markers(live, file_path)
+    undone = [k for k in live_markers if k not in target_markers]
+    if not undone:
+        return []
+
+    # Which commit in target..HEAD introduced each one: walk the file's
+    # versions newest-first and take the first whose predecessor lacked it.
+    log = _run_git("log", "--format=%h%x09%s", f"{target}..HEAD", "--", file_path)
+    commits: list[tuple[str, str]] = []
+    if log.returncode == 0 and isinstance(log.stdout, str):
+        for line in log.stdout.splitlines():
+            if "\t" in line:
+                sha, subject = line.split("\t", 1)
+                commits.append((sha, subject))
+    versions: list[dict[str, dict[str, Any]]] = []
+    for sha, _subject in commits:
+        at = _run_git("show", f"{sha}:{file_path}")
+        text = at.stdout if at.returncode == 0 and isinstance(at.stdout, str) else ""
+        versions.append(_retirement_markers(text, file_path))
+    versions.append(target_markers)  # the oldest commit's predecessor
+
+    found: list[dict[str, Any]] = []
+    for key in undone:
+        retired_by: tuple[str, str] | None = None
+        for i, (sha, subject) in enumerate(commits):
+            if key in versions[i] and key not in versions[i + 1]:
+                retired_by = (sha, subject)
+                break
+        found.append({
+            "record": file_path,
+            "relation": live_markers[key]["relation"],
+            "superseded_by": live_markers[key]["superseded_by"],
+            "commit": retired_by[0] if retired_by else None,
+            "commit_subject": retired_by[1] if retired_by else None,
+        })
+    return found
+
+
+def _render_retirements(retirements: list[dict[str, Any]]) -> str:
+    lines = []
+    for r in retirements:
+        by = (
+            f'retired by {r["commit"]} "{r["commit_subject"]}"'
+            if r["commit"] else "retired in the uncommitted working tree"
+        )
+        lines.append(f'- {r["record"]} — {r["relation"]} — {by}')
+    return "\n".join(lines)
+
+
+_RETIREMENT_ALTERNATIVES = (
+    "To bring a retired record back on purpose, use `palinode restore <file>` "
+    "(or `palinode corrections undo` for a correction), which records that it "
+    "was restored. To roll back anyway, pass --undo-retirements "
+    "(undo_retirements=true)."
+)
+
+
+def rollback_report(
+    file_path: str,
+    commit: str | None = None,
+    dry_run: bool = False,
+    undo_retirements: bool = False,
+) -> dict[str, Any]:
+    """Revert a memory file to a previous version, lifecycle-aware.
+
+    Creates a new commit that restores the file; the old version stays in git
+    history. A rollback that would undo a retirement (see
+    :func:`retirements_undone`) is named in the preview and **refused** unless
+    ``undo_retirements`` acknowledges it; an acknowledged one names every
+    record it resurrected and reports ``status: undid_retirements``, never
+    plain success.
+
+    Returns ``{"result": <text>, "status": ..., "retirements": [...],
+    "resurrected": [...]}`` where ``status`` is one of ``not_found``,
+    ``failed``, ``no_change``, ``preview``, ``refused``, ``rolled_back`` or
+    ``undid_retirements``.
+    """
+    file_path = _resolve_memory_path(file_path)
+
+    def _out(
+        status: str,
+        result: str,
+        retirements: list[dict[str, Any]] | None = None,
+        resurrected: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "result": result,
+            "status": status,
+            "retirements": retirements or [],
+            "resurrected": resurrected or [],
+        }
+
     if not os.path.exists(os.path.join(config.memory_dir, file_path)):
-        return f"File not found: {file_path}"
+        return _out("not_found", f"File not found: {file_path}")
 
     target = commit or "HEAD~1"
-    
+    if target.startswith("-"):
+        # The ref is handed to git positionally; it must never parse as an option.
+        return _out("failed", f"Rollback failed: invalid commit {target!r}")
+
+    retirements = retirements_undone(file_path, target)
+    n = len(retirements)
+    listing = _render_retirements(retirements)
+
     if dry_run:
         # Show what would change
         result = _run_git("diff", f"{target}..HEAD", "--", file_path)
+        notice = ""
+        if retirements:
+            notice = (
+                f"**This rollback would undo {n} retirement(s)** and bring the "
+                f"record(s) back as current, unmarked:\n{listing}\n\n"
+                f"{_RETIREMENT_ALTERNATIVES}\n\n"
+            )
         if not result.stdout.strip():
-            return f"No differences between {target} and HEAD for {file_path}"
+            return _out(
+                "no_change",
+                f"{notice}No differences between {target} and HEAD for {file_path}",
+                retirements,
+            )
         lines = result.stdout.split("\n")
         preview = "\n".join(lines[:50])
         if len(lines) > 50:
             preview += f"\n... ({len(lines) - 50} more lines)"
-        return f"## Dry Run: Rollback {file_path} to {target}\n\n```diff\n{preview}\n```"
+        return _out(
+            "preview",
+            f"## Dry Run: Rollback {file_path} to {target}\n\n{notice}"
+            f"```diff\n{preview}\n```",
+            retirements,
+        )
+
+    if retirements and not undo_retirements:
+        return _out(
+            "refused",
+            f"Refused: rolling back {file_path} to {target} would undo {n} "
+            f"retirement(s) and bring the record(s) back as current:\n{listing}"
+            f"\n\nNothing was written. {_RETIREMENT_ALTERNATIVES}",
+            retirements,
+        )
 
     # Perform the rollback
     checkout = _run_git("checkout", target, "--", file_path)
@@ -853,7 +1073,7 @@ def rollback(file_path: str, commit: str | None = None, dry_run: bool = False) -
             "returncode=%d stderr=%r",
             file_path, target, checkout.returncode, checkout.stderr.strip(),
         )
-        return f"Rollback failed: {checkout.stderr}"
+        return _out("failed", f"Rollback failed: {checkout.stderr}", retirements)
 
     # Commit the revert through the choke point (commit_memory_files) rather
     # than a raw add + commit — the fourth commit-message shape this module
@@ -861,6 +1081,8 @@ def rollback(file_path: str, commit: str | None = None, dry_run: bool = False) -
     # Note: this now also respects config.git.auto_commit, same as every
     # other commit site in this module; the raw calls it replaces did not.
     message = f"palinode: rollback {file_path} to {target}"
+    if retirements:
+        message = f"{message} (undid {n} retirement(s))"
     committed = commit_memory_files([file_path], message)
     if not committed:
         # The checkout landed but the commit did not — the working tree is now
@@ -875,7 +1097,32 @@ def rollback(file_path: str, commit: str | None = None, dry_run: bool = False) -
             file_path, target,
         )
 
-    return f"Rolled back {file_path} to {target}. Committed as: {message}"
+    if retirements:
+        logger.warning(
+            "rollback undid retirements op=rollback file_path=%s target=%s count=%d",
+            file_path, target, n,
+        )
+        return _out(
+            "undid_retirements",
+            f"Rolled back {file_path} to {target} and UNDID {n} retirement(s); "
+            f"resurrected as current:\n{listing}\n\nCommitted as: {message}",
+            retirements,
+            retirements,
+        )
+    return _out(
+        "rolled_back",
+        f"Rolled back {file_path} to {target}. Committed as: {message}",
+    )
+
+
+def rollback(
+    file_path: str,
+    commit: str | None = None,
+    dry_run: bool = False,
+    undo_retirements: bool = False,
+) -> str:
+    """Text form of :func:`rollback_report`: its ``result`` string."""
+    return rollback_report(file_path, commit, dry_run, undo_retirements)["result"]
 
 
 def push() -> str:
@@ -886,42 +1133,56 @@ def push() -> str:
     Returns:
         Push result or error message.
     """
-    # Check if there are unpushed commits
-    status = _run_git("status", "--porcelain")
-    dirty = status.stdout.strip()
-    if dirty:
-        # Auto-commit any uncommitted changes first — an explicit file list,
-        # never the repo-wide `*.md` / `**/*.md` sweep this module's own
-        # docstring forbids elsewhere. `git status --porcelain` prefixes each
-        # line with a two-character status code; a rename entry reads
-        # "old -> new", of which only the destination is still on disk to
-        # add. Quoted paths (spaces/unicode under core.quotepath) are
-        # unquoted so the pathspec matches the real filename.
-        md_files: list[str] = []
-        for line in dirty.split("\n"):
-            if not line:
-                continue
-            entry = line[3:]
-            if " -> " in entry:
-                entry = entry.split(" -> ", 1)[1]
-            entry = entry.strip('"')
-            if entry.endswith(".md"):
+    with _repository_commit_lock():
+        # Check if there are unpushed commits
+        status = _run_git("status", "--porcelain")
+        dirty = status.stdout.strip()
+        if dirty:
+            # Auto-commit the dirty `.md` files first: an explicit file list,
+            # never the repo-wide `*.md` / `**/*.md` sweep this module's own
+            # docstring forbids elsewhere. The commit is limited to that list by
+            # a pathspec, so it holds only those `.md` paths. Anything else that
+            # was already staged (an operator's in-progress edit, any non-`.md`
+            # file) is neither committed nor pushed; it stays staged.
+            #
+            # `git status --porcelain` prefixes each line with a two-character
+            # status code. A rename entry reads "old -> new": only the
+            # destination is on disk to add, but both sides go in the commit
+            # pathspec so the rename lands whole rather than leaving the source's
+            # deletion staged behind it. A staged deletion ("D ") is committed
+            # without an add, since git cannot add a path that is in neither the
+            # index nor the working tree. Quoted paths (spaces/unicode under
+            # core.quotepath) are unquoted so the pathspec matches the real
+            # filename. Lines come from the unstripped stdout: stripping it would
+            # eat the leading space of the first line's " M" status code and
+            # shift that path by one character.
+            md_files: list[str] = []
+            add_files: list[str] = []
+            for line in status.stdout.split("\n"):
+                if not line:
+                    continue
+                code, entry = line[:2], line[3:]
+                source = None
+                if " -> " in entry:
+                    source, entry = entry.split(" -> ", 1)
+                    source = source.strip('"')
+                entry = entry.strip('"')
+                if not entry.endswith(".md"):
+                    continue
                 md_files.append(entry)
+                if code != "D ":
+                    add_files.append(entry)
+                if source and source.endswith(".md"):
+                    md_files.append(source)
 
-        if md_files:
-            _run_git("add", "--", *md_files)
-            pre_commit = _run_git(
-                "commit", "-m",
-                f"palinode: auto-commit before push ({_utc_now().strftime('%Y-%m-%d %H:%M')})",
-            )
-            if pre_commit.returncode != 0:
-                # A failed pre-push commit silently proceeds to push stale state —
-                # surface it. "nothing to commit" also lands here but is
-                # benign; stderr distinguishes a real failure.
-                logger.warning(
-                    "auto-commit before push failed op=commit returncode=%d stderr=%r",
-                    pre_commit.returncode, pre_commit.stderr.strip(),
+            if md_files:
+                outcome = _try_commit_paths(
+                    md_files,
+                    f"palinode: auto-commit before push ({_utc_now().strftime('%Y-%m-%d %H:%M')})",
+                    add_paths=add_files,
                 )
+                if not outcome.committed:
+                    logger.warning("auto-commit before push failed: %s", outcome.error)
 
     result = _run_git("push", "origin", "main")
     if result.returncode != 0:

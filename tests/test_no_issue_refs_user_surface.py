@@ -19,6 +19,13 @@ The guard cannot tell those apart from a bare number, so it asks for the URL.
 `ADR-` string refs are always fine (mirrors the scrub policy: ADR refs in
 comments ship, only ADR `.md` files don't). Shipped docs (docs/*.md) are still
 not scanned — `docs/CHANGELOG.md` cites issues on purpose.
+
+String constants are scanned across every source root. The few literals that
+must carry an issue-shaped token — the pinned fixtures a guard cannot test
+without quoting the form it rejects — are declared by the test module that
+holds them, in ``_ISSUE_REF_FIXTURES``, with a reason each. A declaration that
+names a literal no longer present fails too. An exemption mechanism without
+those rules is the hole it was meant to close.
 """
 from __future__ import annotations
 
@@ -26,6 +33,7 @@ import io
 import re
 import tokenize
 from pathlib import Path
+from typing import NamedTuple
 
 import click
 import pytest
@@ -294,8 +302,29 @@ def test_no_issue_refs_in_ci_workflows() -> None:
     )
 
 
+def _folded_str(node: object) -> str | None:
+    """The literal value of *node* when it is a string built only from literals.
+
+    Covers the plain constant and any ``+`` chain of them. A ref split across a
+    concatenation (``"#" + "100"``) reaches the public payload exactly as a
+    whole literal does; it just becomes invisible to a scan that only looks at
+    single ``Constant`` nodes. Folding is what keeps the allowlist below the
+    only way through.
+    """
+    import ast
+
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _folded_str(node.left)
+        right = _folded_str(node.right)
+        if left is not None and right is not None:
+            return left + right
+    return None
+
+
 def _string_constant_refs_in(path: Path) -> list[tuple[int, str]]:
-    """(line, ref_text) for every string constant in *path* carrying an issue ref."""
+    """(line, ref_text) for every string literal in *path* carrying an issue ref."""
     import ast
 
     try:
@@ -303,11 +332,193 @@ def _string_constant_refs_in(path: Path) -> list[tuple[int, str]]:
     except SyntaxError:  # pragma: no cover — a broken file fails elsewhere
         return []
     found: list[tuple[int, str]] = []
+    seen: set[tuple[int, str]] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            if _issue_refs(node.value):
-                found.append((getattr(node, "lineno", 1), node.value))
+        text = _folded_str(node)
+        if text is None or not _issue_refs(text):
+            continue
+        key = (getattr(node, "lineno", 1), text)
+        if key in seen:  # a fold and its own operand can both match
+            continue
+        seen.add(key)
+        found.append(key)
     return found
+
+
+# ── Fixture declarations: the one way past the literal scan ──────────────────
+#
+# A test that pins this rule has to quote the form it rejects — the guard would
+# otherwise be untestable. So a TEST module may declare its own literals, in
+# itself, as ``_ISSUE_REF_FIXTURES = ((ref, reason), ...)``.
+#
+# Declaring in the file it covers is what makes this hold in both trees. A
+# central list here would name files this one cannot assume exist: not every
+# test module is published alongside it, and an entry pointing at an absent
+# file matches nothing and reads as stale. Keeping each exemption with its
+# literal means a file that is not there takes its declarations with it.
+#
+# Three rules, enforced below, because an exemption mechanism without them is
+# the blind spot with a nicer name:
+#
+#   - only test modules may declare (production and benchmark code gets
+#     reworded — a ref there is text a user reads);
+#   - every entry carries a reason;
+#   - every entry still matches a literal in that same file.
+#
+# Entries are written as plain literals on purpose. Splitting a ref across a
+# concatenation (``"#" + "100"``) also gets past the scan, but it gets past by
+# being invisible to it — nobody reviews what the guard never reports.
+
+#: Module-level name a test module uses to declare its own fixture literals.
+_FIXTURE_DECL = "_ISSUE_REF_FIXTURES"
+
+#: Roots whose modules may carry a declaration at all.
+_FIXTURE_DECL_ROOTS = ("tests",)
+
+#: A reason short enough to be a shrug ("fixture", "ok") is not a reason. Long
+#: enough to have named the literal and why it must stay.
+_MIN_REASON_CHARS = 40
+
+#: This module's own pinned cases — see the block comment above.
+_ISSUE_REF_FIXTURES: tuple[tuple[str, str], ...] = (
+    (
+        "#100",
+        "Pinned fixture for _issue_refs: the bare-tag case this guard rejects "
+        "has to appear literally. Synthetic number, no tracker meaning.",
+    ),
+    (
+        "#715",
+        "Pinned fixture: proves that stripping the permitted public-URL form "
+        "does not swallow a bare tag beside it. Synthetic number.",
+    ),
+    (
+        "https://github.com/some-owner/some-private-repo/issues/715",
+        "Pinned fixture: the foreign-tracker URL form this guard rejects. "
+        "Owner and repo are placeholders, not a real tracker.",
+    ),
+    (
+        "#404",
+        "Synthetic value in this mechanism's own self-tests, which build a "
+        "reasonless and a stale declaration to prove both rules fire.",
+    ),
+)
+
+
+def _declaration_in(path: Path) -> tuple[list[tuple[str, str]], tuple[int, int] | None, list[str]]:
+    """``(entries, line span, malformed complaints)`` for *path*'s declaration.
+
+    An entry that is not a ``(ref, reason)`` pair of literals is reported
+    rather than skipped: a declaration the parser cannot read is one nobody
+    can review either.
+    """
+    import ast
+
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except SyntaxError:  # pragma: no cover — a broken file fails elsewhere
+        return [], None, []
+
+    for node in tree.body:
+        targets = (
+            [node.target]
+            if isinstance(node, ast.AnnAssign)
+            else getattr(node, "targets", [])
+        )
+        if not any(isinstance(t, ast.Name) and t.id == _FIXTURE_DECL for t in targets):
+            continue
+
+        span = (node.lineno, node.end_lineno or node.lineno)
+        value = node.value
+        if not isinstance(value, (ast.Tuple, ast.List)):
+            return [], span, [f"{_FIXTURE_DECL} must be a tuple of (ref, reason) pairs"]
+
+        entries: list[tuple[str, str]] = []
+        problems: list[str] = []
+        for element in value.elts:
+            parts = (
+                [_folded_str(e) for e in element.elts]
+                if isinstance(element, (ast.Tuple, ast.List))
+                else []
+            )
+            if len(parts) != 2 or any(p is None for p in parts):
+                problems.append(
+                    f"line {getattr(element, 'lineno', span[0])}: each entry must be "
+                    "a (ref, reason) pair of string literals"
+                )
+                continue
+            entries.append((parts[0], parts[1]))  # type: ignore[arg-type]
+        return entries, span, problems
+
+    return [], None, []
+
+
+class _ScanResult(NamedTuple):
+    """What one pass over a source tree found."""
+
+    offenders: list[str]  #: literals carrying a ref that nothing covers
+    reasonless: list[str]  #: declared entries with no usable reason
+    stale: list[str]  #: declared entries matching no literal in their file
+    malformed: list[str]  #: declarations the parser could not read
+
+
+def _scan_source_strings(
+    repo_root: Path,
+    roots: tuple[str, ...],
+    *,
+    skip_diagnostics: bool = False,
+    honor_declarations: bool = True,
+) -> _ScanResult:
+    """Scan *roots* under *repo_root* and apply all three declaration rules.
+
+    Parameterised on the root so the same pass can be run against a copy of a
+    published subset, not only the tree it happens to live in.
+
+    A declared ref's own literal inside the declaration is not a hit — the
+    declaration has to write each exempted token down, and it does so beside
+    the reason for it. Only the exact declared strings are skipped: prose in
+    the same block is still scanned, and the entry stays subject to the reason
+    and staleness rules.
+    """
+    diagnostics = repo_root / "palinode" / "diagnostics"
+    result = _ScanResult([], [], [], [])
+
+    for root in roots:
+        for py in sorted((repo_root / root).rglob("*.py")):
+            if skip_diagnostics and py.is_relative_to(diagnostics):
+                continue
+            rel = py.relative_to(repo_root).as_posix()
+            may_declare = rel.startswith(tuple(f"{r}/" for r in _FIXTURE_DECL_ROOTS))
+            entries, span, problems = _declaration_in(py)
+            result.malformed.extend(f"  {rel}: {p}" for p in problems)
+
+            if entries and not (may_declare and honor_declarations):
+                result.malformed.append(
+                    f"  {rel}: declares {_FIXTURE_DECL}, which only test modules may do"
+                )
+                entries = []
+
+            declared = {ref for ref, _reason in entries}
+            live: set[str] = set()
+            for line, text in _string_constant_refs_in(py):
+                in_declaration = span is not None and span[0] <= line <= span[1]
+                if in_declaration and text in declared:
+                    continue
+                refs = _issue_refs(text)
+                if not in_declaration:
+                    live.update(refs)
+                offending = [r for r in refs if r not in declared]
+                if offending:
+                    result.offenders.append(
+                        f"  {rel}:{line}: {offending}  →  {text.strip()[:70]}"
+                    )
+
+            for ref, reason in entries:
+                if len(reason.strip()) < _MIN_REASON_CHARS:
+                    result.reasonless.append(f"  {rel}: {ref}: reason={reason.strip()!r}")
+                if ref not in live:
+                    result.stale.append(f"  {rel}: {ref}")
+
+    return result
 
 
 def test_no_issue_refs_in_package_strings() -> None:
@@ -319,16 +530,12 @@ def test_no_issue_refs_in_package_strings() -> None:
     ``/wrap`` command body rendered into a user's repo are all string constants
     outside ``diagnostics/`` that a reader sees and cannot follow.
 
-    ``tests/`` stays out. Test strings are fixtures and assertion prose for
-    contributors, not shipped user-facing text, and the pinned cases at the
-    bottom of this file quote bare tags on purpose.
+    The package keeps its own failure message because a ref here is printed at
+    a user, not read by a contributor — the companion below covers the rest of
+    the source roots without diluting that.
     """
     repo_root = Path(__file__).resolve().parent.parent
-    offenders: list[str] = []
-    for py in sorted((repo_root / "palinode").rglob("*.py")):
-        for line, text in _string_constant_refs_in(py):
-            rel = py.relative_to(repo_root)
-            offenders.append(f"  {rel}:{line}: {_issue_refs(text)}  →  {text.strip()[:70]}")
+    offenders = _scan_source_strings(repo_root, ("palinode",)).offenders
 
     assert not offenders, (
         "Unfollowable issue refs found in package string constants. A bare "
@@ -343,23 +550,163 @@ def test_no_issue_refs_in_source_string_constants() -> None:
     Diagnostics keeps its dedicated failure above because its remediation text
     is directly user-facing. This companion closes the equivalent gap in
     production code, fixtures, and benchmark harnesses without diluting that
-    diagnostic-specific explanation.
+    diagnostic-specific explanation: an ``xfail`` reason, a bench constant, a
+    fixture's project name are all literals that reach the public payload with
+    every other gate green.
     """
     repo_root = Path(__file__).resolve().parent.parent
-    offenders: list[str] = []
-    for root in _SOURCE_ROOTS:
-        for py in sorted((repo_root / root).rglob("*.py")):
-            if py.is_relative_to(repo_root / "palinode" / "diagnostics"):
-                continue
-            for line, text in _string_constant_refs_in(py):
-                rel = py.relative_to(repo_root)
-                offenders.append(f"  {rel}:{line}: {_issue_refs(text)}  →  {text.strip()[:70]}")
+    offenders = _scan_source_strings(
+        repo_root, _SOURCE_ROOTS, skip_diagnostics=True
+    ).offenders
 
     assert not offenders, (
         "Unfollowable issue refs found in source string constants. Replace the "
-        "bare number with the full public issue URL, or name the change instead:\n"
+        "bare number with the full public issue URL, name the change instead, or "
+        "— only in a test module, and only when the literal is the subject of "
+        f"the test — declare it in that file's {_FIXTURE_DECL} with a "
+        "reason:\n" + "\n".join(offenders)
+    )
+
+
+def test_fixture_declarations_are_well_formed() -> None:
+    """Only test modules declare, and a declaration must be readable.
+
+    Production and benchmark code cannot exempt itself: a ref there is text a
+    user reads, so the answer is to reword it.
+    """
+    repo_root = Path(__file__).resolve().parent.parent
+    offenders = _scan_source_strings(repo_root, _SOURCE_ROOTS).malformed
+    assert not offenders, (
+        f"Unusable {_FIXTURE_DECL} declarations. Each must be a tuple of "
+        "(ref, reason) string-literal pairs, in a test module:\n"
         + "\n".join(offenders)
     )
+
+
+def test_fixture_declarations_carry_a_reason() -> None:
+    """Every declared literal says why it stays.
+
+    Without this the declaration is the blind spot with a nicer name: a later
+    reader cannot tell a reviewed exception from a drive-by silencing.
+    """
+    repo_root = Path(__file__).resolve().parent.parent
+    offenders = _scan_source_strings(repo_root, _SOURCE_ROOTS).reasonless
+    assert not offenders, (
+        f"{_FIXTURE_DECL} entries without a usable reason. Say which literal "
+        "this is and why it cannot be reworded:\n" + "\n".join(offenders)
+    )
+
+
+def test_fixture_declarations_are_not_stale() -> None:
+    """A declared literal that is no longer there is deleted, not left to rot.
+
+    A stale entry pre-authorises a literal nobody reviewed: the line it was
+    written for is gone, but the ref keeps whatever takes its place out of the
+    scan. A declaration cannot keep itself alive either — its own token inside
+    the declaration does not count as the literal it covers.
+    """
+    repo_root = Path(__file__).resolve().parent.parent
+    offenders = _scan_source_strings(repo_root, _SOURCE_ROOTS).stale
+    assert not offenders, (
+        f"{_FIXTURE_DECL} entries matching no literal in their own file. "
+        "Delete them — what they covered is gone:\n" + "\n".join(offenders)
+    )
+
+
+# ── The declaration rules, pinned on synthetic modules ───────────────────────
+# Written to tmp_path rather than asserted against this repo, so they hold the
+# same way in any tree this file is published into.
+
+
+def _write_module(tmp_path: Path, rel: str, body: str) -> Path:
+    path = tmp_path / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_undeclared_literal_is_an_offender(tmp_path: Path) -> None:
+    """The baseline: a ref in a literal fails with no declaration to cover it."""
+    _write_module(tmp_path, "tests/test_sample.py", 'NOTE = "deferred:#404"\n')
+    result = _scan_source_strings(tmp_path, ("tests",))
+    assert result.offenders and "#404" in result.offenders[0]
+    assert not (result.reasonless or result.stale or result.malformed)
+
+
+def test_declared_literal_with_a_reason_passes(tmp_path: Path) -> None:
+    """A declaration with a real reason clears its own literal, and only it."""
+    _write_module(
+        tmp_path,
+        "tests/test_sample.py",
+        f'{_FIXTURE_DECL} = (("#404", "{"x" * _MIN_REASON_CHARS}"),)\n'
+        'NOTE = "deferred:#404"\n'
+        'OTHER = "deferred:#715"\n',
+    )
+    result = _scan_source_strings(tmp_path, ("tests",))
+    assert not (result.reasonless or result.stale or result.malformed)
+    assert len(result.offenders) == 1 and "#715" in result.offenders[0]
+
+
+def test_reasonless_declaration_is_rejected(tmp_path: Path) -> None:
+    """A missing or one-word reason fails, though the literal is covered."""
+    for reason in ("", "fixture"):
+        tree = tmp_path / reason.rjust(1, "_")
+        _write_module(
+            tree,
+            "tests/test_sample.py",
+            f'{_FIXTURE_DECL} = (("#404", "{reason}"),)\nNOTE = "deferred:#404"\n',
+        )
+        result = _scan_source_strings(tree, ("tests",))
+        assert result.reasonless, f"reason={reason!r} should be rejected"
+        assert not result.offenders
+
+
+def test_stale_declaration_is_rejected(tmp_path: Path) -> None:
+    """A declaration whose literal is gone fails — including its own token."""
+    _write_module(
+        tmp_path,
+        "tests/test_sample.py",
+        f'{_FIXTURE_DECL} = (("#404", "{"x" * _MIN_REASON_CHARS}"),)\n',
+    )
+    result = _scan_source_strings(tmp_path, ("tests",))
+    assert result.stale == ["  tests/test_sample.py: #404"]
+
+
+def test_declaration_outside_a_test_module_is_rejected(tmp_path: Path) -> None:
+    """Production code cannot declare its way out of the scan."""
+    _write_module(
+        tmp_path,
+        "palinode/sample.py",
+        f'{_FIXTURE_DECL} = (("#404", "{"x" * _MIN_REASON_CHARS}"),)\n'
+        'NOTE = "deferred:#404"\n',
+    )
+    result = _scan_source_strings(tmp_path, ("palinode",))
+    assert result.malformed and _FIXTURE_DECL in result.malformed[0]
+    assert result.offenders, "the literal is still an offender"
+
+
+def test_malformed_declaration_is_rejected(tmp_path: Path) -> None:
+    """A declaration the parser cannot read fails loudly instead of silently."""
+    _write_module(
+        tmp_path,
+        "tests/test_sample.py",
+        f'{_FIXTURE_DECL} = ("#404",)\nNOTE = "deferred:#404"\n',
+    )
+    result = _scan_source_strings(tmp_path, ("tests",))
+    assert result.malformed
+    assert result.offenders, "an unreadable declaration covers nothing"
+
+
+def test_prose_inside_a_declaration_is_still_scanned(tmp_path: Path) -> None:
+    """Only the declared token is skipped — a ref in a reason is an offender."""
+    _write_module(
+        tmp_path,
+        "tests/test_sample.py",
+        f'{_FIXTURE_DECL} = (("#404", "{"x" * _MIN_REASON_CHARS} see #715"),)\n'
+        'NOTE = "deferred:#404"\n',
+    )
+    result = _scan_source_strings(tmp_path, ("tests",))
+    assert result.offenders and "#715" in result.offenders[0]
 
 
 # ── What counts as an unfollowable reference ─────────────────────────────────
@@ -369,7 +716,7 @@ def test_no_issue_refs_in_source_string_constants() -> None:
 
 def test_bare_number_is_rejected() -> None:
     """The original case: a bare tag, whichever tracker the author meant."""
-    ref = "#" + "100"
+    ref = "#100"
     assert _issue_refs(f"Issue {ref}: the body was mangled.") == [ref]
 
 
@@ -391,15 +738,13 @@ def test_url_to_another_repository_is_rejected() -> None:
     dev-tracker link used to pass this guard untouched, while the same issue
     written as a bare tag beside it would have failed.
     """
-    url = "https://github.com/some-owner/some-private-repo/issues/" + "715"
+    url = "https://github.com/some-owner/some-private-repo/issues/715"
     text = f"Context: {url}"
-    assert _issue_refs(text) == [
-        url
-    ]
+    assert _issue_refs(text) == [url]
 
 
 def test_allowed_url_does_not_mask_a_bare_ref_beside_it() -> None:
     """Stripping the permitted form must not swallow an offender next to it."""
-    ref = "#" + "715"
+    ref = "#715"
     text = "https://github.com/phasespace-labs/palinode/issues/100 and also " + ref
     assert _issue_refs(text) == [ref]

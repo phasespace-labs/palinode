@@ -16,7 +16,9 @@ This module concentrates that knowledge into three stages:
     so a caller (or a test) can ask *what should be true* without a database.
     Each section's text is then passed through the current-text projection
     (:mod:`palinode.core.projection`), which drops the executor's retirement
-    tombstones, so FTS and the embedder are fed the same current content.
+    tombstones and the generated ``## See also`` footer, so FTS and the
+    embedder are fed the same current content. A section left with no text at
+    all gets no row.
     Two hash domains come out of this stage and are never mixed: the
     ``content_hash`` is over the *raw* section (what ``check_freshness`` and
     the quote-anchor verifier compare the file against); the
@@ -141,9 +143,21 @@ def derive(file_path: str, content: str) -> DerivedState:
     category = metadata.get(
         "category", os.path.basename(os.path.dirname(file_path))
     )
+    # A section whose projected text is empty has no current content to index:
+    # a generated `## See also` footer, which above the parser's single-chunk
+    # threshold gets a section of its own, or a section that was nothing but
+    # retirement tombstones. Writing it a row would put an empty chunk in FTS
+    # and hand the embedder an empty string, and the row would still be
+    # returned by an exact-ref read. It is dropped from the derived state
+    # instead, which also makes `plan` prune the row a pre-upgrade index left
+    # behind (`delete_ids`) rather than needing a migration of its own.
     derived_sections = tuple(
-        _derive_section(file_path, sec["section_id"], sec["content"])
-        for sec in sections
+        section
+        for section in (
+            _derive_section(file_path, sec["section_id"], sec["content"])
+            for sec in sections
+        )
+        if section.content.strip()
     )
     # Entity input is metadata['entities'] verbatim. Body-wikilink ingestion
     # and canonicalization are deliberately out of scope for the write path.

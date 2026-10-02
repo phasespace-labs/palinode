@@ -1,0 +1,298 @@
+{
+  "fixture_version": 1,
+  "harness": "claude-code",
+  "note": "Synthetic, fully fictional transcripts in Claude Code's JSONL shape. No real project, person, path or prompt appears here.",
+  "leak_sentinels": {
+    "tool_output": "FIXTURE-SENTINEL-TOOL-OUTPUT-NOT-A-REAL-SECRET",
+    "pasted_document": "FIXTURE-SENTINEL-PASTED-DOC-NOT-A-REAL-SECRET"
+  },
+  "positive_labels": [
+    "explicit_decision_change",
+    "rejected_approach",
+    "remember_this"
+  ],
+  "negative_labels": [
+    "hypothetical_advice",
+    "unaccepted_proposal",
+    "later_observation",
+    "unrelated",
+    "sarcasm_or_quote",
+    "pasted_document",
+    "tool_output",
+    "restated_summary",
+    "injected_context",
+    "assistant_turn"
+  ],
+  "turns": [
+    {
+      "transcript": "harbor-notes-export.jsonl",
+      "session_id": "11111111-2222-4333-8444-555555555555",
+      "turn_index": 0,
+      "turn_uuid": "11111111-0000-4000-8000-000000000001",
+      "label": "unrelated",
+      "hard_case": null,
+      "note": "Ordinary task request; no correction, no directive worth remembering."
+    },
+    {
+      "transcript": "harbor-notes-export.jsonl",
+      "session_id": "11111111-2222-4333-8444-555555555555",
+      "turn_index": 1,
+      "turn_uuid": "11111111-0000-4000-8000-000000000002",
+      "label": "assistant_turn",
+      "hard_case": null,
+      "note": "Assistant proposal that the next user turn overturns."
+    },
+    {
+      "transcript": "harbor-notes-export.jsonl",
+      "session_id": "11111111-2222-4333-8444-555555555555",
+      "turn_index": 2,
+      "turn_uuid": "11111111-0000-4000-8000-000000000003",
+      "label": "explicit_decision_change",
+      "hard_case": null,
+      "note": "Explicit rejection of the stated approach plus a named replacement."
+    },
+    {
+      "transcript": "harbor-notes-export.jsonl",
+      "session_id": "11111111-2222-4333-8444-555555555555",
+      "turn_index": 3,
+      "turn_uuid": "11111111-0000-4000-8000-000000000004",
+      "label": "assistant_turn",
+      "hard_case": null,
+      "note": ""
+    },
+    {
+      "transcript": "harbor-notes-export.jsonl",
+      "session_id": "11111111-2222-4333-8444-555555555555",
+      "turn_index": 4,
+      "turn_uuid": "11111111-0000-4000-8000-000000000005",
+      "label": "rejected_approach",
+      "hard_case": null,
+      "note": "Rejected approach with an explicit stated reason."
+    },
+    {
+      "transcript": "harbor-notes-export.jsonl",
+      "session_id": "11111111-2222-4333-8444-555555555555",
+      "turn_index": 5,
+      "turn_uuid": "11111111-0000-4000-8000-000000000006",
+      "label": "assistant_turn",
+      "hard_case": null,
+      "note": ""
+    },
+    {
+      "transcript": "harbor-notes-export.jsonl",
+      "session_id": "11111111-2222-4333-8444-555555555555",
+      "turn_index": 6,
+      "turn_uuid": "11111111-0000-4000-8000-000000000007",
+      "label": "remember_this",
+      "hard_case": null,
+      "note": "Explicit remember-this directive."
+    },
+    {
+      "transcript": "harbor-notes-export.jsonl",
+      "session_id": "11111111-2222-4333-8444-555555555555",
+      "turn_index": 7,
+      "turn_uuid": "11111111-0000-4000-8000-000000000008",
+      "label": "assistant_turn",
+      "hard_case": null,
+      "note": ""
+    },
+    {
+      "transcript": "harbor-notes-export.jsonl",
+      "session_id": "11111111-2222-4333-8444-555555555555",
+      "turn_index": 8,
+      "turn_uuid": "11111111-0000-4000-8000-000000000009",
+      "label": "tool_output",
+      "hard_case": "correction_text_in_tool_output",
+      "note": "A correction-shaped sentence inside tool output, beside a sentinel that stands in for the credentials and file contents real tool output carries. Never the user's own words, and never sent to the classifier."
+    },
+    {
+      "transcript": "harbor-notes-export.jsonl",
+      "session_id": "11111111-2222-4333-8444-555555555555",
+      "turn_index": 9,
+      "turn_uuid": "11111111-0000-4000-8000-000000000010",
+      "label": "pasted_document",
+      "hard_case": "correction_text_inside_pasted_document",
+      "note": "Correction-shaped text pasted inside a fenced block in the user's turn, carrying a sentinel that stands in for whatever a pasted document really holds. Neither the correction nor the sentinel may leave this turn."
+    },
+    {
+      "transcript": "harbor-notes-export.jsonl",
+      "session_id": "11111111-2222-4333-8444-555555555555",
+      "turn_index": 10,
+      "turn_uuid": "11111111-0000-4000-8000-000000000011",
+      "label": "hypothetical_advice",
+      "hard_case": null,
+      "note": "Conditional future advice; today's decision is unchanged."
+    },
+    {
+      "transcript": "harbor-notes-export.jsonl",
+      "session_id": "11111111-2222-4333-8444-555555555555",
+      "turn_index": 11,
+      "turn_uuid": "11111111-0000-4000-8000-000000000012",
+      "label": "unaccepted_proposal",
+      "hard_case": null,
+      "note": "User floats an alternative and never accepts it."
+    },
+    {
+      "transcript": "harbor-notes-export.jsonl",
+      "session_id": "11111111-2222-4333-8444-555555555555",
+      "turn_index": 12,
+      "turn_uuid": "11111111-0000-4000-8000-000000000013",
+      "label": "assistant_turn",
+      "hard_case": null,
+      "note": ""
+    },
+    {
+      "transcript": "harbor-notes-export.jsonl",
+      "session_id": "11111111-2222-4333-8444-555555555555",
+      "turn_index": 13,
+      "turn_uuid": "11111111-0000-4000-8000-000000000014",
+      "label": "later_observation",
+      "hard_case": null,
+      "note": "Observation after the fact; retires no decision."
+    },
+    {
+      "transcript": "harbor-notes-export.jsonl",
+      "session_id": "11111111-2222-4333-8444-555555555555",
+      "turn_index": 14,
+      "turn_uuid": "11111111-0000-4000-8000-000000000015",
+      "label": "restated_summary",
+      "hard_case": "same_correction_restated_in_summary",
+      "note": "Compact-summary restatement of corrections already captured. Never a second witness."
+    },
+    {
+      "transcript": "lantern-api-rate-limit.jsonl",
+      "session_id": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+      "turn_index": 0,
+      "turn_uuid": "66666666-0000-4000-8000-000000000000",
+      "label": "explicit_decision_change",
+      "hard_case": null,
+      "note": "Reversal of a decision made earlier, with the replacement named."
+    },
+    {
+      "transcript": "lantern-api-rate-limit.jsonl",
+      "session_id": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+      "turn_index": 1,
+      "turn_uuid": "66666666-0000-4000-8000-000000000001",
+      "label": "assistant_turn",
+      "hard_case": null,
+      "note": ""
+    },
+    {
+      "transcript": "lantern-api-rate-limit.jsonl",
+      "session_id": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+      "turn_index": 2,
+      "turn_uuid": "66666666-0000-4000-8000-000000000002",
+      "label": "rejected_approach",
+      "hard_case": null,
+      "note": "Rejected approach with a reason."
+    },
+    {
+      "transcript": "lantern-api-rate-limit.jsonl",
+      "session_id": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+      "turn_index": 3,
+      "turn_uuid": "66666666-0000-4000-8000-000000000003",
+      "label": "remember_this",
+      "hard_case": null,
+      "note": "Remember-this in its 'note this' form."
+    },
+    {
+      "transcript": "lantern-api-rate-limit.jsonl",
+      "session_id": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+      "turn_index": 4,
+      "turn_uuid": "66666666-0000-4000-8000-000000000004",
+      "label": "sarcasm_or_quote",
+      "hard_case": "quoted_correction_from_another_person",
+      "note": "A correction quoted from someone else, in a blockquote. Not this user deciding."
+    },
+    {
+      "transcript": "lantern-api-rate-limit.jsonl",
+      "session_id": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+      "turn_index": 5,
+      "turn_uuid": "66666666-0000-4000-8000-000000000005",
+      "label": "sarcasm_or_quote",
+      "hard_case": "sarcastic_remember_this",
+      "note": "Sarcasm in remember-this form. The grep stage matches; classification must reject."
+    },
+    {
+      "transcript": "lantern-api-rate-limit.jsonl",
+      "session_id": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+      "turn_index": 6,
+      "turn_uuid": "66666666-0000-4000-8000-000000000006",
+      "label": "later_observation",
+      "hard_case": null,
+      "note": "Observation only."
+    },
+    {
+      "transcript": "lantern-api-rate-limit.jsonl",
+      "session_id": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+      "turn_index": 7,
+      "turn_uuid": "66666666-0000-4000-8000-000000000007",
+      "label": "unaccepted_proposal",
+      "hard_case": null,
+      "note": "Question, not a decision. The grep stage matches 'instead of'."
+    },
+    {
+      "transcript": "lantern-api-rate-limit.jsonl",
+      "session_id": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+      "turn_index": 8,
+      "turn_uuid": "66666666-0000-4000-8000-000000000008",
+      "label": "injected_context",
+      "hard_case": "correction_text_in_injected_reminder",
+      "note": "Harness-injected reminder wrapped in the user line. Not the user's own words."
+    },
+    {
+      "transcript": "tidewater-sync-ordering.jsonl",
+      "session_id": "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+      "turn_index": 0,
+      "turn_uuid": "bbbbbbbb-0000-4000-8000-000000000000",
+      "label": "explicit_decision_change",
+      "hard_case": null,
+      "note": "Decision change stated as a replacement."
+    },
+    {
+      "transcript": "tidewater-sync-ordering.jsonl",
+      "session_id": "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+      "turn_index": 1,
+      "turn_uuid": "bbbbbbbb-0000-4000-8000-000000000001",
+      "label": "assistant_turn",
+      "hard_case": "correction_text_in_assistant_turn",
+      "note": "The assistant restating a correction in the user's words. Only user turns are evidence, so this must never become a candidate."
+    },
+    {
+      "transcript": "tidewater-sync-ordering.jsonl",
+      "session_id": "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+      "turn_index": 2,
+      "turn_uuid": "bbbbbbbb-0000-4000-8000-000000000002",
+      "label": "later_observation",
+      "hard_case": null,
+      "note": "Observation."
+    },
+    {
+      "transcript": "tidewater-sync-ordering.jsonl",
+      "session_id": "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+      "turn_index": 3,
+      "turn_uuid": "bbbbbbbb-0000-4000-8000-000000000003",
+      "label": "explicit_decision_change",
+      "hard_case": "correction_reverted_later_in_same_session",
+      "note": "Reverts the earlier correction in the same session. Both are real decision changes; ordering them is the review flow's job, not the detector's."
+    },
+    {
+      "transcript": "tidewater-sync-ordering.jsonl",
+      "session_id": "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+      "turn_index": 4,
+      "turn_uuid": "bbbbbbbb-0000-4000-8000-000000000004",
+      "label": "hypothetical_advice",
+      "hard_case": null,
+      "note": "Hypothetical stated with 'never'. The grep stage matches; classification must reject."
+    },
+    {
+      "transcript": "tidewater-sync-ordering.jsonl",
+      "session_id": "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+      "turn_index": 5,
+      "turn_uuid": "bbbbbbbb-0000-4000-8000-000000000005",
+      "label": "unrelated",
+      "hard_case": null,
+      "note": "Ordinary request."
+    }
+  ]
+}

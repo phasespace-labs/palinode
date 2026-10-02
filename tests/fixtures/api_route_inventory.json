@@ -1,5 +1,29 @@
 [
   [
+    "/aliases",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/aliases/add",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/aliases/check",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/aliases/remove",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/archive",
     [
       "POST"
@@ -66,6 +90,36 @@
     ]
   ],
   [
+    "/corrections",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/corrections/apply",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/corrections/dismiss",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/corrections/preview",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/corrections/undo",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/dedup-suggest",
     [
       "POST"
@@ -117,6 +171,12 @@
   ],
   [
     "/entities/{entity_ref:path}",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/explain/{bundle_id}",
     [
       "GET"
     ]
@@ -359,6 +419,12 @@
   ],
   [
     "/ui/compaction",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/ui/delivery/{bundle_id}",
     [
       "GET"
     ]

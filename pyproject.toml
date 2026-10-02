@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "palinode"
-version = "0.21.0"
+version = "0.22.0"
 description = "Inspectable, correctable project memory in git-versioned Markdown for AI agents."
 authors = [
   {name = "Paul Kyle", email = "paul@phasespace.co"}
@@ -137,6 +137,7 @@ packages = [
     "palinode.cli",
     "palinode.consolidation",
     "palinode.core",
+    "palinode.corrections",
     "palinode.diagnostics",
     "palinode.diagnostics.checks",
     "palinode.import_",

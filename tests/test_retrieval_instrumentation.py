@@ -133,6 +133,24 @@ class TestRetrievalLogger:
         assert entries[1]["file_path"] == "projects/palinode.md"
         assert entries[1]["rank"] == 1
 
+    def test_empty_search_writes_one_call_level_row(self, rl: RetrievalLogger):
+        rl.record_search_results(
+            [],
+            query="a question the store cannot answer",
+            source="palinode_search",
+            mode="explicit",
+            session_id="s-1",
+        )
+        entries = _read_log(rl)
+        assert len(entries) == 1
+        e = entries[0]
+        assert e["file_path"] == ""
+        assert e["chunk_id"] is None and e["rank"] is None and e["score"] is None
+        assert e["disposition"] == "none_delivered"
+        assert e["query"] == "a question the store cannot answer"
+        assert e["source"] == "palinode_search"
+        assert e["session_id"] == "s-1"
+
     def test_record_file_read_emits_entry(self, rl: RetrievalLogger):
         rl.record_file_read("people/bob.md", source="palinode_read", mode="explicit")
         entries = _read_log(rl)
@@ -318,6 +336,37 @@ class TestRetrievalStatsCLI:
             assert "top_files" in data
             assert "distribution" in data
             assert "age_days" in data
+        finally:
+            cfg_mod.config.memory_dir = original_dir
+
+    def test_empty_search_rows_are_counted_apart_from_retrievals(self, memory_dir: Path):
+        from datetime import datetime, timezone
+        events = self._sample_events()
+        events.append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "file_path": "",
+            "chunk_id": None,
+            "mode": "explicit",
+            "source": "palinode_search",
+            "query": "nothing matches this",
+            "rank": None,
+            "score": None,
+            "session_id": None,
+            "disposition": "none_delivered",
+        })
+        self._make_log(memory_dir, events)
+        import palinode.core.config as cfg_mod
+        original_dir = cfg_mod.config.memory_dir
+        cfg_mod.config.memory_dir = str(memory_dir)
+        try:
+            runner = CliRunner()
+            result = runner.invoke(retrieval_stats, ["--days", "7", "--format", "json"])
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert data["total_events"] == 4
+            assert data["explicit"] == 4
+            assert data["empty_searches"] == 1
+            assert data["unique_files_retrieved"] == 2
         finally:
             cfg_mod.config.memory_dir = original_dir
 

@@ -1,0 +1,143 @@
+# Palinode relevance & abstention baseline
+
+Measured against whatever the working tree does — the rig changes nothing itself, so a run is a baseline or a re-measurement depending only on when it was taken. Production search defaults changed by this run: `False`.
+
+- Generated: 2026-09-22T18:39:33.102284+00:00
+- Palinode: 0.21.0 · Python 3.12.13 · macOS-26.5-arm64-arm-64bit
+- Embedding model: bge-m3 (1024 dimensions) · reachable: **no**
+- Corpus v1 · question set v1
+- 39 records → 39 files → 56 chunks, 0 embedded (56 keyword-only)
+- 62 questions · top-k 5 · fts_threshold 0.40 · hybrid_weight 0.50 · snippet cap 400 chars
+- Keyword-only floor 0.35 · max chunks per file 1 (0 = unlimited)
+- Vector relative floor 0.85 (0 = none)
+- Timing passes per question: 3
+
+## Question set
+
+| Class | base | paraphrase | identifier | total |
+|---|---:|---:|---:|---:|
+| release_state | 10 | 3 | 4 | 17 |
+| rejected_approach | 10 | 3 | 0 | 13 |
+| changed_decision | 10 | 4 | 4 | 18 |
+| no_answer | 10 | 2 | 2 | 14 |
+
+Paraphrases and identifier variants are the held-out split: a paraphrase shares few content words with the record that answers it, and an identifier query is a bare tag, config key or filed number.
+
+## What ran, and what did not
+
+- **lexical (keyword-only)** — ran.
+- **lexical (keyword-only) + abstain** — ran.
+- **hybrid @ cosine floor 0.40** — **NOT RUN**: no embedding endpoint reachable; the hybrid arm needs real query vectors and synthetic ones would not measure retrieval quality
+- **hybrid @ cosine floor 0.40 + abstain** — **NOT RUN**: no embedding endpoint reachable; the hybrid arm needs real query vectors and synthetic ones would not measure retrieval quality
+- **hybrid @ cosine floor 0.50** — **NOT RUN**: no embedding endpoint reachable; the hybrid arm needs real query vectors and synthetic ones would not measure retrieval quality
+- **hybrid @ cosine floor 0.50 + abstain** — **NOT RUN**: no embedding endpoint reachable; the hybrid arm needs real query vectors and synthetic ones would not measure retrieval quality
+
+## Headline
+
+| Metric | lexical (keyword-only) | lexical (keyword-only) + abstain |
+|---|---:|---:|
+| Relevant-hit recall@k | 94.2% | 94.2% |
+| Answerable questions with a relevant hit | 46/48 | 46/48 |
+| Top-1 correct | 32/48 (66.7%) | 32/48 (66.7%) |
+| Irrelevant injections (of results delivered) | 128/200 (64.0%) | 103/175 (58.9%) |
+| Footer-only hits | 0/200 (0.0%) | 0/175 (0.0%) |
+| Redundant results (near-duplicate records) | 7/200 (3.5%) | 7/175 (4.0%) |
+| Repeat slots for one source file | 2/200 (1.0%) | 2/175 (1.1%) |
+| Project-isolation violations | 18/153 (11.8%) | 18/153 (11.8%) |
+| Correct abstention (no-answer questions) | 2/14 (14.3%) | 8/14 (57.1%) |
+| Inappropriate confident match | 12/14 (85.7%) | 6/14 (42.9%) |
+| Confidence band (median top score of a correct top-1) | 1.000 | 1.000 |
+| Distinct top scores behind that band | 1 | 1 |
+| Recency trap ranked first | 6/17 (35.3%) | 6/17 (35.3%) |
+| Useful-context tokens (of delivered payload) | 6140/23389 (26.3%) | 6140/20745 (29.6%) |
+| Payload tokens per question | 377.2 | 334.6 |
+| p50 latency (ms) | 1.89 | 1.86 |
+| p95 latency (ms) | 2.18 | 2.23 |
+| Keyword-fallback rate (of calls) | 0/186 (0.0%) | 0/186 (0.0%) |
+| Calls with no BM25 candidate | 0 | 0 |
+
+Latency covers the whole client-visible path: the query embedding where there is one, the store search, and rendering the delivered payload. The lexical arm builds no query vector, so its keyword-fallback count is zero by construction rather than by measurement.
+
+Read *inappropriate confident match* together with the row above it. The band is the median score a correct top-1 carries; when only one distinct score sits behind it, the delivered score is a function of rank rather than of relevance and the band cannot separate anything. In that case the number to act on is the abstention rate, not the confident-match rate.
+
+No project filter, category filter or context was passed on any call: these are the arguments an unadorned `palinode_search` sends, which is what makes project isolation a property of ranking here rather than of a filter the caller remembered to set.
+
+## Confidence verdict
+
+The delivery-level verdict, read from the pre-fusion arm scores, crossed with whether the question had an answer in the corpus. The two cells to read are `confident` under *no-answer* (a confident wrong answer) and `none` under *answerable* (a refusal to answer something the store holds) — the second is qualified by how many of those slates contained a relevant record at all.
+
+### lexical (keyword-only)
+
+| Verdict | answerable | of those, slate held a relevant record | no-answer |
+|---|---:|---:|---:|
+| confident | 33 | 33 | 0 |
+| weak | 15 | 13 | 6 |
+| none | 0 | 0 | 8 |
+
+Graded deliveries: 62.
+
+### lexical (keyword-only) + abstain
+
+| Verdict | answerable | of those, slate held a relevant record | no-answer |
+|---|---:|---:|---:|
+| confident | 33 | 33 | 0 |
+| weak | 15 | 13 | 6 |
+| none | 0 | 0 | 8 |
+
+Graded deliveries: 62.
+
+## Per class
+
+### lexical (keyword-only)
+
+| Class | questions | recall@k | top-1 | injections / results | footer-only | redundant | same-file | isolation | abstained | trap first |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| release_state | 17 | 94.1% | 12/17 | 34/55 | 0 | 3 | 1 | 8 | 0/0 | 4/8 |
+| rejected_approach | 13 | 100.0% | 10/13 | 17/34 | 0 | 4 | 0 | 5 | 0/0 | 0/0 |
+| changed_decision | 18 | 90.5% | 10/18 | 30/64 | 0 | 0 | 0 | 5 | 0/0 | 2/9 |
+| no_answer | 14 | n/a | 0/0 | 47/47 | 0 | 0 | 1 | 0 | 2/14 | 0/0 |
+
+### lexical (keyword-only) + abstain
+
+| Class | questions | recall@k | top-1 | injections / results | footer-only | redundant | same-file | isolation | abstained | trap first |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| release_state | 17 | 94.1% | 12/17 | 34/55 | 0 | 3 | 1 | 8 | 0/0 | 4/8 |
+| rejected_approach | 13 | 100.0% | 10/13 | 17/34 | 0 | 4 | 0 | 5 | 0/0 | 0/0 |
+| changed_decision | 18 | 90.5% | 10/18 | 30/64 | 0 | 0 | 0 | 5 | 0/0 | 2/9 |
+| no_answer | 14 | n/a | 0/0 | 22/22 | 0 | 0 | 1 | 0 | 8/14 | 0/0 |
+
+## Base versus held-out
+
+### lexical (keyword-only)
+
+| Variant | questions | recall@k | top-1 | injections / results |
+|---|---:|---:|---:|---:|
+| base | 40 | 97.1% | 20/30 | 94/145 |
+| identifier | 10 | 100.0% | 7/8 | 1/11 |
+| paraphrase | 12 | 80.0% | 5/10 | 33/44 |
+
+### lexical (keyword-only) + abstain
+
+| Variant | questions | recall@k | top-1 | injections / results |
+|---|---:|---:|---:|---:|
+| base | 40 | 97.1% | 20/30 | 75/126 |
+| identifier | 10 | 100.0% | 7/8 | 1/11 |
+| paraphrase | 12 | 80.0% | 5/10 | 27/38 |
+
+## Where it failed, by question
+
+### lexical (keyword-only)
+
+- No relevant hit at all (2): rel-01-p, chg-04-p
+- Recency trap ranked first (6): rel-01, rel-09, chg-04, rel-04-p, chg-04-p, idn-02
+- Footer-only hit in the slate (0): none
+- Cross-project result (18): rel-01, rel-04, rel-07, rel-08, rel-09, rej-01, rej-02, rej-07, rej-09, rej-10, chg-01, chg-02, chg-03, rel-01-p, rel-07-p, chg-01-p, chg-08-p, idn-02
+- No-answer question that returned something (12): non-01, non-02, non-03, non-04, non-05, non-06, non-07, non-08, non-09, non-10, non-01-p, non-05-p
+
+### lexical (keyword-only) + abstain
+
+- No relevant hit at all (2): rel-01-p, chg-04-p
+- Recency trap ranked first (6): rel-01, rel-09, chg-04, rel-04-p, chg-04-p, idn-02
+- Footer-only hit in the slate (0): none
+- Cross-project result (18): rel-01, rel-04, rel-07, rel-08, rel-09, rej-01, rej-02, rej-07, rej-09, rej-10, chg-01, chg-02, chg-03, rel-01-p, rel-07-p, chg-01-p, chg-08-p, idn-02
+- No-answer question that returned something (6): non-02, non-03, non-04, non-06, non-08, non-09

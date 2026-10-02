@@ -10,7 +10,12 @@ from palinode.core.parity import CATEGORIES
 def list_cmd(category, core_only, fmt):
     """List memory files."""
     try:
-        data = api_client.list_files(category=category, core_only=core_only)
+        # Browse, not injection: a superseded or archived core memory stays
+        # visible here (marked with why it no longer acts), while the
+        # injection consumers of the same endpoint get it withheld.
+        data = api_client.list_files(
+            category=category, core_only=core_only, include_retired_core=True
+        )
 
         output_fmt = OutputFormat(fmt) if fmt else get_default_format()
 
@@ -35,7 +40,15 @@ def list_cmd(category, core_only, fmt):
                 for item in items:
                     name = item["file"].split("/")[-1]
                     summary = item["summary"]
-                    core_tag = " [bold green][core][/bold green]" if item["core"] else ""
+                    # Both tags are escaped (``\[``) — an unescaped ``[core]``
+                    # is rich markup, and rich renders markup it doesn't know
+                    # as nothing at all, so the tag never reached the terminal.
+                    if item.get("core_retired_reason"):
+                        core_tag = (
+                            f" [yellow]\\[retired: {item['core_retired_reason']}][/yellow]"
+                        )
+                    else:
+                        core_tag = " [bold green]\\[core][/bold green]" if item["core"] else ""
                     if summary:
                         console.print(f"  {name:<16} — {summary}{core_tag}")
                     else:

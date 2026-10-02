@@ -121,12 +121,15 @@ Quickstart's own CLI checks, `api_search` for a bare API call), the query, the
 record's store-relative ref, its disposition, and the scope the server
 resolved. Three limits, each confirmed in rehearsal, bound what it can say:
 
-- **A search that delivers nothing writes no row.** The missing-evidence
-  query in the rehearsal returned an explicit `no_match` receipt and added
-  zero rows. An absent row cannot distinguish "never searched" from "searched
-  and found nothing"; the participant's one-line answer is the record of
-  those outcomes, and the study never assigns a failure stage from a missing
-  row alone.
+- **A search that delivers nothing writes one call-level row, from the
+  release after v0.21.0.** It carries the query, source, scope and receipt
+  coverage, an empty ref, and disposition `none_delivered`, so "searched and
+  found nothing" is distinguishable from "never searched". On the pinned
+  `v0.21.0` tag the rehearsal's missing-evidence query returned an explicit
+  `no_match` receipt and added zero rows; there, an absent row cannot make
+  that distinction, the participant's one-line answer is the record of those
+  outcomes, and the study never assigns a failure stage from a missing row
+  alone.
 - **Session-init plus read is a valid route with no search row.** A client
   that recovers the decision through `palinode_session_init` and then
   `palinode_read` leaves only a `palinode_read` row. Any client-sourced row

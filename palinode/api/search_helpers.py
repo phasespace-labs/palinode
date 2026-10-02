@@ -18,6 +18,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from palinode.core import embedder, store
+from palinode.core.agent_directed import withhold_agent_directed
 from palinode.core.tiers import apply_tier
 from palinode.core.config import config
 from palinode.core.defaults import (
@@ -149,12 +150,19 @@ def _enrich_with_snippets(
 ) -> None:
     """In-place add ``snippet`` and ``content_truncated`` to each result.
 
-    The ``content`` field is preserved so API/CLI consumers that legitimately
-    want full chunk bodies are unchanged. MCP callers render ``snippet`` by
+    The ``content`` field keeps the full chunk body so API/CLI consumers that
+    legitimately want it are unchanged. MCP callers render ``snippet`` by
     default to stay within MCP tool-result budgets.
+
+    Both are delivery, so text addressed to AI agents is withheld from both
+    before the window is cut, and ``agent_directed_withheld`` says whether any
+    was. ``palinode_read`` shows the record whole.
     """
     for r in results:
-        content = r.get("content") or ""
+        content, withheld = withhold_agent_directed(r.get("content") or "")
+        if withheld:
+            r["content"] = content
+        r["agent_directed_withheld"] = withheld
         if len(content) <= max_chars:
             r["snippet"] = content
             r["content_truncated"] = False

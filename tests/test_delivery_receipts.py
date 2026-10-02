@@ -115,7 +115,11 @@ def test_ordinary_receipt_adds_retrieval_diagnostics(client, mem):
     assert isinstance(plain, list)
 
     enveloped = client.post("/search", json=body | {"receipt": True}).json()
-    assert set(enveloped) == {"results", "receipt"}
+    # The envelope also names the scope this delivery applied and the source
+    # that decided it — the same two keys /context/prime returns.
+    assert set(enveloped) == {"results", "receipt", "project", "project_resolved_by"}
+    assert enveloped["project"] is None
+    assert enveloped["project_resolved_by"] == "none"
     # The delivered rows are the same delivery, byte for byte.
     assert json.dumps(_stable(enveloped["results"]), sort_keys=True) == \
         json.dumps(_stable(plain), sort_keys=True)
@@ -404,7 +408,10 @@ def test_mcp_rendering_without_resolve_has_receipt_and_mode(client, mem):
     assert with_receipt.startswith(plain)
     extra = with_receipt[len(plain):].strip().splitlines()
     assert len(extra) == 2 and extra[0].startswith(f"Receipt: {receipt['bundle_id']}")
-    assert extra[1] == "Retrieval: hybrid · index: ready · matched"
+    # Readiness, outcome, and — since the delivery also judges what it found —
+    # the match-confidence verdict with the arm scores behind it.
+    assert extra[1].startswith("Retrieval: hybrid · index: ready · matched · match confidence: ")
+    assert receipt["retrieval"]["confidence"] in extra[1]
 
 
 # ── persistence: the retrieval log carries the receipt ───────────────────────
@@ -435,6 +442,26 @@ def test_retrieval_log_rows_carry_the_receipt_fields(client, mem, monkeypatch):
     assert entry["coverage"] == {"status": "not_requested", "reasons": []}
     # No memory prose in the log beyond the query it always carried.
     assert "Postgres as the primary" not in log
+
+
+def test_an_empty_search_logs_one_row_with_the_receipt_and_no_ref(client, mem, monkeypatch):
+    import palinode.api.routers.search as search_router
+
+    monkeypatch.setattr(search_router, "_retrieval_logger", RetrievalLogger(str(mem)))
+    rows, receipt = _search(client, query="zeppelin mooring regulations", limit=3,
+                            resolve="none")
+    assert rows == []
+
+    log = (mem / ".audit" / "retrievals.jsonl").read_text(encoding="utf-8").strip()
+    entries = [json.loads(line) for line in log.splitlines() if line]
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["file_path"] == "" and entry["rank"] is None
+    assert entry["disposition"] == "none_delivered"
+    assert entry["query"] == "zeppelin mooring regulations"
+    assert entry["bundle_id"] == receipt["bundle_id"]
+    assert entry["timestamp"] == receipt["evaluated_at"]
+    assert entry["coverage"] == {"status": "not_requested", "reasons": []}
 
 
 def test_a_row_written_without_a_receipt_is_unchanged(tmp_path):

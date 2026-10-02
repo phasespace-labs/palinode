@@ -22,6 +22,29 @@ from palinode.core.parser import parse_external_refs, parse_markdown
 client = TestClient(app)
 
 
+#: Literals here carry the product's own qualified reference syntax, which the
+#: issue-ref guard cannot distinguish from an unfollowable bare tag. Declared
+#: rather than reworded: `owner/repo#N` names its tracker, and the value is the
+#: thing under test. See tests/test_no_issue_refs_user_surface.py.
+_ISSUE_REF_FIXTURES: tuple[tuple[str, str], ...] = (
+    (
+        "#17",
+        "Fixture value for the gitlab_issue external-ref key: a qualified "
+        "myorg/myrepo reference, placeholder org and repo.",
+    ),
+    (
+        "#1234",
+        "Fixture value for the gitlab_pipeline external-ref key: a qualified "
+        "myorg/myrepo reference, placeholder org and repo.",
+    ),
+    (
+        "#99",
+        "Fixture value for the github_pr external-ref key, qualified to the "
+        "public phasespace-labs/palinode repo — followable by design.",
+    ),
+)
+
+
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 
@@ -172,9 +195,9 @@ class TestSaveExternalRefs:
     def test_save_roundtrips_all_recognised_keys(self, mock_memory_dir):
         refs = {
             "gitlab_mr": "myorg/myrepo!42",
-            "gitlab_issue": "myorg/myrepo" + "#" + "17",
-            "gitlab_pipeline": "myorg/myrepo" + "#" + "1234",
-            "github_pr": "phasespace-labs/palinode" + "#" + "99",
+            "gitlab_issue": "myorg/myrepo#17",
+            "gitlab_pipeline": "myorg/myrepo#1234",
+            "github_pr": "phasespace-labs/palinode#99",
             "linear_issue": "PAL-42",
             "jira_issue": "PROJ-100",
         }

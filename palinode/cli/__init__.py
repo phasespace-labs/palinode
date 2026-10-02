@@ -5,6 +5,7 @@ from palinode.core.brand import BANNER
 from palinode.core.config import config
 
 _cli_logger = logging.getLogger("palinode.config")
+from palinode.cli.aliases import aliases
 from palinode.cli.prime import prime
 from palinode.cli.search import search
 from palinode.cli.save import save
@@ -19,6 +20,7 @@ from palinode.cli.doctor import doctor
 from palinode.cli.manage import reindex, rebuild_fts, split_layers, bootstrap_ids
 from palinode.cli.git import blame, history, rollback, push
 from palinode.cli.trace import trace
+from palinode.cli.explain import explain
 from palinode.cli.query import entities
 from palinode.cli.session_end import session_end
 from palinode.cli.read import read
@@ -26,6 +28,7 @@ from palinode.cli.list_cmd import list_cmd
 from palinode.cli.lint import lint
 from palinode.cli.resolve import resolve
 from palinode.cli.review import review
+from palinode.cli.corrections import corrections
 from palinode.cli.ingest import ingest
 from palinode.cli.prompt import prompt
 from palinode.cli.migrate import migrate
@@ -99,6 +102,7 @@ main.add_command(bootstrap_ids)
 main.add_command(blame)
 main.add_command(history)
 main.add_command(trace)
+main.add_command(explain)
 main.add_command(rollback)
 main.add_command(push)
 
@@ -107,8 +111,10 @@ main.add_command(entities)
 main.add_command(read)
 main.add_command(list_cmd, name="list")
 main.add_command(lint)
+main.add_command(aliases)
 main.add_command(resolve)
 main.add_command(review)
+main.add_command(corrections)
 main.add_command(ingest)
 main.add_command(migrate)
 

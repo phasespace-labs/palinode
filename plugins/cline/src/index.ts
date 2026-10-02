@@ -194,7 +194,7 @@ export function createPalinodePlugin(options: PalinodePluginOptions = {}): Cline
   async function contextFor(prompt: MessageLike): Promise<string | null> {
     const digest = primed ? Promise.resolve(null) : buildCoreDigest(cfg, fetchFn, cwd, sessionId);
     primed = true;
-    const parts = await Promise.all([digest, buildRecallContext(promptText(prompt), cfg, fetchFn)]);
+    const parts = await Promise.all([digest, buildRecallContext(promptText(prompt), cfg, fetchFn, cwd)]);
     const text = parts.filter((p): p is string => Boolean(p)).join("\n\n");
     return text || null;
   }

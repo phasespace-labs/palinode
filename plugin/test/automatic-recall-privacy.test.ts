@@ -18,7 +18,10 @@ function register(config: Record<string, unknown> = {}) {
     pluginConfig: { palinodeApiUrl: "http://fixture.test", palinodeDir: localDir,
       autoCapture: false, recallProfile: "writing", ...config },
     logger,
-    registerTool: (tool: any) => { tools[tool.name] = tool; },
+    registerTool: (tool: any) => {
+      if (typeof tool === "function") tool = tool({});
+      tools[tool.name] = tool;
+    },
     on: (name: string, hook: any) => { hooks[name] = hook; },
     registerCli: vi.fn(), registerService: vi.fn(),
   } as any);

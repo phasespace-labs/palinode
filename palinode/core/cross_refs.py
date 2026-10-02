@@ -33,10 +33,13 @@ import re
 from typing import Any
 
 import frontmatter
+import yaml
 
 from palinode.core import git_tools
 from palinode.core import parser as _parser
 from palinode.core.config import config
+from palinode.core.scope import ScopeChain, other_project, project_entities
+from palinode.core.visibility import is_visible
 
 logger = logging.getLogger("palinode.cross_refs")
 
@@ -117,32 +120,35 @@ def path_to_ref(rel_path: str) -> str:
     return stem.replace(os.sep, "/")
 
 
-#: Per-``memory_dir`` registry cache: ``{ref: ((mtime_ns, size), slug, title)}``.
+#: Per-``memory_dir`` registry cache: ``{ref: ((mtime_ns, size), slug, metadata)}``.
 #: A file's entry is reused while its stat stamp is unchanged and re-read
 #: otherwise, so a rebuild costs one ``stat`` per memory plus one parse per
 #: *changed* memory — instead of one parse per memory per call, which made a
 #: reindex of N files O(N²) parses. Whole-dict replacement per call, so a
 #: concurrent caller sees either the previous or the new snapshot.
-_registry_cache: dict[str, dict[str, tuple[tuple[int, int] | None, str, str]]] = {}
+_registry_cache: dict[str, dict[str, tuple[tuple[int, int] | None, str, dict[str, Any] | None]]] = {}
 
 
-def _read_title(filepath: str) -> str:
-    """The memory's ``title`` (or ``name``) from its frontmatter, ``""`` when
-    unreadable or unparseable — a bad file still cross-links by ref/slug."""
+def _read_metadata(filepath: str) -> dict[str, Any] | None:
+    """Live target metadata; unreadable files cannot establish project scope."""
     try:
         with open(filepath, encoding="utf-8") as fh:
             meta, _ = _parser.parse_frontmatter(fh.read())
-        return str(meta.get("title") or meta.get("name") or "").strip()
+        return meta
     except Exception:
-        return ""
+        return None
 
 
 def build_registry(
-    memory_dir: str, *, exclude_ref: str | None = None
+    memory_dir: str, *, exclude_ref: str | None = None,
+    source_metadata: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, str]]:
     """Map every linkable memory's ``category/slug`` ref → ``{slug, title}``.
 
-    Reads each memory's frontmatter (title/name). Files with any directory
+    Reads each memory's frontmatter (title/name and project entities). With
+    ``source_metadata``, targets must share a project or be global. A global
+    source retains unscoped matching; read-time filtering applies the reader's
+    scope independently. Files with any directory
     segment in :data:`SKIP_DIRS` are excluded (see :func:`_is_skipped`), so
     ``specs/prompts/compaction.md`` is never offered as a link target.
     ``exclude_ref`` (the scanned file's own ref) is omitted so a
@@ -153,7 +159,8 @@ def build_registry(
     :data:`_registry_cache`). Returns a fresh dict each time.
     """
     previous = _registry_cache.get(memory_dir, {})
-    current: dict[str, tuple[tuple[int, int] | None, str, str]] = {}
+    current: dict[str, tuple[tuple[int, int] | None, str, dict[str, Any] | None]] = {}
+    projects = project_entities(source_metadata or {})
     pattern = os.path.join(memory_dir, "**", "*.md")
     for filepath in glob.glob(pattern, recursive=True):
         rel = os.path.relpath(filepath, memory_dir)
@@ -169,15 +176,18 @@ def build_registry(
             stamp = None
         cached = previous.get(ref)
         if stamp is not None and cached is not None and cached[0] == stamp:
-            title = cached[2]
+            meta = cached[2]
         else:
-            title = _read_title(filepath)
-        current[ref] = (stamp, slug, title)
+            meta = _read_metadata(filepath)
+        current[ref] = (stamp, slug, meta)
     _registry_cache[memory_dir] = current
     return {
-        ref: {"slug": slug, "title": title}
-        for ref, (_stamp, slug, title) in current.items()
+        ref: {"slug": slug, "title": str((meta or {}).get("title") or (meta or {}).get("name") or "").strip()}
+        for ref, (_stamp, slug, meta) in current.items()
         if ref != exclude_ref
+        and (not projects or (meta is not None and any(
+            not other_project(ScopeChain(project=project), meta) for project in projects
+        )))
     }
 
 
@@ -217,6 +227,36 @@ def _normalize_existing(value: Any) -> list[str]:
     return []
 
 
+def filter_read_cross_refs(content: str, chain: ScopeChain | None) -> str:
+    """Filter automatic metadata links using live targets and the reader's scope.
+
+    ``cross_refs`` is the auto-updater's field, including legacy lists without
+    provenance markers. Authored body links and typed relations are untouched.
+    The returned view never rewrites the stored record.
+    """
+    meta, _ = _parser.parse_frontmatter(content)
+    refs = meta.get("cross_refs")
+    if not isinstance(refs, list):
+        return content
+    root = os.path.realpath(config.memory_dir)
+    visible = []
+    for ref in refs:
+        if not isinstance(ref, str) or not ref or os.path.isabs(ref):
+            continue
+        if ".." in ref.replace("\\", "/").split("/"):
+            continue
+        path = os.path.abspath(os.path.join(root, ref if ref.endswith(".md") else ref + ".md"))
+        if os.path.commonpath([root, path]) != root or os.path.realpath(path) != path:
+            continue
+        if is_visible(chain, path):
+            visible.append(ref)
+    if visible == refs:
+        return content
+    meta["cross_refs"] = visible
+    _, body = _parser.split_frontmatter(content)
+    return "---\n" + yaml.safe_dump(meta, allow_unicode=True, sort_keys=False) + "---\n" + body
+
+
 def update_file_cross_refs(
     filepath: str, *, content: str | None = None
 ) -> dict[str, Any]:
@@ -251,7 +291,7 @@ def update_file_cross_refs(
 
     self_ref = path_to_ref(rel)
     min_token_len = config.capture.cross_refs.min_token_len
-    registry = build_registry(memory_dir, exclude_ref=self_ref)
+    registry = build_registry(memory_dir, exclude_ref=self_ref, source_metadata=post.metadata)
     refs = detect_refs(post.content, registry, min_token_len=min_token_len)
     result["refs"] = refs
 

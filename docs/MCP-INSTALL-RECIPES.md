@@ -20,7 +20,9 @@ for Claude Code (`--editor claude-code`, JSON), Codex CLI (`--editor codex`, TOM
 Continue (`--editor continue`, YAML), or Desktop (`--editor claude-desktop`, JSON).
 Run the command from the intended installation; its MCP executable is resolved
 automatically. Merge the emitted entry into existing settings, preserving other
-servers. Use `--http --url <MCP-URL>` for a remote endpoint.
+servers. Use `--http --url <MCP-URL>` for a remote endpoint, and add
+`--project <slug>` to scope that client: it is sent as the `X-Palinode-Project`
+header, because a remote server cannot see the client's directory.
 
 The flagship clients are Claude Code and Codex CLI. Serializer and isolated
 process tests do not establish an authenticated chat interaction. Continue and
@@ -629,9 +631,12 @@ The full variable set:
 | `PALINODE_DIR` | `~/.palinode` | Memory file directory (override if non-default) |
 | `PALINODE_API_HOST` | `127.0.0.1` | Host where `palinode-api` listens |
 | `PALINODE_API_PORT` | `6340` | Port for `palinode-api` |
-| `PALINODE_PROJECT` | _(auto from CWD)_ | Project context for ambient search |
+| `PALINODE_PROJECT` | _(auto from CWD)_ | Pins the project for this process: every recall call resolves it ahead of repository/CWD detection. Emitted by `palinode mcp-config --stdio --project <slug>` and `palinode init --pin-project`. |
 
-For HTTP transport the env vars are set on the server side, not the client.
+For HTTP transport the env vars are set on the server side, not the client. A
+server-side `PALINODE_PROJECT` pins every client that sends no project; to
+scope one HTTP client, send the `X-Palinode-Project` header instead
+(`palinode mcp-config --http --project <slug>`).
 
 ---
 

@@ -6,13 +6,20 @@ How to upgrade, recover from crashes, and maintain a healthy Palinode installati
 
 ## Core Safety Guarantee
 
-**Your markdown files are the source of truth.** The SQLite database, vector index, and FTS5 keyword index are all derived from files. If anything goes wrong with the database, delete it and reindex. Your memories are safe as long as the files exist.
+**Your markdown files are the source of truth.** Every memory lives in a file. The vector index and the FTS5 keyword index are derived from those files, so if anything goes wrong with the database you can delete it and reindex: your memories are safe as long as the files exist.
 
 ```
 Files (markdown + YAML frontmatter)  ← source of truth, git-versioned
   ↓ derived
 Database (.palinode.db)              ← rebuild anytime with `palinode reindex`
 ```
+
+**Two things in the database are not derived from files, and deleting it loses them:**
+
+- **Registered triggers** (`palinode trigger`) — the description, target file, threshold, cooldown, expiry and authority are stored only in the database. Capture them with `palinode trigger list` before deleting, and re-register afterwards.
+- **Recall reinforcement** — how often a memory has been retrieved and how recently (`importance`, `last_recalled`, `recall_count`). This only affects result ordering, it decays back to neutral on its own, and losing it costs you nothing but a few weeks of tuning.
+
+Neither holds memory content. Your memories are still safe.
 
 ---
 
@@ -139,21 +146,62 @@ gate on, schedule the cron as often as hourly and let it decide:
 
 ```cron
 # Hourly; the gate decides whether anything actually happens.
-17 * * * * cd /path/to/palinode && PALINODE_DIR=~/palinode venv/bin/python -m palinode.consolidation.cron --nightly --days 1 >> logs/consolidation.log 2>&1
+17 * * * * cd /path/to/palinode && PALINODE_DIR=~/palinode venv/bin/python -m palinode.consolidation.cron --nightly >> logs/consolidation.log 2>&1
 47 * * * * cd /path/to/palinode && PALINODE_DIR=~/palinode venv/bin/python -m palinode.consolidation.cron --days 3 >> logs/consolidation.log 2>&1
 ```
 
-Both `--days` values above match the shipped defaults. Keep them that way: the
-cron argument silently overrides `consolidation.lookback_days`, so a crontab
-edited without the config is the kind of divergence nobody notices until a run
-behaves unexpectedly. `palinode doctor` reports the effective lookback and warns
-when the two disagree.
+The weekly's `--days 3` matches the shipped default. Keep it that way: the cron
+argument silently overrides `consolidation.lookback_days`, so a crontab edited
+without the config is the kind of divergence nobody notices until a run behaves
+unexpectedly. `palinode doctor` reports the effective lookback and warns when
+the two disagree.
 
 The weekly's three days is a *deep clean* over recent notes — the pass that may
 ARCHIVE and MERGE, which the nightly deliberately cannot. It is not a safety net
-for old stragglers: a note the nightly never consolidated is not revisited once
-it falls outside the weekly window either. Widening the window is the wrong lever
-for that, because both passes pay for context they re-read.
+for the nightly: a note the nightly never consolidated is not revisited once it
+falls outside the weekly window either. Widening the window is the wrong lever
+for that, because the pass pays for context it re-reads.
+
+### The nightly does not have a window
+
+The nightly line above passes no `--days`, because the nightly no longer selects
+by calendar window. It keeps a **per-project watermark** — the time of the last
+pass that resolved that project — and reads the notes written since. Four
+consequences worth knowing before you tune anything:
+
+- **A failed, deferred or lock-refused pass advances nothing**, per project. The
+  next run covers the gap by construction, and covers *only* the gap: a project
+  that succeeded is not re-read because a different one failed.
+- **Timestamps, not dates.** A working day that straddles UTC midnight, or a
+  capture appended to an older dated file, is selected exactly once. The old
+  date-string cutoff could miss both, and nothing revisited what a window had
+  passed over.
+- **`--days N` still works and now means the catch-up bound**: how far back a
+  cold or long-failed watermark may reach, so one abandoned project cannot hand
+  the model months of notes in a single request. The default is
+  `consolidation.nightly.lookback_days: 7`, chosen to match
+  `auto_gate.max_hours_elapsed` (168 h) — the gate may legitimately let a week
+  pass before firing at its ceiling, and a shorter bound would drop notes the
+  gate itself chose to wait on. When the bound clamps a mark, the pass logs the
+  project, the mark, the bound and how many note files fell in the gap; it is
+  never a silent truncation.
+- **Each prompt is a fixed size; a busy day takes several.** One prompt carries
+  about 6,000 characters of notes, oldest first, and records where it stopped.
+  A project with more than that is sent the next prompt, resumed at that point,
+  up to `consolidation.nightly.max_prompts_per_project` (default 4) per pass.
+  The pass stops early when nothing is pending, or when a prompt fails or is
+  cut off at the token cap; the mark then stays at the end of the last prompt
+  that resolved. The run result's `prompts_sent` says how many each project
+  took, and `notes_pending` what is left for the next pass.
+
+**Upgrading:** nothing to do. An existing cron line keeps working and covers at
+least what it used to — a line that was widened to `--days 3` to self-heal
+skipped nights is now buying catch-up headroom for the same purpose, and the
+nightly's log says so on every run. Dropping `--days` from the nightly line is
+the tidier end state, but it is optional. On the first run after the upgrade a
+project with no mark starts from the last successful nightly the store recorded
+(the `runs` history, or the gate's clock), clamped to the catch-up bound; a
+store with no record of a successful pass starts one bound back.
 
 A deferred pass exits 0 and logs one line naming both numerators and both
 denominators, so the cron log alone answers "why didn't it run last night":
@@ -181,6 +229,13 @@ last 30 real passes with their start, status, failed projects and lookback,
 including the partial and raised passes the clock ignores. Nothing in the gate
 reads it; `palinode doctor`'s `consolidation_last_run` does, to report the
 last outcome and count a failure streak (see [DOCTOR.md](DOCTOR.md)).
+
+It also holds the nightly's per-project **watermarks** under `watermarks` —
+one timestamp per project, advanced only by a pass that resolved that project.
+Deleting the file loses the marks, not the notes: the next nightly cold-starts
+from the last recorded successful pass, or one catch-up bound back. Like the
+clock and the history, it is derived operational state and never memory
+content.
 
 Notes:
 
@@ -246,6 +301,9 @@ What to know about it operationally:
 ### Database corrupted or missing
 
 ```bash
+# Capture what the rebuild cannot restore (see the note below)
+palinode trigger list --format json > ~/triggers-backup.json
+
 # Delete the database
 rm ~/.palinode/.palinode.db
 
@@ -256,6 +314,13 @@ palinode reindex
 Your memories are untouched. The database is rebuilt from scratch. A hybrid
 rebuild embeds each changed section; a lexical rebuild recreates only the FTS
 index and needs no embedding service.
+
+**Registered triggers and recall statistics do not come back** — they are not
+derived from files (see *Core Safety Guarantee*). Re-register triggers from the
+capture above; recall statistics restart at neutral and re-accumulate with use.
+**If the database is too damaged to read, that capture will fail too** — which
+is why the backup section below suggests exporting triggers on a schedule
+rather than at the moment you need them.
 
 ### Embedding endpoint is down
 
@@ -464,7 +529,12 @@ For belt-and-suspenders:
 cp -r ~/.palinode /backup/palinode-$(date +%Y%m%d)
 ```
 
-The `.palinode.db` file does NOT need to be backed up — it's rebuilt from files with `palinode reindex`.
+The `.palinode.db` file is rebuilt from files with `palinode reindex`, so it needs no backup to protect your memories. If you rely on registered triggers, back those up separately — they are not stored in files:
+
+```bash
+mkdir -p ~/.palinode-backups
+palinode trigger list --format json > ~/.palinode-backups/triggers-$(date +%Y%m%d).json
+```
 
 ---
 
@@ -479,7 +549,7 @@ The `.palinode.db` file does NOT need to be backed up — it's rebuilt from file
 | `PALINODE_RATE_LIMIT_WRITE` | `30` | Max write requests per minute per IP |
 | `PALINODE_MAX_REQUEST_BYTES` | `5242880` (5MB) | Max request body size |
 | `PALINODE_HARNESS` | auto-detected | Harness identity for scoped memory |
-| `PALINODE_PROJECT` | auto-detected from CWD | Project context for ambient search boost |
+| `PALINODE_PROJECT` | auto-detected from CWD | Pins the project for this process: every recall call resolves it ahead of repository/CWD detection. A slug or `project/<slug>` ref; an unusable value is refused (CLI aborts, MCP returns an error, API answers 400). |
 | `PALINODE_MEMBER` | none | Member identity for scoped memory |
 
 ---

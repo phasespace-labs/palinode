@@ -824,6 +824,116 @@ def test_init_dry_run_lists_detected_harness_files(tmp_path: Path):
     assert not (tmp_path / ".cursor" / "rules").exists()
 
 
+# ---- The both-instruction-files disclosure ----------------------------------
+#
+# `init` writes .claude/CLAUDE.md and, on detection, AGENTS.md. Claude Code's
+# documented default is to read its CLAUDE.md files INSTEAD OF AGENTS.md when
+# a CLAUDE.md-family file sits in the working directory or above it, while
+# Codex reads AGENTS.md and not CLAUDE.md — so the two copies are not
+# interchangeable. These guards pin the disclosure, not a behaviour change:
+# which files get written is asserted unchanged above and below.
+
+_DISCLOSURE = "Two instruction files, two audiences"
+
+
+def test_no_disclosure_when_no_agents_md_surface(tmp_path: Path):
+    """Neither file present → .claude/CLAUDE.md only, and no note about a
+    split that does not exist."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["init", "--dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / ".claude" / "CLAUDE.md").exists()
+    assert not (tmp_path / "AGENTS.md").exists()
+    assert _DISCLOSURE not in result.output
+
+
+def test_no_disclosure_when_project_has_only_claude_md(tmp_path: Path):
+    """A pre-existing .claude/CLAUDE.md is still a one-file project."""
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "CLAUDE.md").write_text("# Project\n")
+    runner = CliRunner()
+    result = runner.invoke(main, ["init", "--dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert not (tmp_path / "AGENTS.md").exists()
+    assert _DISCLOSURE not in result.output
+
+
+def test_no_disclosure_when_only_agents_md_is_written(tmp_path: Path):
+    """--no-claudemd --agents leaves one instruction file, which Claude Code
+    does read — nothing to disclose."""
+    runner = CliRunner()
+    result = runner.invoke(
+        main, ["init", "--dir", str(tmp_path), "--no-claudemd", "--agents"]
+    )
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "AGENTS.md").exists()
+    assert not (tmp_path / ".claude" / "CLAUDE.md").exists()
+    assert _DISCLOSURE not in result.output
+
+
+def test_disclosure_when_existing_agents_md_detected(tmp_path: Path):
+    """The headline case: a project that already has AGENTS.md ends up with
+    the instructions in two places, and init says which client reads which."""
+    (tmp_path / "AGENTS.md").write_text("# My agents\n")
+    runner = CliRunner()
+    result = runner.invoke(main, ["init", "--dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    # unchanged behaviour: both files written
+    assert "## Memory (Palinode)" in (tmp_path / "AGENTS.md").read_text()
+    assert "## Memory (Palinode)" in (tmp_path / ".claude" / "CLAUDE.md").read_text()
+    out = result.output
+    assert _DISCLOSURE in out
+    assert ".claude/CLAUDE.md  — read by Claude Code" in out
+    assert "INSTEAD OF AGENTS.md" in out
+    assert "which do not read CLAUDE.md" in out
+    assert "does not reconcile drift" in out
+    assert "https://code.claude.com/docs/en/memory#agents-md" in out
+
+
+def test_disclosure_when_agent_dir_detected(tmp_path: Path):
+    """The .agent/ footprint creates AGENTS.md, so it collides too."""
+    (tmp_path / ".agent").mkdir()
+    runner = CliRunner()
+    result = runner.invoke(main, ["init", "--dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "AGENTS.md").exists()
+    assert _DISCLOSURE in result.output
+
+
+def test_dry_run_discloses_the_split_and_writes_nothing(tmp_path: Path):
+    original = "# My agents\n"
+    (tmp_path / "AGENTS.md").write_text(original)
+    runner = CliRunner()
+    result = runner.invoke(main, ["init", "--dir", str(tmp_path), "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert _DISCLOSURE in result.output
+    assert "https://code.claude.com/docs/en/memory#agents-md" in result.output
+    assert (tmp_path / "AGENTS.md").read_text() == original
+    assert not (tmp_path / ".claude" / "CLAUDE.md").exists()
+
+
+def test_rerun_does_not_reconcile_drift_between_the_two_blocks(tmp_path: Path):
+    """Documented, not fixed: init is idempotent *per file*, so an edit to one
+    block is never propagated to the other — which is why the disclosure says
+    to maintain both."""
+    (tmp_path / "AGENTS.md").write_text("# My agents\n")
+    runner = CliRunner()
+    assert runner.invoke(main, ["init", "--dir", str(tmp_path)]).exit_code == 0
+
+    agents_md = tmp_path / "AGENTS.md"
+    claude_md = tmp_path / ".claude" / "CLAUDE.md"
+    agents_md.write_text(agents_md.read_text() + "\nLocal edit: prefer short recaps.\n")
+    claude_before = claude_md.read_text()
+
+    result = runner.invoke(main, ["init", "--dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert "Local edit: prefer short recaps." in agents_md.read_text()
+    assert "Local edit: prefer short recaps." not in claude_md.read_text()
+    assert claude_md.read_text() == claude_before
+    assert agents_md.read_text().count("## Memory (Palinode)") == 1
+    assert _DISCLOSURE in result.output
+
+
 # ---- ADR-012 Layer 2: palinode-session skill scaffolding --------------------
 
 

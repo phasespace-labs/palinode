@@ -18,7 +18,10 @@
   {% if search.query %}
   <h2 class="section-h">Search results · "{{ search.query }}"</h2>
   {% if search.retrieval %}
-  <p class="meta">Retrieval: {{ search.retrieval.active_mode }} · index: {{ search.retrieval.index_state }} · {{ search.retrieval.outcome }}</p>
+  <p class="meta">Retrieval: {{ search.retrieval.active_mode }} · index: {{ search.retrieval.index_state }} · {{ search.retrieval.outcome }}{% if search.retrieval.confidence %} · match confidence: {{ search.retrieval.confidence }}{% endif %}</p>
+  {% if search.retrieval.confidence == "none" %}
+  <p class="notice">No confident match — the results below are weak.</p>
+  {% endif %}
   {% endif %}
   {% if search.error %}
   <div class="notice">{{ search.error }}</div>

@@ -26,6 +26,10 @@ pytestmark = pytest.mark.skipif(
 def journey_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A real disposable store; no watcher, model, or user memory is used."""
     monkeypatch.setenv("PALINODE_ALLOW_FRESH_DB", "1")
+    # The client is working in harbor-notes, the project the journey saves to.
+    # Pinned so the scope is not whatever checkout the suite runs in: a
+    # project-scoped search leaves other projects' records out.
+    monkeypatch.setenv("PALINODE_PROJECT", "harbor-notes")
     monkeypatch.setattr(config, "memory_dir", str(tmp_path))
     monkeypatch.setattr(config, "db_path", str(tmp_path / ".palinode.db"))
     monkeypatch.setattr(config.search, "retrieval_mode", "lexical")

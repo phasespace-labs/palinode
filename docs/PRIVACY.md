@@ -28,6 +28,11 @@ historical design examples. [Scope predicates](../palinode/core/scope.py) and
 | `private` | Owning `scope` must match a chain entry. Legacy raw files without scope infer their parent directory as owner. | Hidden. |
 | `restricted` | Any `access` entry must match the chain; `scope` itself does not gate it. | Hidden. |
 
+A chain with a project also hides records tagged to a *different* project
+(`entities` name a `project/*`, none of them the chain's). Records with no
+project entity are global and pass. This is selection, not access control: an
+explicit `include_other_projects` request or a known path reaches them.
+
 An explicitly empty chain differs from no chain: it hides explicitly scoped
 inherited records too. Search treats a session ID alone as telemetry, not an
 identity; scoped prime can evaluate an empty chain. `/list` has no scope input

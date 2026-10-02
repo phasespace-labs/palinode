@@ -12,17 +12,26 @@ See ADR-009 §3.1-3.4 for the hierarchy, auto-detection, and access rules.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from palinode.core.config import Config
+
+
+def scope_level_name(level: str, value: str | None) -> str | None:
+    """Strip one own entity-ref prefix, preserving other prefixes literally."""
+    return value.removeprefix(f"{level}/") if value is not None else None
 
 
 @dataclass(frozen=True)
 class ScopeChain:
     """Ordered scope chain from narrowest (session) to broadest (org).
 
-    Each level is an entity ref string (e.g. ``project/palinode``).
+    Each level stores a bare name or identifier without its level prefix
+    (e.g. ``project="palinode"`` or ``session="abc-123"``). Callers normalize
+    non-project entity refs with :func:`scope_level_name` and resolve project
+    aliases before construction; :meth:`as_list` adds each level's prefix to
+    produce entity refs (e.g. ``project/palinode``).
     Unset levels are dropped when serialized via :meth:`as_list`.
     The order of :meth:`as_list` is the search-priority order: earlier
     entries are more specific and take precedence over later ones.
@@ -33,6 +42,11 @@ class ScopeChain:
     project: str | None = None
     member: str | None = None
     org: str | None = None
+    #: Not a level: whether this request asked to see records tagged to a
+    #: project other than :attr:`project` (see :func:`other_project`). Off by
+    #: default, so a request carrying a project is isolated to it. Never part
+    #: of :meth:`as_list`, which stays the chain's identity levels alone.
+    include_other_projects: bool = False
 
     def as_list(self) -> list[str]:
         """Return the chain as entity refs, narrow → broad, omitting unset levels."""
@@ -74,19 +88,20 @@ def resolve_scope_chain(
     supplied by the ADR-008 ambient-context detection). Pass ``None`` in
     pre-ADR-008 setups or when the caller has no project signal.
 
-    ``session_id`` is the caller-generated session identifier. Pass ``None``
-    when session-level scoping is not in use.
+    ``session_id`` is the caller-generated session identifier or its
+    ``session/`` entity ref. Pass ``None`` when session-level scoping is not
+    in use. Non-project levels strip only their own prefix.
 
     Other levels are read from :class:`ScopeConfig` (env vars override YAML).
     """
     s = cfg.scope
     return ScopeChain(
-        session=session_id,
-        agent=s.agent,
-        harness=s.harness,
+        session=scope_level_name("session", session_id),
+        agent=scope_level_name("agent", s.agent),
+        harness=scope_level_name("harness", s.harness),
         project=project,
-        member=s.member,
-        org=s.org,
+        member=scope_level_name("member", s.member),
+        org=scope_level_name("org", s.org),
     )
 
 
@@ -115,6 +130,131 @@ def chain_allows(chain: ScopeChain, metadata: dict[str, Any]) -> bool:
     if isinstance(raw, str) and raw.strip():
         return raw.strip() in chain.as_list()
     return True
+
+
+def project_entities(metadata: dict[str, Any]) -> list[str]:
+    """The ``project/*`` refs a memory's ``entities`` frontmatter names."""
+    raw = metadata.get("entities")
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    return [
+        e.strip() for e in raw
+        if isinstance(e, str) and e.strip().lower().startswith("project/")
+    ]
+
+
+def _project_key(value: str) -> str:
+    """A project slug or ``project/<slug>`` ref as a comparison key: bare, lowercased."""
+    slug = value.strip()
+    if slug.lower().startswith("project/"):
+        slug = slug[len("project/"):]
+    return slug.lower()
+
+
+#: ``(alias map, member index, canonical spellings)``. Holds the map object
+#: itself rather than its ``id()``: a map freed after a reload can hand its id
+#: to the next one, and an id-keyed memo would then serve the old groups.
+_INDEX_MEMO: tuple[dict, dict[str, str], dict[str, str]] | None = None
+
+
+def _project_alias_index() -> tuple[dict[str, str], dict[str, str]]:
+    """The curated entity aliases, as project comparison keys.
+
+    Reads the store's ``entity-aliases.yaml`` through
+    :func:`palinode.core.aliases.load_alias_map` — the same groups search's
+    entity lookup already expands — and keeps its ``project/`` members only.
+    Returns ``(member key -> canonical key, canonical key -> canonical ref as
+    the file spells it)``. Keys are bare and lowercased, which is what makes
+    the comparison case-insensitive. Memoized on the alias map object:
+    ``load_alias_map`` returns the same object until the file changes.
+    """
+    global _INDEX_MEMO
+    from palinode.core import aliases
+
+    groups = aliases.load_alias_map()
+    if _INDEX_MEMO is not None and _INDEX_MEMO[0] is groups:
+        return _INDEX_MEMO[1], _INDEX_MEMO[2]
+    index: dict[str, str] = {}
+    spelled: dict[str, str] = {}
+    for member in groups:
+        if not member.lower().startswith("project/"):
+            continue
+        canonical = aliases.canonical_ref(member)
+        if not canonical.lower().startswith("project/"):
+            canonical = min(ref for ref in groups[member] if ref.lower().startswith("project/"))
+        ckey = _project_key(canonical)
+        index.setdefault(_project_key(member), ckey)
+        index.setdefault(ckey, ckey)
+        spelled.setdefault(ckey, canonical)
+    _INDEX_MEMO = (groups, index, spelled)
+    return index, spelled
+
+
+def alias_index() -> dict[str, str]:
+    """Every project key the curated aliases name -> its canonical key."""
+    return _project_alias_index()[0]
+
+
+def canonical_project(value: str, index: dict[str, str] | None = None) -> str:
+    """The one place a project name is canonicalized for comparison.
+
+    Case-insensitive (``Orbit_App`` and ``orbit_app`` are one project), and a
+    member of a group in the store's ``entity-aliases.yaml`` maps to that
+    group's canonical project. Returns the bare lowercased key; stored entities
+    are never rewritten. ``index`` is a prebuilt :func:`alias_index`, for
+    callers comparing many names at once.
+    """
+    key = _project_key(value)
+    return (alias_index() if index is None else index).get(key, key)
+
+
+def canonical_project_ref(ref: str) -> str:
+    """``ref`` unchanged, unless it is a ``project/`` alias: then its canonical ref.
+
+    Used by project resolution so a request resolved to an alias counts as its
+    canonical project, spelled as ``entity-aliases.yaml`` spells it. A ref that
+    is not an alias keeps its exact spelling, so a store with no alias file
+    resolves exactly as before.
+    """
+    if not ref.lower().startswith("project/"):
+        return ref
+    index, spelled = _project_alias_index()
+    key = _project_key(ref)
+    canonical = canonical_project(ref, index)
+    if canonical == key:
+        return ref
+    return spelled.get(canonical, f"project/{canonical}")
+
+
+def other_project(chain: ScopeChain | None, metadata: dict[str, Any]) -> bool:
+    """Is this memory tagged to a project other than the chain's?
+
+    True when the chain carries a project **and** the memory names at least
+    one ``project/*`` entity **and** none of them is the chain's project. A
+    memory that names no project is global and never "other"; one that names
+    the chain's project among several belongs to it. With no project on the
+    chain there is nothing to be "other" than, so an unscoped request is
+    unchanged. Pure: says nothing about whether the request opted in.
+
+    Projects compare through :func:`canonical_project` on both sides:
+    case-insensitively, and with every member of an ``entity-aliases.yaml`` group
+    counted as its canonical project.
+    """
+    if chain is None or not chain.project:
+        return False
+    tagged = project_entities(metadata)
+    if not tagged:
+        return False
+    index = alias_index()
+    target = canonical_project(chain.project, index)
+    return all(canonical_project(ref, index) != target for ref in tagged)
+
+
+def with_other_projects(chain: ScopeChain | None) -> ScopeChain | None:
+    """``chain`` with other projects' records let through, identity unchanged."""
+    return replace(chain, include_other_projects=True) if chain is not None else None
 
 
 def visible_on_chain(
@@ -159,10 +299,19 @@ def visible_on_chain(
     how one surface can hide a memory the next one leaks. Callers go through
     :func:`palinode.core.visibility.is_visible`, which normalizes for them.
 
+    **Project isolation** applies before all three: when the chain carries a
+    project, a memory tagged to a *different* project (:func:`other_project`)
+    is not visible unless the chain opted in with ``include_other_projects``.
+    The project boost (ADR-008) ranks; this is what keeps a scoped request
+    from being handed another project's decision at all.
+
     Access control is advisory — enforced here at the selection layer, not on
     disk (ADR-009 §3.4).
     """
     from palinode.core.parser import parse_scope
+
+    if not chain.include_other_projects and other_project(chain, metadata):
+        return False
 
     info = parse_scope(metadata, file_path=file_path)
     visibility = info["visibility"]

@@ -151,9 +151,19 @@ context:
   enabled: true
   boost: 1.5
   auto_detect: true       # project/{basename(cwd)} auto-detected
-  project_map:             # explicit overrides
+  project_map:             # explicit overrides (exact, case-sensitive name match)
     my-project: project/my-project
 ```
+
+A request whose project resolves is also **isolated** to it: records tagged to a
+different project are left out of search, the per-turn resolve and the
+session-start prime (records tagged to no project stay). Project names compare
+case-insensitively, and the curated `entity-aliases.yaml` in the memory directory
+(the same file entity lookup already uses) makes every member of a `project/`
+group count as its canonical project, both for the records' tags and for the
+request's resolved project. Stored tags are not rewritten. `palinode doctor`
+reports large project tags that neither that file nor a `project_map` entry
+covers (`project_tags_unmapped`).
 
 ## Injection budgets
 

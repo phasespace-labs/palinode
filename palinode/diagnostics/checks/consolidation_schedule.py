@@ -1,11 +1,23 @@
 """Check: consolidation_schedule_effective
 
 ``palinode.config.yaml`` declares the consolidation lookback in two keys —
-``consolidation.lookback_days`` for the weekly pass and
-``consolidation.nightly.lookback_days`` for the nightly one. The cron lines that
-actually run those passes may also pass ``--days N``, and when they do the
-argument wins: the entry point reads ``--days`` from ``sys.argv`` and only falls
-back to the configured value when it is absent. Nothing announces the override.
+``consolidation.lookback_days`` for the weekly pass's lookback *window* and
+``consolidation.nightly.lookback_days`` for the nightly's **catch-up bound** —
+the nightly selects on a per-project watermark, not a window, and the number
+only bounds how far back a cold or long-failed mark may reach. The cron lines
+that actually run those passes may also pass ``--days N``, and when
+they do the argument wins: the entry point reads ``--days`` from ``sys.argv``
+and only falls back to the configured value when it is absent. Nothing
+announces the override.
+
+Separately from the mismatch below, this check also flags a nightly catch-up
+bound that is tighter than ``consolidation.auto_gate.max_hours_elapsed``. The
+gate may legitimately let a pass go that long before firing at its ceiling
+(``AutoGateConfig.max_hours_elapsed``'s own docstring), and ``NightlyConfig``'s
+own comment says a bound shorter than that ceiling drops the notes the gate
+itself chose to wait on — a cold or long-failed mark older than the bound is
+clamped, and the weekly does not catch the gap either (its own window reaches
+back only a few days from its own run).
 
 That gap cost a real diagnosis. A failing nightly was reasoned about from the
 configured 1-day lookback; the line in ``/etc/cron.d`` passed ``--days 3``, so
@@ -335,9 +347,15 @@ def _entries(sources: _Sources) -> list[CronEntry]:
 # ---------------------------------------------------------------------------
 
 
+#: What to call the number in prose, per mode. The nightly's is a catch-up
+#: bound; the weekly's is still a lookback window.
+_NOUN = {"nightly": "catch-up bound", "weekly": "lookback"}
+
+
 def _describe(mode: str, entries: list[CronEntry], configured: int) -> tuple[str, bool]:
-    """One clause describing *mode*'s effective lookback, and whether it is a problem."""
+    """One clause describing *mode*'s effective bound/lookback, and whether it is a problem."""
     key = _CONFIG_KEY[mode]
+    noun = _NOUN[mode]
 
     if len(entries) > 1:
         listed = ", ".join(
@@ -346,7 +364,7 @@ def _describe(mode: str, entries: list[CronEntry], configured: int) -> tuple[str
         )
         return (
             f"{mode}: {len(entries)} entries invoke the pass — {listed} — so there "
-            f"is no single effective lookback; cron runs all of them"
+            f"is no single effective {noun}; cron runs all of them"
         ), True
 
     entry = entries[0]
@@ -363,23 +381,23 @@ def _describe(mode: str, entries: list[CronEntry], configured: int) -> tuple[str
     if entry.days_problem:
         detail = (
             f"{entry.days_problem}, so the configured {key}={configured} governs — "
-            f"effective lookback {configured} day(s) from a line that reads as though "
+            f"effective {noun} {configured} day(s) from a line that reads as though "
             f"it set one"
         )
     elif entry.days is None:
         detail = (
             f"passes no --days, so the configured {key}={configured} governs — "
-            f"effective lookback {configured} day(s)"
+            f"effective {noun} {configured} day(s)"
         )
     elif entry.days == configured:
         detail = (
             f"runs --days {entry.days}, matching {key}={configured} — "
-            f"effective lookback {entry.days} day(s)"
+            f"effective {noun} {entry.days} day(s)"
         )
     else:
         detail = (
             f"runs --days {entry.days} but {key}={configured} — the cron argument "
-            f"wins, so the effective lookback is {entry.days} day(s), not {configured}"
+            f"wins, so the effective {noun} is {entry.days} day(s), not {configured}"
         )
 
     is_problem = bool(
@@ -398,6 +416,42 @@ def _not_applicable(message: str) -> CheckResult:
         message=message,
         remediation=None,
         tags=("deep",),
+    )
+
+
+#: Hours per day, for comparing a day-denominated catch-up bound against
+#: ``auto_gate.max_hours_elapsed``, which is denominated in hours.
+_HOURS_PER_DAY = 24
+
+
+def _ceiling_remediation(ceiling_days: float) -> str:
+    return (
+        f"Raise {_CONFIG_KEY['nightly']} (or the nightly cron's `--days N`) to at "
+        f"least {ceiling_days:.0f}, or lower consolidation.auto_gate."
+        f"max_hours_elapsed to match, so the catch-up bound can reach as far back "
+        f"as the gate may legitimately wait before firing a pass. Nothing here is "
+        f"edited automatically."
+    )
+
+
+def _ceiling_problem(nightly_days: int, max_hours_elapsed: float) -> str | None:
+    """A clause naming a nightly catch-up bound tighter than the gate's ceiling.
+
+    ``None`` when the bound reaches at least as far back as the gate may
+    legitimately wait (``consolidation.auto_gate.max_hours_elapsed``) — see
+    ``NightlyConfig.lookback_days``'s own comment. Below it, a cold or
+    long-failed watermark older than the bound is clamped, and the notes in
+    the gap are dropped rather than caught up on the next run.
+    """
+    ceiling_days = max_hours_elapsed / _HOURS_PER_DAY
+    if nightly_days >= ceiling_days:
+        return None
+    return (
+        f"nightly: the {nightly_days}-day catch-up bound is tighter than the "
+        f"activity gate's {ceiling_days:.0f}-day ({max_hours_elapsed:.0f} h) ceiling "
+        f"(consolidation.auto_gate.max_hours_elapsed) — the gate may legitimately "
+        f"wait that long before firing a pass, and a shorter bound drops the notes "
+        f"it chose to wait on instead of catching them up next run"
     )
 
 
@@ -427,13 +481,30 @@ def consolidation_schedule_effective(ctx: DoctorContext) -> CheckResult:
     if not entries:
         looked = ", ".join(sources.searched) if sources.searched else "nothing readable"
         missing = f" Absent: {'; '.join(sources.absent)}." if sources.absent else ""
-        return _not_applicable(
+        nightly_days = ctx.config.consolidation.nightly.lookback_days
+        message = (
             f"No consolidation cron entry found — nothing invoking {CRON_MODULE} in "
             f"{looked}. Consolidation may be scheduled another way (a systemd timer, "
-            f"the API, hand-run passes) or not at all; the configured lookbacks "
-            f"({_CONFIG_KEY['nightly']}={ctx.config.consolidation.nightly.lookback_days}, "
-            f"{_CONFIG_KEY['weekly']}={ctx.config.consolidation.lookback_days}) are "
-            f"what any un-argumented run would use.{ignored}{missing}{blind}"
+            f"the API, hand-run passes) or not at all; the nightly's configured "
+            f"catch-up bound ({_CONFIG_KEY['nightly']}={nightly_days}) and the "
+            f"weekly's configured lookback ({_CONFIG_KEY['weekly']}="
+            f"{ctx.config.consolidation.lookback_days}) are what any un-argumented "
+            f"run would use.{ignored}{missing}{blind}"
+        )
+        ceiling_problem = _ceiling_problem(
+            nightly_days, ctx.config.consolidation.auto_gate.max_hours_elapsed
+        )
+        if ceiling_problem is None:
+            return _not_applicable(message)
+        return CheckResult(
+            name=CHECK_NAME,
+            severity="warn",
+            passed=False,
+            message=f"{message} {ceiling_problem}",
+            remediation=_ceiling_remediation(
+                ctx.config.consolidation.auto_gate.max_hours_elapsed / _HOURS_PER_DAY
+            ),
+            tags=("deep",),
         )
 
     configured = {
@@ -443,6 +514,10 @@ def consolidation_schedule_effective(ctx: DoctorContext) -> CheckResult:
 
     clauses: list[str] = []
     problems = False
+    #: The nightly's single, unambiguous effective catch-up bound, for the
+    #: ceiling check below. ``None`` when ambiguous (two or more entries) —
+    #: that is already its own, separately reported problem.
+    nightly_effective: int | None = None
     for mode in ("nightly", "weekly"):
         for_mode = [entry for entry in entries if entry.mode == mode]
         if not for_mode:
@@ -453,10 +528,26 @@ def consolidation_schedule_effective(ctx: DoctorContext) -> CheckResult:
                 f"{mode}: no cron entry, so a run of that pass would use "
                 f"{_CONFIG_KEY[mode]}={configured[mode]}"
             )
+            if mode == "nightly":
+                nightly_effective = configured[mode]
             continue
         clause, is_problem = _describe(mode, for_mode, configured[mode])
         clauses.append(clause)
         problems = problems or is_problem
+        if mode == "nightly" and len(for_mode) == 1:
+            entry = for_mode[0]
+            nightly_effective = (
+                configured[mode] if (entry.days_problem or entry.days is None) else entry.days
+            )
+
+    ceiling_problem = None
+    if nightly_effective is not None:
+        ceiling_problem = _ceiling_problem(
+            nightly_effective, ctx.config.consolidation.auto_gate.max_hours_elapsed
+        )
+        if ceiling_problem is not None:
+            clauses.append(ceiling_problem)
+            problems = True
 
     message = f"Effective consolidation lookback — {'; '.join(clauses)}.{ignored}{blind}"
 
@@ -470,21 +561,27 @@ def consolidation_schedule_effective(ctx: DoctorContext) -> CheckResult:
             tags=("deep",),
         )
 
+    remediation = (
+        "The cron argument is what runs; the config value is what gets read by "
+        "anyone reasoning about a pass after the fact, which is how a failed run "
+        "gets diagnosed against a scope it never had. Converge them — doctor does "
+        "not pick which side moves, because that is a decision about what the pass "
+        "is for: either delete `--days N` from the cron line so palinode.config.yaml "
+        "governs (one source of truth), or set the configured value to the number "
+        "that actually runs. For two entries on one pass, delete the duplicate; for "
+        "a line that could not be read, fix its syntax — cron will have been "
+        "failing on it too. Nothing here is edited automatically."
+    )
+    if ceiling_problem is not None:
+        remediation += " Separately: " + _ceiling_remediation(
+            ctx.config.consolidation.auto_gate.max_hours_elapsed / _HOURS_PER_DAY
+        )
+
     return CheckResult(
         name=CHECK_NAME,
         severity="warn",
         passed=False,
         message=message,
-        remediation=(
-            "The cron argument is what runs; the config value is what gets read by "
-            "anyone reasoning about a pass after the fact, which is how a failed run "
-            "gets diagnosed against a scope it never had. Converge them — doctor does "
-            "not pick which side moves, because that is a decision about what the pass "
-            "is for: either delete `--days N` from the cron line so palinode.config.yaml "
-            "governs (one source of truth), or set the configured value to the number "
-            "that actually runs. For two entries on one pass, delete the duplicate; for "
-            "a line that could not be read, fix its syntax — cron will have been "
-            "failing on it too. Nothing here is edited automatically."
-        ),
+        remediation=remediation,
         tags=("deep",),
     )

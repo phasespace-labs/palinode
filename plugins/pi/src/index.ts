@@ -86,7 +86,7 @@ export default function palinode(pi: PiLike): void {
 
   pi.on("before_agent_start", async (event, _ctx) => {
     if (!await automaticAllowed(cfg, "recall", process.cwd())) return;
-    const context = await buildRecallContext(event.prompt ?? "", cfg);
+    const context = await buildRecallContext(event.prompt ?? "", cfg, fetch, process.cwd());
     if (!context || !await automaticAllowed(cfg, "recall", process.cwd())) return undefined; // silence is the common case
     return {
       message: {

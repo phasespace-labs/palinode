@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from palinode.core.agent_directed import withhold_agent_directed
 from palinode.core.config import config
 from palinode.core.expiry import core_has_expired
 from palinode.core.lifecycle import Eligibility, eligibility, order_key
@@ -94,6 +95,81 @@ PALINODE_HINT = (
 _SKIP_DIRS = frozenset({"daily", "archive"})
 
 
+#: The closed resolution-source vocabulary, in precedence order. Every surface
+#: that carries scope reports the project it resolved *and* one of these, so a
+#: reader can tell an argument from a pinned setting from a git inference
+#: without re-deriving anything. ``explicit`` is a per-call argument;
+#: ``environment`` is the durable pinned setting (``PALINODE_PROJECT``, what a
+#: generated MCP client carries); ``disabled`` is ``context.enabled: false``;
+#: the rest are configured mappings and git/cwd inference.
+RESOLUTION_BASES: tuple[str, ...] = (
+    "explicit",
+    "disabled",
+    "environment",
+    "project_map",
+    "git_origin",
+    "git_common_dir",
+    "cwd_basename",
+    "none",
+)
+
+#: The request header a streamable-HTTP MCP client carries its project in: the
+#: HTTP transport's equivalent of a stdio client's pinned ``PALINODE_PROJECT``,
+#: because an HTTP server's own directory is not the client's.
+#: ``palinode mcp-config --http --project <slug>`` emits it.
+PROJECT_HEADER = "X-Palinode-Project"
+
+#: One name segment: the slug rule ``/session-end`` has always enforced before
+#: it writes a status file.
+_PROJECT_SLUG_RE = re.compile(r"[A-Za-z0-9._-]+")
+#: An entity ref: an optional kind prefix and one name. A per-call argument may
+#: name any entity (``org/custom``), which is why it is checked against this
+#: and not against the slug rule.
+_PROJECT_REF_RE = re.compile(r"(?:[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]+")
+
+
+class InvalidProjectScope(ValueError):
+    """A supplied project value that cannot name a project.
+
+    Raised rather than ignored: a pinned ``PALINODE_PROJECT`` that silently
+    fell back to git inference would scope every recall call in that client to
+    a project the user did not ask for, which is the failure this whole
+    mechanism exists to prevent. The message names the *source* and never
+    echoes the value — an error body is not a place to reflect caller input.
+    """
+
+    def __init__(self, source: str, expected: str) -> None:
+        self.source = source
+        super().__init__(f"{source} is not a usable project: it must be {expected}.")
+
+
+def validate_project_setting(value: str, *, source: str) -> str:
+    """Check a *configured* project value: a slug, or a ``project/<slug>`` ref.
+
+    The stricter of the two rules, because a pinned setting is resolved on
+    every call and ends up naming a status file — it has to be the thing
+    ``/session-end`` would accept, not merely something path-safe.
+    """
+    slug = value.removeprefix("project/")
+    if ".." in slug or not _PROJECT_SLUG_RE.fullmatch(slug):
+        raise InvalidProjectScope(
+            source, "a slug (letters, numbers, '.', '_', '-') or a project/<slug> ref"
+        )
+    return value
+
+
+def validate_project_ref(value: str, *, source: str) -> str:
+    """Check a per-call project argument: a slug or a single ``kind/name`` ref.
+
+    Looser than :func:`validate_project_setting` — an argument has always been
+    allowed to name a non-``project/`` entity — but never path-traversing,
+    never multi-segment, and never a Windows path separator.
+    """
+    if ".." in value or not _PROJECT_REF_RE.fullmatch(value):
+        raise InvalidProjectScope(source, "a slug or a single kind/name entity ref")
+    return value
+
+
 @dataclass(frozen=True)
 class ProjectResolution:
     project: str | None
@@ -102,6 +178,14 @@ class ProjectResolution:
     @property
     def context(self) -> list[str] | None:
         return [self.project] if self.project else None
+
+    def fields(self) -> dict[str, str | None]:
+        """The two scope fields every surface reports, under the digest's names."""
+        return {"project": self.project, "project_resolved_by": self.basis}
+
+    def describe(self) -> str:
+        """One line: which project this delivery was scoped to, and why."""
+        return f"Scope: {self.project or 'none'} ({self.basis})"
 
 
 def ambient_cwd() -> str:
@@ -159,33 +243,57 @@ def _repository_names(cwd: str) -> list[tuple[str, str]]:
 def resolve_context(cwd: str | None = None, project: str | None = None) -> ProjectResolution:
     """Shared ADR-008 resolution; only explicit arguments bypass disablement.
 
+    Precedence: a per-call ``project`` argument, then the pinned
+    ``PALINODE_PROJECT`` setting, then configured mappings, then git/cwd
+    inference, then none. The pinned setting is what a generated MCP client
+    carries, so every call from that client resolves the same project without
+    each call having to pass one — and nothing about one call is remembered
+    for the next: this function reads its arguments and the environment, and
+    holds no state between calls.
+
     Auto-detection supplies a candidate, not proof of an existing project.
     The digest qualifies it against visible, current source records.
     No implicit process CWD: an API host is not the caller's repository.
+
+    Raises :class:`InvalidProjectScope` when the argument or the pinned
+    setting is not a usable project value.
+
+    Whatever resolves, a member of a group in the store's
+    ``entity-aliases.yaml`` is reported as that group's canonical project
+    (:func:`palinode.core.scope.canonical_project_ref`), so a request resolved
+    to an alias counts as the canonical project. The ``project_map`` lookup
+    itself stays an exact, case-sensitive name match.
     """
+    from palinode.core.scope import canonical_project_ref
+
+    def resolved(ref: str, basis: str) -> ProjectResolution:
+        return ProjectResolution(canonical_project_ref(ref), basis)
+
     if project:
-        return ProjectResolution(_project_ref(project), "explicit")
+        validate_project_ref(project, source="The project argument")
+        return resolved(_project_ref(project), "explicit")
     if not config.context.enabled:
         return ProjectResolution(None, "disabled")
     env = os.environ.get("PALINODE_PROJECT")
     if env:
-        return ProjectResolution(_project_ref(env), "environment")
+        validate_project_setting(env, source="PALINODE_PROJECT")
+        return resolved(_project_ref(env), "environment")
     if not cwd:
         return ProjectResolution(None, "none")
     basename = os.path.basename(os.path.normpath(cwd))
     mapped = config.context.project_map.get(basename)
     if mapped:
-        return ProjectResolution(_project_ref(mapped), "project_map")
+        return resolved(_project_ref(mapped), "project_map")
     names = _repository_names(cwd)
     for name, _ in names:
         mapped = config.context.project_map.get(name)
         if mapped:
-            return ProjectResolution(_project_ref(mapped), "project_map")
+            return resolved(_project_ref(mapped), "project_map")
     if config.context.auto_detect:
         name, basis = names[0] if names else (basename, "cwd_basename")
         slug = _project_slug(name)
         if slug:
-            return ProjectResolution(_project_ref(slug), basis)
+            return resolved(_project_ref(slug), basis)
     return ProjectResolution(None, "none")
 
 
@@ -220,6 +328,10 @@ def _digest_row(entry: dict[str, Any]) -> dict[str, Any]:
     if not title:
         title = os.path.splitext(os.path.basename(entry["file"]))[0]
     description = str(meta.get("description") or "").strip()
+    # Each part on its own, before the line is cut: the packer's gist form
+    # splits on the separator, and a cut can split an address from its directive.
+    title = withhold_agent_directed(title)[0]
+    description = withhold_agent_directed(description)[0]
     line = f"{title} — {description}" if description else title
     row: dict[str, Any] = {"file": entry["file"], "summary": line[:MAX_LINE_CHARS]}
     elig: Eligibility = entry["elig"]
@@ -396,8 +508,29 @@ def _most_recent_first(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _has_entity(meta: dict[str, Any], entity: str) -> bool:
+    """Does ``meta`` name ``entity``? A project compares as recall isolation does.
+
+    A ``project/`` entity matches through
+    :func:`palinode.core.scope.canonical_project` (case-insensitive, aliases
+    counted as their canonical project), so the digest's project sections
+    select exactly the records isolation lets through as this project's.
+    """
     entities = meta.get("entities")
-    return isinstance(entities, list) and entity in entities
+    if not isinstance(entities, list):
+        return False
+    if entity in entities:
+        return True
+    if not entity.lower().startswith("project/"):
+        return False
+    from palinode.core.scope import alias_index, canonical_project
+
+    index = alias_index()
+    target = canonical_project(entity, index)
+    return any(
+        isinstance(e, str) and e.strip().lower().startswith("project/")
+        and canonical_project(e, index) == target
+        for e in entities
+    )
 
 
 def build_context_digest(
@@ -424,18 +557,31 @@ def build_context_digest(
     memories, the pre-slice-4 behavior) but ``private``/``restricted``
     memories are still withheld — classic is a *selection* mode, and it was
     never meant to be a way around access control.
+
+    A chain carrying a project also isolates to it: a memory tagged to a
+    different project (``core: true`` included) is left out at the same choke
+    point, and ``other_projects_withheld`` says how many were.
     """
     resolution = resolution or resolve_context(cwd=cwd, project=project)
     resolved = resolution.project
     memories = _scan_memories(config.memory_dir)
     # Always route through the choke point; `meta` here is live frontmatter
     # (just parsed by _scan_memories), so this costs no extra read.
-    from palinode.core.visibility import is_visible
+    from palinode.core.visibility import is_visible, withheld_as_other_project
 
-    memories = [
-        m for m in memories
-        if is_visible(scope_chain, m["file"], metadata=m["meta"])
-    ]
+    kept: list[dict[str, Any]] = []
+    other_projects = 0
+    for m in memories:
+        if is_visible(scope_chain, m["file"], metadata=m["meta"]):
+            kept.append(m)
+        elif m["meta"].get("core") is True and withheld_as_other_project(
+            scope_chain, m["file"], metadata=m["meta"],
+        ):
+            # Only core memories count: the project sections below select by
+            # the session's own project already, so core is the one section
+            # another project's record could have reached.
+            other_projects += 1
+    memories = kept
 
     # Lifecycle eligibility, once per record, from the same live frontmatter.
     # A retired record leaves every section here; a usable one carries its
@@ -496,6 +642,9 @@ def build_context_digest(
         "open_action_items": [_digest_row(m) for m in open_action_items],
         "recent_snapshots": [_digest_row(m) for m in recent_snapshots],
         "_palinode_hint": PALINODE_HINT,
+        # Core memories tagged to another project that isolation left out;
+        # always 0 for a digest with no project on its chain.
+        "other_projects_withheld": other_projects,
     }
     # The count bounds above are the selection; the budget is the ceiling on
     # what the selection renders to. Both apply — the packer takes the already

@@ -252,6 +252,25 @@ RESOLVE_INTENTS: tuple[str, ...] = (
     "current_state",
 )
 
+#: The canonical correction-review action enum. ``supersede`` records a
+#: replacement and archives the original with ``superseded_by``; ``retire``
+#: withdraws it with no successor. Both end at ``status: archived`` — the same
+#: two outcomes ``palinode archive`` has always had, now reachable through a
+#: previewed, revision-checked, confirmed review. Mirrored (not redefined) in
+#: :mod:`palinode.corrections.review`, which keeps this module stdlib-only.
+CORRECTION_ACTIONS: tuple[str, ...] = (
+    "supersede",
+    "retire",
+)
+
+#: The value ``applied`` carries when a document-level correction got its
+#: first write in and not its second: the replacement is saved, the original
+#: is still current. Neither a refusal (which writes nothing) nor a success,
+#: so it is a third value rather than a boolean. Every surface reads it to
+#: decide how to report; mirrored (not redefined) in
+#: :mod:`palinode.corrections.review`, which keeps this module stdlib-only.
+CORRECTION_APPLIED_PARTIAL = "partial"
+
 #: The canonical prompt-task enum.  Single source replacing the duplicate
 #: ``"enum"`` keys at ``palinode/mcp.py:624-625``. ADR-010, finding.
 PROMPT_TASKS: tuple[str, ...] = (
@@ -330,6 +349,13 @@ REGISTRY: tuple[Operation, ...] = (
             # Bounded evidence resolution around each hit. Omitted → no
             # traversal, so an ordinary request stays byte-identical.
             CanonicalParam(name="resolve", type="string", enum=RESOLVE_MODES),
+            # Project isolation opt-out: a project-scoped search leaves out
+            # records tagged to a different project; true returns them too,
+            # each labelled with its own project.
+            CanonicalParam(name="include_other_projects", type="boolean"),
+            # With `resolve`: retired records in each hit's evidence are left
+            # out by default; true keeps them, labelled.
+            CanonicalParam(name="include_retired", type="boolean"),
         ),
         cli_command="search",
         mcp_tool="palinode_search",
@@ -441,6 +467,9 @@ REGISTRY: tuple[Operation, ...] = (
             CanonicalParam(name="file_path", type="string", required=True),
             CanonicalParam(name="reason", type="string"),
             CanonicalParam(name="superseded_by", type="string"),
+            # Preview: the delta, the retained copies and the recovery
+            # command, with nothing written. Apply stays the default.
+            CanonicalParam(name="dry_run", type="boolean"),
         ),
         cli_command="archive",
         mcp_tool="palinode_archive",
@@ -457,6 +486,7 @@ REGISTRY: tuple[Operation, ...] = (
         canonical_params=(
             CanonicalParam(name="file_path", type="string", required=True),
             CanonicalParam(name="reason", type="string"),
+            CanonicalParam(name="dry_run", type="boolean"),
         ),
         cli_command="restore",
         mcp_tool="palinode_restore",
@@ -473,6 +503,7 @@ REGISTRY: tuple[Operation, ...] = (
             CanonicalParam(name="file_path", type="string", required=True),
             CanonicalParam(name="pref", type="string", required=True),
             CanonicalParam(name="reason", type="string"),
+            CanonicalParam(name="dry_run", type="boolean"),
         ),
         cli_command="unretract",
         mcp_tool="palinode_unretract",
@@ -487,6 +518,7 @@ REGISTRY: tuple[Operation, ...] = (
         canonical_params=(
             CanonicalParam(name="file_path", type="string", required=True),
             CanonicalParam(name="reason", type="string"),
+            CanonicalParam(name="dry_run", type="boolean"),
         ),
         cli_command="forget-withdraw",
         mcp_tool="palinode_forget_withdraw",
@@ -541,6 +573,9 @@ REGISTRY: tuple[Operation, ...] = (
             CanonicalParam(name="file_path", type="string", required=True),
             CanonicalParam(name="commit", type="string"),
             CanonicalParam(name="dry_run", type="boolean"),
+            # Acknowledges that applying undoes a retirement;
+            # without it such a rollback is refused on every surface.
+            CanonicalParam(name="undo_retirements", type="boolean"),
         ),
         cli_command="rollback",
         mcp_tool="palinode_rollback",
@@ -575,6 +610,11 @@ REGISTRY: tuple[Operation, ...] = (
     # recall path in `plugins/core`, which calls POST /resolve and injects the
     # rendered bundle. That is not a tool contract, so registering one would
     # claim an obligation that does not exist.
+    #
+    # REST additionally accepts `cwd` and `project`, the requester's scope,
+    # the same superset `/context/prime` takes. They are not tool parameters:
+    # the CLI and MCP surfaces resolve the client's project themselves and
+    # send it, and the hook and plugin adapters send their `cwd`.
     Operation(
         name="resolve",
         canonical_params=(
@@ -588,6 +628,13 @@ REGISTRY: tuple[Operation, ...] = (
             ),
             CanonicalParam(name="max_items", type="integer"),
             CanonicalParam(name="max_chars", type="integer"),
+            # Project isolation opt-out, as on search: records tagged to a
+            # project other than the request's, delivered labelled.
+            CanonicalParam(name="include_other_projects", type="boolean"),
+            # History on request: retired records (archived, superseded,
+            # retracted, expired) are left out by default, as search leaves
+            # them out; true delivers them, labelled.
+            CanonicalParam(name="include_retired", type="boolean"),
         ),
         cli_command="resolve",
         mcp_tool="palinode_resolve",
@@ -623,6 +670,39 @@ REGISTRY: tuple[Operation, ...] = (
         cli_command="trace",
         mcp_tool="palinode_trace",
         api_endpoint=("GET", "/trace/{file_path:path}"),
+        known_drift={},
+    ),
+    # ── explain (delivery provenance) ─────────────────────────────────
+    # The per-delivery counterpart to `trace`'s per-file view: given the
+    # `bundle_id` a receipt returned, what was supplied, at which revisions,
+    # under which scope, with which dispositions and qualifiers. Read-only,
+    # composed entirely from the retrieval log the delivery already wrote.
+    #
+    # The plugin opts in (ADR-019): it is a plain read over the API with the
+    # same two params, and "show me what you were just handed, and why" is the
+    # case a delivery adapter exists for.
+    #
+    # `view` is deliberately NOT a canonical param, on the same reasoning as
+    # lint's `apply`: it is the only way to see the caller's own query prose,
+    # which belongs to the operator's surfaces (CLI, REST, the local
+    # inspector). The MCP tool takes the public view and offers no way to ask
+    # for anything else, which is what its read-only, agent-facing position
+    # means. A design boundary, not drift — `known_drift` would claim a fix is
+    # owed.
+    Operation(
+        name="explain",
+        canonical_params=(
+            CanonicalParam(name="bundle_id", type="string", required=True),
+            CanonicalParam(
+                name="limit",
+                type="integer",
+                notes="Supplied records to show; the remainder are counted, not hidden.",
+            ),
+        ),
+        cli_command="explain",
+        mcp_tool="palinode_explain",
+        api_endpoint=("GET", "/explain/{bundle_id}"),
+        plugin_tool="palinode_explain",
         known_drift={},
     ),
     # ── cluster_neighbors ─────────────────────────────────────────────
@@ -682,6 +762,59 @@ REGISTRY: tuple[Operation, ...] = (
         api_endpoint=("POST", "/lint"),
         known_drift={},
     ),
+    # ── aliases (curating entity-aliases.yaml) ────────────────────────
+    # The operator's editor for the store's alias groups: list, check, add,
+    # remove. CLI + REST only, and MCP-exempt by design rather than by lag.
+    # Alias groups decide what project-scoped recall shows (a member counts as
+    # its canonical project), so an agent that could edit them could widen its
+    # own recall into another project; mutation stays with the operator. The
+    # read-only list is left off MCP too: an agent already sees entity refs
+    # through palinode_entities, and every MCP tool is schema every session pays
+    # for. Plugin: none — a delivery adapter has no curation role (ADR-019).
+    Operation(
+        name="aliases.list",
+        canonical_params=(),
+        cli_command="aliases list",
+        api_endpoint=("GET", "/aliases"),
+        exempt_surfaces=frozenset({"mcp"}),
+        known_drift={},
+    ),
+    Operation(
+        name="aliases.check",
+        canonical_params=(),
+        cli_command="aliases check",
+        api_endpoint=("GET", "/aliases/check"),
+        exempt_surfaces=frozenset({"mcp"}),
+        known_drift={},
+    ),
+    Operation(
+        name="aliases.add",
+        canonical_params=(
+            CanonicalParam(name="canonical", type="string", required=True),
+            CanonicalParam(name="members", type="array", required=True),
+            CanonicalParam(
+                name="move",
+                type="boolean",
+                notes="Take a member out of the group it already belongs to.",
+            ),
+            CanonicalParam(name="dry_run", type="boolean"),
+        ),
+        cli_command="aliases add",
+        api_endpoint=("POST", "/aliases/add"),
+        exempt_surfaces=frozenset({"mcp"}),
+        known_drift={},
+    ),
+    Operation(
+        name="aliases.remove",
+        canonical_params=(
+            CanonicalParam(name="member", type="string", required=True),
+            CanonicalParam(name="dry_run", type="boolean"),
+        ),
+        cli_command="aliases remove",
+        api_endpoint=("POST", "/aliases/remove"),
+        exempt_surfaces=frozenset({"mcp"}),
+        known_drift={},
+    ),
     # ── review ────────────────────────────────────────────────────────
     # Advisory project-memory review. Composes the deterministic lint signals
     # scoped to a project and proposes corrective ops (read-only). Plugin-exempt
@@ -694,6 +827,123 @@ REGISTRY: tuple[Operation, ...] = (
         cli_command="review",
         mcp_tool="palinode_review",
         api_endpoint=("POST", "/review"),
+        known_drift={},
+    ),
+    # ── corrections ───────────────────────────────────────────────────
+    # Transcript-derived correction candidates: a dry-run report over an
+    # operational queue, not a memory operation that writes anything.
+    #
+    # `scan` is deliberately NOT a canonical param, on the same reasoning as
+    # lint's `apply` directly above: it is the act of reading a person's session
+    # transcripts, so it belongs to the operator's surfaces (CLI and REST), and
+    # the MCP tool stays a read-only listing, which is what its `readOnlyHint`
+    # annotation promises. A design boundary, not drift — `known_drift` would
+    # claim a fix is owed.
+    #
+    # The plugin opts in (ADR-019): the listing is a plain read over the API
+    # with the same two params, and a delivery adapter that can show an agent
+    # "here is what you were corrected on" is the case the opt-in exists for.
+    Operation(
+        name="corrections",
+        canonical_params=(
+            CanonicalParam(name="project", type="string"),
+            CanonicalParam(
+                name="since_days",
+                type="integer",
+                notes="Only candidates from the last N days.",
+            ),
+        ),
+        cli_command="corrections list",
+        mcp_tool="palinode_corrections",
+        api_endpoint=("POST", "/corrections"),
+        plugin_tool="palinode_corrections",
+        known_drift={},
+    ),
+    # ── correction review (preview → apply / dismiss, and undo) ────────
+    # One backend contract, four phases, four surfaces. Each phase is its own
+    # operation rather than one `action`-enum operation, for a reason that is
+    # not bookkeeping: MCP annotations are per tool, and preview
+    # (readOnlyHint) and apply (destructiveHint) are exactly the distinction a
+    # client's allow-list needs to see. An enum would have had to annotate the
+    # union, which means annotating the write.
+    #
+    # `slug` and `type` shape the replacement memory on the operator's
+    # surfaces; the MCP tools omit both deliberately — an agent naming the
+    # destination filename of a correction is a way to write over an unrelated
+    # memory, and the save path derives both from the target. That is a design
+    # boundary, so it is recorded as a realization rather than as drift.
+    Operation(
+        name="correction_preview",
+        canonical_params=(
+            CanonicalParam(name="target", type="string"),
+            CanonicalParam(name="claim_id", type="string"),
+            CanonicalParam(name="replacement", type="string"),
+            CanonicalParam(name="allow_content_loss", type="boolean"),
+            CanonicalParam(name="action", type="string", enum=CORRECTION_ACTIONS),
+            CanonicalParam(name="reason", type="string"),
+            CanonicalParam(name="candidate_id", type="string"),
+            CanonicalParam(name="project", type="string"),
+            CanonicalParam(
+                name="backed_by",
+                type="array",
+                notes="Records supporting the replacement. Never the superseded original.",
+            ),
+        ),
+        cli_command="corrections preview",
+        mcp_tool="palinode_correction_preview",
+        api_endpoint=("POST", "/corrections/preview"),
+        plugin_tool="palinode_correction_preview",
+        known_drift={},
+    ),
+    Operation(
+        name="correction_apply",
+        canonical_params=(
+            CanonicalParam(name="target", type="string", required=True),
+            CanonicalParam(name="expect_revision", type="string", required=True),
+            CanonicalParam(name="confirm", type="boolean", required=True),
+            CanonicalParam(name="claim_id", type="string"),
+            CanonicalParam(name="replacement", type="string"),
+            CanonicalParam(name="allow_content_loss", type="boolean"),
+            CanonicalParam(name="action", type="string", enum=CORRECTION_ACTIONS),
+            CanonicalParam(name="reason", type="string"),
+            CanonicalParam(name="candidate_id", type="string"),
+            CanonicalParam(name="project", type="string"),
+            CanonicalParam(
+                name="backed_by",
+                type="array",
+                notes="Records supporting the replacement. Never the superseded original.",
+            ),
+        ),
+        cli_command="corrections apply",
+        mcp_tool="palinode_correction_apply",
+        api_endpoint=("POST", "/corrections/apply"),
+        plugin_tool="palinode_correction_apply",
+        known_drift={},
+    ),
+    Operation(
+        name="correction_dismiss",
+        canonical_params=(
+            CanonicalParam(name="candidate_id", type="string", required=True),
+            CanonicalParam(name="reason", type="string", required=True),
+        ),
+        cli_command="corrections dismiss",
+        mcp_tool="palinode_correction_dismiss",
+        api_endpoint=("POST", "/corrections/dismiss"),
+        plugin_tool="palinode_correction_dismiss",
+        known_drift={},
+    ),
+    Operation(
+        name="correction_undo",
+        canonical_params=(
+            CanonicalParam(name="target", type="string", required=True),
+            CanonicalParam(name="expect_revision", type="string"),
+            CanonicalParam(name="confirm", type="boolean"),
+            CanonicalParam(name="reason", type="string"),
+        ),
+        cli_command="corrections undo",
+        mcp_tool="palinode_correction_undo",
+        api_endpoint=("POST", "/corrections/undo"),
+        plugin_tool="palinode_correction_undo",
         known_drift={},
     ),
     # ── depends ────────────────────────────────────────────────────────
@@ -776,6 +1026,7 @@ INVENTORY_INFRA: dict[Surface, frozenset[str]] = {
             "GET /ui",
             "GET /ui/",
             "GET /ui/compaction",
+            "GET /ui/delivery/{bundle_id}",
             "GET /ui/diffs",
             "GET /ui/history/{file_path:path}",
             "GET /ui/memory",

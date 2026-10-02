@@ -45,6 +45,8 @@ from mcp.server import Server
 
 from palinode import __version__
 from palinode.core.audit import AuditLogger
+from palinode.core.agent_directed import read_notice, withhold_agent_directed
+from palinode.core.framing import MEMORY_IS_DATA
 from palinode.core.auth import load_api_token
 from palinode.core.config import ToolSurface, config, validate_tool_surface
 from palinode.core.defaults import (
@@ -54,8 +56,14 @@ from palinode.core.defaults import (
     _SESSION_END_TIMEOUT_SENTINEL as _SENTINEL,
 )
 from palinode.core.disclosure import PAUSED_READ_AVAILABILITY, PAUSE_SCOPE
+from palinode.core.explain import (
+    DEFAULT_MAX_RECORDS as _EXPLAIN_LIMIT_DEFAULT,
+    MAX_RECORDS_CEILING as _EXPLAIN_LIMIT_MAX,
+)
+from palinode.core.lifecycle_render import render_lifecycle_preview, render_retained_copies
 from palinode.core.parity import (
     CATEGORIES,
+    CORRECTION_ACTIONS,
     MEMORY_TYPES,
     PROMPT_TASKS,
     RESOLVE_INTENTS,
@@ -338,19 +346,62 @@ server.middleware.append(_tailor_instructions)
 _coerce_str_array = coerce_str_array
 
 
+def _http_request() -> Any | None:
+    """The HTTP request behind the current tool call, or ``None`` for stdio.
+
+    The streamable-HTTP transport attaches the inbound request to every tool
+    call's context; stdio attaches nothing. That is how this server tells a
+    remote caller from a local one: an HTTP caller's working directory is on
+    another machine, so this process's directory says nothing about it.
+    """
+    ctx = _request_ctx.get()
+    return getattr(ctx, "request", None) if ctx is not None else None
+
+
+def _resolve_scope():
+    """The client's project scope and the source that decided it.
+
+    One call to the shared resolver per tool call. Over **stdio** the server
+    runs on the client's machine, so the chain is this client's pinned
+    ``PALINODE_PROJECT``, else configured mappings and git/cwd inference from
+    the client's directory. Over **HTTP** this process's directory is the
+    server's own checkout, never the client's, so it is not consulted: the
+    client's ``X-Palinode-Project`` header is its pinned setting (reported as
+    ``environment``, the source that names a pinned client setting), else the
+    operator's own ``PALINODE_PROJECT``, else no project at all. Nothing is
+    cached between calls — the server holds no session state, so two calls in
+    one session agree because they read the same settings, not because the
+    first one remembered anything.
+    """
+    from palinode.core.context_prime import (
+        PROJECT_HEADER,
+        ProjectResolution,
+        ambient_cwd,
+        resolve_context,
+        validate_project_setting,
+    )
+
+    request = _http_request()
+    if request is None:
+        return resolve_context(cwd=ambient_cwd())
+    pinned = (request.headers.get(PROJECT_HEADER) or "").strip()
+    if not pinned:
+        return resolve_context()
+    validate_project_setting(pinned, source=f"The {PROJECT_HEADER} header")
+    if not config.context.enabled:
+        return ProjectResolution(None, "disabled")
+    return ProjectResolution(f"project/{pinned.removeprefix('project/')}", "environment")
+
+
 def _resolve_context() -> list[str] | None:
     """List view of the common ADR-008 resolver for ambient search."""
-    from palinode.core.context_prime import ambient_cwd, resolve_context
-
-    return resolve_context(cwd=ambient_cwd()).context
+    return _resolve_scope().context
 
 
 def _status_project() -> str | None:
     """Resolve the MCP client's project exactly as session-init does."""
-    from palinode.core.context_prime import ambient_cwd, resolve_context
-
     try:
-        return resolve_context(cwd=ambient_cwd()).project
+        return _resolve_scope().project
     except Exception:
         return None
 
@@ -485,6 +536,7 @@ DISPATCH_ERROR_PREFIXES: tuple[str, ...] = (
     "Doctor (deep) failed",
     "Lint failed",
     "Review failed",
+    "Corrections listing failed",
     "Consolidation failed",
     "Archive failed",
     "Archive-expired sweep failed",
@@ -619,6 +671,12 @@ _FULL_CONTENT_HARD_CAP = 4000  # Politeness ceiling for full=True.
 #: MCP surface only. The REST API and CLI are separate paths and legitimately
 #: want wide recall for consolidation, dedup and wiki-maintenance passes.
 MCP_SEARCH_LIMIT_MAX = 50
+
+#: The delivery-explanation record cap, taken from the one definition rather
+#: than restated: every surface bounds the same way and says how much it left
+#: out, so a second copy here could only ever disagree.
+MCP_EXPLAIN_LIMIT_DEFAULT = _EXPLAIN_LIMIT_DEFAULT
+MCP_EXPLAIN_LIMIT_MAX = _EXPLAIN_LIMIT_MAX
 
 
 #: How one evidence record reads, by (relation, direction). Reverse edges are
@@ -780,8 +838,17 @@ def _format_results(
     results: list[dict[str, Any]],
     full: bool = False,
     receipt: dict[str, Any] | None = None,
+    scope: str | None = None,
+    withheld: int = 0,
+    project: str | None = None,
 ) -> str:
     """Format search results as clean text — minimal context burn.
+
+    ``scope`` is the one-line "which project, and why" the shared resolver
+    produced for this call (``Scope: project/x (environment)``). It leads the
+    result text, including the empty one: a search that found nothing in the
+    wrong project is exactly the case where the reader needs to see how the
+    scope was decided.
 
     Renders ``snippet`` by default (populated by ``/search`` per the palinode_search
     returns un-truncated chunk content; exceeds work) so pathologically large chunks
@@ -791,9 +858,39 @@ def _format_results(
 
     Falls back to a defensive 400-char ``content`` slice if neither field is
     populated (older API or external caller).
+
+    When the delivery's confidence verdict is ``none`` the text **leads** with
+    that, above the results, because the reader is a model that will otherwise
+    read the first hit as the answer — the measured failure this exists to
+    stop. The weak results still follow: the verdict is a signal, not a filter
+    (``search.abstain_on_no_confident_match`` is the opt-in that empties the
+    slate, and it is applied by the caller, before this renderer, which then
+    passes the count it withheld as ``withheld`` so the banner can say the
+    store was searched rather than let an abstention read as an empty store).
     """
+    head = f"{scope}\n" if scope else ""
+    banner = ""
+    if isinstance(receipt, dict) and isinstance(receipt.get("retrieval"), dict):
+        from palinode.core.scoring import describe_no_confident_match
+
+        banner = describe_no_confident_match(
+            receipt["retrieval"], delivered=bool(results), withheld=withheld,
+        )
+        if banner:
+            head += banner + "\n"
+        # A scoped search that isolation left (nearly) empty says so, so the
+        # reader does not take it for an empty store. Quiet on a full result.
+        from palinode.core.scoring import describe_other_projects_withheld
+
+        other = describe_other_projects_withheld(
+            receipt["retrieval"].get("other_projects_withheld"),
+            delivered=len(results), project=project,
+        )
+        if other:
+            head += other + "\n"
     if not results:
-        return "No results found." + ("\n".join(_format_receipt(receipt)) if receipt else "")
+        return head + "No results found." + ("\n".join(_format_receipt(receipt)) if receipt else "")
+    head += MEMORY_IS_DATA + "\n"
     parts = []
     any_truncated = False
     for r in results:
@@ -848,6 +945,18 @@ def _format_results(
             "unverified": " [unverified]",
         }.get(epi, "")
 
+        # The record's OWN stated confidence in its accuracy (0.0–1.0, written
+        # at save time) — a different question from the delivery-level verdict
+        # above the results, which is about the match. It has always been
+        # stored and returned inside `metadata`, and never rendered, so an
+        # author who marked a memory half-sure was telling nobody. Shown
+        # whenever present: unlike `epistemic` there is no default value to be
+        # noisy about, so a record carrying one carries it on purpose.
+        conf_label = ""
+        stated = meta.get("confidence")
+        if isinstance(stated, (int, float)) and not isinstance(stated, bool):
+            conf_label = f" [stated confidence {float(stated):.2f}]"
+
         # Surface typed relationship links, for the same reason the epistemic
         # marker above is surfaced: a reader needs to see at a glance that a hit
         # is contested.
@@ -893,6 +1002,10 @@ def _format_results(
         if _stale:
             _link_bits.append("⚠ stale backing: " + ", ".join(_stale))
         links_label = " [" + " | ".join(_link_bits) + "]" if _link_bits else ""
+        # Only on a hit the caller asked for across projects
+        # (include_other_projects): whose record this is, before its text.
+        _other = r.get("other_project")
+        other_label = f" [other project: {', '.join(_other)}]" if _other else ""
 
         # pick body — snippet (default) or capped content (full=True).
         if full:
@@ -908,9 +1021,12 @@ def _format_results(
                 body = (r.get("content") or "")[:400]
             if r.get("content_truncated"):
                 any_truncated = True
+        # The server withholds text addressed to AI agents before the snippet
+        # is cut; this pass covers a server that predates that. Idempotent.
+        body = withhold_agent_directed(body or "")[0]
 
         entry = (
-            f"[{rel}] ({match_label}){fresh_label}{span_label}{epi_label}{links_label}{refs_label}\n{(body or '').strip()}"
+            f"[{rel}] ({match_label}){other_label}{fresh_label}{span_label}{epi_label}{conf_label}{links_label}{refs_label}\n{(body or '').strip()}"
         )
         evidence = r.get("evidence")
         if isinstance(evidence, dict):
@@ -920,7 +1036,7 @@ def _format_results(
             entry += "".join("\n" + line for line in _format_resolution(resolution))
         parts.append(entry)
 
-    rendered = "\n\n---\n\n".join(parts)
+    rendered = head + "\n\n---\n\n".join(parts)
     blocks = [r.get("evidence") for r in results if isinstance(r.get("evidence"), dict)]
     if blocks:
         from palinode.core.evidence import fold_coverage
@@ -1138,6 +1254,15 @@ def _all_tools() -> list[types.Tool]:
                         "description": "Include machine/monitor telemetry memories.",
                         "default": False,
                     },
+                    "include_other_projects": {
+                        "type": "boolean",
+                        "description": (
+                            "Also return memories tagged to other projects, each "
+                            "labelled with its project. Off by default: a "
+                            "project-scoped search leaves them out."
+                        ),
+                        "default": False,
+                    },
                     "since_days": {
                         "type": "integer",
                         "description": (
@@ -1195,6 +1320,15 @@ def _all_tools() -> list[types.Tool]:
                             "answer, an unresolved conflict with both sides, or "
                             "insufficient evidence. Default none."
                         ),
+                    },
+                    "include_retired": {
+                        "type": "boolean",
+                        "description": (
+                            "With resolve: also show retired records (archived, "
+                            "superseded, retracted, expired) in each hit's "
+                            "evidence, labelled. Off by default."
+                        ),
+                        "default": False,
                     },
                 },
                 "required": ["query"],
@@ -1560,6 +1694,11 @@ def _all_tools() -> list[types.Tool]:
                             "Omit for a plain archive with no successor."
                         ),
                     },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "Preview what would change, the retained copies and the recovery command; write nothing.",
+                        "default": False,
+                    },
                 },
                 "required": ["file_path"],
             },
@@ -1589,6 +1728,11 @@ def _all_tools() -> list[types.Tool]:
                     "reason": {
                         "type": "string",
                         "description": "Why this memory is being restored (kept in the audit trail).",
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "Preview what would change, the retained copies and the recovery command; write nothing.",
+                        "default": False,
                     },
                 },
                 "required": ["file_path"],
@@ -1623,6 +1767,11 @@ def _all_tools() -> list[types.Tool]:
                         "type": "string",
                         "description": "Why the retraction is being withdrawn (kept in the audit trail).",
                     },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "Preview what would change, the retained copies and the recovery command; write nothing.",
+                        "default": False,
+                    },
                 },
                 "required": ["file_path", "pref"],
             },
@@ -1650,6 +1799,11 @@ def _all_tools() -> list[types.Tool]:
                     "reason": {
                         "type": "string",
                         "description": "Why the request is being withdrawn (kept in the audit trail).",
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "Preview what would change, the retained copies and the recovery command; write nothing.",
+                        "default": False,
                     },
                 },
                 "required": ["file_path"],
@@ -1739,10 +1893,46 @@ def _all_tools() -> list[types.Tool]:
             ),
         ),
         types.Tool(
+            name="palinode_explain",
+            description=(
+                "Explain one delivery of context: given the bundle_id a search receipt "
+                "returned, show which memories were supplied, the exact revision of each "
+                "(and whether its source changed since), the resolved scope, the calling "
+                "surface, each record's disposition, and the coverage qualifiers. Fields "
+                "that were never recorded are reported as unavailable with the reason, "
+                "never guessed. This is supplied context only — no evidence that anyone "
+                "acted on it is recorded. Read-only."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "bundle_id": {
+                        "type": "string",
+                        "description": "Delivery reference from a receipt (the `bundle_id` / `receipt_ref`).",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum supplied records to show; the rest are counted.",
+                        "minimum": 1,
+                        "maximum": MCP_EXPLAIN_LIMIT_MAX,
+                        "default": MCP_EXPLAIN_LIMIT_DEFAULT,
+                    },
+                },
+                "required": ["bundle_id"],
+            },
+            annotations=types.ToolAnnotations(
+                title="Explain Delivery",
+                readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False,
+            ),
+        ),
+        types.Tool(
             name="palinode_rollback",
             description=(
                 "Revert a memory file to a previous version. Safe: creates a new commit "
-                "preserving the old version in history. Defaults to dry run."
+                "preserving the old version in history. Defaults to dry run. A rollback "
+                "that would undo a retirement (archive/supersede/retraction) is named in "
+                "the preview and refused unless undo_retirements=true; prefer "
+                "palinode_restore to bring a retired memory back."
             ),
             inputSchema={
                 "type": "object",
@@ -1759,6 +1949,14 @@ def _all_tools() -> list[types.Tool]:
                         "type": "boolean",
                         "description": "If true (default), show what would change without applying.",
                         "default": True,
+                    },
+                    "undo_retirements": {
+                        "type": "boolean",
+                        "description": (
+                            "Acknowledge that applying undoes a retirement and brings "
+                            "the record back as current. Without it such a rollback is refused."
+                        ),
+                        "default": False,
                     },
                 },
                 "required": ["file_path"],
@@ -1945,6 +2143,237 @@ def _all_tools() -> list[types.Tool]:
             ),
         ),
         types.Tool(
+            name="palinode_corrections",
+            description=(
+                "List correction candidates mined from harness session transcripts: moments the "
+                "user overturned a decision, rejected an approach and said why, or asked for "
+                "something to be remembered. Each candidate quotes a bounded span of the user's "
+                "own words with the session, turn and project it came from. Advisory and "
+                "read-only — candidates are proposals awaiting review, never applied, and the "
+                "list is empty unless the store's operator enabled transcript capture and named "
+                "the transcript paths in config. Running a fresh detection pass is deliberately "
+                "an operator action on the CLI or REST API, not something this tool can trigger."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Only candidates scoped to this project (e.g. 'harbor-notes'). Omit for all.",
+                    },
+                    "since_days": {
+                        "type": "integer",
+                        "description": "Only candidates from the last N days. Omit for the whole queue.",
+                    },
+                },
+            },
+            annotations=types.ToolAnnotations(
+                title="Correction Candidates",
+                readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False,
+            ),
+        ),
+        types.Tool(
+            name="palinode_correction_preview",
+            description=(
+                "Show exactly what correcting or retiring one memory would change — and change "
+                "nothing. Returns the old text, the proposed new text, the affected document "
+                "(and claim), its exact source revision, the rationale, where the correction came "
+                "from, the project scope, the supersedes/superseded_by relation that would be "
+                "recorded, every other record that quotes or derives from the target (reported, "
+                "never rewritten), and the recovery command. Call this before "
+                "palinode_correction_apply: the revision it returns is what apply requires back, "
+                "so a target that changed in between is refused rather than silently merged."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Memory to correct: 'decisions/x.md', 'decisions/x', or a bare slug. A slug naming two memories is refused with both, never guessed.",
+                    },
+                    "claim_id": {
+                        "type": "string",
+                        "description": "Narrow the correction to one '<!-- fact:id -->' claim inside the target.",
+                    },
+                    "allow_content_loss": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Explicitly permit dropping the original text listed by preview.",
+                    },
+                    "replacement": {
+                        "type": "string",
+                        "description": "The text that would stand instead. Omit to retire the target with no successor.",
+                    },
+                    "action": {
+                        "type": "string",
+                        "enum": list(CORRECTION_ACTIONS),
+                        "description": "supersede (a replacement stands) or retire (nothing does). Derived from `replacement` when omitted.",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Why. Recorded in the history sibling and the commit subject.",
+                    },
+                    "candidate_id": {
+                        "type": "string",
+                        "description": "The palinode_corrections candidate this came from; its span, session and turn become the recorded source.",
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": "Project scope. Inferred from the target's own entities when omitted.",
+                    },
+                    "backed_by": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Records supporting the REPLACEMENT (category/slug refs). The superseded original is never cited as support for its replacement — it is lineage, and a verified quote of it establishes what it said, not that the new claim is true.",
+                    },
+                },
+            },
+            annotations=types.ToolAnnotations(
+                title="Preview a Correction",
+                readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False,
+            ),
+        ),
+        types.Tool(
+            name="palinode_correction_apply",
+            description=(
+                "Apply a correction previewed by palinode_correction_preview. Requires "
+                "`confirm=true` and the `expect_revision` that preview returned; a target that "
+                "changed since the preview, or a ref matching more than one memory, is refused "
+                "with what it found rather than resolved by guesswork. Writes only through the "
+                "existing validated path — the replacement is saved and the original is archived "
+                "with `superseded_by`, so the original stays on disk, in git and retrievable as "
+                "history. An ordinary later observation must NOT be routed here: this is the "
+                "explicit, confirmed path, and it is the only one that retires anything. "
+                "`applied: \"partial\"` means the replacement was saved and the original was NOT "
+                "retired — do not re-run the correction; run the `complete_command` it returns."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Memory to correct, exactly as previewed.",
+                    },
+                    "expect_revision": {
+                        "type": "string",
+                        "description": "The revision palinode_correction_preview returned. A mismatch is refused.",
+                    },
+                    "confirm": {
+                        "type": "boolean",
+                        "description": "Must be true. Nothing is written without it.",
+                        "default": False,
+                    },
+                    "claim_id": {
+                        "type": "string",
+                        "description": "Narrow the correction to one '<!-- fact:id -->' claim inside the target.",
+                    },
+                    "allow_content_loss": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Explicitly permit dropping the original text listed by preview.",
+                    },
+                    "replacement": {
+                        "type": "string",
+                        "description": "The text that stands instead. Omit to retire with no successor.",
+                    },
+                    "action": {
+                        "type": "string",
+                        "enum": list(CORRECTION_ACTIONS),
+                        "description": "supersede or retire. Derived from `replacement` when omitted.",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Why. Recorded in the history sibling and the commit subject.",
+                    },
+                    "candidate_id": {
+                        "type": "string",
+                        "description": "The candidate this came from; it is marked applied in the queue.",
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": "Project scope for the replacement.",
+                    },
+                    "backed_by": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Records supporting the REPLACEMENT (category/slug refs). The superseded original is never among them.",
+                    },
+                },
+                "required": ["target", "expect_revision", "confirm"],
+            },
+            annotations=types.ToolAnnotations(
+                title="Apply a Reviewed Correction",
+                readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False,
+            ),
+        ),
+        types.Tool(
+            name="palinode_correction_dismiss",
+            description=(
+                "Record that a correction candidate was reviewed and declined. Writes no memory: "
+                "the candidate's queue row is marked dismissed, with the reason, and kept — which "
+                "is what stops a later transcript scan proposing the same span again. A reason is "
+                "required, because a dismissal with none is indistinguishable from a candidate "
+                "nobody ever looked at."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "candidate_id": {
+                        "type": "string",
+                        "description": "The candidate id from palinode_corrections.",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Why it was declined. This is the record.",
+                    },
+                },
+                "required": ["candidate_id", "reason"],
+            },
+            annotations=types.ToolAnnotations(
+                title="Dismiss a Correction Candidate",
+                readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False,
+            ),
+        ),
+        types.Tool(
+            name="palinode_correction_undo",
+            description=(
+                "Preview (default) or apply the undo of a correction. Without `confirm` this "
+                "reads: it states what would be restored, what would NOT be deleted, and what "
+                "cannot be reached at all — restoring a previous assertion, deleting history and "
+                "undoing an agent's external actions are three different things and only the "
+                "first is on offer. With `confirm=true` and the preview's `expect_revision` it "
+                "brings the archived record back to status: active. It refuses to resurrect a "
+                "record that was separately retracted or withdrawn by a forget request."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "The archived memory to restore.",
+                    },
+                    "expect_revision": {
+                        "type": "string",
+                        "description": "The revision the undo preview returned. Required with confirm.",
+                    },
+                    "confirm": {
+                        "type": "boolean",
+                        "description": "Must be true to write. Preview is the default.",
+                        "default": False,
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Why the correction is being undone.",
+                    },
+                },
+                "required": ["target"],
+            },
+            annotations=types.ToolAnnotations(
+                title="Undo a Correction",
+                readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False,
+            ),
+        ),
+        types.Tool(
             name="palinode_dedup_suggest",
             description=(
                 "Given draft memory content the LLM is about to save, return the top-K existing "
@@ -2086,7 +2515,8 @@ def _all_tools() -> list[types.Tool]:
                 "what replaced what, conflicts with every side intact, and what is explicitly "
                 "unknown. Use instead of palinode_search when you want the current answer "
                 "rather than a list of hits. Read-only; a tight budget can shrink the answer "
-                "but never turns a conflict into a settled one."
+                "but never turns a conflict into a settled one. Retired records are left "
+                "out, as in search, unless include_retired=true."
             ),
             inputSchema={
                 "type": "object",
@@ -2117,6 +2547,24 @@ def _all_tools() -> list[types.Tool]:
                     "max_chars": {
                         "type": "integer",
                         "description": "Max characters in the answer (default 2000).",
+                    },
+                    "include_other_projects": {
+                        "type": "boolean",
+                        "description": (
+                            "Also return records tagged to other projects, each "
+                            "labelled with its project. Off by default: a "
+                            "project-scoped request leaves them out."
+                        ),
+                        "default": False,
+                    },
+                    "include_retired": {
+                        "type": "boolean",
+                        "description": (
+                            "Also return retired records (archived, superseded, "
+                            "retracted, expired), labelled as history. Off by "
+                            "default, as in search."
+                        ),
+                        "default": False,
                     },
                 },
             },
@@ -2301,6 +2749,11 @@ async def _tool_list(arguments: dict[str, Any]) -> list[types.TextContent]:
         params["category"] = arguments["category"]
     if arguments.get("core_only"):
         params["core_only"] = "true"
+        # Browsing, not injecting: a core memory the lifecycle classifier
+        # retired stays in this listing, labelled with why it no longer acts.
+        # The injection consumers of the same endpoint (the SessionStart hook,
+        # the plugins) omit the flag and get it withheld.
+        params["include_retired_core"] = "true"
 
     resp = await _get("/list", params=params)
     if resp.status_code != 200:
@@ -2310,7 +2763,10 @@ async def _tool_list(arguments: dict[str, Any]) -> list[types.TextContent]:
         return _text("No files found.")
     parts = []
     for f in data:
-        c_tag = " [core]" if f.get("core") else ""
+        if f.get("core_retired_reason"):
+            c_tag = f" [retired: {f['core_retired_reason']}]"
+        else:
+            c_tag = " [core]" if f.get("core") else ""
         parts.append(f"{f['file']} — {f.get('summary', '')}{c_tag}")
     return _text("\n".join(parts))
 
@@ -2320,6 +2776,7 @@ async def _tool_list(arguments: dict[str, Any]) -> list[types.TextContent]:
 async def _tool_read(arguments: dict[str, Any]) -> list[types.TextContent]:
     include_meta = bool(arguments.get("meta", False))
     params: dict[str, Any] = {"file_path": arguments["file_path"], "meta": "true"}
+    params["project"] = _resolve_scope().project or ""
     tier = arguments.get("tier")
     if tier:
         params["tier"] = tier
@@ -2328,14 +2785,18 @@ async def _tool_read(arguments: dict[str, Any]) -> list[types.TextContent]:
         return _text(f"Error reading file: {resp.text}")
     data = resp.json()
     content = data.get("content", "")
+    # Full text on an explicit read, led by what its flagged part is. The
+    # local check covers a server that predates the notice field.
+    notice = data.get("agent_directed_notice") or read_notice(content)
+    lead = f"{notice}\n" if notice else ""
     if include_meta:
         fm = data.get("frontmatter") or {}
         # Render as YAML-ish frontmatter + body so downstream consumers
         # can re-parse if they want.  Keep it simple: the file already
         # has the same structure on disk.
         fm_lines = "\n".join(f"{k}: {v!r}" for k, v in fm.items())
-        return _text(f"---\n{fm_lines}\n---\n{content}")
-    return _text(content)
+        return _text(f"{lead}---\n{fm_lines}\n---\n{content}")
+    return _text(f"{lead}{content}")
 
 
 # ── search ────────────────────────────────────────────────────────
@@ -2356,6 +2817,8 @@ async def _tool_search(arguments: dict[str, Any]) -> list[types.TextContent]:
         body["include_daily"] = True
     if arguments.get("include_telemetry"):
         body["include_telemetry"] = True
+    if str(arguments.get("include_other_projects", False)).lower() in ("true", "1"):
+        body["include_other_projects"] = True
     if arguments.get("since_days") is not None:
         body["since_days"] = int(arguments["since_days"])
     if arguments.get("types"):
@@ -2372,14 +2835,21 @@ async def _tool_search(arguments: dict[str, Any]) -> list[types.TextContent]:
     # Opt-in evidence closure; "none" is the API default and is not sent.
     if arguments.get("resolve") and arguments["resolve"] != "none":
         body["resolve"] = arguments["resolve"]
+    if str(arguments.get("include_retired", False)).lower() in ("true", "1"):
+        body["include_retired"] = True
     # Always ask for the delivery receipt. It is not a tool parameter: an agent
     # never has a reason to decline provenance for what it was just handed, and
     # the cost is two lines of text without `resolve`.
     body["receipt"] = True
-    # ADR-008: ambient context boost
-    context = _resolve_context()
-    if context:
-        body["context"] = context
+    # ADR-008: ambient context boost. The same resolution the session-init
+    # digest reports, so an explicit setup and a later search in the same
+    # client cannot disagree about which project they are scoped to.
+    scope = _resolve_scope()
+    # Always stated, empty included: this surface resolved the scope itself and
+    # reports what it resolved, so it must send that result rather than leave
+    # the field absent — absent is the API's cue to apply its own pinned
+    # project, which would apply a scope this call never reported.
+    body["context"] = scope.context or []
 
     resp = await _post("/search", json=body, timeout=60.0)
     if resp.status_code != 200:
@@ -2391,11 +2861,23 @@ async def _tool_search(arguments: dict[str, Any]) -> list[types.TextContent]:
         results, receipt = payload.get("results") or [], payload.get("receipt")
     else:
         results, receipt = payload, None
+    # Opt-in abstention (`search.abstain_on_no_confident_match`, default off):
+    # withhold a slate the server judged worth nothing. Applied here, on the
+    # one surface whose reader is a model, and only to the rendering — the
+    # receipt and the retrieval log still record what the store delivered, so
+    # switching this on changes what is shown and never what is measured.
+    withheld = 0
+    if config.search.abstain_on_no_confident_match and results:
+        from palinode.core.confidence import NONE, delivered_verdict
+
+        if delivered_verdict(receipt) == NONE:
+            withheld, results = len(results), []
     # `full` is purely a rendering choice — the API always
     # populates `snippet` and preserves `content`, so the MCP picks
     # which to render without an extra round-trip.
     return _text(_format_results(
         results, full=bool(arguments.get("full")), receipt=receipt,
+        scope=scope.describe(), withheld=withheld, project=scope.project,
     ))
 
 
@@ -2467,6 +2949,11 @@ async def _tool_save(arguments: dict[str, Any]) -> list[types.TextContent]:
         confirmation += f" [lexical retrieval: {state}]"
     if warnings:
         confirmation += f" [warnings: {'; '.join(warnings)}]"
+    retained = render_retained_copies(
+        (data.get("forget") or {}).get("retained_copies")
+    )
+    if retained:
+        confirmation = "\n".join([confirmation, *retained])
     return _text(confirmation)
 
 
@@ -2609,6 +3096,8 @@ async def _tool_archive(arguments: dict[str, Any]) -> list[types.TextContent]:
         body["reason"] = arguments["reason"]
     if arguments.get("superseded_by"):
         body["superseded_by"] = arguments["superseded_by"]
+    if arguments.get("dry_run"):
+        body["dry_run"] = True
     # No model call, but a single archive writes the memory, appends to its
     # history sibling, flags dependents, updates the chunk index and commits —
     # enough work on a large store to outrun the 30 s default. Matches the CLI.
@@ -2616,15 +3105,21 @@ async def _tool_archive(arguments: dict[str, Any]) -> list[types.TextContent]:
     if resp.status_code != 200:
         return _text(f"Archive failed: {resp.text}")
     data = resp.json()
+    if data.get("dry_run"):
+        return _text("\n".join(render_lifecycle_preview(data)))
+    retained = render_retained_copies(data.get("retained_copies"))
     if data.get("status") == "already_archived":
-        return _text(f"{data.get('file')} is already archived — no change.")
+        return _text("\n".join(
+            [f"{data.get('file')} is already archived — no change.", *retained]
+        ))
     successor = data.get("superseded_by")
     verb = f"Superseded by {successor}" if successor else "Archived"
-    return _text(
-        f"{verb}: {data.get('file')}\n"
-        f"History: {data.get('history_file')}\n"
-        f"Chunks suppressed from recall: {data.get('chunks_updated', 0)}"
-    )
+    return _text("\n".join([
+        f"{verb}: {data.get('file')}",
+        f"History: {data.get('history_file')}",
+        f"Chunks suppressed from recall: {data.get('chunks_updated', 0)}",
+        *retained,
+    ]))
 
 
 # ── restore (inverse of archive) ───────────────────────────────────
@@ -2634,10 +3129,14 @@ async def _tool_restore(arguments: dict[str, Any]) -> list[types.TextContent]:
     body = {"file_path": file_path}
     if arguments.get("reason"):
         body["reason"] = arguments["reason"]
+    if arguments.get("dry_run"):
+        body["dry_run"] = True
     resp = await _post("/restore", json=body)
     if resp.status_code != 200:
         return _text(f"Restore failed: {resp.text}")
     data = resp.json()
+    if data.get("dry_run"):
+        return _text("\n".join(render_lifecycle_preview(data)))
     if data.get("status") == "not_archived":
         return _text(f"{data.get('file')} is not archived — no change.")
     lines = [
@@ -2666,10 +3165,14 @@ async def _tool_unretract(arguments: dict[str, Any]) -> list[types.TextContent]:
     body = {"file_path": file_path, "pref": pref}
     if arguments.get("reason"):
         body["reason"] = arguments["reason"]
+    if arguments.get("dry_run"):
+        body["dry_run"] = True
     resp = await _post("/unretract", json=body)
     if resp.status_code != 200:
         return _text(f"Unretract failed: {resp.text}")
     data = resp.json()
+    if data.get("dry_run"):
+        return _text("\n".join(render_lifecycle_preview(data)))
     if data.get("status") == "not_retracted":
         return _text(
             f"{data.get('file')} carries no retraction for that pref — no change."
@@ -2690,12 +3193,18 @@ async def _tool_forget_withdraw(arguments: dict[str, Any]) -> list[types.TextCon
     body = {"file_path": file_path}
     if arguments.get("reason"):
         body["reason"] = arguments["reason"]
+    if arguments.get("dry_run"):
+        body["dry_run"] = True
     resp = await _post("/forget-withdraw", json=body, timeout=120.0)
     if resp.status_code != 200:
         return _text(f"Forget-withdraw failed: {resp.text}")
     data = resp.json()
+    if data.get("dry_run"):
+        return _text("\n".join(render_lifecycle_preview(data)))
+    partial = data.get("status") == "partial"
+    head = "Partially withdrawn" if partial else "Withdrawn"
     lines = [
-        f"Withdrawn: {data.get('file')} (pref: {data.get('pref')!r})",
+        f"{head}: {data.get('file')} (pref: {data.get('pref')!r})",
         f"Restored: {len(data.get('restored', []))} — "
         + (", ".join(data.get("restored", [])) or "none"),
         f"Unretracted: {len(data.get('unretracted', []))} — "
@@ -2705,10 +3214,11 @@ async def _tool_forget_withdraw(arguments: dict[str, Any]) -> list[types.TextCon
     ]
     if data.get("failed"):
         lines.append(
-            "Failed: " + ", ".join(
+            "Failed (still retired): " + ", ".join(
                 f"{f['path']} ({f['op']})" for f in data["failed"]
             )
         )
+    lines.extend(render_retained_copies(data.get("retained_copies")))
     return _text("\n".join(lines))
 
 
@@ -2802,26 +3312,32 @@ async def _tool_session_init(arguments: dict[str, Any]) -> list[types.TextConten
             "file/skill/hook layers. Call palinode_search directly for context."
         )
     body = {}
+    remote = _http_request() is not None
     if arguments.get("project"):
         body["project"] = arguments["project"]
     if arguments.get("cwd"):
         body["cwd"] = arguments["cwd"]
-    elif not body:
+    elif not body and not remote:
         # stdio servers run on the client's machine, so the server
         # process CWD is a usable default scope hint. Explicit args win.
+        # An HTTP server's CWD is its own checkout, never the client's.
         from palinode.core.context_prime import ambient_cwd
 
         body["cwd"] = ambient_cwd()
     if "project" not in body:
-        # The MCP stdio process can have a client-specific PALINODE_PROJECT
-        # while the API process does not.  Forward that resolved environment
-        # scope across the process boundary, but leave cwd/git resolution in
-        # the API for clients without an explicit environment scope.
+        # The MCP process can carry a client-specific pinned project (a stdio
+        # client's PALINODE_PROJECT, an HTTP client's X-Palinode-Project
+        # header) that the API process cannot see. Forward that resolved
+        # scope across the process boundary — with the source that decided it,
+        # so the digest reports a pinned setting as one rather than as an
+        # argument — but leave cwd/git resolution in the API for clients
+        # without an explicit environment scope.
         from palinode.core.context_prime import resolve_context
 
-        resolution = resolve_context(cwd=body.get("cwd"))
+        resolution = _resolve_scope() if remote else resolve_context(cwd=body.get("cwd"))
         if resolution.basis == "environment" and resolution.project:
             body["project"] = resolution.project
+            body["project_resolved_by"] = resolution.basis
     resp = await _post("/context/prime", json=body)
     if resp.status_code != 200:
         return _text(f"Error: {resp.text}")
@@ -2866,6 +3382,30 @@ async def _tool_trace(arguments: dict[str, Any]) -> list[types.TextContent]:
     return _text(format_trace_text(resp.json()))
 
 
+# ── explain ───────────────────────────────────────────────────────
+@_handles("palinode_explain")
+async def _tool_explain(arguments: dict[str, Any]) -> list[types.TextContent]:
+    """Explain one delivery from the receipt rows it wrote.
+
+    The public view only: the caller's own query prose stays diagnostics-only,
+    exactly as on the receipt, and there is no parameter here that would lift
+    that — an operator reading their own store uses the CLI or the local
+    inspector.
+    """
+    bundle_id = arguments.get("bundle_id")
+    if not bundle_id:
+        return _text("Error: bundle_id is required")
+    params: dict[str, Any] = {"view": "public"}
+    if arguments.get("limit") is not None:
+        params["limit"] = arguments["limit"]
+    resp = await _get(f"/explain/{bundle_id}", params=params)
+    if resp.status_code != 200:
+        return _text(f"Error: {resp.text}")
+    from palinode.core.explain import format_explanation_text
+
+    return _text(format_explanation_text(resp.json()))
+
+
 # ── rollback ──────────────────────────────────────────────────────
 @_handles("palinode_rollback")
 async def _tool_rollback(arguments: dict[str, Any]) -> list[types.TextContent]:
@@ -2876,6 +3416,7 @@ async def _tool_rollback(arguments: dict[str, Any]) -> list[types.TextContent]:
     if arguments.get("commit"):
         params["commit"] = arguments["commit"]
     params["dry_run"] = str(arguments.get("dry_run", True)).lower()
+    params["undo_retirements"] = str(arguments.get("undo_retirements", False)).lower()
     resp = await _post_params("/rollback", params=params)
     if resp.status_code != 200:
         return _text(f"Error: {resp.text}")
@@ -3083,6 +3624,16 @@ async def _tool_resolve(arguments: dict[str, Any]) -> list[types.TextContent]:
     for key in ("max_items", "max_chars"):
         if arguments.get(key) is not None:
             body[key] = int(arguments[key])
+    if str(arguments.get("include_retired", False)).lower() in ("true", "1"):
+        body["include_retired"] = True
+    # The client's project, resolved here, on the surface closest to the
+    # client, exactly as palinode_search resolves it. The API then scopes the
+    # bundle to the client, never to the machine the API happens to run on.
+    scope = _resolve_scope()
+    if scope.project:
+        body["project"] = scope.project
+    if str(arguments.get("include_other_projects", False)).lower() in ("true", "1"):
+        body["include_other_projects"] = True
     resp = await _post("/resolve", json=body, timeout=60.0)
     if resp.status_code != 200:
         return _text(f"Resolve failed: {resp.text}")
@@ -3132,6 +3683,109 @@ async def _tool_review(arguments: dict[str, Any]) -> list[types.TextContent]:
     if resp.status_code != 200:
         return _text(f"Review failed: {resp.text}")
     return _text(json.dumps(resp.json(), indent=2))
+
+
+# ── corrections ───────────────────────────────────────────────────
+@_handles("palinode_corrections")
+async def _tool_corrections(arguments: dict[str, Any]) -> list[types.TextContent]:
+    # `scan` is deliberately absent from this surface. Reading a person's
+    # session transcripts is an operator action, and the operator's tools are
+    # the CLI and the REST API; an agent asking "what did I get wrong lately?"
+    # gets the queue as it stands, which is what `readOnlyHint` promises.
+    body: dict[str, Any] = {"scan": False}
+    if arguments.get("project"):
+        body["project"] = arguments["project"]
+    if arguments.get("since_days") is not None:
+        body["since_days"] = arguments["since_days"]
+    resp = await _post("/corrections", json=body, timeout=60.0)
+    if resp.status_code != 200:
+        return _text(f"Corrections listing failed: {resp.text}")
+    return _text(json.dumps(resp.json(), indent=2))
+
+
+# ── correction review ─────────────────────────────────────────────────────
+#: The params each review phase forwards. Listed once so a tool cannot send a
+#: key its route does not model, and a new canonical param is added in one
+#: place rather than three.
+_CORRECTION_PREVIEW_KEYS = (
+    "target", "claim_id", "replacement", "action", "reason", "candidate_id", "project",
+    "backed_by", "allow_content_loss",
+)
+_CORRECTION_APPLY_KEYS = _CORRECTION_PREVIEW_KEYS + ("expect_revision", "confirm")
+
+
+def _correction_body(arguments: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    return {key: arguments[key] for key in keys if arguments.get(key) is not None}
+
+
+async def _correction_call(
+    phase: str, body: dict[str, Any], label: str
+) -> list[types.TextContent]:
+    """One transport for all four phases; a refusal comes back as its payload.
+
+    A 409 here is the contract working — a stale revision, an ambiguous target,
+    an unnamed one — so the refusal's own JSON is returned rather than an
+    opaque status line. The agent needs the candidates to choose from.
+
+    The same code also carries a *partial* apply, which is the opposite of a
+    refusal: something was written. It is led as such, because an agent told
+    "refused" would reasonably conclude the store was untouched and re-run the
+    correction instead of finishing it.
+    """
+    from palinode.core.parity import CORRECTION_APPLIED_PARTIAL
+
+    resp = await _post(f"/corrections/{phase}", json=body, timeout=120.0)
+    if resp.status_code == 409:
+        try:
+            detail = resp.json().get("detail", {})
+        except ValueError:
+            detail = {"detail": resp.text}
+        if isinstance(detail, dict) and detail.get("applied") == CORRECTION_APPLIED_PARTIAL:
+            return _text(f"{label} PARTIALLY applied: {json.dumps(detail, indent=2)}")
+        return _text(f"{label} refused: {json.dumps(detail, indent=2)}")
+    if resp.status_code != 200:
+        return _text(f"{label} failed: {resp.text}")
+    return _text(json.dumps(resp.json(), indent=2))
+
+
+@_handles("palinode_correction_preview")
+async def _tool_correction_preview(arguments: dict[str, Any]) -> list[types.TextContent]:
+    return await _correction_call(
+        "preview",
+        _correction_body(arguments, _CORRECTION_PREVIEW_KEYS),
+        "Correction preview",
+    )
+
+
+@_handles("palinode_correction_apply")
+async def _tool_correction_apply(arguments: dict[str, Any]) -> list[types.TextContent]:
+    if not arguments.get("confirm"):
+        return _text(
+            "Correction apply refused: confirm=true is required. Call "
+            "palinode_correction_preview first and pass back its "
+            "confirm.expect_revision — nothing is written without both."
+        )
+    return await _correction_call(
+        "apply",
+        _correction_body(arguments, _CORRECTION_APPLY_KEYS),
+        "Correction apply",
+    )
+
+
+@_handles("palinode_correction_dismiss")
+async def _tool_correction_dismiss(arguments: dict[str, Any]) -> list[types.TextContent]:
+    body = _correction_body(arguments, ("candidate_id", "reason"))
+    if not body.get("reason"):
+        return _text("Correction dismiss refused: a reason is required — it is the record.")
+    return await _correction_call("dismiss", body, "Correction dismiss")
+
+
+@_handles("palinode_correction_undo")
+async def _tool_correction_undo(arguments: dict[str, Any]) -> list[types.TextContent]:
+    body = _correction_body(
+        arguments, ("target", "expect_revision", "confirm", "reason")
+    )
+    return await _correction_call("undo", body, "Correction undo")
 
 
 # ── prompt ────────────────────────────────────────────────────────

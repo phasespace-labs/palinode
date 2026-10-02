@@ -1,10 +1,15 @@
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 import {
+  archiveMemory,
   buildCoreDigest,
   buildRecallContext,
   buildSessionCapture,
+  clientCwd,
   RESOLUTION_DEADLINE_MARKER,
   trimToUnitBoundary,
   configFromEnv,
@@ -16,6 +21,7 @@ import {
   withdrawForgetRequest,
   type FetchFn,
   type PalinodeConfig,
+  FRAME,
 } from "../src/index.js";
 
 const CFG: PalinodeConfig = {
@@ -112,6 +118,24 @@ describe("buildRecallContext", () => {
     const ctx = await buildRecallContext(PROMPT, CFG, fetchFn);
     expect(ctx).toContain("Trigger fired: decisions/deploy-rollback.md");
     expect(ctx).toContain("Full rollback decision body.");
+  });
+
+  it("filters legacy cross_refs on trigger reads in the client's project", async () => {
+    const fetchFn = (async (input: unknown) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/controls/check") return Response.json({ project: "home" });
+      if (url.pathname === "/check-triggers") return Response.json([
+        { memory_file: "insights/global-rule.md" },
+      ]);
+      if (url.pathname === "/read") return Response.json({
+        content: `---\ncross_refs: [${url.searchParams.get("project") === "home"
+          ? "decisions/home-link" : "decisions/foreign-link"}]\n---\nGlobal body`,
+      });
+      return Response.json({ results: [] });
+    }) as FetchFn;
+    const ctx = await buildRecallContext(PROMPT, CFG, fetchFn, "/client/workspace");
+    expect(ctx).toContain("decisions/home-link");
+    expect(ctx).not.toContain("decisions/foreign-link");
   });
 
   it("sends the strict defaults in the search payload", async () => {
@@ -269,6 +293,18 @@ describe("bounded resolution (the per-turn consuming hook)", () => {
     expect(body.max_chars).toBeGreaterThan(CFG.maxChars - 400);
   });
 
+  it("carries the client's cwd to resolution, and nothing when there is none", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const fetchFn = (async (url: unknown, init?: { body?: unknown }) => {
+      if (String(url).includes("/resolve")) bodies.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify(BUNDLES.current), { status: 200 });
+    }) as FetchFn;
+    await buildRecallContext(PROMPT, RCFG, fetchFn, "/work/quillon-client");
+    await buildRecallContext(PROMPT, RCFG, fetchFn);
+    expect(bodies[0].cwd).toBe("/work/quillon-client");
+    expect("cwd" in bodies[1]).toBe(false);
+  });
+
   it("says nothing when the injection cap leaves no room for an honest answer", async () => {
     const calls: Array<{ url: string }> = [];
     const ctx = await buildRecallContext(
@@ -337,6 +373,31 @@ describe("bounded resolution (the per-turn consuming hook)", () => {
     expect(ctx).toContain("insights/region-b");
   });
 
+  it("leads unframed fallback memory with the authority frame", async () => {
+    const hits = [
+      { rel_path: "decisions/deploy-rollback.md", score: 1.0, raw_score: 0.62, snippet: "git revert" },
+    ];
+    const fetchFn = (async (url: unknown) => {
+      if (String(url).includes("/resolve")) throw new DOMException("TimeoutError", "TimeoutError");
+      if (String(url).includes("/search")) return new Response(JSON.stringify({ results: hits }), { status: 200 });
+      return new Response("[]", { status: 200 });
+    }) as FetchFn;
+    const ctx = (await buildRecallContext(PROMPT, RCFG, fetchFn))!;
+    expect(ctx).toContain(FRAME);
+    expect(ctx.indexOf(FRAME)).toBeLessThan(ctx.indexOf("git revert"));
+  });
+
+  it("does not add a second frame to a bundle that carries its own", async () => {
+    const ctx = (await buildRecallContext(
+      "which region does the cache cluster run in?",
+      RCFG,
+      stubFetch({ "/check-triggers": [], "/resolve": BUNDLES.conflict }),
+    ))!;
+    const line = FRAME.trimEnd();
+    expect(BUNDLES.conflict.text).toContain(line);
+    expect(ctx.split(line).length - 1).toBe(1);
+  });
+
   it("carries an explicit unknown rather than an older value", async () => {
     const ctx = await buildRecallContext(
       "what is the pipeline throughput ceiling?",
@@ -370,6 +431,51 @@ describe("bounded resolution (the per-turn consuming hook)", () => {
     expect(ctx!.replace(`${RESOLUTION_DEADLINE_MARKER}\n`, "")).toBe(before);
   });
 
+  it("scopes the deadline fallback to the client's project", async () => {
+    // /resolve scopes itself through `cwd` server-side; the fallback /search
+    // used to send none at all — `{query, limit, threshold, max_chars}` — so
+    // a missed deadline delivered what the bundle path would have withheld
+    // for the very same client. `/search` honours scope only via `context`.
+    const hits = [
+      { rel_path: "decisions/deploy-rollback.md", score: 1.0, raw_score: 0.62, snippet: "git revert" },
+    ];
+    const calls: Array<{ url: string; body?: unknown }> = [];
+    const fetchFn = (async (url: unknown, init?: { body?: unknown }) => {
+      const u = String(url);
+      calls.push({ url: u, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      if (u.includes("/resolve")) throw new DOMException("TimeoutError", "TimeoutError");
+      if (u.includes("/controls/check")) {
+        return new Response(JSON.stringify({ allowed: true, project: "otherproj" }), { status: 200 });
+      }
+      if (u.includes("/search")) return new Response(JSON.stringify({ results: hits }), { status: 200 });
+      return new Response("[]", { status: 200 });
+    }) as FetchFn;
+
+    const ctx = await buildRecallContext(PROMPT, RCFG, fetchFn, "/repo/otherproj");
+    expect(ctx).toContain("Related memories");
+    const search = calls.find((c) => c.url.includes("/search"));
+    expect((search?.body as { context?: unknown[] } | undefined)?.context).toEqual(["project/otherproj"]);
+  });
+
+  it("sends no scope on the fallback when the client has no resolvable project", async () => {
+    const hits = [{ rel_path: "notes/a.md", score: 1.0, raw_score: 0.6, snippet: "x" }];
+    const calls: Array<{ url: string; body?: unknown }> = [];
+    const fetchFn = (async (url: unknown, init?: { body?: unknown }) => {
+      const u = String(url);
+      calls.push({ url: u, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      if (u.includes("/resolve")) throw new DOMException("TimeoutError", "TimeoutError");
+      if (u.includes("/controls/check")) {
+        return new Response(JSON.stringify({ allowed: true, project: null }), { status: 200 });
+      }
+      if (u.includes("/search")) return new Response(JSON.stringify({ results: hits }), { status: 200 });
+      return new Response("[]", { status: 200 });
+    }) as FetchFn;
+
+    await buildRecallContext(PROMPT, RCFG, fetchFn, "/repo/unscoped");
+    const search = calls.find((c) => c.url.includes("/search"));
+    expect(search?.body).not.toHaveProperty("context");
+  });
+
   it("says nothing when the deadline passes and search recalls nothing either", async () => {
     const fetchFn = (async (url: unknown) => {
       if (String(url).includes("/resolve")) throw new Error("deadline");
@@ -389,6 +495,21 @@ describe("bounded resolution (the per-turn consuming hook)", () => {
       PROMPT, RCFG, stubFetch({ "/check-triggers": [], "/resolve": empty }),
     );
     expect(ctx).toBeNull();
+  });
+
+  it("delivers an empty scoped bundle that says other projects were withheld", async () => {
+    const line =
+      "2 records from other projects withheld (scope: project/alpha). They are about other projects, not this one.";
+    const isolated = {
+      selected: [], conflicts: [], replaced: [], insufficient: [],
+      omitted_conflicts: 0, other_projects_withheld: 2,
+      coverage: { status: "complete", reasons: [] }, receipt_ref: null,
+      text: `### Resolved from memory (current state)\n\nNothing in memory answers this.\n${line}`,
+    };
+    const ctx = await buildRecallContext(
+      PROMPT, RCFG, stubFetch({ "/check-triggers": [], "/resolve": isolated }),
+    );
+    expect(ctx).toContain(line);
   });
 
   it("takes the plain search channel when resolution is switched off", async () => {
@@ -807,6 +928,62 @@ describe("reversal client (restore / unretract / forget-withdraw)", () => {
   });
 });
 
+describe("lifecycle dry runs and retained copies", () => {
+  const retained = {
+    records: [
+      {
+        file: "insights/readout.md",
+        of: "decisions/x.md",
+        relations: ["sources (quoted)"],
+        in_default_recall: true,
+        action: "it quotes this record verbatim",
+      },
+    ],
+    total: 3,
+    more: 1,
+    not_visible: 1,
+    note: "Reported, never changed.",
+  };
+
+  it("archiveMemory posts the canonical params and returns the retained copies", async () => {
+    const calls: Array<{ url: string; body?: unknown }> = [];
+    const out = await archiveMemory(
+      "decisions/x.md",
+      CFG,
+      stubFetch({ "/archive": { file: "decisions/x.md", status: "archived", retained_copies: retained } }, calls),
+      "closed",
+      "decisions/y.md",
+    );
+    expect(calls[0].url).toBe("http://test:6340/archive");
+    expect(calls[0].body).toEqual({ file_path: "decisions/x.md", reason: "closed", superseded_by: "decisions/y.md" });
+    expect(out?.retained_copies?.records[0].file).toBe("insights/readout.md");
+    expect(out?.retained_copies?.more).toBe(1);
+    expect(out?.retained_copies?.not_visible).toBe(1);
+  });
+
+  it("each of the four sends dry_run only when asked", async () => {
+    const calls: Array<{ url: string; body?: unknown }> = [];
+    const fetchFn = stubFetch(
+      {
+        "/archive": { file: "d.md", status: "would_archive", dry_run: true },
+        "/restore": { file: "d.md", status: "would_restore", dry_run: true },
+        "/unretract": { file: "d.md", status: "would_unretract", dry_run: true, mentions: 1 },
+        "/forget-withdraw": { file: "f.md", status: "would_withdraw", dry_run: true, pref: "p" },
+      },
+      calls,
+    );
+    expect((await archiveMemory("d.md", CFG, fetchFn, undefined, undefined, true))?.status).toBe("would_archive");
+    expect((await restoreMemory("d.md", CFG, fetchFn, undefined, true))?.status).toBe("would_restore");
+    expect((await unretractMentions("d.md", "p", CFG, fetchFn, undefined, true))?.status).toBe("would_unretract");
+    expect((await withdrawForgetRequest("f.md", CFG, fetchFn, undefined, true))?.status).toBe("would_withdraw");
+    expect(calls.map((c) => (c.body as Record<string, unknown>).dry_run)).toEqual([true, true, true, true]);
+
+    const plain: Array<{ url: string; body?: unknown }> = [];
+    await archiveMemory("d.md", CFG, stubFetch({ "/archive": { file: "d.md", status: "archived" } }, plain));
+    expect(plain[0].body).toEqual({ file_path: "d.md" });
+  });
+});
+
 
 describe("capture opt-in and policy", () => {
   it("defaults off and rejects denied capture without sending content", async () => {
@@ -819,5 +996,24 @@ describe("capture opt-in and policy", () => {
       stubFetch({ "/controls/check": { allowed: false } }, calls))).toBe(false);
     expect(calls).toHaveLength(1);
     expect(JSON.stringify(calls)).not.toContain("FAKE_SECRET_excluded");
+  });
+});
+
+describe("clientCwd — a linked worktree sends its main repository's root", () => {
+  it("maps a linked worktree to the main worktree root, and leaves other dirs alone", () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "pal-wt-")));
+    const main = join(base, "harbor-notes");
+    const linked = join(base, "agent-a1b2c3");
+    const git = (...args: string[]) =>
+      execFileSync("git", args, { stdio: "ignore", env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" } });
+    git("init", "-q", main);
+    git("-C", main, "-c", "user.email=t@t.test", "-c", "user.name=t",
+      "commit", "-q", "--allow-empty", "-m", "init");
+    git("-C", main, "worktree", "add", "-q", linked);
+
+    expect(clientCwd(linked)).toBe(main);
+    expect(clientCwd(main)).toBe(main);
+    const plain = realpathSync(mkdtempSync(join(tmpdir(), "pal-plain-")));
+    expect(clientCwd(plain)).toBe(plain);
   });
 });

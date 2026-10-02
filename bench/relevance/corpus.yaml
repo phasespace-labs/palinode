@@ -1,0 +1,742 @@
+# Relevance / abstention fixture corpus — SYNTHETIC.
+#
+# Every project, person, host, version and identifier below is invented for
+# this benchmark. Nothing here is copied from, derived from, or shaped after a
+# real memory store. This directory ships publicly; keep it that way.
+#
+# Roles (see bench/relevance/corpus.py for the enforced vocabulary):
+#   current_state     an answer about the release state as it stands now
+#   current_decision  the decision in force after a change
+#   superseded        the decision that was in force before the change
+#   proposal          a newer, undecided proposal (the recency trap)
+#   scoped_note       a newer note true only in a narrower scope (recency trap)
+#   rejected          an approach that was considered and turned down, with why
+#   old_context       an older note that is still true about the past
+#   duplicate         a near-duplicate restatement of another record
+#   noise             topically broad material with no answer in it
+#   cross_project     a record belonging to the unrelated second project
+#
+# `sections:` makes a record long enough (>2000 chars of body) that the parser
+# splits it on H2 headings — which is what gives the auto-footer its own chunk
+# and makes footer-only hits reachable at all.
+
+corpus_version: 1
+
+projects:
+  harborlight: The project under evaluation.
+  tidewater: A second, unrelated project. Present only to test isolation.
+  marlinworks: Named by no-answer questions. Deliberately has zero records.
+
+people:
+  - Nadia Okonkwo
+  - Rafael Ibarra
+  - Sunil Achterberg
+  - Marta Delacroix
+
+records:
+
+  # ── harborlight: current release state ──────────────────────────────────
+
+  - id: hl-release-4-2-0
+    project: harborlight
+    category: projects
+    type: ProjectSnapshot
+    role: current_state
+    date: "2026-05-14"
+    dup_group: release-4-2-0
+    title: Harborlight 4.2.0 is the current release
+    body: |
+      Harborlight 4.2.0 was cut on 14 May 2026 and is the current release. The
+      tag is HL-4.2.0 and it is the build running in every production ring.
+      Nadia Okonkwo signed the cut. No 4.3 branch exists yet; the next minor is
+      not scheduled. Treat HL-4.2.0 as the answer to "what is running" until a
+      newer snapshot replaces this one.
+
+  - id: hl-release-notes-4-2-0
+    project: harborlight
+    category: projects
+    type: ProjectSnapshot
+    role: current_state
+    date: "2026-05-14"
+    title: What shipped in Harborlight 4.2.0
+    body: |
+      Harborlight 4.2.0 ships three things. The sync planner now emits a single
+      batch per window instead of one per shard. The replay endpoint accepts a
+      cursor so an operator can resume an interrupted backfill. And the long
+      standing checksum mismatch filed as HL-E0447 is fixed: the reader was
+      hashing the decoded payload while the writer hashed the encoded one.
+      Rafael Ibarra wrote the release notes.
+
+  - id: hl-support-window
+    project: harborlight
+    category: decisions
+    type: Decision
+    role: current_state
+    date: "2026-05-20"
+    title: Harborlight supported version window
+    body: |
+      Harborlight supports the current minor and the one before it. As of the
+      4.2.0 cut that means 4.2.x and 4.1.x receive fixes. Harborlight 4.0.x is
+      out of support and receives nothing, not even security fixes. Anything in
+      the 3.x line has been unsupported since the 4.0 cut. Operators asking
+      whether 4.0 is still supported should read this as a no.
+
+  - id: hl-deploy-target
+    project: harborlight
+    category: decisions
+    type: Decision
+    role: current_state
+    date: "2026-06-02"
+    title: Harborlight deploys through three staged rings
+    body: |
+      Harborlight deploys to production as a staged rollout across three rings.
+      Ring one is internal traffic only, ring two is a five percent customer
+      slice, ring three is everyone. A ring must hold for two hours with no
+      budget burn before the next opens. This replaced the all-at-once deploy
+      that the 4.0 line used. Sunil Achterberg owns the rollout tooling.
+
+  - id: hl-batch-window-current
+    project: harborlight
+    category: decisions
+    type: Decision
+    role: current_state
+    date: "2026-06-11"
+    title: Harborlight default sync batch window is 750 ms
+    body: |
+      The default value of sync.batch_window_ms in Harborlight is 750. It was
+      raised from the previous default after the ring-two rollout showed that a
+      shorter window produced more partial batches than it saved in latency.
+      Deployments that need tighter latency may override sync.batch_window_ms
+      per environment, but 750 is what a fresh install gets today.
+
+  - id: hl-error-budget-current
+    project: harborlight
+    category: decisions
+    type: Decision
+    role: current_state
+    date: "2026-06-25"
+    title: Harborlight error budget is 0.2 percent monthly
+    body: |
+      Harborlight runs against a monthly error budget of 0.2 percent of sync
+      operations. Burning half the budget freezes ring three. Burning all of it
+      freezes every ring until the following month. Marta Delacroix reviews the
+      burn at the weekly sync. The budget is measured on completed operations,
+      not on requests, so a retried operation counts once.
+
+  - id: hl-runtime-baseline
+    project: harborlight
+    category: decisions
+    type: Decision
+    role: current_state
+    date: "2026-07-08"
+    title: Harborlight runtime baseline is Python 3.12
+    body: |
+      The supported runtime baseline for Harborlight is Python 3.12. Nothing in
+      the tree may use syntax or standard library behaviour newer than that, and
+      the test matrix no longer builds 3.11. The baseline moved when the sync
+      planner adopted the newer task group semantics. A deployment still pinned
+      to 3.11 will start but is unsupported.
+
+  - id: hl-oncall-rotation
+    project: harborlight
+    category: projects
+    type: ProjectSnapshot
+    role: current_state
+    date: "2026-07-16"
+    title: Harborlight on-call rotation owner
+    body: |
+      Marta Delacroix owns the Harborlight on-call rotation. She took it over
+      from Sunil Achterberg when the region work started. The rotation is two
+      people deep with a one-week handover and no secondary outside business
+      hours. Escalation past the rotation goes to Nadia Okonkwo.
+
+  # ── harborlight: older context that is still true about the past ────────
+
+  - id: hl-release-3-8-0-old
+    project: harborlight
+    category: projects
+    type: ProjectSnapshot
+    role: old_context
+    date: "2025-11-04"
+    title: Harborlight 3.8.0 is the current release
+    body: |
+      Harborlight 3.8.0 was cut on 4 November 2025 and is the current release.
+      The tag is HL-3.8.0. It is the build running in production and the one
+      support should assume when a customer reports a sync fault. The 4.0 work
+      is on a branch and is not scheduled.
+
+  - id: hl-release-4-0-0-old
+    project: harborlight
+    category: projects
+    type: ProjectSnapshot
+    role: old_context
+    date: "2026-01-22"
+    title: Harborlight 4.0.0 is the current release
+    body: |
+      Harborlight 4.0.0 was cut on 22 January 2026 and is the current release.
+      The tag is HL-4.0.0. This is the first release on the new sync planner and
+      it deploys all at once rather than in rings. Nadia Okonkwo signed the cut.
+
+  - id: hl-batch-window-old
+    project: harborlight
+    category: decisions
+    type: Decision
+    role: old_context
+    date: "2026-02-12"
+    title: Harborlight default sync batch window is 250 ms
+    body: |
+      The default value of sync.batch_window_ms in Harborlight is 250. A shorter
+      window was chosen so that a single slow shard cannot hold a batch open.
+      Operators who want fewer, larger batches may raise sync.batch_window_ms
+      per environment; 250 is what a fresh install gets.
+
+  - id: hl-planning-notes-q1
+    project: harborlight
+    category: projects
+    type: ProjectSnapshot
+    role: noise
+    date: "2026-01-09"
+    entities:
+      - project/harborlight
+      - person/nadia-okonkwo
+    title: Harborlight first-quarter planning notes
+    sections:
+      - heading: Scope
+        text: |
+          The quarter has four themes: sync throughput, replay ergonomics, the
+          deployment story, and whatever the audit turns up. None of these are
+          decided yet; this note exists so the conversation has somewhere to
+          land. Throughput is the one with a number attached, because the sync
+          planner has never been measured under a shard count above forty and
+          the next three onboardings all clear that. Replay ergonomics is the
+          one everybody wants and nobody has written down. The deployment story
+          is contested between the people who ship weekly and the people who
+          answer the pager.
+      - heading: Open questions
+        text: |
+          Does the planner need a queue at all, or is the batch window enough?
+          Should replay be a separate binary? Is there a version of the rollout
+          that does not require an operator to watch a dashboard for two hours?
+          What does support actually need from a release note? Each of these has
+          at least two people with strong opinions and no owner, which is the
+          normal state of a planning note in January and the reason this record
+          should not be read as a decision about anything.
+      - heading: Not decided here
+        text: |
+          Nothing in this note settles retention, authentication lifetimes,
+          schema versioning, region topology, the batch window default, or the
+          release cadence. Those all have their own records, written later, and
+          where this note disagrees with one of them the other record wins. This
+          paragraph exists because planning notes get retrieved for queries they
+          cannot answer, and a reader who lands here should be told so rather
+          than left to infer it from the date.
+      - heading: Attendees
+        text: |
+          Nadia Okonkwo, Rafael Ibarra, Sunil Achterberg and Marta Delacroix
+          attended. Notes taken by Rafael Ibarra. The next planning session is
+          unscheduled; whoever books it should bring the throughput numbers,
+          because without them the throughput theme is a slogan rather than a
+          plan and the quarter will end with the same four themes restated.
+          Marta Delacroix asked that the pager load be on the agenda whenever
+          the session does get booked, on the grounds that it is the only theme
+          with a person attached to it rather than a system, and that it has
+          been carried forward from the previous two quarters without anybody
+          disagreeing with it or doing anything about it either.
+
+  # ── harborlight: rejected approaches, with the reason ───────────────────
+
+  - id: hl-rejected-dual-write
+    project: harborlight
+    category: decisions
+    type: Decision
+    role: rejected
+    date: "2026-03-12"
+    dup_group: rejected-dual-write
+    title: Harborlight rejected dual-write replication
+    body: |
+      Dual-write replication was considered for Harborlight and rejected. Under
+      dual-write the service writes each record to both the primary store and
+      the replica in the same request. It was rejected because reconciliation
+      cost dominates: any partial failure leaves the two stores disagreeing, and
+      the repair job we would have to write is larger than the replication
+      problem it solves. Split-brain during a network partition was the second
+      reason. Rafael Ibarra wrote the rejection up.
+
+  - id: hl-rejected-cron-poller
+    project: harborlight
+    category: decisions
+    type: Decision
+    role: rejected
+    date: "2026-03-26"
+    title: Harborlight rejected a cron-driven poller
+    body: |
+      A cron-driven poller was proposed as the Harborlight sync trigger and
+      rejected. The design polls each source on a fixed schedule and enqueues
+      whatever changed. It was rejected because the schedule sets a hard latency
+      floor of sixty seconds, and three of the committed integrations need sync
+      to complete inside ten. Polling also wastes a full scan per interval on
+      sources that did not change.
+
+  - id: hl-rejected-vendor-queue
+    project: harborlight
+    category: decisions
+    type: Decision
+    role: rejected
+    date: "2026-04-09"
+    title: Harborlight rejected a managed queue vendor
+    body: |
+      Moving the Harborlight work queue to a managed vendor was evaluated and
+      rejected. The functionality was adequate. It was rejected on cost: the
+      vendor bills cross-region egress per message, and the region topology
+      means most messages cross a region boundary, so the projected monthly bill
+      was roughly four times the self-hosted queue it would replace. Revisit if
+      the topology changes.
+
+  - id: hl-rejected-inline-compression
+    project: harborlight
+    category: decisions
+    type: Decision
+    role: rejected
+    date: "2026-04-23"
+    title: Harborlight rejected inline payload compression
+    body: |
+      Compressing sync payloads inline on the write path was tried and rejected.
+      It halved transfer bytes as expected. It was rejected because the CPU cost
+      lands on the write path, where the budget is tightest: at the measured
+      shard counts compression added enough per-record latency to push the batch
+      window past its target. Compression at rest, off the write path, is still
+      open.
+
+  - id: hl-rejected-client-dedup
+    project: harborlight
+    category: decisions
+    type: Decision
+    role: rejected
+    date: "2026-05-07"
+    title: Harborlight rejected client-side deduplication
+    body: |
+      Client-side deduplication was rejected for Harborlight. The proposal had
+      each client suppress records it believed it had already sent, keyed on a
+      local timestamp. It was rejected on correctness: under clock skew between
+      clients the key is not unique, and two clients with drifting clocks can
+      suppress different records while both believing they deduplicated
+      correctly. Deduplication stays server-side.
+
+  # ── harborlight: changed decisions, old and new, plus the recency trap ──
+
+  - id: hl-retention-old
+    project: harborlight
+    category: decisions
+    type: Decision
+    role: superseded
+    date: "2026-02-03"
+    title: Harborlight retains sync history for 30 days
+    body: |
+      Harborlight retains sync history for 30 days. The window was chosen to
+      cover a monthly reconciliation cycle with a few days of slack. Filed as
+      RFC-HARBOR-0088. Storage cost was the binding constraint; nobody asked for
+      longer at the time.
+
+  - id: hl-retention-new
+    project: harborlight
+    category: decisions
+    type: Decision
+    role: current_decision
+    date: "2026-06-18"
+    title: Harborlight retains sync history for 90 days
+    body: |
+      Harborlight retains sync history for 90 days. This replaces the earlier
+      30-day window. Filed as RFC-HARBOR-0142. Two customer investigations in
+      the spring needed history older than 30 days and could not get it, which
+      is what moved the number. Storage cost roughly tripled and was accepted.
+      This is the retention period in force.
+
+  - id: hl-retention-proposal
+    project: harborlight
+    category: insights
+    type: Insight
+    role: proposal
+    date: "2026-08-22"
+    epistemic: open_question
+    title: Proposal to cut Harborlight retention to 14 days
+    body: |
+      There is a proposal to cut Harborlight sync history retention to 14 days.
+      The argument is that the 90-day window is used by almost nobody and that
+      the storage line is now the largest single cost in the service. No
+      decision has been taken. The proposal has not been reviewed, has no filed
+      number, and nothing has changed in production. Read this as an open
+      question, not as the retention period.
+
+  - id: hl-auth-ttl-old
+    project: harborlight
+    category: decisions
+    type: Decision
+    role: superseded
+    date: "2026-01-15"
+    title: Harborlight access tokens live for 24 hours
+    body: |
+      Harborlight access tokens are issued with a 24-hour time to live. The long
+      lifetime keeps batch integrations from re-authenticating mid-run, which
+      was the complaint that drove the number. Refresh is manual.
+
+  - id: hl-auth-ttl-new
+    project: harborlight
+    category: decisions
+    type: Decision
+    role: current_decision
+    date: "2026-04-02"
+    title: Harborlight access tokens live for 1 hour
+    body: |
+      Harborlight access tokens are issued with a 1-hour time to live, replacing
+      the earlier 24-hour lifetime. Automatic refresh landed with the same
+      change, so batch integrations no longer break at the boundary. The shorter
+      lifetime is what the service issues today.
+
+  - id: hl-auth-incident-note
+    project: harborlight
+    category: insights
+    type: Insight
+    role: old_context
+    date: "2026-07-30"
+    title: Retro on the long-lived token incident
+    body: |
+      Writing up the token incident for the record. At the time of the incident
+      Harborlight access tokens lived for 24 hours, and a token leaked from a
+      build log stayed usable for most of a day before anyone noticed. The
+      24-hour lifetime is the fact that made the blast radius what it was. This
+      note describes the state during the incident and is not a statement about
+      what the service issues now.
+
+  - id: hl-schema-v2-old
+    project: harborlight
+    category: decisions
+    type: Decision
+    role: superseded
+    date: "2026-03-01"
+    title: Harborlight production runs schema version 2
+    body: |
+      Harborlight production runs schema_version=2. Version 2 splits the record
+      envelope from the payload so the envelope can be validated without
+      decoding the body. Every ring is on it.
+
+  - id: hl-schema-v3-new
+    project: harborlight
+    category: decisions
+    type: Decision
+    role: current_decision
+    date: "2026-05-20"
+    title: Harborlight production runs schema version 3
+    body: |
+      Harborlight production runs schema_version=3, replacing version 2. Version
+      3 adds the cursor field the replay endpoint needs and makes the envelope
+      checksum mandatory. The migration ran ring by ring and completed with the
+      4.2.0 rollout. Production is on version 3.
+
+  - id: hl-schema-staging-rollback
+    project: harborlight
+    category: insights
+    type: Insight
+    role: scoped_note
+    date: "2026-09-01"
+    title: Staging rolled back to schema version 2
+    body: |
+      Staging was rolled back to schema_version=2 this week while we reproduce a
+      replay fault. This is a staging-only change with no production component;
+      production remains on version 3. The rollback will be undone once the
+      fault is reproduced. Do not read this note as a change to the production
+      schema version.
+
+  - id: hl-region-single-old
+    project: harborlight
+    category: decisions
+    type: Decision
+    role: superseded
+    date: "2026-02-20"
+    title: Harborlight runs in a single region
+    body: |
+      Harborlight runs in one region. A second region was costed and judged not
+      worth it at the current customer footprint: the failure modes we have seen
+      are process-level, not regional, and a second region adds a replication
+      problem we do not have today.
+
+  - id: hl-region-two-new
+    project: harborlight
+    category: decisions
+    type: Decision
+    role: current_decision
+    date: "2026-07-05"
+    title: Harborlight runs two regions, active-passive
+    body: |
+      Harborlight now runs two regions in an active-passive topology, replacing
+      the single-region arrangement. Filed as ADR-HARBOR-0031. The passive
+      region carries a warm replica and takes traffic only on an explicit
+      failover. Two committed customers required a regional failover story,
+      which is what moved this. This is the topology in force.
+
+  - id: hl-region-cost-memo
+    project: harborlight
+    category: insights
+    type: Insight
+    role: proposal
+    date: "2026-08-30"
+    epistemic: open_question
+    title: Memo revisiting the cost of the passive region
+    body: |
+      A memo circulated this week arguing that the passive Harborlight region
+      costs more than the failover story is worth, and that collapsing back to a
+      single region would pay for two engineers. It is a memo. Nothing has been
+      decided, no review has happened, and the active-passive topology is still
+      what runs. Recorded so the argument is not relitigated from memory.
+
+  # ── harborlight: near-duplicate restatements ────────────────────────────
+
+  - id: hl-release-4-2-0-restate
+    project: harborlight
+    category: projects
+    type: ProjectSnapshot
+    role: duplicate
+    date: "2026-05-15"
+    dup_group: release-4-2-0
+    title: Current Harborlight release is 4.2.0
+    body: |
+      Restating for the record: the current Harborlight release is 4.2.0, tag
+      HL-4.2.0, cut on 14 May 2026 and running in every production ring. Nadia
+      Okonkwo signed the cut. There is no 4.3 branch.
+
+  - id: hl-rejected-dual-write-restate
+    project: harborlight
+    category: decisions
+    type: Decision
+    role: duplicate
+    date: "2026-03-13"
+    dup_group: rejected-dual-write
+    title: Note — dual-write replication is not happening
+    body: |
+      Following yesterday's write-up: dual-write replication is rejected for
+      Harborlight. Reconciliation cost is the reason — a partial failure leaves
+      the primary and the replica disagreeing and the repair job is bigger than
+      the problem. Split-brain under partition was the second reason.
+
+  # ── harborlight: long records whose auto-footer is its own chunk ────────
+
+  - id: hl-onboarding-guide
+    project: harborlight
+    category: projects
+    type: ProjectSnapshot
+    role: noise
+    date: "2026-04-30"
+    entities:
+      - project/harborlight-release-4-2-0
+      - person/nadia-okonkwo
+    title: Harborlight laptop onboarding guide
+    sections:
+      - heading: Accounts
+        text: |
+          A new engineer needs four accounts before anything else works: the
+          source host, the artifact store, the paging tool and the dashboard.
+          Ask Marta Delacroix; she has the template request and will file all
+          four at once. Expect a day for the paging tool, which is the slow one
+          because it needs a phone number verified out of band and the vendor
+          batches those overnight. Nothing in this section is worth reading
+          twice; it exists so that nobody has to reconstruct the list.
+      - heading: Local setup
+        text: |
+          Clone the tree, create a virtual environment, install the development
+          extras, run the test suite once before changing anything. If the suite
+          fails on a clean tree the usual cause is a stale artifact cache; clear
+          it and run again. The editor configuration is checked in and should be
+          left alone. There is a pre-commit hook that formats and lints; install
+          it, because the continuous integration job runs the same checks and
+          finding out there is slower than finding out here.
+      - heading: First task
+        text: |
+          Every new engineer takes the same first task: fix one open papercut of
+          their choosing, end to end, including the test. The point is not the
+          papercut. The point is to walk the whole path once — branch, change,
+          test, review, merge, deploy — while somebody is paying attention and
+          can answer a question without it costing anybody anything. Pick
+          something small enough to finish in two days.
+      - heading: Who to ask
+        text: |
+          Sync planner questions go to Rafael Ibarra. Deployment and rollout
+          questions go to Sunil Achterberg. Anything about the pager goes to
+          Marta Delacroix. If the question is "should we", it goes to Nadia
+          Okonkwo, and if the answer matters it should end up written down
+          somewhere better than a chat thread, because an onboarding guide is
+          where facts come to be six months out of date.
+      - heading: Things this guide does not answer
+        text: |
+          This guide will not tell you what is running in production, what the
+          supported version window is, what the retention period is, or which
+          schema version the envelope uses. Every one of those has moved at
+          least once since this guide was written and each has its own record.
+          If you find yourself reading an onboarding guide for an answer of
+          that shape, the guide is the wrong document and the links at the foot
+          of this note are not an endorsement of it as a source. Ask the person
+          named above instead, or read the decision record directly, and if
+          neither exists then the honest answer is that nobody has written it
+          down and somebody should before the next person has to ask.
+
+  - id: hl-weekly-notes
+    project: harborlight
+    category: projects
+    type: ProjectSnapshot
+    role: noise
+    date: "2026-06-30"
+    entities:
+      - decision/harborlight-retention-policy
+      - person/rafael-ibarra
+    title: Harborlight weekly sync notes, late June
+    sections:
+      - heading: Round the table
+        text: |
+          Rafael Ibarra is still on the replay cursor and expects to be for
+          another week. Sunil Achterberg finished the ring-three automation and
+          has moved to the rollout dashboard, which nobody asked for but
+          everybody will use. Marta Delacroix spent most of the week on the
+          pager and has asked, again, whether the secondary can be staffed. No
+          decision. Nadia Okonkwo was out.
+      - heading: Chores
+        text: |
+          The artifact store is at eighty percent and needs a prune policy that
+          somebody owns. The flaky test in the planner suite has failed four
+          times this month and has not been looked at. Two dashboards point at a
+          metric that was renamed in April and have been showing a flat line
+          ever since, which is worse than showing nothing. None of these are
+          urgent and all of them will still be here in September.
+      - heading: Carried over
+        text: |
+          Three items have been carried from the previous two weeks without
+          movement. The prune policy for the artifact store still has no owner
+          and the store will be full before anybody assigns one. The flaky
+          planner test is still flaky and still unassigned. The two dead
+          dashboards are still dead. The pattern here is that chores with no
+          named owner survive indefinitely in a weekly note, which is a thing
+          worth noticing about weekly notes in general rather than about these
+          three chores in particular. Sunil Achterberg offered to take the prune
+          policy if nobody else wanted it, which counts as an owner right up
+          until the moment it needs doing.
+      - heading: Next week
+        text: |
+          Replay cursor review, rollout dashboard demo, and a decision on
+          whether the secondary pager slot gets staffed. Marta Delacroix will
+          bring numbers on how often the primary was paged outside hours, which
+          is the only part of this that will change anyone's mind. Notes taken
+          by Sunil Achterberg. Nothing in these notes decides anything about
+          retention, schema versions or the region topology, whatever the links
+          at the bottom of this note might suggest.
+
+  # ── tidewater: the unrelated second project ─────────────────────────────
+
+  - id: td-release-2-1-0
+    project: tidewater
+    category: projects
+    type: ProjectSnapshot
+    role: cross_project
+    date: "2026-05-19"
+    title: Tidewater 2.1.0 is the current release
+    body: |
+      Tidewater 2.1.0 was cut on 19 May 2026 and is the current release. The tag
+      is TW-2.1.0 and it is the build running in production. Sunil Achterberg
+      signed the cut. Tidewater is the billing service and shares no code with
+      the sync services.
+
+  - id: td-rejected-dual-write
+    project: tidewater
+    category: decisions
+    type: Decision
+    role: cross_project
+    date: "2026-03-18"
+    title: Tidewater rejected dual-write replication
+    body: |
+      Dual-write replication was considered for Tidewater and rejected. The
+      billing ledger cannot tolerate two stores disagreeing even briefly, and
+      dual-write makes that state reachable on any partial failure.
+      Reconciliation cost was the second reason. Tidewater replicates from the
+      ledger's own change feed instead.
+
+  - id: td-retention-decision
+    project: tidewater
+    category: decisions
+    type: Decision
+    role: cross_project
+    date: "2026-06-21"
+    title: Tidewater retains ledger history for 7 years
+    body: |
+      Tidewater retains ledger history for 7 years. This is a regulatory floor
+      rather than an engineering choice and is not negotiable against storage
+      cost. It has no relationship to the retention window of any other service.
+
+  - id: td-batch-window
+    project: tidewater
+    category: decisions
+    type: Decision
+    role: cross_project
+    date: "2026-06-14"
+    title: Tidewater default settlement window is 400 ms
+    body: |
+      The default value of settle.batch_window_ms in Tidewater is 400. It was
+      chosen so a settlement batch closes inside the payment processor's
+      acknowledgement timeout. Tidewater has no sync.batch_window_ms setting;
+      the name belongs to a different service.
+
+  - id: td-quarterly-review
+    project: tidewater
+    category: projects
+    type: ProjectSnapshot
+    role: cross_project
+    date: "2026-07-02"
+    entities:
+      - project/harborlight-release-4-2-0
+      - person/marta-delacroix
+    title: Tidewater quarterly review
+    sections:
+      - heading: Where the quarter landed
+        text: |
+          Tidewater closed the quarter on 2.1.0 with the settlement rewrite
+          finished and the ledger export still open. The rewrite is the headline:
+          settlement batches now close inside the processor timeout without the
+          retry loop that used to hide the problem. The export slipped because
+          the schema it exports to changed under us twice and the second change
+          arrived without notice.
+      - heading: Cost
+        text: |
+          Billing infrastructure cost fell eleven percent, almost all of it the
+          retry loop going away. The remaining line that matters is ledger
+          storage, which is fixed by regulation and will not move. Marta
+          Delacroix asked whether the export could reuse another team's pipeline
+          rather than building a third one; nobody had an answer and it is worth
+          asking again before the export restarts.
+      - heading: What did not happen
+        text: |
+          The ledger export did not ship and will not ship this quarter. The
+          processor-specific code path that everybody agreed to delete in April
+          is still there, because deleting it requires a migration nobody has
+          scheduled. The shared on-call conversation was deferred for the second
+          time. None of these are surprises and all three were predicted in the
+          previous quarterly review, which suggests the review is better at
+          forecasting slippage than at preventing it.
+      - heading: Next quarter
+        text: |
+          Finish the ledger export, retire the last processor-specific code path
+          and decide whether Tidewater keeps its own on-call rotation or folds
+          into the shared one. That last one is a people question rather than a
+          technical one and has been deferred twice. Notes by Marta Delacroix.
+          Nothing in this review says anything about any other service; where a
+          link at the foot of this note points somewhere else, it points at a
+          person or a release that came up in conversation, not at a fact this
+          review establishes or a decision this team took. Tidewater's numbers
+          are Tidewater's; read them as nothing else.
+
+  - id: td-incident-note
+    project: tidewater
+    category: insights
+    type: Insight
+    role: cross_project
+    date: "2026-08-11"
+    title: Tidewater settlement stall, August
+    body: |
+      Tidewater stalled settlement for forty minutes on 11 August when the
+      processor returned a novel error code the retry path did not recognise and
+      the batch stayed open. Fixed by widening the retriable set. The stall was
+      contained to Tidewater and touched no other service.

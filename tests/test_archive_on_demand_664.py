@@ -460,7 +460,7 @@ class _FakeAPI:
         self._payload = payload
         self.calls: list[dict[str, Any]] = []
 
-    def archive(self, file_path, reason=None, superseded_by=None):
+    def archive(self, file_path, reason=None, superseded_by=None, dry_run=False):
         self.calls.append(
             {"file_path": file_path, "reason": reason, "superseded_by": superseded_by}
         )
@@ -543,7 +543,9 @@ async def test_mcp_archive_tool_registered_full_not_core(monkeypatch):
     assert "palinode_archive" in full
     schema = full["palinode_archive"].input_schema
     assert schema["required"] == ["file_path"]
-    assert set(schema["properties"]) == {"file_path", "reason", "superseded_by"}
+    assert set(schema["properties"]) == {
+        "file_path", "reason", "superseded_by", "dry_run",
+    }
 
     monkeypatch.setenv("PALINODE_MCP_SURFACE", "core")
     core = {t.name for t in await list_tools()}

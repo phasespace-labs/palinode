@@ -88,7 +88,12 @@ def bm25_or(question: str, *, top_k: int, category: str | None = None) -> list[d
     ``OR``, so ``store.search_fts("Where is the Login as Customer button")``
     needs every term in one chunk — a natural-language question almost always
     carries a word the evidence lacks, and the arm comes back empty. Same SQL
-    and row shape as ``search_fts``; only the MATCH expression differs.
+    and row shape as ``search_fts``; the MATCH expression differs, and so does
+    the normalization: this keeps the ``/ 25`` constant the published rows in
+    ``docs/BENCHMARKS.md`` were measured with, where the product now prices
+    each query against the index (``store.bm25_query_scale``). The difference
+    is a per-query constant, which the rank-relative floor and RRF are blind
+    to, but the rows are not cheap to re-run and are left reproducible.
     """
     from palinode.core import store
 

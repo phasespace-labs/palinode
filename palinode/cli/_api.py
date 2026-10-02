@@ -110,6 +110,8 @@ class PalinodeAPI:
         tier: str | None = None,
         resolve: str | None = None,
         receipt: bool = False,
+        include_other_projects: bool | None = None,
+        include_retired: bool = False,
     ) -> list[dict[str, Any]] | tuple[list[dict[str, Any]], dict[str, Any] | None]:
         """Search memory. ``receipt=True`` returns ``(results, receipt)`` instead.
 
@@ -126,7 +128,10 @@ class PalinodeAPI:
             payload["resolve"] = resolve
         if category:
             payload["category"] = category
-        if context:
+        # An empty list is a scope the caller decided on ("no project"), not an
+        # unset parameter: it must reach the server, because an absent context
+        # is what tells the server to apply its own pinned project instead.
+        if context is not None:
             payload["context"] = context
         if threshold is not None:
             payload["threshold"] = threshold
@@ -144,6 +149,10 @@ class PalinodeAPI:
             payload["include_daily"] = True
         if include_telemetry:
             payload["include_telemetry"] = True
+        if include_other_projects:
+            payload["include_other_projects"] = True
+        if include_retired:
+            payload["include_retired"] = True
         if receipt:
             payload["receipt"] = True
 
@@ -263,7 +272,9 @@ class PalinodeAPI:
         Returns ``{file, content, size_bytes, [frontmatter]}``.  When
         ``meta=True``, ``frontmatter`` is a parsed dict.  ADR-010.
         """
-        params: dict = {"file_path": file_path}
+        from palinode.core.context_prime import ambient_cwd, resolve_context
+
+        params: dict = {"file_path": file_path, "project": resolve_context(cwd=ambient_cwd()).project or ""}
         if meta:
             params["meta"] = "true"
         if tier:
@@ -272,13 +283,25 @@ class PalinodeAPI:
         response.raise_for_status()
         return response.json()
 
-    def list_files(self, category: str | None = None, core_only: bool | None = None) -> list[dict[str, Any]]:
-        """List memory files via the API.  ADR-010."""
+    def list_files(
+        self,
+        category: str | None = None,
+        core_only: bool | None = None,
+        include_retired_core: bool | None = None,
+    ) -> list[dict[str, Any]]:
+        """List memory files via the API.  ADR-010.
+
+        ``include_retired_core`` keeps retired core memories (superseded,
+        archived, expired …) in a ``core_only`` listing — the browse view's
+        opt-in, off by default so the injection semantics are the fallback.
+        """
         params: dict = {}
         if category:
             params["category"] = category
         if core_only:
             params["core_only"] = "true"
+        if include_retired_core:
+            params["include_retired_core"] = "true"
         response = self.client.get("/list", params=params)
         response.raise_for_status()
         return response.json()
@@ -327,13 +350,21 @@ class PalinodeAPI:
         intent: str | None = None,
         max_items: int | None = None,
         max_chars: int | None = None,
+        include_retired: bool = False,
+        project: str | None = None,
+        include_other_projects: bool = False,
     ) -> dict[str, Any]:
         """Bounded resolution via the API.  ADR-010.
+
+        ``project`` is the caller's resolved project scope. The API may run on
+        another machine, so the CLI resolves it locally and sends it.
 
         Raises ``RequestError`` if the API is unreachable; the CLI catches
         this and resolves in-process instead (the operation needs no model).
         """
         body: dict[str, Any] = {}
+        if project:
+            body["project"] = project
         if query:
             body["query"] = query
         if ref:
@@ -346,6 +377,10 @@ class PalinodeAPI:
             body["max_items"] = max_items
         if max_chars is not None:
             body["max_chars"] = max_chars
+        if include_other_projects:
+            body["include_other_projects"] = True
+        if include_retired:
+            body["include_retired"] = True
         response = self.client.post("/resolve", json=body, timeout=60.0)
         response.raise_for_status()
         return response.json()
@@ -360,6 +395,44 @@ class PalinodeAPI:
         if project:
             body["project"] = project
         response = self.client.post("/review", json=body, timeout=30.0)
+        response.raise_for_status()
+        return response.json()
+
+    def corrections(
+        self,
+        project: str | None = None,
+        since_days: int | None = None,
+        scan: bool = False,
+    ) -> dict[str, Any]:
+        """List transcript-derived correction candidates via the API.
+
+        ``scan`` runs a detection pass first. Both are read-only with respect to
+        memory: a candidate is a proposal, and nothing here applies one.
+
+        Raises ``RequestError`` if the API is unreachable; the CLI catches this
+        to fall back to a local in-process read of the candidate queue.
+        """
+        body: dict = {"scan": scan}
+        if project:
+            body["project"] = project
+        if since_days is not None:
+            body["since_days"] = since_days
+        response = self.client.post("/corrections", json=body, timeout=180.0)
+        response.raise_for_status()
+        return response.json()
+
+    def correction_review(self, phase: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Call one phase of the correction contract (`preview`/`apply`/`dismiss`/`undo`).
+
+        One method for four routes because they are one contract with one
+        request shape per phase; a method each would be four copies of the
+        same two lines. The 120 s budget matches ``/archive``: an apply writes
+        a memory, saves a replacement, appends to a history sibling, flags
+        dependents, pushes the status into the index and commits.
+        """
+        response = self.client.post(
+            f"/corrections/{phase}", json=payload, timeout=120.0
+        )
         response.raise_for_status()
         return response.json()
 
@@ -485,12 +558,15 @@ fields, the session-end hook audit push)."""
         file_path: str,
         reason: str | None = None,
         superseded_by: str | None = None,
+        dry_run: bool = False,
     ) -> dict[str, Any]:
         payload: dict = {"file_path": file_path}
         if reason is not None:
             payload["reason"] = reason
         if superseded_by is not None:
             payload["superseded_by"] = superseded_by
+        if dry_run:
+            payload["dry_run"] = True
         # No model call, but a single archive writes the memory, appends to its
         # history sibling, flags dependents, updates the chunk index and commits
         # — enough work on a large store to outrun the 30 s default.
@@ -498,29 +574,73 @@ fields, the session-end hook audit push)."""
         response.raise_for_status()
         return response.json()
 
-    def restore(self, file_path: str, reason: str | None = None):
+    def restore(
+        self, file_path: str, reason: str | None = None, dry_run: bool = False
+    ):
         payload: dict = {"file_path": file_path}
         if reason is not None:
             payload["reason"] = reason
+        if dry_run:
+            payload["dry_run"] = True
         response = self.client.post("/restore", json=payload)
         response.raise_for_status()
         return response.json()
 
-    def unretract(self, file_path: str, pref: str, reason: str | None = None):
+    def unretract(
+        self,
+        file_path: str,
+        pref: str,
+        reason: str | None = None,
+        dry_run: bool = False,
+    ):
         payload: dict = {"file_path": file_path, "pref": pref}
         if reason is not None:
             payload["reason"] = reason
+        if dry_run:
+            payload["dry_run"] = True
         response = self.client.post("/unretract", json=payload)
         response.raise_for_status()
         return response.json()
 
-    def forget_withdraw(self, file_path: str, reason: str | None = None):
+    def forget_withdraw(
+        self, file_path: str, reason: str | None = None, dry_run: bool = False
+    ):
         payload: dict = {"file_path": file_path}
         if reason is not None:
             payload["reason"] = reason
+        if dry_run:
+            payload["dry_run"] = True
         response = self.client.post(
             "/forget-withdraw", json=payload, timeout=120.0
         )
+        response.raise_for_status()
+        return response.json()
+
+    def aliases_list(self) -> dict[str, Any]:
+        response = self.client.get("/aliases")
+        response.raise_for_status()
+        return response.json()
+
+    def aliases_check(self) -> dict[str, Any]:
+        response = self.client.get("/aliases/check")
+        response.raise_for_status()
+        return response.json()
+
+    def aliases_add(
+        self,
+        canonical: str,
+        members: list[str],
+        move: bool = False,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        payload = {"canonical": canonical, "members": members, "move": move, "dry_run": dry_run}
+        response = self.client.post("/aliases/add", json=payload)
+        response.raise_for_status()
+        return response.json()
+
+    def aliases_remove(self, member: str, dry_run: bool = False) -> dict[str, Any]:
+        payload = {"member": member, "dry_run": dry_run}
+        response = self.client.post("/aliases/remove", json=payload)
         response.raise_for_status()
         return response.json()
 
@@ -640,8 +760,36 @@ fields, the session-end hook audit push)."""
         response.raise_for_status()
         return response.json()
 
-    def rollback(self, file_path: str, commit: str = None, dry_run: bool = True) -> dict[str, Any]:
-        params: dict = {"file_path": file_path, "dry_run": dry_run}
+    def explain(
+        self,
+        bundle_id: str,
+        *,
+        view: str = "public",
+        limit: int | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Explain one delivery by its receipt reference (``bundle_id``)."""
+        params: dict[str, Any] = {"view": view}
+        if limit is not None:
+            params["limit"] = limit
+        if session_id:
+            params["session_id"] = session_id
+        response = self.client.get(f"/explain/{bundle_id}", params=params, timeout=30.0)
+        response.raise_for_status()
+        return response.json()
+
+    def rollback(
+        self,
+        file_path: str,
+        commit: str = None,
+        dry_run: bool = True,
+        undo_retirements: bool = False,
+    ) -> dict[str, Any]:
+        params: dict = {
+            "file_path": file_path,
+            "dry_run": dry_run,
+            "undo_retirements": undo_retirements,
+        }
         if commit:
             params["commit"] = commit
         response = self.client.post("/rollback", params=params, timeout=30.0)

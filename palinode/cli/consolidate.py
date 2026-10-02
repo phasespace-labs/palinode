@@ -37,7 +37,12 @@ def _timeout_report(seconds: float) -> dict:
 
 
 @click.command()
-@click.option("--nightly", is_flag=True, help="Run lightweight nightly pass (today only, UPDATE/SUPERSEDE)")
+@click.option(
+    "--nightly",
+    is_flag=True,
+    help="Run lightweight nightly pass (everything not yet consolidated, "
+         "UPDATE/SUPERSEDE)",
+)
 @click.option("--dry-run", is_flag=True, help="Preview changes without applying")
 @click.option(
     "--source",
@@ -60,6 +65,10 @@ def consolidate(nightly, dry_run, sources, respect_gate, fmt):
     Runs unconditionally: the activity gate governs the automatic cron path,
     not an operator who has asked for a pass. ``--respect-gate`` opts this run
     into the same policy.
+
+    ``--nightly`` selects the notes written since each project's last
+    successful pass — no window, so a hand-run after a failed night picks up
+    exactly what the failure left behind and nothing else.
 
     A pass that reaches the LLM can run for minutes; the client waits
     ``PALINODE_CONSOLIDATE_TIMEOUT`` seconds (default 900) and, if that is not
@@ -92,6 +101,20 @@ def consolidate(nightly, dry_run, sources, respect_gate, fmt):
             else:
                 console.print("[green]Consolidation complete.[/green]")
                 console.print(f"Stats: {data.get('stats', 'none')}")
+            if data.get("notes_pending"):
+                # The same counts the API and MCP return.
+                console.print(
+                    f"[yellow]{data['notes_pending']} of {data.get('notes_selected', '?')} "
+                    f"selected note(s) did not fit this pass's prompt in full "
+                    f"({data.get('notes_presented', '?')} presented); they are "
+                    "selected again next pass.[/yellow]"
+                )
+            prompts_sent = data.get("prompts_sent") or {}
+            if any(count > 1 for count in prompts_sent.values()):
+                console.print(
+                    "Prompts sent per project: "
+                    + ", ".join(f"{project} {count}" for project, count in sorted(prompts_sent.items()))
+                )
 
     except ReadTimeout as e:
         # Catch before RequestError (its superclass) and before the blanket

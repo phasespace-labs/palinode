@@ -292,8 +292,10 @@ def test_trigger_discovery_filters_targets_before_returning_metadata(client, tri
     registry = client.get("/triggers")
     assert registry.status_code == 200
     assert {row["id"] for row in registry.json()} == set(trigger_records)
-    # Matching still consumes cooldown for hidden candidates before delivery.
-    assert all(row["fire_count"] == 1 for row in registry.json())
+    # Only a delivered trigger records a fire; a hidden candidate matches,
+    # is dropped, and keeps its cooldown and its fire_count.
+    fired = {row["id"]: row["fire_count"] for row in registry.json()}
+    assert fired == {name: (1 if name in {"open", "scoped"} else 0) for name in trigger_records}
 
 
 def test_trigger_discovery_uses_live_frontmatter_and_requires_existing_file(

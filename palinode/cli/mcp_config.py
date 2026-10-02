@@ -22,6 +22,7 @@ from typing import Any
 import click
 
 from palinode.cli._format import console
+from palinode.core.context_prime import PROJECT_HEADER
 
 
 # ---------------------------------------------------------------------------
@@ -51,11 +52,23 @@ def _http_url(url: str | None, host: str, port: int) -> str:
     return f"http://{host}:{port}/mcp/"
 
 
-def _build_http_entry(url: str, bearer: str | None = None) -> dict[str, Any]:
-    """Build the ``palinode`` server entry for streamable-HTTP transport."""
+def _build_http_entry(url: str, bearer: str | None = None,
+                      project: str | None = None) -> dict[str, Any]:
+    """Build the ``palinode`` server entry for streamable-HTTP transport.
+
+    With *project*, the client carries it in the ``X-Palinode-Project`` header:
+    the HTTP server runs on another machine, so neither the client's directory
+    nor its environment reaches it, and the header is how this client's project
+    does.
+    """
     entry: dict[str, Any] = {"type": "http", "url": url}
+    headers: dict[str, str] = {}
     if bearer:
-        entry["headers"] = {"Authorization": f"Bearer {bearer}"}
+        headers["Authorization"] = f"Bearer {bearer}"
+    if project is not None:
+        headers[PROJECT_HEADER] = project
+    if headers:
+        entry["headers"] = headers
     return entry
 
 
@@ -385,7 +398,7 @@ def _redact(value: Any) -> Any:
     for key, item in value.items():
         if key in ("env", "headers", "http_headers") and isinstance(item, dict):
             result[key] = {
-                name: ("<redacted>" if key != "env" or any(
+                name: ("<redacted>" if (key != "env" and name != PROJECT_HEADER) or any(
                     part in name.upper() for part in ("TOKEN", "SECRET", "KEY", "PASSWORD", "AUTH")
                 ) else setting)
                 for name, setting in item.items()
@@ -524,7 +537,7 @@ def _emit_config(
     if emit_http and editor == "claude-desktop":
         raise click.UsageError("Claude Desktop's local JSON config requires --stdio; use its Connectors UI for HTTP.")
     if emit_http:
-        entry = _build_http_entry(_http_url(url, host, port), bearer=bearer)
+        entry = _build_http_entry(_http_url(url, host, port), bearer=bearer, project=project)
     else:
         entry = _build_stdio_entry(executable, project)
     block = _client_block(entry, editor)
@@ -602,7 +615,10 @@ def _emit_config(
 @click.option(
     "--project",
     callback=_validate_project_slug,
-    help="Project slug for this generated stdio client (emitted as PALINODE_PROJECT).",
+    help=(
+        "Project slug for this generated client: PALINODE_PROJECT for --stdio, "
+        "the X-Palinode-Project header for --http."
+    ),
 )
 @click.option(
     "--json", "output_json",
@@ -638,10 +654,8 @@ def mcp_config(
     """
     if executable and not emit_stdio:
         raise click.UsageError("--executable requires --stdio.")
-    if project is not None and not emit_stdio:
-        raise click.UsageError(
-            "--project requires --stdio; HTTP clients share the remote server process."
-        )
+    if project is not None and not (emit_stdio or emit_http):
+        raise click.UsageError("--project requires --stdio or --http.")
     if editor != "generic" and not (emit_http or emit_stdio):
         raise click.UsageError("--editor requires --stdio or --http.")
     if emit_stdio and (url or bearer or host != DEFAULT_HTTP_HOST or port != DEFAULT_HTTP_PORT):

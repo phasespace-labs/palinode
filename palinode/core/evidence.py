@@ -88,6 +88,7 @@ from typing import Any, Iterable
 from palinode.core import parser as _parser
 from palinode.core import revalidation as _reval
 from palinode.core import store
+from palinode.core.agent_directed import withhold_agent_directed
 from palinode.core.config import config
 from palinode.core.lifecycle import Eligibility, eligibility
 from palinode.core.parity import RESOLVE_MODES
@@ -469,15 +470,19 @@ def _title(meta: dict[str, Any], body: str) -> str | None:
     for key in ("title", "name"):
         val = meta.get(key)
         if isinstance(val, str) and val.strip():
-            return val.strip()
+            return withhold_agent_directed(val.strip())[0]
     m = re.search(r"^#\s+(.+?)\s*$", body, re.MULTILINE)
-    return m.group(1).strip() if m else None
+    return withhold_agent_directed(m.group(1).strip())[0] if m else None
 
 
 _WS_RE = re.compile(r"\s+")
 
 
 def _excerpt(body: str) -> str:
+    # Withheld on the whole body, before it is squashed and cut: the sentence
+    # structure the detector reads is gone afterwards, and a cut can split an
+    # address from the directive it governs.
+    body, _ = withhold_agent_directed(body)
     text = re.sub(r"^#{1,6}\s+.*$", "", body, flags=re.MULTILINE)
     text = _WS_RE.sub(" ", text).strip()
     if len(text) <= EXCERPT_CHARS:
@@ -1119,6 +1124,64 @@ def attach_evidence(
     return result
 
 
+#: The row-level evidence buckets a record can reach a reader through.
+_EVIDENCE_BUCKETS: tuple[str, ...] = ("replacements", "conflicts", "support", "discovered")
+
+
+def withhold_retired(results: list[dict[str, Any]], evidence: EvidenceResult) -> int:
+    """Drop retired records from each row's ``evidence`` and ``resolution`` blocks.
+
+    Automatic and default reads follow search: a record the lifecycle
+    classifier retired is not handed to a reader beside a hit — not as an
+    unlinked discovery, a replaced predecessor, a conflict or a support
+    excerpt, and not by ref on the resolution's sides or support groups (a
+    ref is often a slug of the value it retired). The hit itself is never
+    touched; it is what the caller searched for. Each evidence block gains
+    ``history_withheld``, the number of records left out.
+
+    Presentation only, and applied *after* :func:`attach_resolution` decided
+    each outcome over the whole evidence, so no outcome changes. A caller
+    that wants the history asks for it (``include_retired``) and this is not
+    called. Returns the total withheld across all rows.
+    """
+    total = 0
+    for row, seed in zip(results, evidence.seeds, strict=True):
+        block = row.get("evidence")
+        if not isinstance(block, dict):
+            continue
+        own = seed.seed_ref
+        hidden: set[str] = set()
+        for bucket in _EVIDENCE_BUCKETS:
+            kept: list[Any] = []
+            for rec in block.get(bucket) or []:
+                ref = rec.get("ref") if isinstance(rec, dict) else None
+                if ref and ref != own and rec.get("currency") == "retired":
+                    hidden.add(ref)
+                    continue
+                kept.append(rec)
+            block[bucket] = kept
+        block["history_withheld"] = len(hidden)
+        total += len(hidden)
+        resolution = row.get("resolution")
+        if hidden and isinstance(resolution, dict):
+            resolution["sides"] = [
+                s for s in resolution.get("sides") or []
+                if not (isinstance(s, dict) and s.get("ref") in hidden)
+            ]
+            groups = []
+            for group in resolution.get("support") or []:
+                if not isinstance(group, dict):
+                    continue
+                members = [
+                    m for m in group.get("members") or []
+                    if not (isinstance(m, dict) and m.get("ref") in hidden)
+                ]
+                if members:
+                    groups.append({**group, "members": members})
+            resolution["support"] = groups
+    return total
+
+
 __all__ = [
     "BUDGET_SUPPORT_HOPS",
     "COVERAGE_REASONS",
@@ -1131,4 +1194,5 @@ __all__ = [
     "attach_evidence",
     "fold_coverage",
     "resolve_evidence",
+    "withhold_retired",
 ]

@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from palinode.api._util import _safe_500
 from palinode.api.path_safety import _open_memory_file_text, _resolve_memory_path
 from palinode.core import embedder, expiry, parser, store
+from palinode.core.lifecycle import eligibility
 from palinode.core.visibility import is_visible
 
 router = APIRouter()
@@ -30,8 +31,27 @@ class CheckTriggersRequest(BaseModel):
     cooldown_bypass: bool | None = False
 
 
-def _trigger_target_visible(memory_file: str) -> bool:
-    """Require a safe, readable target with live no-chain discovery permission."""
+def _trigger_target_deliverable(memory_file: str) -> bool:
+    """Require a safe, readable, *current* target with discovery permission.
+
+    Two gates, both read from the target's live frontmatter:
+
+    - visibility (:func:`palinode.core.visibility.is_visible`) — a ``private``
+      or off-chain ``restricted`` memory is never pushed into automatic recall;
+    - lifecycle (:func:`palinode.core.lifecycle.eligibility`) — a retired
+      target (archived, superseded, deprecated, retracted, expired, or under
+      ``archive/``) is not deliverable either. A trigger fire is an unprompted
+      assertion that the target is worth acting on now; retiring a memory has
+      to stop that, or archiving it silently leaves one automatic path still
+      presenting it as current. The classifier is the shared one the digest
+      and the consolidation runner already select through, so the three cannot
+      disagree about what "retired" means.
+
+    The trigger row itself is untouched: registry inspection still lists it,
+    and ``restore``-ing the target makes it deliverable again with no
+    re-registration. ``check_triggers`` applies this *before* recording a
+    fire, so an undeliverable target burns neither cooldown nor ``fire_count``.
+    """
     candidates = [memory_file]
     if not memory_file.endswith(".md"):
         candidates.append(f"{memory_file}.md")
@@ -44,7 +64,9 @@ def _trigger_target_visible(memory_file: str) -> bool:
             continue
         except (HTTPException, OSError, ValueError):
             return False
-        return is_visible(None, resolved, metadata=metadata)
+        if not is_visible(None, resolved, metadata=metadata):
+            return False
+        return not eligibility(metadata, path=resolved).retired
     return False
 
 
@@ -102,13 +124,16 @@ def check_triggers_api(req: CheckTriggersRequest) -> list[dict[str, Any]]:
         emb = embedder.embed(req.query)
         if not emb:
             return []
-        results = store.check_triggers(
+        # Matching is store-wide, but only a visible, non-retired target's
+        # metadata reaches automatic recall — and the verdict is made *before*
+        # the fire is recorded, so a trigger that delivers nothing keeps its
+        # cooldown and its fire_count. Registry inspection remains a
+        # maintenance view over every trigger.
+        return store.check_triggers(
             query_embedding=emb,
-            cooldown_bypass=req.cooldown_bypass or False
+            cooldown_bypass=req.cooldown_bypass or False,
+            deliverable=_trigger_target_deliverable,
         )
-        # Matching/cooldown is store-wide; only deliver visible target metadata
-        # to automatic recall. Registry inspection remains a maintenance view.
-        return [row for row in results if _trigger_target_visible(row["memory_file"])]
     except embedder.EmbeddingInputError:
         raise  # typed 422 via the app-level handler in server.py
     except embedder.EmbeddingUnavailable:

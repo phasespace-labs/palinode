@@ -30,3 +30,4 @@ from palinode.diagnostics.checks import projection_version  # noqa: F401
 from palinode.diagnostics.checks import duplicate_fact_ids  # noqa: F401
 from palinode.diagnostics.checks import consolidation_schedule  # noqa: F401
 from palinode.diagnostics.checks import consolidation_last_run  # noqa: F401
+from palinode.diagnostics.checks import project_tags  # noqa: F401

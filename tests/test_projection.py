@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from palinode.core.embedding_preprocess import AUTO_FOOTER_MARKER
 from palinode.core.lifecycle import RETIRED_MENTION_RE
 from palinode.core.projection import PROJECTION_VERSION, Projected, project_current_text
 
@@ -20,7 +21,8 @@ MENTION = "~~Alice lives in Paris~~ [RETRACTED 2026-09-10 r:0badc0de]."
 
 
 def test_version_constant_is_stamped_on_every_projection():
-    assert PROJECTION_VERSION == 1
+    # 2 since the auto-footer joined the retirement tombstones.
+    assert PROJECTION_VERSION == 2
     out = project_current_text("plain\n")
     assert isinstance(out, Projected)
     assert out.version == PROJECTION_VERSION
@@ -185,6 +187,56 @@ def test_whole_line_strike_with_an_odd_tail_is_still_the_recognizers_call():
 def test_ordinary_strikethrough_stays(line):
     doc = f"{line}\n"
     assert project_current_text(doc).text == doc
+
+
+# ── the generated auto-footer ─────────────────────────────────────────────────
+
+
+FOOTER = (
+    "## See also\n"
+    f"{AUTO_FOOTER_MARKER}\n"
+    "- [[alice-smith]]\n"
+    "- [[q3-planning]]\n"
+)
+
+
+def test_auto_footer_is_projected_out_and_the_body_survives():
+    body = "# Release\n\nThe batch window is 15 minutes.\n"
+    out = project_current_text(body + "\n" + FOOTER)
+    assert out.text == body
+    assert out.changed
+    assert "## See also" in out.removed and AUTO_FOOTER_MARKER in out.removed
+    assert "- [[alice-smith]]" in out.removed
+
+
+def test_a_section_that_is_only_a_footer_projects_to_nothing():
+    """The shape ``indexer.reconcile`` turns into *no row at all*."""
+    assert project_current_text(FOOTER).text == ""
+
+
+def test_a_user_written_see_also_without_the_marker_is_content():
+    doc = "# Note\n\n## See also\n\n- [[alice-smith]] — she wrote the spec\n"
+    assert project_current_text(doc).text == doc
+
+
+def test_a_fenced_example_of_the_marker_is_content():
+    """``strip_auto_footer`` would truncate here; the index must not."""
+    doc = (
+        "# How the footer works\n\n"
+        "```markdown\n"
+        "## See also\n"
+        f"{AUTO_FOOTER_MARKER}\n"
+        "- [[alice-smith]]\n"
+        "```\n\n"
+        "The marker is the first line of the block.\n"
+    )
+    assert project_current_text(doc).text == doc
+
+
+def test_frontmatter_entities_survive_a_footer_projection():
+    fm = "---\nid: x\nentities:\n- person/alice-smith\n---\n"
+    out = project_current_text(fm + "Body.\n\n" + FOOTER)
+    assert out.text == fm + "Body.\n"
 
 
 # ── determinism ───────────────────────────────────────────────────────────────

@@ -33,21 +33,41 @@ What the bundle holds
 ``insufficient``
     Seeds the policy refused to answer for, with the closed reason that says
     why. Unknown is a result, never a fallback to the older value.
+``history_withheld``
+    How many retired records this bundle left out. Automatic delivery follows
+    search: a record the lifecycle classifier retired (archived, deprecated,
+    superseded, retracted, expired, under ``archive/``) is not delivered by
+    default — not as a replacement, not as an unknown, not as an unlinked
+    discovery, and not by ref under the record that replaced it, whose
+    ``replaces:`` line then counts it instead of naming it. A label beside a
+    retired value does not stop a reader answering with it. The request opts
+    in with ``include_retired`` (history, labelled as such), and a record the
+    caller named itself (``ref`` / ``context``) is always reported: telling a
+    caller that what it holds was replaced is the point of naming it.
 ``coverage``
     Folded from the evidence layer's coverage plus this layer's own budget and
     cold-start reasons. ``partial`` always names its reasons.
 ``source_revisions``
     ``ref → raw content_hash`` for everything the bundle mentions, so a caller
     can tell whether the record it acted on has changed underneath it.
+``other_projects_withheld``
+    How many records tagged to another project this bundle left out. A request
+    whose scope carries a project is isolated to it by the visibility choke
+    point (:mod:`palinode.core.visibility`): a record naming one or more
+    ``project/*`` entities, none of them the request's, is not a seed and is
+    not reached by evidence expansion. A record naming no project is global
+    and stays. ``include_other_projects`` opts in, and each such record then
+    carries its own projects in ``other_project`` and in its stamp. A record
+    the caller names itself (``ref`` / ``context``) is always reported.
+    Presentation only: no resolution outcome is decided differently.
 ``receipt_ref`` / ``receipt``
     The per-delivery receipt (:mod:`palinode.core.receipt`) over the records
     this bundle actually delivered: each one's exact source revision and the
     hash domain that revision came from, how it was disposed, what lineage is
     known behind it, and under which policy, scope and clock. ``receipt_ref``
     is its ``bundle_id`` — the correlation key the retrieval log and
-    ``palinode trace`` share. Building it writes nothing: resolve is read-only
-    in both ledgers, and a receipt is a description of a delivery, not an
-    event in it.
+    ``palinode trace`` share. Building it writes nothing; the delivery surface
+    persists receipt metadata after rendering, without creating recall events.
 
 Conflict-preserving packing
 ---------------------------
@@ -93,7 +113,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from palinode.core import store
 from palinode.core.config import config
@@ -148,8 +168,16 @@ from palinode.core.resolution import (
     Side,
     resolve,
 )
-from palinode.core.scope import ScopeChain
+from palinode.core.scoring import describe_other_projects_withheld
+from palinode.core.scope import (
+    ScopeChain,
+    other_project,
+    project_entities,
+    with_other_projects,
+)
 from palinode.core.visibility import filter_visible, normalize_memory_path
+from palinode.core.agent_directed import withhold_agent_directed
+from palinode.core.framing import MEMORY_IS_DATA
 
 logger = logging.getLogger("palinode.core.bundle")
 
@@ -182,6 +210,10 @@ BUNDLE_COVERAGE_REASONS: frozenset[str] = frozenset({
 #: Hard ceiling on seeds, whatever the caller's item budget says. Evidence
 #: traversal is per-seed, so this is what keeps one request's file reads bounded.
 MAX_SEEDS = 12
+
+#: How much wider the seed query looks when the visibility gate hid seeds
+#: from a full window. Only paid when something was actually hidden.
+_SEED_OVERFETCH = 5
 
 # ── request / budget ─────────────────────────────────────────────────────────
 
@@ -231,6 +263,13 @@ class BundleRequest:
     context: tuple[str, ...] = ()
     intent: str = "current_state"
     budget: BundleBudget = field(default_factory=BundleBudget)
+    #: Deliver records tagged to a project other than the request's, labelled.
+    #: Off by default so an automatic caller (the per-turn hook) scoped to a
+    #: project is never handed another project's decision.
+    include_other_projects: bool = False
+    #: Deliver retired records too, labelled as history. Off by default so
+    #: an automatic caller (the per-turn hook) gets what search would give it.
+    include_retired: bool = False
 
     def __post_init__(self) -> None:
         if not (self.query and self.query.strip()) and not (self.ref and self.ref.strip()):
@@ -260,9 +299,12 @@ class Assertion:
     kind: str
     qualifiers: tuple[str, ...]
     revision: str | None
+    #: The record's own projects when they are not the request's — set only on
+    #: a record delivered across projects (opted in, or named by the caller).
+    other_project: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "ref": self.ref,
             "rel_path": self.rel_path,
             "title": self.title,
@@ -276,6 +318,10 @@ class Assertion:
             "qualifiers": list(self.qualifiers),
             "revision": self.revision,
         }
+        # Only on a cross-project record, so the default payload keeps its shape.
+        if self.other_project:
+            out["other_project"] = list(self.other_project)
+        return out
 
 
 @dataclass(frozen=True)
@@ -290,6 +336,7 @@ class Discovery:
     ref: str
     currency: str
     statement: str
+    other_project: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -314,6 +361,10 @@ class Selected:
     #: serialized: every ref here is already in ``refs["support"]``, and the
     #: structured payload keeps the shape it shipped with.
     discovered: tuple[Discovery, ...] = field(default=(), repr=False)
+    #: Retired records this one replaced that the request did not ask to see.
+    #: Rendered as a count on the ``replaces:`` line and deliberately **not**
+    #: serialized: a ref is often a slug of the very value it retired.
+    withheld_replaces: tuple[str, ...] = field(default=(), repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -403,6 +454,14 @@ class Bundle:
     omitted_conflicts: int
     omitted_conflict_refs: tuple[tuple[str, ...], ...]
     budget: dict[str, int]
+    #: Records tagged to another project left out because the request did not
+    #: ask for them (``include_other_projects``).
+    other_projects_withheld: int = 0
+    #: The request's project, for the withheld line the text carries when
+    #: isolation left the bundle (nearly) empty. In-process only.
+    isolation_project: str | None = field(default=None, repr=False)
+    #: Retired records left out because the request did not ask for history.
+    history_withheld: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -423,6 +482,8 @@ class Bundle:
             "omitted_conflicts": self.omitted_conflicts,
             "omitted_conflict_refs": [list(g) for g in self.omitted_conflict_refs],
             "budget": dict(self.budget),
+            "other_projects_withheld": self.other_projects_withheld,
+            "history_withheld": self.history_withheld,
             "text": render_bundle(self),
         }
 
@@ -451,8 +512,12 @@ def _statement(text: str, title: str | None) -> str:
     Takes text in either shape the layers below produce — a raw body, or the
     evidence layer's already-squashed excerpt — because both arrive here and
     both otherwise render the title twice in one line.
+
+    Text addressed to AI agents is withheld here, before squashing, so the
+    statement every unit renders — and the packer measures — already carries
+    the marker in its place.
     """
-    out = _squash(text)
+    out = _squash(withhold_agent_directed(text)[0])
     if title:
         for prefix in (f"# {title}", f"## {title}", f"### {title}", title):
             if out.startswith(prefix):
@@ -463,10 +528,10 @@ def _statement(text: str, title: str | None) -> str:
 def _title_of(meta: dict[str, Any], body: str) -> str | None:
     title = meta.get("title")
     if isinstance(title, str) and title.strip():
-        return title.strip()
+        return withhold_agent_directed(title.strip())[0]
     for line in body.splitlines():
         if line.startswith("# "):
-            return line[2:].strip() or None
+            return withhold_agent_directed(line[2:].strip())[0] or None
     return None
 
 
@@ -521,6 +586,7 @@ class _View:
     title: str | None
     excerpt: str
     freshness: str
+    other_project: tuple[str, ...] = ()
 
 
 def _assertion(side: Side, views: dict[str, _View], revisions: dict[str, str]) -> Assertion:
@@ -539,6 +605,7 @@ def _assertion(side: Side, views: dict[str, _View], revisions: dict[str, str]) -
         kind=side.kind,
         qualifiers=side.qualifiers,
         revision=revisions.get(rel) if rel else None,
+        other_project=view.other_project if view else (),
     )
 
 
@@ -617,10 +684,16 @@ def _query_seeds(query: str, limit: int) -> tuple[list[dict[str, Any]], set[str]
 
 def _collect_seeds(
     request: BundleRequest, chain: ScopeChain | None
-) -> tuple[list[dict[str, Any]], set[str]]:
-    """Seed rows for this request, visibility-gated and de-duplicated by file."""
+) -> tuple[list[dict[str, Any]], set[str], int]:
+    """Seed rows for this request, visibility-gated and de-duplicated by file.
+
+    Also returns how many query seeds project isolation withheld. A ref the
+    caller named is its own: it passes the gate with other projects let
+    through (access control still applies), exactly as a named retired
+    record is still reported.
+    """
     reasons: set[str] = set()
-    rows: list[dict[str, Any]] = []
+    exact_rows: list[dict[str, Any]] = []
 
     exact = [r for r in (request.ref, *request.context) if r and r.strip()]
     for ref in exact:
@@ -628,19 +701,32 @@ def _collect_seeds(
         if row is None:
             reasons.add(TARGET_MISSING)
             continue
-        rows.append(row)
+        exact_rows.append(row)
 
+    # ADR-009 Layer 2: the same choke point search uses. An exact ref the
+    # requester may not see is reported as a missing target, never named.
+    visible = filter_visible(with_other_projects(chain), exact_rows)
+    if len(visible) != len(exact_rows):
+        reasons.add(TARGET_MISSING)
+
+    other_projects: set[str] = set()
     seed_limit = max(1, min(request.budget.max_items, MAX_SEEDS))
     if request.query and request.query.strip():
         found, query_reasons = _query_seeds(request.query, seed_limit)
         reasons |= query_reasons
-        rows.extend(found)
-
-    # ADR-009 Layer 2: the same choke point search uses. An exact ref the
-    # requester may not see is reported as a missing target, never named.
-    visible = filter_visible(chain, rows)
-    if len(visible) != len(rows):
-        reasons.add(TARGET_MISSING)
+        kept = filter_visible(chain, found, other_projects=other_projects)
+        if len(kept) != len(found) and len(found) >= seed_limit:
+            # Hidden seeds consumed the window; look once more, wider, as
+            # ``/search`` does, so isolation cannot starve the request of the
+            # records it may see ranked just below another project's.
+            found, _ = _query_seeds(request.query, seed_limit * _SEED_OVERFETCH)
+            other_projects.clear()
+            kept = filter_visible(chain, found, other_projects=other_projects)
+        # Another project's record is withheld and counted, not a missing
+        # target; anything else hidden is reported as before.
+        if len(kept) + len(other_projects) != len(found):
+            reasons.add(TARGET_MISSING)
+        visible.extend(kept)
 
     seen: set[str] = set()
     deduped: list[dict[str, Any]] = []
@@ -652,7 +738,7 @@ def _collect_seeds(
         deduped.append(row)
         if len(deduped) >= MAX_SEEDS:
             break
-    return deduped, reasons
+    return deduped, reasons, len(other_projects)
 
 
 # ── assembly ─────────────────────────────────────────────────────────────────
@@ -661,6 +747,7 @@ def _collect_seeds(
 def _views(
     rows: list[dict[str, Any]],
     seeds: list[SeedEvidence],
+    chain: ScopeChain | None = None,
 ) -> dict[str, _View]:
     """One view per ref the bundle can mention: seeds first, then records.
 
@@ -672,7 +759,16 @@ def _views(
     the seed reads from the same live, projected load every other record's
     excerpt already came from. The row's own indexed text is the fallback for
     a seed whose file could not be read at all.
+
+    A record tagged to a project other than the chain's carries those projects
+    as its label; by default no such record reaches this far.
     """
+
+    def label(meta: dict[str, Any] | None) -> tuple[str, ...]:
+        if not meta or not other_project(chain, meta):
+            return ()
+        return tuple(project_entities(meta))
+
     out: dict[str, _View] = {}
     for row, seed in zip(rows, seeds, strict=True):
         if not seed.seed_ref:
@@ -690,6 +786,7 @@ def _views(
             title=title,
             excerpt=_statement(body, title),
             freshness=seed.seed_freshness,
+            other_project=label(seed.seed_meta),
         )
     for seed in seeds:
         for rec in seed.records():
@@ -701,15 +798,23 @@ def _views(
                 title=rec.title,
                 excerpt=_statement(rec.excerpt, rec.title),
                 freshness=rec.freshness,
+                other_project=label(rec.meta),
             )
     return out
 
 
-def _support_refs(seed: SeedEvidence) -> list[str]:
-    return [rec.ref for rec in (*seed.support, *seed.discovered)]
+def _support_refs(seed: SeedEvidence, hidden: set[str]) -> list[str]:
+    return [
+        rec.ref for rec in (*seed.support, *seed.discovered)
+        if rec.ref not in hidden
+    ]
 
 
-def _discoveries(seed: SeedEvidence, views: dict[str, _View]) -> tuple[Discovery, ...]:
+def _discoveries(
+    seed: SeedEvidence,
+    views: dict[str, _View],
+    hide: Callable[[str | None, str], bool],
+) -> tuple[Discovery, ...]:
     """The unlinked records found around one seed, in a renderable shape.
 
     ``direction="discovered"`` is the evidence layer's own word for "no link
@@ -718,6 +823,8 @@ def _discoveries(seed: SeedEvidence, views: dict[str, _View]) -> tuple[Discovery
     """
     out: list[Discovery] = []
     for rec in seed.discovered:
+        if hide(rec.ref, rec.currency):
+            continue
         view = views.get(rec.ref)
         out.append(Discovery(
             ref=rec.ref,
@@ -726,6 +833,7 @@ def _discoveries(seed: SeedEvidence, views: dict[str, _View]) -> tuple[Discovery
                 view.excerpt if view else _statement(rec.excerpt, rec.title),
                 DISCOVERY_EXCERPT_CHARS,
             ),
+            other_project=view.other_project if view else (),
         ))
     return tuple(out)
 
@@ -739,21 +847,41 @@ def _assemble(
     resolutions: list[Resolution],
     views: dict[str, _View],
     revisions: dict[str, str],
-) -> tuple[list[Selected], list[Replaced], list[ConflictGroup], list[Insufficient]]:
+    *,
+    shown_retired: frozenset[str] | None = None,
+) -> tuple[
+    list[Selected], list[Replaced], list[ConflictGroup], list[Insufficient], set[str]
+]:
     """Group per-seed outcomes into the four buckets, de-duplicated by ref.
 
     Two seeds that resolve to the same standing record produce one ``selected``
     entry (their seed refs merge); two seeds on either side of one conflict
     produce one group. Nothing here re-decides an outcome.
+
+    ``shown_retired`` is which retired records may be delivered: ``None`` for
+    all of them (the request asked for history), otherwise only the refs the
+    caller named. Every other retired record is left out of every bucket and
+    returned in the withheld set; the record standing in its place is still
+    delivered. What is withheld is presentation only — no outcome changes.
     """
     selected: dict[str, Selected] = {}
     replaced: dict[str, Replaced] = {}
     conflicts: dict[tuple[str, ...], ConflictGroup] = {}
     insufficient: dict[str, Insufficient] = {}
+    withheld: set[str] = set()
+
+    def hide(ref: str | None, currency: str) -> bool:
+        if shown_retired is None or currency != "retired" or not ref:
+            return False
+        if ref in shown_retired:
+            return False
+        withheld.add(ref)
+        return True
 
     for seed, resolution in zip(seeds, resolutions, strict=True):
         seed_ref = seed.seed_ref or ""
         chain_records = _replacement_records(seed)
+        seed_side = next((s for s in resolution.sides if s.ref == seed_ref), None)
 
         if resolution.outcome == OUTCOME_SUPPORTED and resolution.current is not None:
             current = resolution.current
@@ -773,6 +901,13 @@ def _assemble(
             if REPLACEMENT_SCHEDULED in resolution.reasons:
                 scheduled_by = [s.ref for s in history if s.ref and s.ref != current.ref]
                 history = []
+            # History the request did not ask for: counted, never named.
+            withheld_here = tuple(
+                s.ref for s in history
+                if s.ref and s.ref != current.ref and hide(s.ref, s.currency)
+            )
+            history = [s for s in history if s.ref not in withheld_here]
+            seed_hidden = seed_ref != current.ref and seed_ref in withheld
             if EXPLICIT_REPLACEMENT in resolution.reasons:
                 for side in history:
                     if side.ref and side.ref not in replaced:
@@ -782,14 +917,14 @@ def _assemble(
                             reason=EXPLICIT_REPLACEMENT,
                         )
             existing = selected.get(key)
+            found = _discoveries(seed, views, hide)
             refs = {
                 "replaces": [s.ref for s in history if s.ref],
-                "support": _support_refs(seed),
-                "seeds": [seed_ref] if seed_ref else [],
+                "support": _support_refs(seed, withheld),
+                "seeds": [seed_ref] if seed_ref and not seed_hidden else [],
             }
             if scheduled_by:
                 refs["superseded_by"] = scheduled_by
-            found = _discoveries(seed, views)
             if existing is None:
                 selected[key] = Selected(
                     assertion=_assertion(current, views, revisions),
@@ -797,9 +932,10 @@ def _assemble(
                     refs=refs,
                     alternatives=tuple(
                         {"ref": s.ref, "kind": s.kind, "currency": s.currency}
-                        for s in others if s.ref
+                        for s in others if s.ref and not hide(s.ref, s.currency)
                     ),
                     discovered=found,
+                    withheld_replaces=withheld_here,
                 )
             else:
                 merged = {
@@ -815,6 +951,9 @@ def _assemble(
                     refs=merged,
                     alternatives=existing.alternatives,
                     discovered=tuple(by_ref.values()),
+                    withheld_replaces=tuple(dict.fromkeys(
+                        [*existing.withheld_replaces, *withheld_here]
+                    )),
                 )
             continue
 
@@ -843,8 +982,13 @@ def _assemble(
         # insufficient_evidence — the seed itself is what could not be
         # answered for. A seed retired in favour of a successor nobody can
         # see is reported as replaced *and* unknown: the record is out, and
-        # what replaced it is not available to stand in its place.
+        # what replaced it is not available to stand in its place. Both only
+        # when history was asked for or the caller named the record.
         if resolution.outcome == OUTCOME_INSUFFICIENT:
+            # A retired seed is the record itself, not a question about one:
+            # withheld whole, exactly as search would not have returned it.
+            if seed_side is not None and hide(seed_ref, seed_side.currency):
+                continue
             view = views.get(seed_ref)
             if seed_ref and seed_ref not in insufficient:
                 insufficient[seed_ref] = Insufficient(
@@ -853,7 +997,6 @@ def _assemble(
                     title=view.title if view else None,
                     reasons=resolution.reasons,
                 )
-            seed_side = next((s for s in resolution.sides if s.ref == seed_ref), None)
             if seed_side is not None and seed_side.currency == "retired" and seed_ref not in replaced:
                 successor = None
                 reason = seed_side.currency_reason
@@ -871,11 +1014,16 @@ def _assemble(
         if ref in selected:
             del replaced[ref]
 
+    # A record withheld on one seed's account and standing on another's is
+    # delivered: standing wins, as it does over ``replaced`` above.
+    withheld -= set(selected)
+
     return (
         list(selected.values()),
         list(replaced.values()),
         list(conflicts.values()),
         list(insufficient.values()),
+        withheld,
     )
 
 
@@ -1095,6 +1243,8 @@ _HEADING = "### Resolved from memory (current state)"
 #: sized its injection against.
 _COVERAGE_RESERVE = 140
 _OMISSION_RESERVE = 110
+#: The other-projects withheld line: count, a project ref and the option name.
+_WITHHELD_LINE_RESERVE = 160
 #: Bytes reserved for the ``Receipt: <bundle_id>`` line. The identifier is a
 #: fixed-width digest, but it is minted after packing (it covers the records
 #: packing chose), so the line is reserved rather than measured.
@@ -1113,7 +1263,9 @@ def _section_label(kind: str, count: int) -> str:
     return f"Unknown ({count}):"
 
 
-def _frame_chars(query: str | None, ref: str | None, *, contested: bool) -> int:
+def _frame_chars(
+    query: str | None, ref: str | None, *, contested: bool, withheld_line: bool = False,
+) -> int:
     """What a bundle costs before a single unit goes in it.
 
     Heading, the question (or record) line, the coverage line, the receipt
@@ -1121,7 +1273,7 @@ def _frame_chars(query: str | None, ref: str | None, *, contested: bool) -> int:
     budget drops. Charged up front so ``max_chars`` bounds the rendered text
     rather than just its contents.
     """
-    total = len(_HEADING) + 1
+    total = len(_HEADING) + 1 + len(MEMORY_IS_DATA) + 1
     if query:
         total += len(f'Question: "{_squash(query, 200)}"') + 1
     elif ref:
@@ -1132,6 +1284,9 @@ def _frame_chars(query: str | None, ref: str | None, *, contested: bool) -> int:
     total += _COVERAGE_RESERVE + _RECEIPT_RESERVE
     if contested:
         total += _OMISSION_RESERVE
+    if withheld_line:
+        # The other-projects line a thin scoped bundle may carry.
+        total += _WITHHELD_LINE_RESERVE
     return total
 
 
@@ -1152,6 +1307,8 @@ def _stamp(a: Assertion) -> str:
         bits.append("index stale")
     if a.effective_at:
         bits.append(a.effective_at[:10])
+    if a.other_project:
+        bits.append(f"other project: {', '.join(a.other_project)}")
     return " · ".join(bits)
 
 
@@ -1201,12 +1358,23 @@ def _render_discovery(found: Discovery) -> str:
     say what it is not: nothing in either record claims they are related.
     """
     statement = f" — {found.statement}" if found.statement else ""
-    return f"    ⚠ also found (unlinked): [{found.ref}] [{found.currency}]{statement}"
+    other = (
+        f" · other project: {', '.join(found.other_project)}"
+        if found.other_project else ""
+    )
+    return (
+        f"    ⚠ also found (unlinked): [{found.ref}] [{found.currency}{other}]{statement}"
+    )
 
 
 def _render_selected(item: Selected) -> list[str]:
     lines = [_line(item.assertion)]
-    replaces = item.refs.get("replaces") or []
+    replaces = list(item.refs.get("replaces") or [])
+    if item.withheld_replaces:
+        n = len(item.withheld_replaces)
+        replaces.append(
+            f"{n} earlier record{'' if n == 1 else 's'} (retired; withheld)"
+        )
     if replaces:
         lines.append(f"    replaces: {', '.join(replaces)}")
     # The record that takes over on the date already in the stamp. Named so a
@@ -1263,7 +1431,7 @@ def render_bundle(bundle: Bundle) -> str:
     MCP, REST and CLI all emit this string, so the three readings of one
     request cannot disagree about what stands.
     """
-    out: list[str] = [_HEADING]
+    out: list[str] = [_HEADING, MEMORY_IS_DATA]
     if bundle.query:
         out.append(f'Question: "{_squash(bundle.query, 200)}"')
     elif bundle.ref:
@@ -1292,6 +1460,15 @@ def render_bundle(bundle: Bundle) -> str:
     if not (bundle.selected or bundle.conflicts or bundle.replaced or bundle.insufficient):
         out.append("")
         out.append("Nothing in memory answers this.")
+
+    withheld_line = describe_other_projects_withheld(
+        bundle.other_projects_withheld,
+        delivered=len(bundle.selected) + len(bundle.conflicts)
+        + len(bundle.replaced) + len(bundle.insufficient),
+        project=bundle.isolation_project,
+    )
+    if withheld_line:
+        out.append(withheld_line)
 
     if bundle.omitted_conflicts:
         out.append("")
@@ -1431,7 +1608,12 @@ def build_bundle(
     surface and every run.
     """
     reasons: set[str] = set()
-    rows, seed_reasons = _collect_seeds(request, chain)
+    # Project isolation is the chain's to apply, at the visibility choke
+    # point every seed and every evidence expansion already passes; the
+    # request only says whether other projects' records are wanted.
+    if request.include_other_projects:
+        chain = with_other_projects(chain)
+    rows, seed_reasons, other_withheld = _collect_seeds(request, chain)
     reasons |= seed_reasons
 
     evidence = resolve_evidence(
@@ -1447,9 +1629,15 @@ def build_bundle(
     ] + [rec.rel_path for seed in evidence.seeds for rec in seed.records()]
     revisions = _revisions_for(rels)
 
-    views = _views(rows, evidence.seeds)
-    selected, replaced, conflicts, insufficient = _assemble(
-        evidence.seeds, resolutions, views, revisions
+    views = _views(rows, evidence.seeds, chain)
+    # Retired records the caller named are its own; every other one is
+    # history, delivered only when the request asks for it.
+    shown_retired = None if request.include_retired else frozenset(
+        r.strip().replace(os.sep, "/").removesuffix(".md")
+        for r in (request.ref, *request.context) if r and r.strip()
+    )
+    selected, replaced, conflicts, insufficient, withheld = _assemble(
+        evidence.seeds, resolutions, views, revisions, shown_retired=shown_retired,
     )
 
     # What the receipt needs about each record, taken from the layers that
@@ -1484,7 +1672,10 @@ def build_bundle(
 
     packed = _apply_budget(
         selected, replaced, conflicts, insufficient, request.budget,
-        frame_chars=_frame_chars(request.query, request.ref, contested=bool(conflicts)),
+        frame_chars=_frame_chars(
+            request.query, request.ref, contested=bool(conflicts),
+            withheld_line=other_withheld > 0,
+        ),
     )
     reasons |= packed.reasons
 
@@ -1504,9 +1695,9 @@ def build_bundle(
 
     coverage = _coverage(reasons)
     # The receipt is built over what packing actually delivered, not over
-    # everything considered — and it is pure: no lookup, no row in the
-    # retrieval log. Resolve stays read-only in both ledgers; the log records
-    # retrieval *events*, and this operation is an analysis of one.
+    # everything considered. Building it is pure: no lookup or write. The
+    # delivery surface persists the receipt separately from retrieval events;
+    # this operation is an analysis of one.
     receipt = build_receipt(
         _receipt_rows(packed, views, revisions, metas, file_hashes, currencies),
         request={
@@ -1516,6 +1707,12 @@ def build_bundle(
             "intent": request.intent,
             "max_items": request.budget.max_items,
             "max_chars": request.budget.max_chars,
+            # Other projects change what is selected, so they are part of the
+            # query scope; unset (not False) by default keeps the default's key.
+            "include_other_projects": request.include_other_projects or None,
+            # History changes what is selected, so it is part of the query
+            # scope; unset (not False) by default keeps the default's key.
+            "include_retired": request.include_retired or None,
         },
         scope=chain.as_list() if chain is not None else (),
         resolve_mode="full",
@@ -1551,6 +1748,9 @@ def build_bundle(
             "chars": packed.chars,
             "tokens": packed.tokens,
         },
+        other_projects_withheld=other_withheld,
+        isolation_project=chain.project if chain is not None else None,
+        history_withheld=len(withheld),
     )
 
 

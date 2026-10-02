@@ -24,6 +24,7 @@ import time
 import pytest
 
 from palinode.cli.init import USER_PROMPT_SUBMIT_HOOK_SCRIPT
+from palinode.core.framing import MEMORY_IS_DATA
 from tests import test_resolve_bundle as scenarios
 
 # The store fixture and the three scenarios are the ones the unit-level suite
@@ -35,6 +36,7 @@ seed_current = scenarios.seed_current
 seed_conflict = scenarios.seed_conflict
 seed_unlinked_correction = scenarios.seed_unlinked_correction
 seed_contested_stale_backing = scenarios.seed_contested_stale_backing
+_write = scenarios._write
 
 pytestmark = pytest.mark.skipif(
     not (shutil.which("curl") and shutil.which("jq")),
@@ -71,7 +73,13 @@ def live_api(mem):
 
 
 def _run_hook(tmp_path, api_url: str, prompt: str, **env) -> str:
-    """Run the shipped hook against the live server; return additionalContext."""
+    """Run the shipped hook against the live server; return additionalContext.
+
+    The hook sends its ``cwd`` (here the tmp store, whose directory name is a
+    project of its own), so a scenario that expects its records passes the
+    scenario's project as ``PALINODE_PROJECT``: a scoped request leaves other
+    projects' records out.
+    """
     hook = tmp_path / "hook.sh"
     hook.write_text(USER_PROMPT_SUBMIT_HOOK_SCRIPT)
     full_env = {
@@ -112,7 +120,8 @@ def _scripted_consumer(context: str) -> str | None:
 
 def test_a_fresh_session_receives_the_successor(live_api, mem, tmp_path):
     seed_current(mem)
-    context = _run_hook(tmp_path, live_api, "which endpoint does production serve traffic from?")
+    context = _run_hook(tmp_path, live_api, "which endpoint does production serve traffic from?",
+                        PALINODE_PROJECT="demo")
 
     assert "decisions/endpoint-v2" in context
     assert "Production serves traffic from endpoint bravo." in context
@@ -125,7 +134,8 @@ def test_a_fresh_session_receives_the_successor(live_api, mem, tmp_path):
 
 def test_an_unresolved_conflict_reaches_the_session_with_both_sides(live_api, mem, tmp_path):
     seed_conflict(mem)
-    context = _run_hook(tmp_path, live_api, "which region does the cache cluster run in?")
+    context = _run_hook(tmp_path, live_api, "which region does the cache cluster run in?",
+                        PALINODE_PROJECT="demo")
 
     assert "insights/region-a" in context and "insights/region-b" in context
     assert "frankfurt" in context and "dublin" in context
@@ -143,7 +153,8 @@ def test_an_unlinked_correction_reaches_the_session(live_api, mem, tmp_path):
     told the wrong thing confidently.
     """
     seed_unlinked_correction(mem)
-    context = _run_hook(tmp_path, live_api, "what is the orbit client retry policy?")
+    context = _run_hook(tmp_path, live_api, "what is the orbit client retry policy?",
+                        PALINODE_PROJECT="orbit")
 
     assert "decisions/orbit-retry" in context
     assert "insights/orbit-scheduling" in context, (
@@ -160,7 +171,8 @@ def test_a_contested_side_keeps_its_qualifier_through_the_hook(live_api, mem, tm
     """The conflict-side qualifiers, end to end: the stale-backed side is
     labelled in the text a real session receives."""
     seed_contested_stale_backing(mem)
-    context = _run_hook(tmp_path, live_api, "what is the orbit queue depth ceiling?")
+    context = _run_hook(tmp_path, live_api, "what is the orbit queue depth ceiling?",
+                        PALINODE_PROJECT="orbit")
 
     assert "insights/queue-depth-a" in context and "insights/queue-depth-b" in context
     stale = next(
@@ -171,7 +183,14 @@ def test_a_contested_side_keeps_its_qualifier_through_the_hook(live_api, mem, tm
     assert "⚠ contradicts: insights/queue-depth-b" in stale, stale
 
 
-@pytest.mark.parametrize("max_chars", ["520", "560", "600", "700", "900"])
+#: The window where the budget bites sits above the bundle's fixed frame, so it
+#: moves with the frame's cost: the authority line every bundle leads with.
+_FRAME_COST = len(MEMORY_IS_DATA) + 1
+
+
+@pytest.mark.parametrize(
+    "max_chars", [str(n + _FRAME_COST) for n in (520, 560, 600, 700, 900)]
+)
 def test_a_tight_budget_keeps_the_conflict_whole_or_names_it(
     live_api, mem, tmp_path, max_chars
 ):
@@ -179,7 +198,7 @@ def test_a_tight_budget_keeps_the_conflict_whole_or_names_it(
     seed_conflict(mem)
     context = _run_hook(
         tmp_path, live_api, "which region does the cache cluster run in?",
-        PALINODE_HOOK_RECALL_MAX_CHARS=max_chars,
+        PALINODE_HOOK_RECALL_MAX_CHARS=max_chars, PALINODE_PROJECT="demo",
     )
     if "Contested" in context:
         assert "insights/region-a" in context, context
@@ -218,3 +237,40 @@ def test_deadline_exhaustion_marks_the_fallback(live_api, mem, tmp_path):
     assert _scripted_consumer(context) is None, (
         "the fallback must not present an unchecked hit as a resolved current answer"
     )
+
+
+def test_deadline_fallback_withholds_another_projects_record(live_api, mem, tmp_path):
+    """The fallback /search must leave out what /resolve withholds.
+
+    ``seed_current`` scopes its record to ``project/demo``; the session here
+    is ``project/home``. With a normal deadline, bounded resolution already
+    withholds the other project's record. A 1 ms deadline forces the
+    plain-search fallback, and before this fix that fallback carried no
+    scope at all — it sent only ``{query, limit, threshold, max_chars}`` — so
+    it delivered the record /resolve would have withheld for the same prompt
+    and the same session.
+    """
+    seed_current(mem)
+    context = _run_hook(
+        tmp_path, live_api, "which endpoint does production serve traffic from?",
+        PALINODE_HOOK_RESOLVE_DEADLINE="1", PALINODE_PROJECT="home",
+    )
+    assert "endpoint bravo" not in context, (
+        "the deadline fallback leaked another project's record"
+    )
+    assert "decisions/endpoint-v2" not in context
+
+
+def test_deadline_fallback_still_delivers_the_same_projects_record(live_api, mem, tmp_path):
+    """The scoped fallback is not a stricter filter than /resolve — same
+    project still gets its own record, exactly as the unscoped fallback used
+    to (and as /resolve itself does)."""
+    seed_current(mem)
+    context = _run_hook(
+        tmp_path, live_api, "which endpoint does production serve traffic from?",
+        PALINODE_HOOK_RESOLVE_DEADLINE="1", PALINODE_PROJECT="demo",
+    )
+    assert "resolution unavailable (deadline)" in context
+    assert "### Related memories" in context
+    assert "decisions/endpoint-v2" in context
+    assert "endpoint bravo" in context

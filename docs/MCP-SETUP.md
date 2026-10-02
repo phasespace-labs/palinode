@@ -167,7 +167,7 @@ The three `ServerAlive*` / `TCPKeepAlive` options keep the SSH session alive acr
 | `PALINODE_MCP_HTTP_HOST` | `127.0.0.1` | Bind address for HTTP MCP server (`palinode-mcp-http --host …` overrides it). Non-loopback requires `PALINODE_API_TOKEN` or `PALINODE_API_ALLOW_UNAUTH=1` — the transport refuses to start otherwise. |
 | `PALINODE_MCP_HTTP_PORT` | `6341` | Port for HTTP MCP server (`palinode-mcp-http --port …` overrides it) |
 | `PALINODE_MCP_SURFACE` | `full` | MCP tool advertisement surface: `full` advertises every tool; `core` advertises the hot-path subset while keeping dispatch capability unchanged |
-| `PALINODE_PROJECT` | _(auto-detect from CWD)_ | Project context for ambient search |
+| `PALINODE_PROJECT` | _(auto-detect from CWD)_ | Pins the project for this process: every recall call resolves it — session init, context prime and ambient search alike — ahead of repository/CWD detection. A per-call `project` argument still wins. Must be a slug or a `project/<slug>` ref; anything else is refused, not ignored. |
 | `PALINODE_API_TOKEN` | _(unset)_ | Bearer token for the API **and** the HTTP MCP server (which has no token of its own — it gates `/mcp/` with this and sends the same token on its own calls to the API). **Required** when `PALINODE_API_HOST` or `PALINODE_MCP_HTTP_HOST` is non-loopback — the server refuses to start otherwise (see [SECURITY.md](../SECURITY.md#api-authentication)). |
 | `PALINODE_API_ALLOW_UNAUTH` | _(unset)_ | Set to `1` to let the API and the HTTP MCP server start token-less on a non-loopback bind (network-isolated hosts only). One knob for both; each warns on every start. |
 | `PALINODE_API_BIND_INTENT` | _(unset)_ | Set to `public` to confirm intentional public exposure and suppress the non-loopback bind warning. Requires `PALINODE_API_TOKEN`. |
@@ -192,11 +192,17 @@ The three `ServerAlive*` / `TCPKeepAlive` options keep the SSH session alive acr
 | `palinode_history` | Git history of a memory file; `detail="full"` adds per-commit diffs |
 | `palinode_blame` | Per-line provenance for a memory file |
 | `palinode_trace` | Composed provenance lineage for a memory file: sources, saved/changed commits, supersession, typed links, recall |
+| `palinode_explain` | Explain one delivery by its receipt reference: what was supplied, at which revisions, under which scope — and what was never recorded |
 | `palinode_diff` | What changed across memory in the last N days |
 | `palinode_rollback` | Revert a memory file to a previous version |
 | `palinode_push` | Push memory changes to remote git |
 | `palinode_lint` | Scan for orphaned files, contradictions, stale content |
 | `palinode_review` | Advisory project-memory review: composes health signals, proposes corrective ops (read-only) |
+| `palinode_corrections` | List correction candidates mined from harness transcripts — proposals only, nothing applied |
+| `palinode_correction_preview` | Show what correcting or retiring one memory would change — reads only, returns the revision `apply` requires back |
+| `palinode_correction_apply` | Apply a previewed correction; needs `confirm` and the preview's revision, refuses a stale or ambiguous target |
+| `palinode_correction_dismiss` | Record that a correction candidate was reviewed and declined, with its reason |
+| `palinode_correction_undo` | Preview (default) or apply the undo of a correction — restores the previous assertion, deletes no history |
 | `palinode_trigger` | Register prospective memory triggers |
 | `palinode_prompt` | Manage versioned LLM prompt files |
 | `palinode_consolidate` | Run memory consolidation (long-running — see below) |

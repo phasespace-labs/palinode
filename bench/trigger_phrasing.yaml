@@ -1,0 +1,333 @@
+# Prospective-trigger phrasing corpus — synthetic, versioned, hand-labelled.
+#
+# Everything here is fictional. The projects ("Harbor", "Lantern", "Tessera"),
+# the people and the numbers are invented; nothing describes a real system.
+#
+# Each trigger carries the SAME intent in three description styles:
+#
+#   docs_style  - third person, about the user, the way the tool descriptions
+#                 and docs currently teach people to write a trigger.
+#   user_worded - the same intent in the words a user would actually type.
+#   phrasings   - three or four such user-worded variants, scored on max.
+#
+# Prompts are stratified per trigger:
+#
+#   on_target_terse   - what a user really types when they want this memory.
+#   on_target_verbose - the same intent inside a long session-handoff turn.
+#   near_miss         - adjacent topic, must NOT fire this trigger (or any).
+#   unrelated         - a different world entirely, must fire nothing.
+#
+# A (prompt, trigger) pair is POSITIVE only when the prompt's own trigger is
+# the one being scored and the prompt is on-target. Every other pair, including
+# an on-target prompt scored against a different trigger, is a negative.
+
+version: 1
+
+triggers:
+  - id: release-cut
+    memory_file: decisions/release-cut.md
+    descriptions:
+      docs_style: "User is asking how to cut and publish a new release of the toolkit."
+      user_worded: "how do I cut a release and publish it"
+      phrasings:
+        - "how do I cut a release"
+        - "what is the release process here"
+        - "ship a new version"
+        - "tag and publish the next version"
+    prompts:
+      on_target_terse:
+        - "cut a release"
+        - "time to ship the next version"
+      on_target_verbose:
+        - "Picking up where we left off. The branch is green, the changelog has the last four entries in it, and Priya signed off on the migration note this morning. I think everything that was blocking is done, so the next thing is getting this out to users. Walk me through what has to happen."
+        - "Before I hand this off: everything on the milestone is closed and the staging box has been running the build for two days without a complaint. What is left is the part I always get wrong and have to look up, so tell me the steps in order and what I should check before and after."
+      near_miss:
+        - "which version of the CLI is installed on this laptop"
+      unrelated:
+        - "what is a good weeknight pasta sauce"
+
+  - id: incident-postmortem
+    memory_file: decisions/incident-postmortem.md
+    descriptions:
+      docs_style: "User is asking how to write a postmortem after a production outage."
+      user_worded: "how do I write up the postmortem for this outage"
+      phrasings:
+        - "write the postmortem for this outage"
+        - "what goes in an incident writeup"
+        - "the incident is over, what now"
+        - "document what happened during the outage"
+    prompts:
+      on_target_terse:
+        - "write the postmortem"
+        - "incident is closed, do the writeup"
+      on_target_verbose:
+        - "Continuing from the incident channel. The queue backed up for about three hours last night, we drained it by hand at two in the morning, and the fix is already merged. Everyone is awake again and the on-call wants something written down before the weekly. Help me get that started."
+        - "Handoff note for you: we lost the checkout path for a while yesterday, the cause turned out to be a config that was rolled forward without the matching flag, and it is fixed now. Leadership wants the story, the timeline and what we are changing so it does not repeat."
+      near_miss:
+        - "is the status page still showing degraded"
+      unrelated:
+        - "recommend a podcast for a long drive"
+
+  - id: contributor-reply
+    memory_file: decisions/contributor-reply.md
+    descriptions:
+      docs_style: "User is asking how to reply to a first-time outside contributor on a pull request."
+      user_worded: "how should I reply to this first-time contributor"
+      phrasings:
+        - "write a reply to this contributor"
+        - "how do I answer a first pull request from outside"
+        - "someone new opened a pull request, what do I say"
+        - "draft a friendly review comment for a newcomer"
+    prompts:
+      on_target_terse:
+        - "draft the reply to the new contributor"
+        - "someone new opened a pull request, help me answer"
+      on_target_verbose:
+        - "Carrying over from this morning. A person I have never seen before opened a patch against the parser, it is mostly right but it is missing tests and the commit message is one word. I do not want to scare them off and I also do not want to merge it as is. Write what I should send back."
+        - "Session note: the patch queue has one from an outsider who clearly spent a weekend on it. Two of the three files are good, the third reimplements something we already have. I need wording that is warm, says yes to the good part, and asks for the rest without sounding like a list of complaints."
+      near_miss:
+        - "how many pull requests are open right now"
+      unrelated:
+        - "what time does the hardware store close on Sunday"
+
+  - id: migration-backfill
+    memory_file: decisions/migration-backfill.md
+    descriptions:
+      docs_style: "User is asking how to run the backfill after a schema migration has been applied."
+      user_worded: "how do I run the backfill now that the migration is applied"
+      phrasings:
+        - "run the backfill after the migration"
+        - "the migration landed, what about the old rows"
+        - "how do I fill in the new column for existing records"
+        - "backfill the historical data"
+    prompts:
+      on_target_terse:
+        - "the migration landed, run the backfill"
+        - "old rows still have the empty column"
+      on_target_verbose:
+        - "Where we are: the new column is live everywhere and writes are populating it correctly, but everything written before Tuesday still has it blank, which is about four million records. I need to fill those in without locking the table for an hour. What is the procedure we settled on last time."
+        - "Continuing the schema work. The change is deployed, the application is happy, and now the reporting team is complaining that half their rows are null. Those are the historical ones. Tell me how to work through them in batches and how to know when it is finished."
+      near_miss:
+        - "how long does a schema change usually take to review"
+      unrelated:
+        - "explain why bread dough needs to rest"
+
+  - id: flaky-test-triage
+    memory_file: decisions/flaky-test-triage.md
+    descriptions:
+      docs_style: "User is asking how to triage a test that fails intermittently in continuous integration."
+      user_worded: "this test only fails sometimes, how do I track it down"
+      phrasings:
+        - "the test passes locally and fails in CI"
+        - "how do I chase down a flaky test"
+        - "this failure is intermittent, what do I do"
+        - "a test fails maybe one run in five"
+    prompts:
+      on_target_terse:
+        - "this test is flaky again"
+        - "passes locally, fails on the runner"
+      on_target_verbose:
+        - "Back on the build problem from yesterday. The same case failed twice this week and passed nine other times with no code change in between, so I am fairly sure it is timing and not a real regression. I do not want to just retry it forever. How do I actually find out."
+        - "Handing you the state: the pipeline has been red on and off for three days, always the same file, never the same assertion. Reruns go green. People have started ignoring the red badge, which is the part that worries me most. Where do I start."
+      near_miss:
+        - "how do I add a new test file to the suite"
+      unrelated:
+        - "what are the visa rules for a two week trip"
+
+  - id: dependency-upgrade
+    memory_file: decisions/dependency-upgrade.md
+    descriptions:
+      docs_style: "User is asking how to upgrade a pinned third-party dependency safely."
+      user_worded: "how do I upgrade this pinned dependency without breaking things"
+      phrasings:
+        - "bump this library to the new major version"
+        - "how do we upgrade a pinned dependency"
+        - "the lockfile is two years old, what now"
+        - "is it safe to move to the newer release of this package"
+    prompts:
+      on_target_terse:
+        - "bump the http library to the new major"
+        - "our lockfile is ancient, start upgrading"
+      on_target_verbose:
+        - "Resuming the cleanup thread. We are three majors behind on the serialization library, the release notes mention two breaking changes that look like they touch us, and nothing else is blocking. I would rather do this now than the week before a launch. How should I sequence it."
+        - "Context from earlier: the bot has been opening the same upgrade proposal every month and we keep closing it. I finally want to take it. The concern is that the package is used in both the worker and the API and I do not know which one breaks first."
+      near_miss:
+        - "how do I add a brand new package to the project"
+      unrelated:
+        - "suggest a stretching routine for sore shoulders"
+
+  - id: api-deprecation
+    memory_file: decisions/api-deprecation.md
+    descriptions:
+      docs_style: "User is asking how to deprecate and eventually remove a public API endpoint."
+      user_worded: "how do we deprecate an endpoint people still use"
+      phrasings:
+        - "how do we retire an old endpoint"
+        - "deprecate this API without breaking clients"
+        - "what is the removal timeline for a public route"
+        - "we want to kill the old version of this call"
+    prompts:
+      on_target_terse:
+        - "retire the old search endpoint"
+        - "we want to remove the legacy route"
+      on_target_verbose:
+        - "Continuing the cleanup plan. The second version of the export call has everything the first one had, and the first one still gets a few thousand requests a day from clients we cannot contact directly. I want it gone by the next quarter without an angry inbox."
+        - "Picking this back up: two teams still call the old shape and both have promised to move for six months. I need a plan with warnings, dates and a point where it actually stops answering, plus what we tell people in between."
+      near_miss:
+        - "what is the rate limit on the export endpoint"
+      unrelated:
+        - "how do I get marker off a painted wall"
+
+  - id: spend-review
+    memory_file: decisions/spend-review.md
+    descriptions:
+      docs_style: "User is asking how to review and reduce the monthly cloud bill."
+      user_worded: "our cloud bill jumped, how do I find out why"
+      phrasings:
+        - "the monthly bill went up, where is it going"
+        - "how do I cut infrastructure cost"
+        - "review the cloud spend"
+        - "what is driving the hosting bill"
+    prompts:
+      on_target_terse:
+        - "the bill doubled this month"
+        - "where is all the hosting money going"
+      on_target_verbose:
+        - "Starting the quarterly chore. The invoice came in noticeably higher than the last three and nothing obvious shipped, so either something is running that should not be or a rate changed. I want to find the top few line items and decide what to turn off."
+        - "Handover from finance: they want a number by Friday explaining the increase and what we intend to do about it. I have access to the usage export but I never remember which dimensions actually matter."
+      near_miss:
+        - "how do I add a new person to the billing account"
+      unrelated:
+        - "which houseplants survive a dark room"
+
+  - id: design-review-prep
+    memory_file: decisions/design-review-prep.md
+    descriptions:
+      docs_style: "User is asking how to prepare a design document for review by the wider team."
+      user_worded: "how do I get my design doc ready for review"
+      phrasings:
+        - "get this design doc ready for review"
+        - "what should a design proposal contain"
+        - "I am writing a proposal, what goes in it"
+        - "how do we run a design review here"
+    prompts:
+      on_target_terse:
+        - "my design doc needs to go out for review"
+        - "what goes in the proposal before I circulate it"
+      on_target_verbose:
+        - "Continuing the planning work. I have a rough document describing the two options and why I prefer the second, but it has no drawbacks section and no rollout thinking. Review is on Thursday and I would rather not be told the obvious things in the meeting."
+        - "State of play: the approach is agreed between me and one other person, and now it needs to survive a room. I want to know what the reviewers here always ask for so it is already in the document before they ask."
+      near_miss:
+        - "who has permission to comment on the shared drive"
+      unrelated:
+        - "what is the best way to sharpen a kitchen knife"
+
+  - id: oncall-handoff
+    memory_file: decisions/oncall-handoff.md
+    descriptions:
+      docs_style: "User is asking how to hand off the on-call rotation at the end of a shift."
+      user_worded: "how do I hand off on-call at the end of my week"
+      phrasings:
+        - "my on-call week is ending, what do I pass on"
+        - "how do I hand over the pager"
+        - "what goes in the on-call handoff"
+        - "end of shift handover notes"
+    prompts:
+      on_target_terse:
+        - "my pager week ends tonight"
+        - "write the handover for the next on-call"
+      on_target_verbose:
+        - "Wrapping my rotation. Two alerts fired overnight, one was noise and one is still half-fixed with a workaround in place, and there is a scheduled job that will page again on Sunday unless someone disables it. The next person starts in the morning."
+        - "Closing out the week: nothing caught fire, but the disk alert on the reporting box is going to come back and I never got to the root cause. I want to leave something behind that is actually useful rather than a shrug."
+      near_miss:
+        - "how do I change my notification sound in the alerting app"
+      unrelated:
+        - "explain the offside rule simply"
+
+  - id: customer-escalation
+    memory_file: decisions/customer-escalation.md
+    descriptions:
+      docs_style: "User is asking how to respond to an escalated customer support ticket."
+      user_worded: "a customer escalated, how should I respond"
+      phrasings:
+        - "this support ticket got escalated, what do I say"
+        - "how do we answer an angry customer"
+        - "the account manager is asking for an update on a broken account"
+        - "draft a response for an escalated ticket"
+    prompts:
+      on_target_terse:
+        - "this ticket just got escalated"
+        - "draft something for the upset customer"
+      on_target_verbose:
+        - "Coming back to the support thread. The account has hit the same import failure four times, they have been told twice that it was fixed, and now their account manager is in the conversation asking for a call. Engineering thinks it is a data problem on their side, which is true and completely unhelpful to say."
+        - "Handoff: a customer on the larger plan has been blocked since Monday, the workaround we gave them does not work for their volume, and the tone of the last message is somewhere past patient. I need to answer today and I need it to be honest about the timeline."
+      near_miss:
+        - "how many tickets came in last week"
+      unrelated:
+        - "what is the difference between stock and broth"
+
+  - id: flag-rollout
+    memory_file: decisions/flag-rollout.md
+    descriptions:
+      docs_style: "User is asking how to roll a feature out gradually behind a feature flag."
+      user_worded: "how do I roll this out slowly behind a flag"
+      phrasings:
+        - "turn this on for a few users first"
+        - "how do we do a staged rollout"
+        - "put it behind a flag and ramp it"
+        - "what percentage do we start a rollout at"
+    prompts:
+      on_target_terse:
+        - "ramp the new editor to a few percent"
+        - "turn it on for internal users only first"
+      on_target_verbose:
+        - "Continuing from the merge. The code is in and dark, and I do not want to enable it for everyone on a Friday. I would like a small group first, then something like a tenth, and a clear rule for when to go further or pull it back."
+        - "Session handoff: the feature is complete but the performance story is unproven at scale, so we agreed to expose it gradually. Tell me the ramp we use, what to watch at each step, and how to back out in a hurry."
+      near_miss:
+        - "how do I delete a flag that nobody reads anymore"
+      unrelated:
+        - "how long should I proof sourdough in a cold kitchen"
+
+  - id: index-rebuild
+    memory_file: decisions/index-rebuild.md
+    descriptions:
+      docs_style: "User is asking how to rebuild the search index from the source documents."
+      user_worded: "how do I rebuild the search index from scratch"
+      phrasings:
+        - "rebuild the index from the source files"
+        - "search results look stale, reindex"
+        - "how long does a full reindex take"
+        - "wipe and rebuild the search index"
+    prompts:
+      on_target_terse:
+        - "reindex everything"
+        - "search is returning stale documents"
+      on_target_verbose:
+        - "Back to the search problem. Documents that were renamed last month still come back under their old titles, and a few that were deleted are still returned, so the index and the files clearly disagree. Rebuilding feels like the honest fix but I do not know what it costs us while it runs."
+        - "Where I left it: queries are fine for anything recent and wrong for anything older than the import. I suspect the incremental path skipped a batch. I want to start clean, and I need to know whether search keeps answering while that happens."
+      near_miss:
+        - "how do I change the number of results a query returns"
+      unrelated:
+        - "what should I look for when buying used skis"
+
+  - id: security-advisory
+    memory_file: decisions/security-advisory.md
+    descriptions:
+      docs_style: "User is asking how to respond to a published security advisory affecting a dependency."
+      user_worded: "there is an advisory against a library we use, what do I do"
+      phrasings:
+        - "a package we use has a published vulnerability"
+        - "how do we respond to a security advisory"
+        - "the scanner flagged a dependency, what now"
+        - "patch the vulnerable library"
+    prompts:
+      on_target_terse:
+        - "the scanner flagged one of our packages"
+        - "advisory dropped for a library we ship"
+      on_target_verbose:
+        - "Picking this up from the alert. A library we depend on published a fix for something rated high, we are on an affected version, and it is only reachable if an attacker can already post arbitrary documents. I need to decide how fast we move and what we tell people who ask."
+        - "Handoff state: the scan opened a report, the maintainers released a patch version yesterday, and our build pins the old one in two services. I would rather follow the process we agreed than improvise it on a Friday afternoon."
+      near_miss:
+        - "how do I rotate my own login credentials"
+      unrelated:
+        - "what is a reasonable tip in a Lisbon restaurant"

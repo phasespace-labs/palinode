@@ -46,6 +46,10 @@ stays out: refs, hashes and dispositions are written; content never is. The log
 keeps the visibility and retention regime it already had (telemetry, excluded
 from semantic recall).
 
+``/resolve`` persists the public receipt in a receipt-only envelope on that
+same log after rendering, including evidence refs, qualifiers and output budget.
+It creates no file-retrieval events or recall metadata.
+
 ``/context/prime`` returns its receipt but writes no retrieval rows: a
 session-start injection ledger is a separate, larger contract and is not built
 here.

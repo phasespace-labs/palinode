@@ -96,8 +96,11 @@ def test_rest_default_is_byte_identical_and_resolve_is_additive(client, mem):
     assert hit["rel_path"] == "decisions/db.md"
     assert hit["currency"] == "retired"  # the seed is not presented as current
     block = hit["evidence"]
+    # `history_withheld`: retired records left out of the evidence by default
+    # (none here — the only linked record is the current successor).
     assert set(block) == {"replacements", "conflicts", "support", "discovered",
-                          "seed_freshness", "coverage"}
+                          "seed_freshness", "coverage", "history_withheld"}
+    assert block["history_withheld"] == 0
     assert [(r["ref"], r["currency"]) for r in block["replacements"]] == [("decisions/db-v2", "current")]
     assert block["coverage"]["status"] == "partial"
     assert "target_hidden" in block["coverage"]["reasons"]

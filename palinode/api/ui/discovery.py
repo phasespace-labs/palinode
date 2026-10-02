@@ -1,4 +1,26 @@
-"""Visible-store adapters for inspector discovery; maintenance stays full-store."""
+"""Visible-store adapters for inspector discovery; maintenance stays full-store.
+
+**The inspector's visibility rule, stated once.** Discovery — the
+dashboard, the list, the recent panel — is visibility-filtered: it walks
+``collect_memory_files``, which routes every row through
+:func:`palinode.core.visibility.is_visible`, so a ``private`` or ``restricted``
+memory is not listed. Direct reads are not filtered, and that is deliberate:
+
+1. **A direct read stays allowed.** ``/ui/memory/<file>`` and
+   ``/ui/history/<file>`` render a record the listing hides. The inspector is
+   loopback-only and its user is the store's local operator, who already owns
+   the files; refusing would protect nothing and would break inspecting history
+   for exactly the records most worth inspecting.
+2. **The page labels it.** :func:`discovery_visibility` is what both pages ask,
+   so a hidden record is never mistaken for a default-visible one.
+3. **No mutation is offered for a hidden record.** Anything the inspector
+   offers that would change a record — the correction / retirement section — is
+   replaced by a refusal pointing at the CLI and API, where the caller's
+   authority is explicit. The correction action must not become a quiet way to
+   edit restricted records from a page that never checked visibility.
+
+``ui_memory`` and ``ui_history`` follow it identically.
+"""
 from __future__ import annotations
 
 import os
@@ -60,6 +82,71 @@ def indexed_discovery(memories: list[dict[str, Any]]) -> tuple[int, list[dict[st
         if len(recent) < 12:
             recent.append({"path": memory["path"], "type": memory["type"]})
     return total, recent
+
+
+#: The human-facing label for each way discovery hides a record. Keyed by the
+#: reason, so a page renders the reason rather than re-deriving it.
+_VISIBILITY_LABELS: dict[str, str] = {
+    "private": "private — withheld from every listing, from recall and from the session-start digest",
+    "restricted": "restricted — withheld from every surface that carries no matching scope",
+    "scope": "out of scope — withheld from listings that carry no matching scope",
+    "unreadable": "unreadable frontmatter — hidden rather than assumed public",
+    "not-browsable": "not a browsable memory — excluded from the memory list",
+}
+
+
+def discovery_visibility(
+    rel_path: str, *, metadata: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Would the inspector's discovery surfaces hide this record, and why?
+
+    Asks the same choke point the listing asks
+    (:func:`palinode.core.visibility.is_visible` with no scope chain — the
+    ``GET /list`` contract), plus the browsable-memory predicate the memory
+    list applies. Returns ``hidden``, a machine ``reason`` and a human
+    ``label``; a visible record reports ``hidden: False`` with no reason.
+
+    Reading-only, and never a refusal by itself: rule 1 above means a direct
+    read is still served. What the caller does with ``hidden`` is rule 2 (label
+    the page) and rule 3 (offer no mutation).
+    """
+    from palinode.api.ui.views import is_browsable_memory
+    from palinode.core.visibility import is_visible
+
+    rel = str(rel_path).replace(os.sep, "/").lstrip("/")
+    abs_path = os.path.join(config.memory_dir, rel)
+
+    meta = metadata
+    if meta is None:
+        try:
+            from palinode.core import parser
+
+            with open(abs_path, encoding="utf-8") as handle:
+                meta, _ = parser.parse_frontmatter(handle.read())
+        except (OSError, ValueError, UnicodeDecodeError):
+            return {
+                "hidden": True,
+                "reason": "unreadable",
+                "label": _VISIBILITY_LABELS["unreadable"],
+            }
+
+    if not is_visible(None, abs_path, metadata=meta):
+        declared = str((meta or {}).get("visibility") or "").strip().lower()
+        reason = declared if declared in {"private", "restricted"} else "scope"
+        return {
+            "hidden": True,
+            "reason": reason,
+            "label": _VISIBILITY_LABELS[reason],
+        }
+
+    if not is_browsable_memory(rel):
+        return {
+            "hidden": True,
+            "reason": "not-browsable",
+            "label": _VISIBILITY_LABELS["not-browsable"],
+        }
+
+    return {"hidden": False, "reason": None, "label": "listed in discovery"}
 
 
 def visible_commit_count(memories: list[dict[str, Any]], days: int = 7) -> int:

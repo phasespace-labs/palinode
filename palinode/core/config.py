@@ -63,14 +63,46 @@ class CrossRefsConfig:
     min_token_len: int = 6
 
 @dataclass
+class TranscriptCaptureConfig:
+    """Opt-in mining of harness session transcripts for user corrections.
+
+    Off by default and empty by default: with no ``harness_paths`` entry there is
+    nothing to read even when ``enabled`` is true. Transcripts are the most
+    sensitive thing Palinode can be pointed at, so enabling the source and naming
+    the directories are two separate, explicit operator acts.
+
+    Keys of ``harness_paths`` are harness ids with a reader
+    (``palinode.corrections.readers``); values are absolute directories, e.g.
+    ``{"claude-code": ["~/.claude/projects"]}``. Everything read is bounded by
+    ``lookback_days`` and ``max_candidates``, and what is skipped is counted in
+    the scan report rather than dropped quietly.
+
+    ``classify`` is the third act, and the only one that transmits anything.
+    Detection is local arithmetic over files; classification sends a bounded
+    window of conversation text to the configured consolidation endpoint, which
+    may be a remote host. Defaulting it to ``False`` means turning the source on
+    never, by itself, causes a byte of transcript to leave the machine — with it
+    off a scan runs the deterministic stage only and every candidate is queued
+    for review. There is deliberately no per-call override anywhere: a caller
+    able to switch it on for one request could send out text the operator's
+    config said stays local.
+    """
+    enabled: bool = False
+    harness_paths: dict[str, list[str]] = field(default_factory=dict)
+    lookback_days: int = 7
+    max_candidates: int = 50
+    classify: bool = False
+
+@dataclass
 class CaptureConfig:
     """General capture capability configuration map.
 
-    Only ``cross_refs`` is live — session extraction, daily-note capture, and
-    quick-capture are all handled by their respective callers with no config
-    read-through, so no dataclasses exist here for them.
+    ``cross_refs`` and ``transcripts`` are live — session extraction, daily-note
+    capture, and quick-capture are all handled by their respective callers with
+    no config read-through, so no dataclasses exist here for them.
     """
     cross_refs: CrossRefsConfig = field(default_factory=CrossRefsConfig)
+    transcripts: TranscriptCaptureConfig = field(default_factory=TranscriptCaptureConfig)
 
 @dataclass
 class TranscriptorConfig:
@@ -236,37 +268,87 @@ class SearchConfig:
     as originally intended). mcp_threshold=0.4 was ALREADY safe under the
     new semantics (100% recall in every round measured) and is unchanged.
 
-    Known, measured, NOT fixed here: BM25-normalized and cosine are not on a
-    comparable scale, so one shared threshold value is itself imprecise.
-    When these bands were measured, FTS retrieved a candidate at all in only
-    17/54 pairs (0/30 for full-sentence queries — FTS5's implicit AND across
-    every token meant an ordinary question never matched its target); that
-    half is fixed by ``store.fts_match_expression`` (OR-joined
+    Known, measured, and since fixed elsewhere: BM25-normalized and cosine are
+    not on a comparable scale, so one shared threshold value is itself
+    imprecise. When these bands were measured, FTS retrieved a candidate at all
+    in only 17/54 pairs (0/30 for full-sentence queries — FTS5's implicit AND
+    across every token meant an ordinary question never matched its target);
+    that half is fixed by ``store.fts_match_expression`` (OR-joined
     content words, identifier phrases), measured at +5.8 on exact-label
-    questions. What remains: the arm's normalized score for a genuine hit
-    skews low even where BM25 should do the real work — single-identifier
-    queries in round 3 scored 0.131-0.352, all below even mcp_threshold. A
-    structurally correct fix (separate per-arm thresholds, or recalibrating
-    search_fts's raw-score/25.0 normalization) is a bigger change than
-    adjusting these two numbers and is intentionally not made here.
+    questions. The other half was the arm's normalized score skewing low
+    exactly where BM25 should do the real work — single-identifier queries in
+    round 3 scored 0.131-0.352, all below even mcp_threshold. Both halves of
+    that are now addressed: the FTS arm has its own floor (``fts_threshold``
+    below, relative), and ``store.bm25_query_scale`` normalizes each query's
+    BM25 against what that query could score in this index rather than against
+    a constant 25, so an exact identifier hit scores ~1.0 on any store size.
+    These two values are cosine floors and were not touched by either.
     """
     mcp_threshold: float = 0.4
     api_threshold: float = 0.5
     # The FTS arm's own floor, RELATIVE to the best keyword match in the same
     # result set: an FTS candidate survives when ``score >= fts_threshold *
     # top_score``. ``threshold`` (mcp_/api_) is an absolute cosine floor; the
-    # FTS arm's normalized BM25 (``|bm25| / 25``) is on a different scale AND
-    # that scale moves with corpus size (IDF ~ log N/df), so an absolute floor
-    # is wrong twice — at 0.4/0.5 it discarded most correct keyword hits before
-    # fusion, and any absolute value right for a 30-chunk store is wrong for a
-    # 4-chunk one. Measured 2026-09-08 on the 54-pair rig after the OR-join
+    # FTS arm's normalized BM25 is on a different scale, so an absolute floor
+    # there discarded most correct keyword hits before fusion at 0.4/0.5.
+    # Measured 2026-09-08 on the 54-pair rig after the OR-join
     # fix: the true chunk is the top keyword match in 51/54 pairs and within
     # 0.49–0.92× of it in the other three; the best distractor sits at a
     # median 0.39× of the top. 0.4 keeps every true hit in that set and drops
-    # about half the distractors; rank fusion and top_k do the rest. The
-    # normalization itself is still the structurally wrong scale — this is the
-    # per-arm floor from the original finding, not the rescale.
+    # about half the distractors; rank fusion and top_k do the rest.
+    # Unaffected by the per-query rescale of that score
+    # (``store.bm25_query_scale``): every candidate of one query is divided by
+    # the same positive number, so the ratio this floor reads is identical.
     fts_threshold: float = 0.4
+    # The VECTOR arm's floor, relative to the best cosine in the same candidate
+    # set: a candidate survives when ``cosine >= vector_relative_floor *
+    # top_cosine``. Same shape as ``fts_threshold``, and for the same reason —
+    # ``mcp_threshold`` / ``api_threshold`` are ABSOLUTE cosine floors, so they
+    # say whether a candidate is plausible at all and nothing about whether it
+    # is plausible *next to the match this query actually found*. Without a
+    # relative cutoff the arm hands fusion every one of its ``top_k * 2``
+    # candidates that clears the absolute floor, and weak neighbours fill every
+    # remaining slot. ``0.0`` restores that.
+    #
+    # Calibrated from the recorded per-result cosines of the relevance rig's
+    # hybrid runs (bench/relevance, corpus v1, question set v1, 62 questions,
+    # top_k 5, real bge-m3, both shipped floors). Of the 52 relevant results
+    # delivered at the 0.40 floor, the LOWEST ratio one carried against the best
+    # cosine in its own slate was 0.884; the tenth percentile sat at 0.932 and
+    # the median at 1.000. Irrelevant results overlap that range but skew well
+    # below it (median 0.920, lower quartile 0.851, minimum 0.675). 0.85 is the
+    # last round value under the weakest true hit, with the same ~4-point margin
+    # the keyword arm's floor keeps: 0.88 would sit 0.004 from losing a relevant
+    # result and 0.90 measurably loses two.
+    #
+    # Then run end to end on the same rig at 0.0 and at 0.85, hybrid arm, real
+    # bge-m3: results delivered 304 -> 262 and injections 224 -> 186 at the 0.40
+    # cosine floor (277 -> 240 and 198 -> 164 at 0.50), payload 502 -> 429 tokens
+    # per question, useful-context 20.1% -> 23.5%, with recall 52/52, top-1 37/48
+    # and correct abstention all unchanged and no question worse on relevant hits,
+    # first-relevant rank or top-1. The useful-token count is identical either
+    # way: what the floor removes is the part of the payload that was not the
+    # answer.
+    vector_relative_floor: float = 0.85
+    # The keyword arm's floor when it is the ONLY arm: explicit lexical
+    # retrieval (``retrieval_mode: lexical``) and the per-input keyword
+    # fallback, where there is no vector arm to admit a candidate the keyword
+    # arm would have dropped. Same relative shape as ``fts_threshold`` (a
+    # fraction of the best keyword match in the same result set); a separate
+    # number because a single-arm slate has no second opinion, so its floor has
+    # to be the looser of the two. ``0.0`` restores the pre-0.22 behaviour, in
+    # which this path applied NO floor at all and therefore filled ``top_k``
+    # unconditionally.
+    #
+    # Measured on the relevance rig (bench/relevance, corpus v1, question set
+    # v1, 62 questions, top_k 5), from the same per-question data the
+    # 2026-09-20 baseline was recorded against. Across the 48 relevant results
+    # delivered, the LOWEST ratio a relevant hit carried was 0.387; the next
+    # two were 0.495 and 0.498. Irrelevant results sit far below that: 10% of
+    # them score 0.0 against the top match and 30% are under 0.276. 0.35 is
+    # the last value below the weakest true hit — 0.4 (the two-arm value)
+    # measurably drops it.
+    lexical_fts_threshold: float = 0.35
     # The BEAM k-sweep (400 answers/point, replicated on a second judge family)
     # measured contradiction_resolution rising
     # 0.300→0.388→0.456 at k=5/10/15 then plateauing to k=25 (0.416, n.s. step).
@@ -294,11 +376,43 @@ class SearchConfig:
     retrieval_mode: Literal["hybrid", "lexical"] = "hybrid"
     hybrid_enabled: bool = True
     dedup_score_gap: float = 0.2
+    # How many chunks from ONE source file may occupy the delivered slate while
+    # chunks from other files are still competitive. Overflow is not discarded:
+    # it is deferred to the back of the queue and still delivered when the
+    # slate would otherwise come back short, so the cap changes *which* results
+    # fill the slate, never how many. ``0`` = unlimited, the pre-0.22
+    # behaviour, where ``dedup_score_gap`` alone let one file take 3 of 5 slots
+    # on a small slate (the post-fusion scores it compares are rank-derived, so
+    # adjacent ranks sit far inside the gap and nothing is suppressed).
+    #
+    # 1 rather than 2 because the rig measured 1 better on every counted
+    # outcome (bench/relevance, corpus v1, question set v1, keyword arm, 62
+    # questions, top_k 5, at the 0.35 floor): relevant-hit recall 49/52 vs
+    # 48/52, same-file repeats 2 vs 6 of 200 delivered, useful-context tokens
+    # 26.3% vs 25.7%, injections 128 vs 129, top-1 and project isolation
+    # identical. The recall difference is one question — a four-section weekly
+    # note took 3 of 5 slots and buried one of the two records that answered
+    # it; capping the note let that record in.
+    max_chunks_per_file: int = 1
     daily_penalty: float = 0.3  # Multiplier for daily/ files (0.3 = 30% of original score)
     # cap per-result body returned by /search via the `snippet` field.
     # MCP renders snippet by default; full chunk content remains available
     # through `content` (API/CLI) or the `full=true` flag on palinode_search.
     snippet_max_chars: int = 400
+    #: Withhold the slate on the MCP surface when the delivery's confidence
+    #: verdict (:mod:`palinode.core.confidence`) is ``none`` — nothing
+    #: delivered reaches even the low mark on either pre-fusion arm.
+    #:
+    #: **Off by default, deliberately.** The verdict ships as a signal, not a
+    #: filter: the measured failure this addresses is a caller treating weak
+    #: material as an answer, and the fix for that is telling it the material
+    #: is weak, not hiding the store. An empty slate also cannot be
+    #: distinguished by the reader from an empty *store*, so switching this on
+    #: trades one unanswerable question for another. Verdict, banner, receipt
+    #: and log are unaffected by it either way, and every other surface
+    #: (REST, CLI, inspector, plugin) keeps returning its rows — this is a
+    #: presentation choice on the one surface whose reader is a model.
+    abstain_on_no_confident_match: bool = False
     # Budgets for the opt-in evidence resolver (``resolve`` on search).
     evidence: EvidenceConfig = field(default_factory=EvidenceConfig)
 
@@ -319,7 +433,27 @@ class ReadConfig:
 class NightlyConfig:
     """Lightweight daily update configurations."""
     enabled: bool = True
-    lookback_days: int = 1
+    # The nightly's **catch-up bound**, not a window. Selection is a
+    # per-project watermark (the timestamp of the last pass that resolved that
+    # project), so this number no longer decides what a healthy run sees — it
+    # decides how far back a cold or long-failed mark may reach, which is what
+    # stops one abandoned project handing the model months of notes in a single
+    # request. The cron's `--days N` overrides it for that run, with the same
+    # meaning.
+    #
+    # 7 because `auto_gate.max_hours_elapsed` is 168: the gate may legitimately
+    # let a week pass before firing a pass at its ceiling, and a bound shorter
+    # than the ceiling would drop the notes the gate itself chose to wait on.
+    # It was 1 while this was a window, which as a bound would have meant a
+    # single failed night still lost a day — the property the watermark exists
+    # to remove.
+    lookback_days: int = 7
+    # How many prompts one pass may send a project whose selection does not
+    # fit one prompt. Each prompt is the same fixed-size contiguous excerpt,
+    # resumed where the last one stopped; the pass stops early when nothing is
+    # pending or a prompt fails, so this multiplies how much a night can clear
+    # without growing any single call. 1 is one prompt per project per pass.
+    max_prompts_per_project: int = 4
     # PROPOSE_CONTRADICTS is in the default set because it is the
     # no-winner counterpart to SUPERSEDE: it records a conflict in
     # frontmatter and retires nothing, so it is additive in exactly the

@@ -55,6 +55,79 @@ The pinned query shapes are natural-language questions, short keywords, absent i
 exact-topic controls, and natural-language paraphrase controls. Each false-positive observation
 records both the fused score exposed to callers and the underlying raw cosine when available.
 
+## Relevance & abstention — what lands in the payload, and what should not
+
+`relevance/` measures the other half of the abstention question: not only "does
+search decline when it should", but "when it answers, how much of what it hands
+the agent is the answer". Both retrieval modes are scored on one versioned,
+sanitized fixture of 39 synthetic records and 62 labelled questions across four
+classes — current release state, rejected approach and reason, changed decision
+(old versus new, where recency alone must not settle it), and no-answer /
+unrelated-project — plus held-out paraphrases and exact-identifier variants.
+
+The corpus carries the noise the failure reports name, not just the answers:
+old context notes that still read as present tense, auto-generated `See also`
+footers that get their own chunk (so a footer-only hit is reachable rather than
+hypothetical), near-duplicate restatements, and a second project that shares the
+first one's vocabulary.
+
+```bash
+python -m bench.relevance --out results.json --report report.md
+python -m bench.relevance --coverage-only        # fixture gate, no store needed
+python -m bench.relevance --thresholds 0.4,0.5   # the shipped MCP and API floors
+```
+
+Per question and in aggregate, for the keyword-only and the hybrid arm:
+relevant-hit recall@k, irrelevant injections, footer-only hits, redundant
+results (both near-duplicate records and repeat slots for one file),
+project-isolation violations, correct abstention versus inappropriate confident
+match, and whether a retired value or an undecided proposal ranked first.
+Useful-context tokens and p50/p95 latency are measured **through the payload the
+client actually receives** — `_enrich_with_snippets` plus
+`palinode.mcp._format_results`, not a reconstruction.
+
+The hybrid arm needs a real embedding endpoint. When none is reachable the
+lexical arm runs alone and the hybrid rows are printed as **NOT RUN** with the
+reason; synthetic vectors are never substituted. Production defaults are never
+changed — the shipped floors are recorded, not tuned.
+
+The recorded baseline lives in
+`results/relevance-abstention-baseline-2026-09-20/`.
+
+```bash
+python -m pytest tests/test_bench_relevance.py -q   # no model, no network
+```
+
+## Prospective-trigger phrasing measurement
+
+`trigger_phrasing.py` answers a question the trigger thresholds had only been
+guessed at: does *any* of the proposed options separate a prompt that is about a
+trigger from one that is not? The corpus (`trigger_phrasing.yaml`, versioned,
+entirely fictional) holds 14 triggers written three ways — third-person
+"User is asking how to…" as the docs teach, the same intent in the words a user
+would type, and 3–4 user-worded phrasings scored on their max — plus stratified
+prompts per trigger (on-target terse, on-target verbose/session-handoff-shaped,
+near-miss off-target, unrelated off-target). Every prompt is scored against
+every trigger, so the labels are per (prompt, trigger) pair and a fire on
+someone else's trigger counts as a false fire, not a near miss.
+
+Scores come from the real embedder, the real `store.add_trigger` /
+`store.check_triggers` path and the shipped distance-to-score conversion; the
+lexical arm is a real FTS5 index scored with the product's own BM25
+normalization. It reports score distributions, AUC, best-threshold
+precision/recall and fire / false-fire rates at candidate thresholds, for
+absolute floors, a relative "must lead the runner-up" rule and a vector-OR-BM25
+hybrid. It changes no production default and refuses to run without an
+embedding endpoint rather than inventing vectors.
+
+```bash
+python -m bench.trigger_phrasing --out results.json
+python -m bench.trigger_phrasing --format markdown --out tables.md
+```
+
+Latest run: `results/trigger-phrasing-2026-09-20/` (report, generated tables,
+raw observations).
+
 ## Current-state recall — from memory transitions to agent decisions
 
 `current_state/` measures the thing retrieval scores cannot: after a record is
@@ -157,6 +230,8 @@ point indexes zero vectors.
 | `run.py` | End-to-end orchestrator (the four axes) + CLI. |
 | `report.py` | Renders a results JSON object as a Markdown report. |
 | `abstention.py` | Standalone no-answer/control threshold sweep + JSON/Markdown output. |
+| `relevance/` | Relevance & abstention: labelled fixture, per-question scorer, both retrieval modes, delivered-payload accounting. |
+| `trigger_phrasing.py` | Labelled prospective-trigger separation: description styles, absolute / relative / hybrid decision rules. |
 | `current_state/` | Current-state recall: event corpus, five arms, deterministic reader, invariants. |
 | `perf.py` | Scale sweep behind `docs/PERFORMANCE.md` — latency, throughput, RAM, disk at 1k/10k/50k chunks. |
 
@@ -165,5 +240,7 @@ point indexes zero vectors.
 ```bash
 python -m pytest tests/test_bench_harness.py -q
 python -m pytest tests/test_bench_abstention.py -q
+python -m pytest tests/test_bench_relevance.py -q
+python -m pytest tests/test_bench_trigger_phrasing.py -q
 python -m pytest tests/test_bench_perf.py -q
 ```

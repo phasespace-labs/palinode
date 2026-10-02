@@ -4,6 +4,18 @@ import click
 
 from palinode.cli._api import api_client
 from palinode.cli._format import console, get_default_format, OutputFormat
+from palinode.core.lifecycle_render import render_lifecycle_preview, render_retained_copies
+
+_DRY_RUN_HELP = "Preview what would change and the recovery path; write nothing"
+
+
+def _emit_preview(data) -> bool:
+    """Render a dry run and report whether one was rendered."""
+    if not data.get("dry_run"):
+        return False
+    for line in render_lifecycle_preview(data):
+        click.echo(line)
+    return True
 
 
 def _emit_json(data) -> None:
@@ -15,8 +27,9 @@ def _emit_json(data) -> None:
 @click.command(name="restore")
 @click.argument("file_path")
 @click.option("--reason", default=None, help="Why this memory is being restored")
+@click.option("--dry-run", is_flag=True, help=_DRY_RUN_HELP)
 @click.option("--format", "fmt", type=click.Choice(["json", "text"]), help="Output format")
-def restore(file_path, reason, fmt):
+def restore(file_path, reason, dry_run, fmt):
     """Bring an archived memory back into default recall.
 
     The inverse of `palinode archive` for every archive path (on-demand,
@@ -26,7 +39,7 @@ def restore(file_path, reason, fmt):
     (see `palinode unretract`) and triggers are not re-enabled.
     """
     try:
-        data = api_client.restore(file_path, reason=reason)
+        data = api_client.restore(file_path, reason=reason, dry_run=dry_run)
     except Exception as e:
         console.print(f"[red]Error restoring {file_path}: {str(e)}[/red]")
         raise SystemExit(1)
@@ -36,6 +49,8 @@ def restore(file_path, reason, fmt):
         _emit_json(data)
         return
 
+    if _emit_preview(data):
+        return
     if data.get("status") == "not_archived":
         console.print(f"[yellow]{data.get('file')} is not archived — no change.[/yellow]")
         return
@@ -61,8 +76,9 @@ def restore(file_path, reason, fmt):
 @click.argument("file_path")
 @click.argument("pref")
 @click.option("--reason", default=None, help="Why the retraction is being withdrawn")
+@click.option("--dry-run", is_flag=True, help=_DRY_RUN_HELP)
 @click.option("--format", "fmt", type=click.Choice(["json", "text"]), help="Output format")
-def unretract(file_path, pref, reason, fmt):
+def unretract(file_path, pref, reason, dry_run, fmt):
     """Withdraw one preference's mention-level retraction from one memory.
 
     Un-strikes every `~~…~~ [RETRACTED …]` span PREF produced in FILE_PATH
@@ -71,7 +87,7 @@ def unretract(file_path, pref, reason, fmt):
     recorded in the file's history sibling. `status` is never changed.
     """
     try:
-        data = api_client.unretract(file_path, pref, reason=reason)
+        data = api_client.unretract(file_path, pref, reason=reason, dry_run=dry_run)
     except Exception as e:
         console.print(f"[red]Error unretracting {file_path}: {str(e)}[/red]")
         raise SystemExit(1)
@@ -81,6 +97,8 @@ def unretract(file_path, pref, reason, fmt):
         _emit_json(data)
         return
 
+    if _emit_preview(data):
+        return
     if data.get("status") == "not_retracted":
         console.print(
             f"[yellow]{data.get('file')} carries no retraction for that pref — no change.[/yellow]"
@@ -98,8 +116,9 @@ def unretract(file_path, pref, reason, fmt):
 @click.command(name="forget-withdraw")
 @click.argument("file_path")
 @click.option("--reason", default=None, help="Why the forget request is being withdrawn")
+@click.option("--dry-run", is_flag=True, help=_DRY_RUN_HELP)
 @click.option("--format", "fmt", type=click.Choice(["json", "text"]), help="Output format")
-def forget_withdraw(file_path, reason, fmt):
+def forget_withdraw(file_path, reason, dry_run, fmt):
     """Take a forget request back.
 
     FILE_PATH is the memory holding the request ("please forget that I…").
@@ -108,7 +127,7 @@ def forget_withdraw(file_path, reason, fmt):
     Each step is its own audited commit; failures are reported per target.
     """
     try:
-        data = api_client.forget_withdraw(file_path, reason=reason)
+        data = api_client.forget_withdraw(file_path, reason=reason, dry_run=dry_run)
     except Exception as e:
         console.print(f"[red]Error withdrawing {file_path}: {str(e)}[/red]")
         raise SystemExit(1)
@@ -118,7 +137,18 @@ def forget_withdraw(file_path, reason, fmt):
         _emit_json(data)
         return
 
-    console.print(f"[green]Withdrawn: {data.get('file')}[/green] (pref: {data.get('pref')!r})")
+    if _emit_preview(data):
+        return
+    if data.get("status") == "partial":
+        console.print(
+            f"[yellow]Partially withdrawn: {data.get('file')}[/yellow] "
+            f"(pref: {data.get('pref')!r}) — some steps failed; "
+            "the memories listed under 'failed' are still retired."
+        )
+    else:
+        console.print(
+            f"[green]Withdrawn: {data.get('file')}[/green] (pref: {data.get('pref')!r})"
+        )
     restored = data.get("restored", [])
     console.print(f"  restored ({len(restored)}): {', '.join(restored) or 'none'}")
     unretracted = data.get("unretracted", [])
@@ -131,3 +161,5 @@ def forget_withdraw(file_path, reason, fmt):
     )
     for f in data.get("failed", []):
         console.print(f"  [red]failed: {f['path']} ({f['op']})[/red]")
+    for line in render_retained_copies(data.get("retained_copies")):
+        click.echo(line)

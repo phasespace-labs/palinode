@@ -59,11 +59,18 @@ logger = logging.getLogger("palinode.aliases")
 
 ALIAS_FILENAME = "entity-aliases.yaml"
 
-# (mtime, size) of the file the cache was built from — cheap staleness check so a
-# hand-edit is picked up without a restart, without stat-ing on every lookup path
-# more than once.
+# (mtime_ns, size, inode) of the file the cache was built from — cheap staleness
+# check so a hand-edit is picked up without a restart, without stat-ing on every
+# lookup path more than once. The inode is what catches an edit landing in the
+# same timestamp tick with the same size: `palinode aliases` writes by atomic
+# replace, which always gives the file a new inode, so another process reading
+# the map sees the change on its next lookup.
 _cache: dict[str, frozenset[str]] | None = None
-_cache_stamp: tuple[float, int] | None = None
+_cache_stamp: tuple[int, int, int] | None = None
+#: member ref -> the canonical ref (the file's key) of its group, built with
+#: ``_cache``. Lookup stays symmetric; this only answers "which spelling does
+#: the file call canonical", for callers that must report one name.
+_canonical: dict[str, str] = {}
 
 
 def alias_file_path() -> str:
@@ -123,15 +130,29 @@ def _parse(raw: Any) -> dict[str, frozenset[str]]:
     return out
 
 
+def _canonicals(raw: Any, groups: dict[str, frozenset[str]]) -> dict[str, str]:
+    """member -> canonical ref: the first key in the file whose group holds it."""
+    out: dict[str, str] = {}
+    keys = raw.get("aliases") if isinstance(raw, dict) else None
+    if not isinstance(keys, dict):
+        return out
+    for canonical in keys:
+        if not isinstance(canonical, str):
+            continue
+        for member in groups.get(canonical.strip(), ()):
+            out.setdefault(member, canonical.strip())
+    return out
+
+
 def load_alias_map(*, force: bool = False) -> dict[str, frozenset[str]]:
     """Load (and cache) the alias map. Absent file -> empty map."""
-    global _cache, _cache_stamp
+    global _cache, _cache_stamp, _canonical
     path = alias_file_path()
     try:
         st = os.stat(path)
-        stamp = (st.st_mtime, st.st_size)
+        stamp = (st.st_mtime_ns, st.st_size, st.st_ino)
     except OSError:
-        _cache, _cache_stamp = {}, None
+        _cache, _cache_stamp, _canonical = {}, None, {}
         return {}
 
     if not force and _cache is not None and _cache_stamp == stamp:
@@ -144,10 +165,11 @@ def load_alias_map(*, force: bool = False) -> dict[str, frozenset[str]]:
         # Unreadable/invalid: fall back to exact matching rather than failing the
         # query. The store is still correct — just not widened.
         logger.warning("entity-aliases: could not read %s (%s) — ignoring", path, exc)
-        _cache, _cache_stamp = {}, stamp
+        _cache, _cache_stamp, _canonical = {}, stamp, {}
         return {}
 
     _cache, _cache_stamp = _parse(raw), stamp
+    _canonical = _canonicals(raw, _cache)
     if _cache:
         logger.info("entity-aliases: %d ref(s) in %d group(s)",
                     len(_cache), len(set(_cache.values())))
@@ -171,7 +193,13 @@ def resolve(entity_ref: str) -> list[str]:
     return [entity_ref, *rest]
 
 
+def canonical_ref(entity_ref: str) -> str:
+    """The file's canonical spelling for ``entity_ref``'s group, else the ref itself."""
+    load_alias_map()
+    return _canonical.get(entity_ref, entity_ref)
+
+
 def reset_cache() -> None:
     """Drop the cached map (tests, and after an intentional edit)."""
-    global _cache, _cache_stamp
-    _cache, _cache_stamp = None, None
+    global _cache, _cache_stamp, _canonical
+    _cache, _cache_stamp, _canonical = None, None, {}

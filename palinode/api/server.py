@@ -34,6 +34,7 @@ from palinode.core.auth import (
     validate_bind_auth as _core_validate_bind_auth,
 )
 from palinode.core.config import config
+from palinode.core.context_prime import InvalidProjectScope
 from palinode.core.embedder import EmbeddingInputError, EmbeddingUnavailable
 
 # Re-exported so the health/status routers can reach the client factory via
@@ -350,6 +351,26 @@ async def _embedding_input_error_handler(
     )
     return JSONResponse(status_code=422, content={"detail": str(exc)})
 
+
+@app.exception_handler(InvalidProjectScope)
+async def _invalid_project_scope_handler(
+    request: Request, exc: InvalidProjectScope
+) -> JSONResponse:
+    """Map an unusable project value to a 400 — on every endpoint, not one.
+
+    A pinned ``PALINODE_PROJECT`` (or a caller's ``project`` argument) that
+    cannot name a project is a configuration error the caller has to see: it
+    reaches here from prime, search and session-end alike rather than being
+    dropped back to git inference, which would scope the whole session to a
+    project nobody asked for. The message names the source and never echoes
+    the value.
+    """
+    logger.warning(
+        "invalid project scope op=%s source=%s", request.url.path, exc.source
+    )
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
 # Reindex concurrency guard and auto_summary observability state
 # live in palinode/api/_util.py so the handlers that read them — now in
 # routers/maintenance.py and routers/health.py — share one source of truth.
@@ -593,7 +614,17 @@ class _CapturePauseMiddleware:
     speculative settings platform.
     """
 
-    _CAPTURE_PATHS = {"/save", "/session-end", "/ingest", "/ingest-url"}
+    # `/corrections/apply` and `/corrections/undo` are here because they are
+    # explicit, user-initiated *writes* to memory, and the policy's rule for
+    # those is already settled: an exclusion never blocks an explicit save, but
+    # a store-wide pause does — it stops explicit MCP/API calls too. Their
+    # previews and `/corrections/dismiss` are deliberately absent: a preview
+    # writes nothing, and a dismissal marks an operational queue row rather
+    # than capturing anything into memory.
+    _CAPTURE_PATHS = {
+        "/save", "/session-end", "/ingest", "/ingest-url",
+        "/corrections/apply", "/corrections/undo",
+    }
     _RECALL_PATHS = {
         "/search", "/search-associative", "/dedup-suggest", "/orphan-repair",
         "/cluster-neighbors", "/topic-coverage", "/read", "/list", "/resolve",
@@ -677,9 +708,11 @@ from palinode.api.enrichment import (  # noqa: E402,F401
 )
 
 # ── Register sub-routers (routes moved from this module) ─────────────────────
+from palinode.api.routers.aliases import router as _aliases_router  # noqa: E402
 from palinode.api.routers.consolidation import router as _consolidation_router  # noqa: E402
 from palinode.api.routers.controls import router as _controls_router  # noqa: E402
 from palinode.api.routers.context import router as _context_router  # noqa: E402
+from palinode.api.routers.explain import router as _explain_router  # noqa: E402
 from palinode.api.routers.git_history import router as _git_history_router  # noqa: E402
 from palinode.api.routers.health import router as _health_router  # noqa: E402
 from palinode.api.routers.maintenance import router as _maintenance_router  # noqa: E402
@@ -699,6 +732,8 @@ app.include_router(_health_router)
 app.include_router(_maintenance_router)
 app.include_router(_session_router)
 app.include_router(_context_router)
+app.include_router(_explain_router)
+app.include_router(_aliases_router)
 
 # ── Local read-only provenance UI (Phase 0) ─────────────────────────────────
 # Server-rendered HTML under /ui — no new service, loopback-only, read-only.
@@ -754,6 +789,7 @@ from palinode.api.routers.session import (  # noqa: E402,F401
     SessionEndRequest, session_end_api, list_prompts_api,
     get_prompt_api, activate_prompt_api,
 )
+from palinode.api.routers.explain import explain_api  # noqa: E402,F401
 
 
 def main() -> None:

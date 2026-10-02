@@ -27,7 +27,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from palinode.core.config import config
-from palinode.core.scope import ScopeChain, resolve_scope_chain
+from palinode.core.scope import ScopeChain, resolve_scope_chain, scope_level_name
 
 logger = logging.getLogger("palinode.api")
 
@@ -55,6 +55,14 @@ class PrimeRequest(BaseModel):
     cwd: str | None = None
     #: Explicit project slug or entity ref; overrides cwd resolution.
     project: str | None = None
+    #: How the caller resolved ``project``, when it resolved one itself. A
+    #: stdio MCP server resolves its client's pinned ``PALINODE_PROJECT`` in
+    #: its own process and forwards the result, because the API process does
+    #: not have that client's environment; without this the digest would
+    #: report a configured scope as an argument someone typed. Reporting only
+    #: — it never changes which project is used, and anything outside the
+    #: closed vocabulary is rejected rather than echoed.
+    project_resolved_by: str | None = None
     #: Caller-generated session identifier; lands on the scope chain's
     #: session level.
     session_id: str | None = None
@@ -92,7 +100,12 @@ def context_prime_api(req: PrimeRequest) -> dict[str, Any]:
     separate contract, and this endpoint has never written to that log.
     """
     from palinode.core.capture_policy import evaluate_capture_policy
-    from palinode.core.context_prime import build_context_digest, resolve_context
+    from palinode.core.context_prime import (
+        RESOLUTION_BASES,
+        ProjectResolution,
+        build_context_digest,
+        resolve_context,
+    )
     from palinode.core.receipt import build_digest_receipt
 
     decision = evaluate_capture_policy(
@@ -118,10 +131,20 @@ def context_prime_api(req: PrimeRequest) -> dict[str, Any]:
     # stays internally coherent.
     project_arg = req.project or (req.scope.project if req.scope else None)
     resolution = resolve_context(cwd=req.cwd, project=project_arg)
+    if req.project_resolved_by and resolution.basis == "explicit":
+        if req.project_resolved_by not in RESOLUTION_BASES:
+            raise HTTPException(status_code=422, detail="Unknown project resolution source")
+        resolution = ProjectResolution(resolution.project, req.project_resolved_by)
     resolved = resolution.project
 
     if req.scope is not None:
-        chain = ScopeChain(**req.scope.model_dump())
+        levels = req.scope.model_dump()
+        for level in ("session", "agent", "harness", "member", "org"):
+            levels[level] = scope_level_name(level, levels[level])
+        if levels["project"]:
+            override_project = resolve_context(project=levels["project"]).project
+            levels["project"] = override_project.split("/", 1)[1] if override_project else None
+        chain = ScopeChain(**levels)
     else:
         bare = resolved.split("/", 1)[1] if resolved else None
         chain = resolve_scope_chain(config, project=bare, session_id=req.session_id)

@@ -36,9 +36,13 @@ what archival did — ``status`` back to ``active``, ``superseded_by``
 cleared — and nothing else: the archived file *is* the record, so the
 frontmatter is reconstructed from it rather than by hand (``created_at``,
 entities, epistemic marker and every other field survive untouched). A
-retraction marker inside the body, its ``retracted_prefs`` record, and any
-trigger that points at the file are separate lifecycle state with their own
-surfaces and are deliberately not resurrected by a restore. The
+retraction marker inside the body, its ``retracted_prefs`` record, and the
+``enabled`` flag on any trigger that points at the file are separate
+lifecycle state with their own surfaces and are deliberately not resurrected
+by a restore. (Trigger *delivery* is a different question and is not stored
+state: ``/check-triggers`` reads the target's live lifecycle on every check,
+so an archived target stops being delivered while it is archived and is
+deliverable again once restored, with no re-registration.) The
 resurrection is made visible, never silent: ``restored_at`` and
 ``restored_from`` land in frontmatter, the history sibling gains a line,
 and the write is one commit. ``restored_at`` is also what keeps a restored
@@ -59,6 +63,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any
 
 import frontmatter
@@ -108,6 +113,16 @@ def set_archived_frontmatter(path: str, superseded_by: str | None = None) -> Non
     git_tools.write_memory_file(path, frontmatter.dumps(post) + "\n")
 
 
+def history_rel_for(abs_path: str) -> str:
+    """The ``{base}-history.md`` sibling a write would append to, memory-relative.
+
+    Mirrors :func:`palinode.consolidation.executor.append_to_history`'s naming
+    so a dry run can name the file without creating it.
+    """
+    base = re.sub(r"\.md$", "", re.sub(r"-status\.md$", "", abs_path))
+    return os.path.relpath(f"{base}-history.md", config.memory_dir)
+
+
 def _audit_id(metadata: dict[str, Any], rel_path: str) -> str:
     """The identifier the history entry is tagged with.
 
@@ -127,6 +142,7 @@ def archive_memory(
     superseded_by: str | None = None,
     *,
     actor: str | None = None,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """Retire one named memory: ARCHIVE, or SUPERSEDE when ``superseded_by`` is set.
 
@@ -145,6 +161,11 @@ def archive_memory(
     tell an operator's on-demand archive from one a proposer earned. Omitted (a
     direct CLI/API/MCP call), nothing changes.
 
+    ``dry_run`` validates exactly as an apply would, then returns
+    ``status: would_archive`` with the frontmatter delta, the relation that
+    would be recorded and the recovery command — and writes nothing: no file,
+    no history line, no index row, no commit.
+
     Raises:
         ValueError: the path is malformed or escapes ``memory_dir``.
         FileNotFoundError: no such memory file.
@@ -162,7 +183,7 @@ def archive_memory(
         post = frontmatter.load(f)
 
     if post.get("status") == ARCHIVED_STATUS:
-        return {
+        out: dict[str, Any] = {
             "file": rel,
             "status": "already_archived",
             "superseded_by": post.get("superseded_by"),
@@ -170,6 +191,41 @@ def archive_memory(
             "history_file": None,
             "chunks_updated": 0,
             "committed": False,
+        }
+        if dry_run:
+            out["dry_run"] = True
+        return out
+
+    if dry_run:
+        delta: dict[str, Any] = {
+            "status": {"from": post.get("status"), "to": ARCHIVED_STATUS},
+        }
+        if superseded_by:
+            delta["superseded_by"] = {
+                "from": post.get("superseded_by"), "to": superseded_by,
+            }
+        return {
+            "file": rel,
+            "status": "would_archive",
+            "dry_run": True,
+            "superseded_by": superseded_by,
+            "reason": reason,
+            "frontmatter_delta": delta,
+            "relation": {
+                "recorded": (
+                    [f"superseded_by: {superseded_by}"] if superseded_by else []
+                ),
+                "removed": [],
+            },
+            "history_file": history_rel_for(abs_path),
+            "committed": False,
+            "recovery": {
+                "command": f"palinode restore {rel}",
+                "note": (
+                    "restore is the exact inverse: status back to active, "
+                    "superseded_by dropped, the resurrection recorded"
+                ),
+            },
         }
 
     # ADR-015 §2.2's replace-guard deliberately does NOT apply here. That guard
@@ -231,7 +287,9 @@ def archive_memory(
     }
 
 
-def restore_memory(file_path: str, reason: str | None = None) -> dict[str, Any]:
+def restore_memory(
+    file_path: str, reason: str | None = None, *, dry_run: bool = False
+) -> dict[str, Any]:
     """Bring one archived memory back into default recall.
 
     The inverse of :func:`archive_memory` for every archive path (on-demand,
@@ -261,6 +319,10 @@ def restore_memory(file_path: str, reason: str | None = None) -> dict[str, Any]:
     Idempotent: a memory that is not archived is reported as
     ``not_archived`` and nothing is written or committed.
 
+    ``dry_run`` returns ``status: would_restore`` with the frontmatter delta,
+    the relation that would be removed, the backing that would be flagged
+    stale and the recovery command, and writes nothing.
+
     Raises:
         ValueError: the path is malformed or escapes ``memory_dir``.
         FileNotFoundError: no such memory file.
@@ -273,7 +335,7 @@ def restore_memory(file_path: str, reason: str | None = None) -> dict[str, Any]:
         post = frontmatter.load(f)
 
     if post.get("status") != ARCHIVED_STATUS:
-        return {
+        out: dict[str, Any] = {
             "file": rel,
             "status": "not_archived",
             "restored_from": None,
@@ -282,12 +344,58 @@ def restore_memory(file_path: str, reason: str | None = None) -> dict[str, Any]:
             "chunks_updated": 0,
             "committed": False,
         }
+        if dry_run:
+            out["dry_run"] = True
+        return out
 
     from palinode.consolidation.executor import _utc_now, append_to_history
 
     successor = post.metadata.get("superseded_by")
     restored_from = str(successor) if successor else ARCHIVED_STATUS
     restored_at = _utc_now().isoformat()
+
+    if dry_run:
+        from palinode.consolidation.propagate import stale_backing_on_restore
+
+        delta: dict[str, Any] = {
+            "status": {"from": ARCHIVED_STATUS, "to": ACTIVE_STATUS},
+            "restored_from": {
+                "from": post.metadata.get("restored_from"), "to": restored_from,
+            },
+            "restored_at": {
+                "from": post.metadata.get("restored_at"), "to": "(time of apply)",
+            },
+        }
+        if successor:
+            delta["superseded_by"] = {"from": str(successor), "to": None}
+        preview: dict[str, Any] = {
+            "file": rel,
+            "status": "would_restore",
+            "dry_run": True,
+            "restored_from": restored_from,
+            "reason": reason,
+            "frontmatter_delta": delta,
+            "relation": {
+                "recorded": [],
+                "removed": [f"superseded_by: {successor}"] if successor else [],
+            },
+            "stale_backing": [
+                e["ref"] for e in stale_backing_on_restore(post.metadata)
+            ],
+            "history_file": history_rel_for(abs_path),
+            "committed": False,
+            "recovery": {
+                "command": (
+                    f"palinode archive {rel} --superseded-by {successor}"
+                    if successor else f"palinode archive {rel}"
+                ),
+                "note": "archive retires it again; the restore stays in history",
+            },
+        }
+        expires_at = post.metadata.get("expires_at")
+        if expires_at:
+            preview["expires_at"] = str(expires_at)
+        return preview
 
     post["status"] = ACTIVE_STATUS
     post.metadata.pop("superseded_by", None)
@@ -356,6 +464,7 @@ __all__ = [
     "ACTIVE_STATUS",
     "ARCHIVED_STATUS",
     "archive_memory",
+    "history_rel_for",
     "resolve_memory_ref",
     "restore_memory",
     "set_archived_frontmatter",

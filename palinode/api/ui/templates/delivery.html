@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Palinode · delivery · {{ explanation.bundle_id }}{% endblock %}
+{% block crumb %}delivery / <b>{{ explanation.bundle_id }}</b>{% endblock %}
+{% block health_pill %}<span class="pill"><span class="d"></span>read-only</span>{% endblock %}
+{% block content %}
+{#
+  Every value on this page is either something the delivery recorded or an
+  explicit "unavailable" marker with its reason. Nothing is inferred, and no
+  field is silently dropped — an empty cell would be a claim of its own.
+
+  Jinja2 autoescaping is on for these templates, which is what makes a memory
+  ref or a recorded query containing markup render as text.
+#}
+<div class="dash history-view">
+  <h1>What this delivery supplied</h1>
+  <p class="lede">{{ explanation.summary }}</p>
+
+  {% if explanation.status == 'not_found' %}
+  <h2 class="section-h">Why this reference may not be here</h2>
+  <p class="meta">Looked in <code>{{ explanation.log.file }}</code> —
+    {{ explanation.log.rows_in_log }} row(s), oldest
+    {{ explanation.log.oldest_row or 'unrecorded' }}.</p>
+  <ul class="flist">
+    {% for c in explanation.log.candidates %}
+    <li><span class="mono">{% if c.checked %}{{ 'YES' if c.holds else 'no' }}{% else %}cannot be checked{% endif %}</span>
+      <b>{{ c.reason }}</b> <span class="meta">— {{ c.detail }}</span></li>
+    {% endfor %}
+  </ul>
+  {% else %}
+
+  <h2 class="section-h">The delivery</h2>
+  <ul class="flist">
+    <li>Evaluated <span class="mono">{{ field(explanation.delivery.evaluated_at) }}</span></li>
+    <li>Policy <span class="mono">{{ field(explanation.delivery.policy_version) }}</span></li>
+    <li>Scope <span class="mono">{{ scope_text }}</span></li>
+    <li>Project <span class="mono">{{ project_text }}</span></li>
+    <li>Selected by <span class="mono">{{ field(explanation.selection_path.surface) }}</span>
+      <span class="meta">{{ explanation.selection_path.surface_meaning }}</span></li>
+    <li>Demand <span class="mono">{{ field(explanation.selection_path.demand) }}</span>
+      <span class="meta">{{ explanation.selection_path.demand_meaning }}</span></li>
+    <li>Core / trigger / recall <span class="meta">{{ field(explanation.selection_path.core_trigger_or_recall) }}</span></li>
+    <li>Query <span class="mono">{{ field(explanation.query) }}</span></li>
+    <li>Coverage <span class="mono">{{ coverage_text }}</span></li>
+    <li>Next known change <span class="mono">{{ explanation.delivery.next_transition or "no known boundary ahead — which never means 'never'" }}</span></li>
+  </ul>
+
+  <h2 class="section-h">Supplied records <span class="n">{{ explanation.supplied|length }}</span></h2>
+  {% if explanation.supplied %}
+  <ul class="flist">
+    {% for r in explanation.supplied %}
+    <li>
+      <a href="{{ url_for('ui_memory', file_path=r.ref) }}">{{ r.ref }}</a>
+      <span class="mono">[{{ field(r.disposition) }}]</span>
+      <span class="meta">rev {{ field(r.revision) }} ·
+        {% if r.source_state.available %}source {{ r.source_state.status }} since{% else %}{{ field(r.source_state) }}{% endif %}</span>
+      <span class="meta">· <a href="{{ url_for('ui_history', file_path=r.ref) }}">history</a></span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="empty">{{ 'Searched, and nothing was delivered.' if explanation.status == 'none_delivered' else 'No record of this delivery is visible to you.' }}</p>
+  {% endif %}
+  {% if explanation.not_shown.count %}
+  <p class="meta">{{ explanation.not_shown.note }}</p>
+  {% endif %}
+  {% if explanation.redacted.count %}
+  <p class="meta">{{ explanation.redacted.note }}</p>
+  {% endif %}
+  <p class="meta">Evidence records: {{ field(explanation.evidence_records) }}</p>
+
+  <h2 class="section-h">Acted on</h2>
+  <p class="empty">— not yet captured ({{ explanation.acted_on.gap }}). {{ explanation.acted_on.note }}</p>
+  {% endif %}
+
+  <h2 class="section-h">Correcting a memory</h2>
+  <p class="meta">{{ explanation.correction.note }}</p>
+  <ul class="flist">
+    {% for route in explanation.correction.routes %}
+    <li><span class="mono">{{ route }}</span></li>
+    {% endfor %}
+    <li><span class="meta">see {{ explanation.correction.docs }}</span></li>
+  </ul>
+</div>
+{% endblock %}

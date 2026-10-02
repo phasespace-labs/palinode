@@ -31,6 +31,20 @@ TOOL_SMOKE_ARGS: dict[str, tuple[dict, bool]] = {
     "palinode_doctor":            ({}, False),
     "palinode_lint":              ({}, False),
     "palinode_review":            ({}, False),
+    # Read-only listing over the candidate queue; empty on a clean store, which
+    # is a result rather than an error.
+    "palinode_corrections":       ({}, False),
+    # The review flow. Preview against a ref that does not exist is a refusal
+    # with a reason, which is the contract working — not a server error.
+    "palinode_correction_preview": ({"target": "decisions/smoke-absent.md"}, True),
+    # Apply and undo without confirmation refuse before they reach the store;
+    # dismiss refuses an unknown candidate id. All three are the guardrail.
+    "palinode_correction_apply":  (
+        {"target": "decisions/smoke-absent.md", "expect_revision": "0" * 64, "confirm": False},
+        True,
+    ),
+    "palinode_correction_dismiss": ({"candidate_id": "smoke-absent", "reason": "smoke"}, True),
+    "palinode_correction_undo":   ({"target": "decisions/smoke-absent.md"}, True),
     "palinode_trigger":           ({"action": "list"}, False),
     "palinode_prompt":            ({"action": "list"}, False),
     "palinode_depends":           ({"unblocked": True}, False),
@@ -51,6 +65,11 @@ TOOL_SMOKE_ARGS: dict[str, tuple[dict, bool]] = {
     # trace composes over the same git surface; with no commits the saved/
     # changed rows resolve to "none" rather than erroring.
     "palinode_trace":             ({"file_path": "insights/smoke-target.md"}, False),
+    # explain reads the retrieval log back. On a store where this reference was
+    # never delivered it answers "no delivery with this reference is recorded",
+    # with the candidate causes — which is a result, not an error. The id is a
+    # well-formed opaque digest so the shape guard passes and the lookup runs.
+    "palinode_explain":           ({"bundle_id": "0123456789abcdef"}, False),
 
     # Embedding-aware tools — _fake_embed returns a constant vector, so
     # similarity is uniform; tools should still dispatch and return either

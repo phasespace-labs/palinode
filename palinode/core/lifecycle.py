@@ -332,6 +332,21 @@ def eligibility(
     return _result("unmarked", "unmarked")
 
 
+def retired_reason(elig: Eligibility) -> str:
+    """Why a retired record is retired, naming the replacement when there is one.
+
+    :attr:`Eligibility.reason` says which *signal* decided the state; a reader
+    being told a record no longer stands wants the successor when one exists,
+    so a ``superseded_by`` pointer outranks the status that carried it (an
+    ``archive_memory(..., superseded_by=…)`` writes both). One renderer, so the
+    search surface's ``currency_reason`` and the listing's
+    ``core_retired_reason`` cannot drift into two spellings of one fact.
+    """
+    if elig.superseded_by:
+        return f"superseded_by: {elig.superseded_by}"
+    return elig.reason
+
+
 def order_key(elig: Eligibility, mtime: float = 0.0) -> tuple[int, float, float]:
     """Sort key for "most recent first" — use with ``reverse=True``.
 

@@ -33,14 +33,29 @@ from fastapi.templating import Jinja2Templates
 
 from palinode.core import git_tools, store
 from palinode.core.config import config
+from palinode.core.explain import (
+    DEFAULT_MAX_RECORDS,
+    MAX_RECORDS_CEILING,
+    InvalidBundleId,
+    QueryAccess,
+    explain_delivery,
+    format_field,
+    validate_bundle_id,
+)
 from palinode.core.parser import parse_markdown, split_frontmatter
 
 from palinode.api.path_safety import _resolve_memory_path
 from palinode.api.ui.provenance import build_provenance
 from palinode.api.ui.render import render_markdown
-from palinode.api.ui.discovery import discovery_lint, indexed_discovery, visible_commit_count
+from palinode.api.ui.discovery import (
+    discovery_lint,
+    discovery_visibility,
+    indexed_discovery,
+    visible_commit_count,
+)
 from palinode.api.ui.views import (
     build_compaction_view,
+    build_correction_panel,
     build_diffs_view,
     build_memory_list,
     build_quality_view,
@@ -97,20 +112,39 @@ def _host_is_loopback(host: str) -> bool:
             return False
 
 
+def _bind_host() -> str:
+    """The resolved API bind host — ``PALINODE_API_HOST``, else the config.
+
+    The same resolution ``server.py`` uses for its startup bind gate.
+    """
+    return os.environ.get("PALINODE_API_HOST", config.services.api.host)
+
+
+def bind_is_loopback() -> bool:
+    """Is the API bound where only this machine can reach it?
+
+    The predicate behind :func:`_loopback_guard`, exposed because a second
+    caller needs the same question answered. ``GET /explain`` serves the
+    diagnostics view — the caller's own query prose — on exactly this test, so
+    it must be *this* test and not a lookalike: a JSON route that disagreed
+    with the inspector about what "local" means is precisely the drift that
+    would hand one surface's refusal to another surface's caller.
+    """
+    return _host_is_loopback(_bind_host())
+
+
 def _loopback_guard() -> None:
     """Refuse to serve the UI on a non-loopback bind.
 
-    Reuses the API's bind-intent signal: the host comes from
-    ``PALINODE_API_HOST`` (falling back to ``config.services.api.host``), the
-    same resolution ``server.py`` uses for its startup bind gate. Unlike the
+    Reuses the API's bind-intent signal (see :func:`_bind_host`). Unlike the
     API, the UI hard-refuses a non-loopback bind even with a configured token.
     The app's bearer middleware also protects UI requests when enabled; this
     extra bind restriction is independent of deployment authentication.
     Neither ``PALINODE_API_BIND_INTENT=public`` nor
     ``PALINODE_API_ALLOW_UNAUTH=1`` lifts it.
     """
-    host = os.environ.get("PALINODE_API_HOST", config.services.api.host)
-    if not _host_is_loopback(host):
+    if not bind_is_loopback():
+        host = _bind_host()
         raise HTTPException(
             status_code=403,
             detail=(
@@ -344,10 +378,22 @@ def ui_memory(request: Request, file_path: str) -> HTMLResponse:
     if metadata.get("status"):
         extra_chips.append({"label": "status", "value": str(metadata["status"])})
 
+    # A direct read of a hidden record is served, labelled, and offered no
+    # mutation (see palinode.api.ui.discovery for the rule). All three come
+    # from the one visibility verdict.
+    visibility = discovery_visibility(rel, metadata=metadata)
+
     ctx = _page_context()
     ctx.update(
         {
             "active": "memory",
+            "visibility": visibility,
+            "correction": build_correction_panel(
+                rel,
+                visibility,
+                preview=lambda: _correction_preview(rel),
+                candidates=lambda: _correction_candidates(rel),
+            ),
             "memory_id": metadata.get("id") or rel.removesuffix(".md"),
             "title": title,
             "kicker": kicker or "memory",
@@ -362,6 +408,82 @@ def ui_memory(request: Request, file_path: str) -> HTMLResponse:
         }
     )
     return templates.TemplateResponse(request, "fact.html", ctx)
+
+
+@router.get("/delivery/{bundle_id}", response_class=HTMLResponse, name="ui_delivery")
+def ui_delivery(request: Request, bundle_id: str, limit: int = DEFAULT_MAX_RECORDS) -> HTMLResponse:
+    """Read-only explanation of one delivery, addressed by its receipt reference.
+
+    The operator's view of what an agent was handed: it asks for the
+    diagnostics view, so the caller's own query prose is shown here and nowhere
+    an agent can reach. That is safe for exactly the reason the whole UI is —
+    ``_loopback_guard`` refuses a non-loopback bind, so this is a person reading
+    their own store on their own machine. ``GET /explain`` gates the same two
+    fields on the same predicate (:func:`bind_is_loopback`), so the page and
+    the JSON route disclose the same thing under the same conditions.
+
+    Visibility filtering still applies with no scope identity (``chain=None``):
+    private and restricted records are counted, never named. The page renders
+    through Jinja2 with autoescaping on, which is what keeps a memory ref or a
+    recorded query containing markup from being markup.
+    """
+    _loopback_guard()
+    try:
+        safe_id = validate_bundle_id(bundle_id)
+    except InvalidBundleId as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    explanation = explain_delivery(
+        safe_id,
+        memory_dir=config.memory_dir,
+        chain=None,
+        # The same gate ``GET /explain`` applies, evaluated rather than
+        # assumed: ``_loopback_guard`` above has already refused every request
+        # this could be false for, so the page shows the query exactly when the
+        # JSON route would — and stops showing it if that guard ever changes.
+        query_access=QueryAccess(requested=True, loopback=bind_is_loopback()),
+        max_records=max(1, min(limit, MAX_RECORDS_CEILING)),
+    )
+    ctx = _page_context()
+    ctx.update(
+        {
+            "active": "memory",
+            "explanation": explanation,
+            "field": format_field,
+            "project_text": _project_text(explanation),
+            "coverage_text": _coverage_text(explanation),
+            "scope_text": _scope_text(explanation),
+        }
+    )
+    return templates.TemplateResponse(request, "delivery.html", ctx)
+
+
+def _scope_text(explanation: dict[str, Any]) -> str:
+    """The scope line. An empty chain is a resolved answer, not a blank cell."""
+    delivery = explanation.get("delivery") or {}
+    scope = delivery.get("scope")
+    if isinstance(scope, list) and not scope:
+        return "no scope identity (access control only)"
+    return format_field(scope)
+
+
+def _project_text(explanation: dict[str, Any]) -> str:
+    """The project line, pre-composed so the template holds no field logic."""
+    delivery = explanation.get("delivery") or {}
+    project = delivery.get("project")
+    if not isinstance(project, dict) or project.get("available") is False:
+        return format_field(project)
+    return f"{project['value']} (resolved by: {format_field(project['resolved_by'])})"
+
+
+def _coverage_text(explanation: dict[str, Any]) -> str:
+    """The coverage line: status plus its qualifiers, or why there is none."""
+    delivery = explanation.get("delivery") or {}
+    coverage = delivery.get("coverage")
+    if not isinstance(coverage, dict) or coverage.get("available") is False:
+        return format_field(coverage)
+    reasons = ", ".join(coverage.get("reasons") or []) or "no qualifiers"
+    return f"{coverage.get('status', '?')} — {reasons}"
 
 
 @router.get("/history/{file_path:path}", response_class=HTMLResponse, name="ui_history")
@@ -401,12 +523,37 @@ def ui_history(request: Request, file_path: str) -> HTMLResponse:
             "history": history,
             "history_unavailable": history_unavailable,
             "history_limit": 20,
+            # The label, identically to ui_memory: the timeline of a hidden
+            # record is readable and says so.
+            "visibility": discovery_visibility(rel),
         }
     )
     return templates.TemplateResponse(request, "history.html", ctx)
 
 
 # ── Capability adapters for the P1 views ────────────────────────────────────
+def _correction_preview(rel: str) -> dict[str, Any]:
+    """Build the read-only half of the correction contract for one record.
+
+    Calls :func:`palinode.corrections.review.preview_correction` in process —
+    the same function the CLI, API and MCP preview call — with ``retire`` as
+    the action, because a preview needs no replacement text to report the
+    record's revision, its policies and what references it. No write path is
+    reachable from here.
+    """
+    from palinode.corrections.review import ACTION_RETIRE, preview_correction
+
+    return preview_correction(target=rel, action=ACTION_RETIRE)
+
+
+def _correction_candidates(rel: str) -> list[dict[str, Any]]:
+    """Queued correction candidates whose own span quotes text in this record."""
+    from palinode.corrections.review import candidates_naming
+
+    return candidates_naming(rel)
+
+
+
 def _search_memory(query: str) -> dict[str, Any]:
     """Run the existing search capability in-process and return result rows.
 

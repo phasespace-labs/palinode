@@ -32,6 +32,42 @@ capture:
     # avoid false-positive substring hits on short names.
     min_token_len: 6
 
+  # Mine harness session transcripts for user corrections — moments you
+  # overturned a decision, rejected an approach with a reason, or asked for
+  # something to be remembered. Every result is a PROPOSAL: nothing here writes,
+  # changes or retires a memory. See docs/HARNESSES.md.
+  #
+  # Three separate opt-ins, in this order. Each one is deliberate:
+  #   1. enabled       — turn the source on
+  #   2. harness_paths — name the directories it may read
+  #   3. classify      — allow it to ask a model, which is what sends text
+  transcripts:
+    # 1. Off by default. Nothing is read and nothing is written until this is true.
+    enabled: false
+
+    # 2. Which harnesses, and which directories. Empty by default: enabling the
+    #    source with no paths still reads nothing. Absolute paths only; a path
+    #    traversing a symlink is refused.
+    harness_paths: {}
+    #   claude-code:
+    #     - ~/.claude/projects
+
+    # 3. Classification is off by default, and it is the ONLY part that
+    #    transmits anything. With it false, a scan runs the deterministic
+    #    pattern stage locally, makes NO request to any model endpoint, and
+    #    queues every candidate as `needs_review` for you to look at.
+    #    With it true, each candidate's bounded window (at most 5 turns, 400
+    #    characters each — your own turns and ordinary assistant replies only)
+    #    is sent to the endpoint configured under `consolidation.llm_url`.
+    #    IF THAT ENDPOINT IS NOT LOCAL, THAT TEXT LEAVES THIS MACHINE.
+    #    `palinode controls status` reports the destination.
+    classify: false
+
+    # Bounds on a scan. Both report what they skipped rather than truncating
+    # quietly.
+    lookback_days: 7
+    max_candidates: 50
+
 # -----------------------------------------------------------------------------
 # Ingestion Pipeline
 # -----------------------------------------------------------------------------
@@ -156,6 +192,34 @@ search:
   # BM25 arm floor, relative to the best keyword match in the same result set
   # (a candidate survives when score >= fts_threshold * top_score). 0.0 = no floor.
   fts_threshold: 0.4
+  # The same shape for the vector arm: a candidate survives when its cosine is
+  # at least this fraction of the best cosine in the same candidate set.
+  # mcp_threshold / api_threshold above are ABSOLUTE floors — they say whether
+  # a match is plausible at all, not whether it is plausible next to the match
+  # this query found, which is what let weak neighbours fill every slot.
+  # Relative to the best match, so the top result always survives: this bounds
+  # a slate, it never returns nothing. 0.0 = no relative floor.
+  vector_relative_floor: 0.85
+  # The same floor for searches where the keyword arm is the ONLY arm —
+  # retrieval_mode: lexical, and the keyword fallback a healthy embedder's
+  # per-input rejection falls back to. Looser than fts_threshold on purpose:
+  # there is no vector arm to re-admit a candidate the keyword arm dropped.
+  # Measured as the last value below the weakest true hit on the relevance rig.
+  # 0.0 = no floor, which fills `limit` whatever the evidence is.
+  lexical_fts_threshold: 0.35
+  # How many chunks of ONE source file may take slots ahead of other files'
+  # competitive chunks. Overflow is deferred rather than dropped: it still
+  # fills a slate that would otherwise come back short, so this changes which
+  # results you get and never how many. 0 = unlimited.
+  max_chunks_per_file: 1
+  # Every delivery reports a match-confidence verdict (confident/weak/none)
+  # read from the pre-fusion arm scores; see docs/lexical-retrieval.md. It is
+  # a signal about what was delivered and never decides what is delivered —
+  # the two floors above do that. Turning this on withholds the slate on the
+  # MCP surface when the verdict is `none` (nothing found clears even the low
+  # mark). Off by default: an empty slate cannot be told apart from an empty
+  # store. Other surfaces always return their rows.
+  abstain_on_no_confident_match: false
   # Default number of results
   default_limit: 15
   # Status values to exclude from search results
@@ -168,15 +232,18 @@ search:
 # Three-tier memory freshness:
 #   Tier 1: Session append — free, every session exit (hook or MCP call).
 #           Appends summary to daily/{date}.md + one-liner to projects/{slug}-status.md.
-#   Tier 2: Nightly dedup — lightweight LLM pass over today's notes.
+#   Tier 2: Nightly dedup — lightweight LLM pass over whatever has not been
+#           consolidated yet (a per-project watermark, not a window).
 #           UPDATE/SUPERSEDE only. No restructuring, no archival.
 #   Tier 3: Weekly deep clean — full compaction with MERGE/ARCHIVE.
 #           Restructures status files, archives processed daily notes.
 #
 # HOW TO INSTALL CRON JOBS:
-#   # Nightly — lightweight dedup of today's sessions (Tier 2)
+#   # Nightly — lightweight dedup of everything not yet consolidated (Tier 2)
+#   # No --days: the nightly's watermark decides what it reads. Passing
+#   # --days N still works and sets the catch-up bound (see nightly below).
 #   0 11 * * * cd /path/to/palinode && PALINODE_DIR=/path/to/data \
-#     venv/bin/python -m palinode.consolidation.cron --nightly --days 1 \
+#     venv/bin/python -m palinode.consolidation.cron --nightly \
 #     >> /path/to/data/logs/consolidation.log 2>&1
 #
 #   # Weekly — full compaction (Tier 3)
@@ -234,8 +301,26 @@ consolidation:
   # Nightly pass configuration (Tier 2)
   nightly:
     enabled: true
-    # How many days to look back (1 = today only)
-    lookback_days: 1
+    # The nightly's CATCH-UP BOUND, not a window. Selection is a per-project
+    # watermark — the notes written since the last pass that resolved that
+    # project — so a healthy run reads exactly the new notes and nothing else,
+    # and a failed run's notes are selected again because a failure does not
+    # advance the mark. This number only bounds how far back a cold or
+    # long-failed mark may reach, so one abandoned project cannot hand the
+    # model months of notes in a single request; whatever the bound excludes
+    # is named in the log, never dropped silently.
+    # 7 matches auto_gate.max_hours_elapsed (168 h): the gate may let a week
+    # pass before firing at its ceiling, and a shorter bound would drop the
+    # notes the gate itself chose to wait on. `--days N` on the nightly cron
+    # line overrides it, with the same meaning.
+    lookback_days: 7
+    # Prompts one pass may send a project whose new notes do not fit one
+    # prompt (about 6,000 characters of notes each). Each prompt resumes where
+    # the last stopped; the pass stops early when nothing is pending or a
+    # prompt fails or is cut off, and the mark then stays at the end of the
+    # last prompt that resolved. Raising it clears more a night without making
+    # any single call bigger. 1 = one prompt per project per pass.
+    max_prompts_per_project: 4
     # Restrict to safe, additive operations — no cross-date restructuring.
     # MERGE is allowed but the executor enforces a same-day guard: only facts
     # sharing the same [YYYY-MM-DD] date prefix may be merged in a nightly run.

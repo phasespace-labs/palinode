@@ -43,6 +43,13 @@ def _load_events(log_path: Path, days: int) -> list[dict[str, Any]]:
 
 def _stats(events: list[dict[str, Any]]) -> dict[str, Any]:
     """Aggregate retrieval events into summary statistics."""
+    from palinode.core.retrieval_log import BUNDLE_RECEIPT
+
+    events = [e for e in events if e.get("event_type") != BUNDLE_RECEIPT]
+    # An empty search delivery logs one call-level row with no memory ref; it
+    # is a search, not a retrieval, so it is counted on its own.
+    empty_searches = sum(1 for e in events if not e.get("file_path"))
+    events = [e for e in events if e.get("file_path")]
     total = len(events)
     explicit = sum(1 for e in events if e.get("mode") == "explicit")
     passive = sum(1 for e in events if e.get("mode") == "passive")
@@ -124,6 +131,7 @@ def _stats(events: list[dict[str, Any]]) -> dict[str, Any]:
         "total_events": total,
         "explicit": explicit,
         "passive": passive,
+        "empty_searches": empty_searches,
         "unique_files_retrieved": len(file_counts),
         "top_files": top_files,
         "distribution": {
@@ -186,6 +194,7 @@ def retrieval_stats(days: int, fmt: str) -> None:
     console.print(f"  Total events:      {stats['total_events']}")
     console.print(f"  Explicit:          {stats['explicit']}")
     console.print(f"  Passive:           {stats['passive']}")
+    console.print(f"  Empty searches:    {stats['empty_searches']}")
     console.print(f"  Unique files:      {stats['unique_files_retrieved']}")
 
     dist = stats["distribution"]

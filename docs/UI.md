@@ -170,6 +170,20 @@ audit views that can expose broader Git history. Scope labels are not
 per-person authentication or encryption; see the [privacy and visibility
 contract](PRIVACY.md) before sharing a store, backup, or token.
 
+The rule for those direct reads is **hidden from default discovery, readable on
+explicit request**, and it is stated rather than implied:
+
+1. `/ui/memory/<file>` and `/ui/history/<file>` still render a record the
+   listing hides. The inspector is loopback-only and its user is the store's
+   local operator, who already owns the files; refusing would protect nothing
+   and would break inspecting history for the records most worth inspecting.
+2. Both pages **label** such a record prominently, so it is never mistaken for
+   a default-visible one.
+3. **No correction, retirement or restore is offered from the inspector for
+   it.** The page never established who is asking — loopback is not an
+   authorization boundary — so the correction section is replaced by a refusal
+   pointing at the CLI and API, where the caller's authority is explicit.
+
 Archiving is lifecycle state, not a promise to remove every historical copy.
 It does not erase Git history, backups, clones, or an already-derived index.
 Capture, pause, and exclusion controls are separate future work; this guide
@@ -182,10 +196,11 @@ does not claim they are available in the inspector.
 | Dashboard | `/ui/` | How many browsable memories and indexed chunks exist? Which health counts need attention? What changed recently? |
 | Memory | `/ui/memory` | Which memory files can I browse? Which are core, fresh, aging, stale, or a given type? |
 | Search | `/ui/memory?q=terms` | Which indexed memories match this query? |
-| Fact detail | `/ui/memory/<category>/<slug>` | What does this memory say, what metadata does it carry, and what provenance is available? |
+| Fact detail | `/ui/memory/<category>/<slug>` | What does this memory say, what metadata does it carry, what provenance is available, and what would correcting or retiring it involve? |
 | Diffs | `/ui/diffs` | Which memory files changed in recent Git commits? |
 | Compaction | `/ui/compaction` | Which consolidation passes ran, and which archived-fact history files exist? |
 | Quality | `/ui/quality` | Which memories are stale, orphaned, missing descriptions, contradictory, missing extraction metadata, or resting on a retired `backed_by` source? |
+| Delivery | `/ui/delivery/<bundle_id>` | What context did one delivery supply, at which revisions, under which scope — and what about it was never recorded? |
 
 ### Dashboard
 
@@ -259,6 +274,37 @@ visual “chain intact” state is therefore not an independent cryptographic
 attestation; use the underlying Git history and Palinode's validation tools
 when investigating integrity.
 
+### Delivery detail
+
+`/ui/delivery/<bundle_id>` explains one hand-off of context, addressed by the
+reference a delivery returned (a search receipt's `bundle_id`). It shows the
+memories that delivery supplied, the exact revision each was supplied at and
+whether that source has changed since, the server-resolved scope, the calling
+surface, each record's disposition, and the delivery's coverage qualifiers —
+with every field the retrieval log never recorded shown as `unavailable` and
+its reason, never guessed.
+
+Two boundaries are deliberate. The page shows the delivery's query prose and
+session id, which no agent-facing surface does: this is a person reading their
+own store over loopback, and the page evaluates that same bind predicate rather
+than assuming it — `GET /explain/{bundle_id}?view=diagnostics` gates those two
+fields on exactly the same question, so the page and the JSON route disclose the
+same thing under the same conditions. And supplied context is shown separately
+from any evidence that an agent acted on it — Palinode records no such evidence,
+and the page says so rather than implying use from delivery.
+
+Each supplied record links to its memory and its Git history, and the page ends
+with a clearly labelled pointer to where a correction is made: the
+`palinode corrections preview` / `apply` / `undo` flow (see
+[CORRECTIONS.md](CORRECTIONS.md)), plus the plain save and supersede routes. The
+page itself stays read-only and offers no button.
+
+Not every delivery is explainable. `/context/prime`, `/resolve`, and an
+empty-query search write no retrieval-log rows, so a reference from one of them
+has nothing to read back; the page reports the candidate causes and marks the
+one it cannot check as uncheckable. See
+[DELIVERY-RECEIPTS.md](DELIVERY-RECEIPTS.md#explaining-a-delivery-after-the-fact).
+
 ### Diffs and compaction
 
 Diffs groups recent commits by day and shows only touched Markdown memory
@@ -294,6 +340,12 @@ memories.
 Every UI route is a `GET` route. The inspector offers no save, edit, archive,
 rollback, reindex, or consolidation action, and browsing it does not modify or
 commit memory Markdown.
+
+The *Correct or retire this* section on a memory page is no exception. It
+renders the context a correction needs — the record's current revision, the
+records that reference it, any pending correction candidates quoting text in it
+— and the exact commands to run elsewhere. There is no form, nothing posts, and
+the page holds no write path. See [CORRECTIONS.md](CORRECTIONS.md).
 
 Search has one narrower operational side effect: because the UI deliberately
 reuses Palinode's normal search capability, a successful query updates recall

@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException
 
 from palinode.core.config import config
+from palinode.core.context_prime import ProjectResolution
 from palinode.core.retrieval_log import RetrievalLogger
 
 logger = logging.getLogger("palinode.api")
@@ -47,6 +49,35 @@ def _project_from_cwd(cwd: str | None) -> str | None:
 
     project = resolve_context(cwd=cwd).project
     return project.removeprefix("project/") if project else None
+
+
+def effective_project_scope(context: Sequence[str] | None) -> ProjectResolution:
+    """The project scope a delivery applies, and where it came from.
+
+    Three cases, and the difference between the last two is load-bearing —
+    what this returns is both what the delivery applies and what it reports,
+    so the two can never disagree:
+
+    - **No ``context`` at all** — the caller resolved nothing (the REST and
+      plugin surfaces). The pinned ``PALINODE_PROJECT`` applies, and only
+      that: never the API host's own directory, which is not the caller's
+      repository.
+    - **A ``context`` naming a project** — the caller already resolved scope
+      on the surface closest to it (the MCP server and the CLI both do,
+      through the one shared resolver) and that decision stands: ``explicit``.
+    - **A ``context`` that names no project, empty list included** — the
+      caller stated a scope with no project in it. That is a decision too, so
+      no project is applied and none is reported. It is how a caller opts out
+      of a pinned server's scope; ``palinode search --no-context`` sends
+      exactly this.
+    """
+    from palinode.core.context_prime import resolve_context
+
+    if context is None:
+        return resolve_context()
+    project = next((ref for ref in context
+                    if isinstance(ref, str) and ref.startswith("project/")), None)
+    return resolve_context(project=project) if project else ProjectResolution(None, "none")
 
 
 # ── Reindex concurrency guard ─────────────────────────────────────────

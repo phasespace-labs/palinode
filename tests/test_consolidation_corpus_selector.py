@@ -95,9 +95,9 @@ def test_nightly_stays_daily_only(store, monkeypatch):
     seen: dict = {}
     real = runner._collect_daily_notes
 
-    def _spy(lookback, sources=None):
-        seen["sources"] = sources
-        return real(lookback, sources=sources)
+    def _spy(*args, **kwargs):
+        seen["sources"] = kwargs.get("sources")
+        return real(*args, **kwargs)
 
     monkeypatch.setattr(runner, "_collect_daily_notes", _spy)
 

@@ -213,6 +213,8 @@ def test_reindex_parses_each_frontmatter_block_about_once(
 
 
 def test_update_file_cross_refs_results_match_reference_registry(corpus: list[Path]) -> None:
+    from palinode.core.scope import ScopeChain, other_project, project_entities
+
     root = config.memory_dir
     for p in corpus:
         rel = os.path.relpath(str(p), root)
@@ -220,7 +222,8 @@ def test_update_file_cross_refs_results_match_reference_registry(corpus: list[Pa
             continue
         self_ref = cross_refs.path_to_ref(rel)
         try:
-            body = frontmatter.load(str(p)).content
+            post = frontmatter.load(str(p))
+            body = post.content
         except Exception:
             expected: list[str] = []  # unparseable source: no refs, error reported
         else:
@@ -228,6 +231,14 @@ def test_update_file_cross_refs_results_match_reference_registry(corpus: list[Pa
                 body, _reference_registry(root, self_ref),
                 min_token_len=config.capture.cross_refs.min_token_len,
             )
+            projects = project_entities(post.metadata)
+            if projects:
+                expected = [ref for ref in expected if any(
+                    not other_project(ScopeChain(project=project), frontmatter.load(
+                        os.path.join(root, ref + ".md"),
+                    ).metadata)
+                    for project in projects
+                )]
         assert cross_refs.update_file_cross_refs(str(p))["refs"] == expected
 
 

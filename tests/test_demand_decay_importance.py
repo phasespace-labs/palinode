@@ -305,6 +305,10 @@ def test_priority_nudge_does_not_override_strong_vector_match(_isolated_env, mon
     """Human priority nudges near ties but cannot make a weak hit outrank a
     much stronger normal-priority vector match."""
     monkeypatch.setattr(config.decay, "enabled", False)
+    # The claim is about ORDER, so the weak hit has to reach the ranker at all:
+    # the vector arm's relative floor would otherwise drop it before fusion,
+    # which is that floor's own behaviour and is tested where it belongs.
+    monkeypatch.setattr(config.search, "vector_relative_floor", 0.0)
     _index_chunk(
         chunk_id="strong-normal",
         file_path="insights/strong-normal.md",

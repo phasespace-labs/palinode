@@ -61,11 +61,34 @@ Startup recall, ambient CLI/MCP search and session-end use one project resolver.
 The order is:
 
 1. An explicit `project` argument (a slug or entity ref).
-2. `PALINODE_PROJECT`, when `context.enabled` is true.
+2. The pinned `PALINODE_PROJECT` setting, when `context.enabled` is true.
 3. The supplied directory's basename in `context.project_map`.
 4. The repository origin name, then the common checkout name, in that map.
 5. With `context.auto_detect: true`, infer from the origin name, then the common
    checkout name, then the normalized directory basename.
+6. Otherwise none — the digest degrades to core memories and search is unscoped.
+
+**An argument scopes one call; the setting scopes a client.** Nothing persists a
+per-call argument: `palinode_session_init(project=…)` scopes that call, and the
+search after it resolves independently. Pin the project instead when every call
+from one client should agree — `palinode init --pin-project` writes it into the
+generated `.mcp.json`, and `palinode mcp-config --stdio --project <slug>` emits
+it for a client you configure by hand. Both set `PALINODE_PROJECT` in that
+client's own MCP process, so two clients can name different projects without any
+shared session state.
+
+A pinned value that is not a slug or a `project/<slug>` ref is **refused**, not
+quietly replaced by git inference: the CLI aborts, the MCP tool returns an
+error, and the API answers `400`. The error names the setting and never echoes
+the value.
+
+Every response that carries scope names the project *and* the source that
+decided it — `explicit`, `environment` (the pinned setting), `project_map`,
+`git_origin`, `git_common_dir`, `cwd_basename`, `disabled` or `none`. Search
+leads with `Scope: project/<slug> (<source>)` on the MCP and CLI surfaces and
+returns `project` / `project_resolved_by` in the REST receipt envelope; the
+session-start digest carries the same two in its heading and its JSON.
+`palinode resolve` and triggers are not project-scoped and report no scope.
 
 Git inspection is local, read-only and bounded by timeouts. It does not fetch.
 For example, a checkout renamed to `checkout-2` and its linked worktree
@@ -90,13 +113,31 @@ falls back to the API host's process directory. **A remote API host cannot inspe
 a checkout that exists only on your computer:** pass `project` explicitly to
 prime/session-end and set `PALINODE_PROJECT` for ambient CLI/MCP search. A remote
 or unavailable path can otherwise only supply a basename candidate. Bare API
-search uses its explicit `context` list; it does not infer the server's project.
+search uses its explicit `context` list; only with **no** `context` field does
+it apply the API process's own pinned `PALINODE_PROJECT`, and nothing else — it
+never infers the server's directory. An explicit `context` is the caller's
+decision and is never overridden, so an **empty list means "no project scope"**
+and is how a caller opts out on a pinned server. What the response reports is
+always what the search applied. `palinode search --no-context` sends exactly
+that empty list; the CLI and MCP always state the scope they resolved, empty
+included, rather than leaving the field absent.
 
 `context.enabled: false` disables all ambient project inference, including the
 environment and mappings. An explicit project still works. `auto_detect: false`
 disables inferred candidates while retaining configured mappings and overrides.
-Search context is a relevance boost; use the existing entity filter when you
-need to restrict search to one project's records.
+Search context boosts the project's records and also isolates them. A search
+with a project leaves out records tagged to a *different* project: their
+`entities` name a `project/*` and none of them is this one. Records that name no
+project are global and stay. `include_other_projects` (CLI
+`--include-other-projects`) returns the rest too, each labelled with its
+project. The receipt's `retrieval.other_projects_withheld` counts what was left
+out. The same rule applies to the per-turn resolve and the session-start prime.
+Project names compare case-insensitively, and a `project/` group in the store's
+curated `entity-aliases.yaml` makes each member count as the group's canonical
+project; a request resolved to an alias is reported as the canonical project.
+Stored tags are never rewritten. `project_map` lookups stay exact. See
+[ENTITY-ALIASES.md](ENTITY-ALIASES.md) for the file's format and how to curate
+it with `palinode aliases`.
 
 Save remains explicit: use `palinode save ... --project my-app`, the MCP/API
 `project` parameter, or `entities: [project/my-app]` for project-wide decisions.
@@ -131,6 +172,8 @@ Core memory persists in the model's context window from turn 1 until OpenClaw co
 
 **Core memory can expire.** A `core: true` memory is *acting* state — it is injected without anyone asking — so it may carry the same `expires_at` (ISO-8601) that ephemeral memories use for the TTL sweep, plus an optional free-text `authority` naming who or what licensed it to act (`"paul: standing"`, a session id, a policy name). Set both through `metadata` at save time (`metadata: {expires_at: ..., authority: ...}`, or `metadata.ttl` for a duration). Past its `expires_at` a core memory stays on disk, in git, and searchable — it just stops being injected: `GET /list?core_only=true` (the session-start hook and the harness plugins) and `/context/prime` (`palinode_session_init`, `palinode prime`) both withhold it, and the lapse is logged once. `authority` is stored and displayed, not enforced. `palinode lint` lists core memories with no `expires_at`.
 
+**Retiring a core memory withholds it the same way.** Expiry is one of several ways a memory stops standing; the injection path asks the lifecycle classifier below about all of them, so a `core: true` decision you supersede in place (`palinode archive <ref> --superseded-by <ref>`) is no longer injected beside the decision that replaced it. Its `/list` row reports `core: false` and names the signal in `core_retired_reason` (`superseded_by: decisions/…`, `status:archived`, `expired`). It is withheld from injection only: the record stays listed, readable and searchable, and the browse surfaces keep showing it with that reason — `palinode list --core` and the `palinode_list` MCP tool ask for it explicitly (`include_retired_core=true` on `GET /list`, off by default so injection is the fail-safe).
+
 **The startup payload has a budget, and truncation never manufactures certainty.** What the digest renders is capped by `context.injection_max_chars` (default 6000) and `context.injection_max_tokens` (default 1500, estimated at 4 chars/token — an estimate, not a tokenizer); the per-turn recall block is budgeted separately by `context.recall_max_chars` / `recall_max_tokens` (3000 / 750), because one payload is paid once a session and the other on every message. Set a pair to `0` and that surface is bounded only by the digest's own line and count limits, exactly as before. Over budget, the digest packs in priority order — snapshots, core memories, decisions, action items — and degrades in one direction only: a plain row may be demoted to its gist and pointer (title plus file path), but **a row never loses a qualifier, and a conflict never loses a side**. A contested row that does not fit is replaced by an explicit stub — `⚠ 2 conflicts omitted for budget — see decisions/a.md, decisions/b.md` — which keeps the source pointers, so a budget can cost you detail but can never make a contested claim look settled. Every omission is reported: `_budget` on the JSON response (cost, count omitted, reason) and a WARNING in the API log. A `core: true` memory should be a gist and a pointer for the same reason; `palinode lint` flags ones over `context.core_gist_max_chars` (1500).
 
 **The digest never presents a retired memory as current.** Every section of the session-start digest — core memories, recent decisions, open action items, recent snapshots — is selected through one lifecycle classifier (`palinode.core.lifecycle`), the same one consolidation uses to decide which decisions govern a compaction. A memory is *retired* when its `status` (or KU `lifecycle`) is `archived`, `deprecated`, `superseded` or `retracted`, when it carries a `superseded_by`, or when its `expires_at` has passed. A memory is also retired **by location**: anything under `archive/` is retired whatever its frontmatter says, because the weekly pass and `archive_memory` move a note there without rewriting it, so its path is the only record that it was retired at all (the reason reads `path:archive`; a note that also declares `status: archived` is reported by its declaration). A retired memory leaves the digest even if it still sits under `decisions/` — it stays on disk, in git and searchable on demand. A memory with no `status` at all is *unmarked*: it is used as before and is not silently promoted to "active". A usable row also keeps its qualifiers: `contradicts` (an open conflict), `stale_backing` (a source it rested on was retired) and a declared `epistemic` marker travel with the row — as JSON keys on `POST /context/prime` and as `[⚠ contradicts: … | ⚠ stale backing: … | epistemic: …]` on the `palinode_session_init` and `palinode prime` text — so a contested or unverified snapshot cannot become an unqualified summary. An absent `epistemic` stays unmarked. "Recent" means the memory's effective date — its declared `date`, else the `last_updated` / `created_at` the save path stamps; touching a file is not a new effective decision, and undated memories rank last.
@@ -146,6 +189,19 @@ After core injection, Palinode searches for context relevant to **what you just 
   carries exact terms and identifiers that embeddings blur. The combined system measures
   0.981 evidence recall@10 on LongMemEval_S — see [BENCHMARKS](BENCHMARKS.md). If the
   keyword arm errors, search degrades to vector-only and logs a warning rather than failing.
+- **Each arm is bounded against its own best match, before the merge.** A
+  keyword candidate needs `search.fts_threshold` (default `0.4`) of the best
+  normalized BM25 score in its candidate set; a vector candidate needs
+  `search.vector_relative_floor` (default `0.85`) of the best cosine in its
+  own. `search.mcp_threshold` / `search.api_threshold` remain the vector arm's
+  absolute cosine floors and are unchanged: an absolute floor says whether a
+  match is plausible at all, a relative one whether it is plausible beside the
+  match this query actually found — and it is the second question that decides
+  whether the rest of `limit` gets filled with weak neighbours. Both relative
+  floors measure against the best candidate in their own arm, so the top match
+  always survives: a search that has any match never returns nothing, and
+  abstention stays a separate decision. Set either to `0.0` to restore the
+  unbounded arm.
 - Results are adjusted by **Temporal Decay**, bumping up scores for recently updated and highly important memories.
 - Returns top 5 results, 700 chars each
 - **Skipped for trivial messages** (< 15 chars, or acks like "ok", "sure", "thanks")

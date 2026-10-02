@@ -153,7 +153,10 @@ def test_zero_byte_read_gets_one_retry(tmp_store, controlled_timers, finish_writ
             if finish_write:
                 assert any("completed body" in b for b in _bodies()), _bodies()
             else:
-                assert _bodies() == [""]
+                # A file with no current text gets no row at all — an empty
+                # chunk is not a retrievable hit, it is just a row FTS indexes
+                # nothing for. (It used to be written as one empty body.)
+                assert _bodies() == []
     finally:
         handler.shutdown()
 

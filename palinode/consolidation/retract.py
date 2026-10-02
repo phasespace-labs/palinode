@@ -78,7 +78,7 @@ from typing import Any
 
 import frontmatter
 
-from palinode.consolidation.archive import resolve_memory_ref
+from palinode.consolidation.archive import history_rel_for, resolve_memory_ref
 from palinode.core import git_tools
 from palinode.core.config import config
 from palinode.core.hashing import stable_md5_hexdigest
@@ -373,6 +373,8 @@ def unretract_mentions(
     file_path: str,
     pref: str,
     reason: str | None = None,
+    *,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """Withdraw one pref's retraction from one memory: un-strike its markers,
     clear its ``retracted_prefs`` record.
@@ -388,6 +390,10 @@ def unretract_mentions(
       for the record (the same tracked-state rule as retraction).
 
     The file's ``status`` frontmatter is never changed.
+
+    ``dry_run`` returns ``status: would_unretract`` with the spans that would be
+    un-struck, the ``retracted_prefs`` delta and the recovery path, and writes
+    nothing.
 
     Raises:
         ValueError: the path is malformed or escapes ``memory_dir``.
@@ -405,13 +411,41 @@ def unretract_mentions(
     norm = normalize_pref(pref)
     recorded = post.metadata.get("retracted_prefs") or []
     if not isinstance(recorded, list) or norm not in recorded:
-        return {"file": rel, "status": "not_retracted", "mentions": 0}
+        out: dict[str, Any] = {"file": rel, "status": "not_retracted", "mentions": 0}
+        if dry_run:
+            out["dry_run"] = True
+        return out
 
     rid = retraction_id(pref)
     new_body, mentions = _unstrike_re(rid).subn(r"\1", post.content)
+    remaining = [p for p in recorded if p != norm]
+
+    if dry_run:
+        return {
+            "file": rel,
+            "status": "would_unretract",
+            "dry_run": True,
+            "mentions": mentions,
+            "spans": _unstrike_re(rid).findall(post.content),
+            "retraction_id": rid,
+            "reason": reason,
+            "frontmatter_delta": {
+                "retracted_prefs": {"from": list(recorded), "to": remaining or None},
+            },
+            "relation": {"recorded": [], "removed": [f"retracted_prefs: {norm}"]},
+            "history_file": history_rel_for(abs_path),
+            "committed": False,
+            "recovery": {
+                "command": None,
+                "note": (
+                    "there is no single-file re-retract command: a retraction "
+                    "is re-applied by saving the forget request again, which "
+                    "strikes every memory the pref still matches"
+                ),
+            },
+        }
 
     post.content = new_body
-    remaining = [p for p in recorded if p != norm]
     if remaining:
         post["retracted_prefs"] = remaining
     else:

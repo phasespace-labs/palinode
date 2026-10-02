@@ -82,6 +82,8 @@ class ArchiveRequest(BaseModel):
     file_path: str
     reason: str | None = None
     superseded_by: str | None = None
+    #: Preview: validate and report what would change, write nothing.
+    dry_run: bool = False
 
 
 @router.post("/archive")
@@ -92,15 +94,22 @@ def archive_api(req: ArchiveRequest) -> dict[str, Any]:
     appends the reason to the `{base}-history.md` audit sibling, propagates the
     status to the chunk index so the memory leaves default recall, and commits
     both files. Idempotent: an already-archived memory is reported unchanged.
+
+    Both the result and the ``dry_run`` preview carry ``retained_copies``: the
+    records that quote, cite or link the target and stay in default recall,
+    reported and never changed.
     """
     from palinode.consolidation.archive import archive_memory
 
     try:
-        return archive_memory(
+        result = archive_memory(
             req.file_path,
             reason=req.reason,
             superseded_by=req.superseded_by,
+            dry_run=req.dry_run,
         )
+        result["retained_copies"] = _retained(result["file"])
+        return result
     except PathTraversalError as e:
         # Same split as every other path-guarded route: 400 for malformed
         # input (null byte), 403 for a path that resolves outside
@@ -114,9 +123,26 @@ def archive_api(req: ArchiveRequest) -> dict[str, Any]:
         raise _safe_500(e, "Archive failed")
 
 
+def _retained(rels: str | list[str], *, unchanged: bool = False) -> dict[str, Any]:
+    """The ``retained_copies`` block for a lifecycle result.
+
+    ``unchanged`` selects the wording for operations that retire nothing
+    (restore, unretract previews).
+    """
+    from palinode.corrections.review import (
+        REFERENCING_UNCHANGED_NOTE,
+        RETAINED_COPIES_NOTE,
+        retained_copies_reported,
+    )
+
+    note = REFERENCING_UNCHANGED_NOTE if unchanged else RETAINED_COPIES_NOTE
+    return retained_copies_reported(rels, note=note)
+
+
 class RestoreRequest(BaseModel):
     file_path: str
     reason: str | None = None
+    dry_run: bool = False
 
 
 @router.post("/restore")
@@ -134,7 +160,10 @@ def restore_api(req: RestoreRequest) -> dict[str, Any]:
     from palinode.consolidation.archive import restore_memory
 
     try:
-        return restore_memory(req.file_path, reason=req.reason)
+        result = restore_memory(req.file_path, reason=req.reason, dry_run=req.dry_run)
+        if req.dry_run:
+            result["retained_copies"] = _retained(result["file"], unchanged=True)
+        return result
     except PathTraversalError as e:
         status_code = 400 if e.malformed else 403
         raise HTTPException(status_code=status_code, detail="Invalid path")
@@ -148,6 +177,7 @@ class UnretractRequest(BaseModel):
     file_path: str
     pref: str
     reason: str | None = None
+    dry_run: bool = False
 
 
 @router.post("/unretract")
@@ -162,7 +192,12 @@ def unretract_api(req: UnretractRequest) -> dict[str, Any]:
     from palinode.consolidation.retract import unretract_mentions
 
     try:
-        return unretract_mentions(req.file_path, req.pref, reason=req.reason)
+        result = unretract_mentions(
+            req.file_path, req.pref, reason=req.reason, dry_run=req.dry_run
+        )
+        if req.dry_run:
+            result["retained_copies"] = _retained(result["file"], unchanged=True)
+        return result
     except PathTraversalError as e:
         status_code = 400 if e.malformed else 403
         raise HTTPException(status_code=status_code, detail="Invalid path")
@@ -175,6 +210,7 @@ def unretract_api(req: UnretractRequest) -> dict[str, Any]:
 class ForgetWithdrawRequest(BaseModel):
     file_path: str
     reason: str | None = None
+    dry_run: bool = False
 
 
 @router.post("/forget-withdraw")
@@ -183,6 +219,9 @@ def forget_withdraw_api(req: ForgetWithdrawRequest) -> dict[str, Any]:
     retracted, and archive the request record(s) so they stop acting as
     tombstones. `file_path` names the forget-request memory; 409 when the
     memory carries no forget request.
+
+    The request records it archives are retirements like any other, so the
+    result and the ``dry_run`` preview carry their ``retained_copies``.
     """
     from palinode.consolidation.forget import (
         NotAForgetRequest,
@@ -190,7 +229,15 @@ def forget_withdraw_api(req: ForgetWithdrawRequest) -> dict[str, Any]:
     )
 
     try:
-        return withdraw_forget_request(req.file_path, reason=req.reason)
+        result = withdraw_forget_request(
+            req.file_path, reason=req.reason, dry_run=req.dry_run
+        )
+        records = (
+            [r["file"] for r in result.get("requests_to_archive", [])]
+            if req.dry_run else result.get("requests_archived", [])
+        )
+        result["retained_copies"] = _retained(records)
+        return result
     except PathTraversalError as e:
         status_code = 400 if e.malformed else 403
         raise HTTPException(status_code=status_code, detail="Invalid path")

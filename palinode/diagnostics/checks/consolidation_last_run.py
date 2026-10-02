@@ -4,21 +4,24 @@
 run. This check says whether the last pass *worked* — and, more to the point,
 how many passes in a row have not.
 
-The count is the number that matters. The nightly does not archive what it
-consolidates, so with a lookback of ``L`` days a note written on day D−1 is in
-the window of ``L`` consecutive nightlies: it survives ``L−1`` failures and is
-lost from the nightly's view on the ``L``-th. The weekly does not cover the
-gap — its own window (3 days by default, Sundays in the shipped crontab)
-reaches back only a few days from its run and never sees a note the nightly
-dropped earlier in the week. ``L`` silent failures in a row is the only way a
-day of notes leaves every window, and until this check the only thing that
-said a nightly failed was the cron log; one real partial (the model's reply
-cut off at the token cap) was found by someone reading it by hand. So: the
-thresholds follow the lookback the nightly actually ran — ``error`` at ``L``
-consecutive failures, ``warn`` one short of that — and the message says why.
-On the shipped default (``nightly.lookback_days = 1``) a single failure is
-already the lost day, so it is an ``error`` outright; the dogfood host's
-``--days 3`` gives warn at two, error at three.
+The count is the number that matters, and what it costs changed when the
+nightly's window became a per-project watermark. A failed pass no longer
+advances the mark, so its notes are selected again on the next run: the first
+failures cost nothing but the delay. What a streak eventually costs is the
+catch-up bound — ``B`` days (``nightly.lookback_days``, or the cron's
+``--days N``), the furthest back a mark may reach. Once a mark is older than
+``B``, the floor clamps it and the notes in the gap leave the nightly's view;
+the weekly does not cover them either, since its own window (3 days by
+default, Sundays in the shipped crontab) reaches back only a few days from
+its own run.
+
+So the thresholds are no longer one arithmetic but two. ``error`` at ``B``
+consecutive failures — the streak that actually drops notes — and ``warn`` at
+two, because a broken nightly is worth surfacing long before it loses
+anything, and two in a row is no longer plausibly a one-off. On the shipped
+default (``B = 7``) that is warn at two, error at seven; a host that pins
+``--days 1`` gets error on the first failure, which is the truthful answer
+for a bound that thin.
 
 Where the history comes from
 ----------------------------
@@ -80,8 +83,10 @@ WEEKLY_WARN_AT = 2
 WEEKLY_FAIL_AT = 3
 
 #: Statuses meaning the pass finished with nothing left unconsolidated. The
-#: idle statuses belong here: nothing in the window is nothing left behind.
-_OK_STATUSES = frozenset({"success", "no_new_notes", "no notes found"})
+#: idle statuses belong here: nothing selected is nothing left behind. Shared
+#: with the watermark's cold start, which must agree with this check about
+#: which recorded passes count as successful.
+_OK_STATUSES = activity_gate.SUCCESS_STATUSES
 
 #: Statuses that count toward a streak. A record with no recognisable status
 #: (a hand-edited file, a runner result that carried none) is reported as
@@ -92,32 +97,42 @@ _FAIL_STATUSES = frozenset({"partial", "error"})
 _CADENCE = {"nightly": "daily", "weekly": "weekly"}
 
 
+#: Where the nightly warn fires, whatever the catch-up bound. A failed nightly
+#: costs nothing until the bound is exceeded, so this is not "about to lose
+#: notes" — it is "the nightly has stopped working", which on a daily cadence
+#: two consecutive failures establish and one does not.
+NIGHTLY_WARN_AT = 2
+
+
 def _why_nightly(nightly_days: int, weekly_days: int) -> str:
     """The sentence that turns a count into a consequence, from the real numbers.
 
     Kept in one place so the warn and the error say the same thing about the
-    same arithmetic — and derived, because the dogfood host runs ``--days 3``
-    while the shipped default is 1, and a literal 3 here was false on every
-    default install.
+    same arithmetic — and derived, because the bound is configurable and the
+    dogfood host's cron pins its own.
     """
     runs = "one run" if nightly_days == 1 else f"{nightly_days} runs"
     return (
-        f"the nightly's {nightly_days}-day lookback keeps a day's notes in view for "
-        f"{runs}, and the weekly's {weekly_days}-day window reaches back only "
+        f"a failed nightly does not advance the watermark, so its notes are "
+        f"selected again — but only until the mark is older than the "
+        f"{nightly_days}-day catch-up bound, which is {runs} at a daily cadence, "
+        f"and the weekly's {weekly_days}-day window reaches back only "
         f"{weekly_days} days from its own run"
     )
 
 
-def nightly_thresholds(lookback_days: int) -> tuple[int, int]:
-    """``(warn_at, fail_at)`` for a nightly that ran with ``lookback_days``.
+def nightly_thresholds(catchup_days: int) -> tuple[int, int]:
+    """``(warn_at, fail_at)`` for a nightly bounded by ``catchup_days``.
 
-    A day's notes are in the window of ``lookback_days`` consecutive
-    nightlies, so the streak that drops them is ``lookback_days`` itself;
-    the warn fires one short of that. With a 1-day lookback the two coincide
-    and the first failure is an error — there is no earlier moment to warn at.
+    The error is the streak that actually drops notes: at a daily cadence a
+    mark is older than the bound after ``catchup_days`` consecutive failures,
+    and the floor then clamps it. The warn does not scale with the bound — a
+    nightly that has failed twice needs looking at whether the bound is 3 days
+    or 30 — except where the bound is tighter than the warn, in which case
+    there is no room to warn first and both fire together.
     """
-    fail_at = max(int(lookback_days), 1)
-    return max(fail_at - 1, 1), fail_at
+    fail_at = max(int(catchup_days), 1)
+    return min(NIGHTLY_WARN_AT, fail_at), fail_at
 
 
 def _utc_now() -> datetime:
@@ -138,7 +153,9 @@ class ModeSummary:
     #: The gate's own clock stamp — a success start — for a state file that
     #: predates outcome records or has none for this mode.
     gate_stamp: datetime | None
-    #: The lookback the newest record ran with, else the configured one.
+    #: The ``lookback_days`` the newest record ran with, else the configured
+    #: one. For the nightly this is the catch-up bound; for the weekly it is
+    #: still the lookback window.
     lookback_days: int
 
 
@@ -286,11 +303,17 @@ def _describe(summary: ModeSummary, now: datetime, why_nightly: str) -> str:
     level = _level(summary)
     if mode == "nightly" and level == 2:
         clause += (
-            f" — {summary.streak} in a row: a day of notes written before the streak "
-            f"has left every window ({why_nightly})"
+            f" — {summary.streak} in a row reaches the {summary.lookback_days}-day "
+            f"catch-up bound: notes older than it are no longer selected "
+            f"({why_nightly})"
         )
     elif mode == "nightly" and level == 1:
-        clause += f" — the next consecutive failure loses a day of notes: {why_nightly}"
+        remaining = max(summary.lookback_days - summary.streak, 0)
+        clause += (
+            f" — the nightly has not completed for {summary.streak} runs; nothing "
+            f"is lost yet and roughly {remaining} more day(s) of catch-up remain: "
+            f"{why_nightly}"
+        )
     elif level >= 1:
         clause += (
             f" — {summary.streak} consecutive {mode} passes have left their notes "
@@ -384,9 +407,11 @@ def consolidation_last_run(ctx: DoctorContext) -> CheckResult:
             "model ignoring the JSON contract. Then run the pass by hand: "
             "`palinode consolidate --nightly` (or `palinode consolidate` for the "
             "weekly). An on-demand pass records its outcome too, and a success "
-            "resets the streak. The nightly's lookback is what lets a hand-run "
-            "recover the missed days; it does not reach past a streak as long as "
-            "the lookback itself."
+            "resets the streak. A hand-run nightly picks up exactly what the "
+            "failed ones left behind — their watermarks never advanced — as long "
+            "as the marks are still inside the catch-up bound "
+            "(`consolidation.nightly.lookback_days`, or `--days N` on the cron "
+            "line); past that the pass reports what it skipped."
         ),
         tags=("fast",),
     )

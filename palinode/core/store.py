@@ -10,6 +10,7 @@ semantic memory chunk updates, deletions, and search retrieval.
 """
 from __future__ import annotations
 
+import math
 import re
 import sqlite3
 import sqlite_vec
@@ -18,13 +19,17 @@ import os
 import struct
 import hashlib
 from contextlib import contextmanager
-from typing import Any, Collection, Iterator, Sequence
+from typing import Any, Callable, Collection, Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from palinode.core.config import config
 from palinode.core import aliases
 from palinode.core import expiry as _expiry
 from palinode.core import parser as _parser
-from palinode.core.lifecycle import contains_retired_fact_text, eligibility
+from palinode.core.lifecycle import (
+    contains_retired_fact_text,
+    eligibility,
+    retired_reason,
+)
 from palinode.core.path_guard import to_rel_path
 from palinode.core.quote_verify import QuoteStatus, verify_source_anchors
 # The hybrid-search scoring pipeline + its pure decay/predicate helpers live in
@@ -1284,6 +1289,28 @@ s t d ll m re ve
 """.split())
 
 
+def fts_match_units(query: str) -> list[str]:
+    """The quoted phrase units :func:`fts_match_expression` ORs together.
+
+    Split out because the units are needed twice: once to build the MATCH
+    expression, and once to price the query — :func:`bm25_query_scale` asks the
+    index how rare each unit is. Building the expression and then splitting the
+    string back apart would be a second parser to keep in step with the first.
+
+    Returns ``[]`` for a query with no word characters.
+    """
+    units: list[str] = []
+    for raw in query.split():
+        words = sanitize_fts_query(raw)
+        if words == '""':
+            continue
+        units.append('"' + words + '"')
+    if not units:
+        return []
+    content = [u for u in units if u.strip('"').lower() not in FTS_STOPWORDS]
+    return content or units
+
+
 def fts_match_expression(query: str) -> str:
     """Turn a natural-language query into an FTS5 MATCH expression that a
     question can actually satisfy.
@@ -1310,16 +1337,90 @@ def fts_match_expression(query: str) -> str:
     Returns ``'""'`` (the empty phrase, valid and matching nothing) for a
     query with no word characters.
     """
-    units: list[str] = []
-    for raw in query.split():
-        words = sanitize_fts_query(raw)
-        if words == '""':
-            continue
-        units.append('"' + words + '"')
+    return " OR ".join(fts_match_units(query)) or '""'
+
+
+#: The floor FTS5's own ``bm25()`` clamps a non-discriminating term's IDF to
+#: (``fts5_aux.c``: ``if( idf<=0.0 ) idf = 1e-6``). A term in half the store or
+#: more scores this, i.e. nothing — and the scale below has to read that back
+#: rather than divide by it.
+_BM25_IDF_FLOOR = 1e-6
+
+
+def bm25_query_scale(
+    db: sqlite3.Connection, units: Sequence[str], *, table: str = "chunks_fts"
+) -> float:
+    """What this query's best possible BM25 score is, in this index.
+
+    FTS5's ``bm25()`` sums ``IDF(unit) × saturation(frequency, length)`` over
+    the query's phrases, with ``saturation == 1.0`` for a phrase appearing once
+    in an average-length document. So the sum of the per-unit IDFs is the score
+    of a *reference document*: one that contains every unit of the query once
+    and is of average length. Dividing by it turns an absolute BM25 into "how
+    much of the evidence this query could possibly find is in this chunk",
+    which is the same number on a three-record store and a three-million-record
+    one — where ``|bm25| / 25`` was a constant fraction of nothing, growing
+    with corpus size (IDF ≈ log N/df) and with the number of query terms, so
+    an exact identifier hit scored 0.02 on a small store and 0.20 on a larger
+    one having found precisely the same thing.
+
+    Two decisions the arithmetic does not make on its own:
+
+    * **A unit the store has never seen still counts**, priced as if exactly
+      one document held it (``df = 1``, the rarest a term can actually be).
+      Pricing only the units the corpus holds looks principled and is the
+      opposite of useful: a query mostly made of words the store does not know
+      would then be *easy* to cover completely, and the questions with no
+      answer in the store are exactly the ones carrying unknown words.
+      Measured on the packaged relevance fixture, that variant put five of the
+      fourteen no-answer questions at a perfect 1.0.
+    * **A unit with nothing rare about it is kept at FTS5's own floor**, not
+      dropped. A term in half the store or more has ``IDF <= 0``, which
+      ``bm25()`` clamps to ``_BM25_IDF_FLOOR``; carrying the same clamp here
+      keeps the sum a faithful ceiling for the score being divided, and on a
+      store small enough that *every* term is common (with two documents no
+      term can be rare) the ratio is still the fraction of the query's units
+      this chunk holds. What such a score cannot tell anyone is that the query
+      had nothing discriminating in it — the standing limit of a coverage
+      scale, recorded with the marks in :mod:`palinode.core.confidence`.
+
+    ``db`` is an open connection; ``units`` are :func:`fts_match_units`'
+    phrases; ``table`` is the FTS5 index to price them against, which is the
+    chunk index for every product caller (``bench.trigger_phrasing`` scores the
+    same arm over an index of trigger descriptions). Returns ``0.0`` when there
+    is nothing to price — no units, or an empty index — which
+    :func:`search_fts` reads as "no keyword evidence". Costs one ``count(*)``
+    per unit, on top of the search itself.
+    """
     if not units:
-        return '""'
-    content = [u for u in units if u.strip('"').lower() not in FTS_STOPWORDS]
-    return " OR ".join(content or units)
+        return 0.0
+    # The only interpolated value below is the table name, and it is an
+    # identifier chosen by the caller in code, never a query string — the units
+    # themselves are bound. Rejecting anything that is not a bare identifier
+    # keeps it that way.
+    if not table.isidentifier():
+        raise ValueError(f"not an FTS5 table name: {table!r}")
+    try:
+        n_docs = float(
+            db.execute(f"SELECT count(*) FROM {table}_docsize").fetchone()[0]  # nosec B608
+        )
+    except sqlite3.Error:
+        # No docsize shadow table (``columnsize=0``): the index's own row count
+        # is the same N bm25() uses.
+        n_docs = float(db.execute(f"SELECT count(*) FROM {table}").fetchone()[0])  # nosec B608
+    if n_docs <= 0.0:
+        return 0.0
+    total = 0.0
+    for unit in units:
+        row = db.execute(
+            f"SELECT count(*) FROM {table} WHERE {table} MATCH ?",  # nosec B608
+            (unit,),
+        ).fetchone()
+        # An absent unit is priced at the rarest a present one can be.
+        df = max(int(row[0] if row else 0), 1)
+        idf = math.log((n_docs - df + 0.5) / (df + 0.5))
+        total += idf if idf > 0.0 else _BM25_IDF_FLOOR
+    return total
 
 
 def search_fts(query: str, category: str | None = None, top_k: int = 10,
@@ -1336,8 +1437,11 @@ def search_fts(query: str, category: str | None = None, top_k: int = 10,
 
     Returns:
         List of dicts with keys: file_path, section_id, content,
-        category, metadata, score. Score is BM25 rank (lower = better match,
-        normalized to 0.0-1.0 range for RRF merging).
+        category, metadata, score. ``score`` is this chunk's BM25 as a fraction
+        of what this query could score against a document holding every one of
+        its terms once — 1.0 is that reference document, and a denser chunk (a
+        repeated term, a short chunk) can exceed it, up to FTS5's ``k1 + 1``
+        saturation ceiling of 2.2. See :func:`bm25_query_scale`.
     """
     # use try/finally so the connection is closed on all paths (same
     # hygiene fix as search()).
@@ -1347,7 +1451,8 @@ def search_fts(query: str, category: str | None = None, top_k: int = 10,
 
         # FTS5 match query — OR-joined content words / identifier phrases (the implicit-AND finding);
         # sanitize_fts_query handles quotes, hyphens, and boolean operators per token.
-        safe_query = fts_match_expression(query)
+        units = fts_match_units(query)
+        safe_query = " OR ".join(units) or '""'
 
         sql = """
             SELECT c.id, c.file_path, c.section_id, c.content, c.category, c.metadata,
@@ -1368,6 +1473,10 @@ def search_fts(query: str, category: str | None = None, top_k: int = 10,
 
         cursor.execute(sql, tuple(params))
         rows = cursor.fetchall()
+        # Priced against the same index the rows came from, and only when
+        # there are rows to price: the per-unit counts are the one cost this
+        # normalization adds, and an empty result set has nothing to normalize.
+        scale = bm25_query_scale(db, units) if rows else 0.0
     finally:
         db.close()
 
@@ -1380,10 +1489,13 @@ def search_fts(query: str, category: str | None = None, top_k: int = 10,
         if _excluded_by_kind(meta, kind_exclude_list):
             continue
         # BM25 rank is negative (more negative = better match).
-        # Normalize to 0.0-1.0 where 1.0 is best.
         raw_score = abs(row["bm25_score"]) if row["bm25_score"] else 0
-        # Cap at 25 for normalization (typical BM25 scores range 0-25)
-        normalized = min(raw_score / 25.0, 1.0)
+        # Against what this query could possibly score here, not against a
+        # constant. Every row of one query is divided by the same positive
+        # number, so ordering, the ratio each candidate carries against the
+        # best one, and therefore both relative floors are untouched; what
+        # changes is what the number means (see bm25_query_scale).
+        normalized = raw_score / scale if scale > 0.0 else 0.0
         results.append({
             "id": row["id"],
             "file_path": row["file_path"],
@@ -1552,10 +1664,7 @@ def currency_of(
     """
     elig = eligibility(meta, path=file_path, now=now)
     if elig.retired:
-        reason = elig.reason
-        if elig.superseded_by:
-            reason = f"superseded_by: {elig.superseded_by}"
-        return "retired", reason
+        return "retired", retired_reason(elig)
     if contains_retired_fact_text(content):
         return "retired", "retired fact text"
     if elig.contradicts:
@@ -1930,6 +2039,14 @@ def set_status_for_path(file_path: str, status: str) -> int:
     ``config.search.exclude_status`` reads) stale, and recall would not be
     suppressed. This updates the stored metadata directly, no body re-embed.
 
+    ``meta_hash`` moves with the metadata. Leaving it at the pre-push value
+    stored *archived* metadata under the *active* frontmatter's hash, so any
+    later frontmatter change that returned the file to that hash — a
+    ``rollback`` of the archive commit, or an operator hand-reverting the same
+    lines — planned as a no-op in reconcile and search stayed stale while the
+    file said current. Hashing what is stored keeps the planner's
+    one question ("does the index hold this file's frontmatter?") honest.
+
     ``file_path`` must be the absolute path stored in ``chunks.file_path``.
 
     Returns the number of chunk rows updated (rows already at ``status`` are
@@ -1947,8 +2064,8 @@ def set_status_for_path(file_path: str, status: str) -> int:
                 continue
             meta["status"] = status
             db.execute(
-                "UPDATE chunks SET metadata = ? WHERE id = ?",
-                (json.dumps(meta, default=str), row["id"]),
+                "UPDATE chunks SET metadata = ?, meta_hash = ? WHERE id = ?",
+                (json.dumps(meta, default=str), meta_hash(meta), row["id"]),
             )
             updated += 1
         if updated:
@@ -1996,9 +2113,10 @@ repair path).
             if meta.get("entities") == entities:
                 continue
             meta["entities"] = entities
+            # meta_hash moves with the metadata, as in set_status_for_path.
             db.execute(
-                "UPDATE chunks SET metadata = ? WHERE id = ?",
-                (json.dumps(meta, default=str), row["id"]),
+                "UPDATE chunks SET metadata = ?, meta_hash = ? WHERE id = ?",
+                (json.dumps(meta, default=str), meta_hash(meta), row["id"]),
             )
             updated += 1
 
@@ -2025,10 +2143,12 @@ def _mark_vectorless(fts_results: list[dict[str, Any]]) -> None:
 
     A chunk written FTS-only — the per-input embed-rejection path, or a deferred
     embed — has no ``chunks_vec`` row, so the vector arm can never carry it
-    and normalized BM25 (``raw / 25.0``, rarely above 0.35 even for an exact
-    identifier hit) is the only score it will ever have. Under the shared
+    and normalized BM25 is the only score it will ever have. Under the shared
     per-arm floor that made it unreachable at the default threshold while
-    the recovery text promised it "stays keyword-searchable".
+    the recovery text promised it "stays keyword-searchable" (the score was
+    then ``raw / 25.0``, rarely above 0.35 even for an exact identifier hit;
+    it is priced per query now, but the exemption is about the arm, not the
+    number).
     :func:`palinode.core.ranker.rank_hybrid` exempts ``has_vector is False``
     candidates from the floor; everything with a vector keeps today's floor
     (the BM25-arm measurement that deferred renormalising it holds for
@@ -2075,6 +2195,7 @@ def search_hybrid(
     record_access: bool = True,
     use_fts: bool = True,
     fts_threshold: float | None = None,
+    vector_relative_floor: float | None = None,
 ) -> list[dict[str, Any]]:
     """Hybrid search combining semantic vectors and BM25 keyword matching.
 
@@ -2086,11 +2207,24 @@ def search_hybrid(
         query_embedding: The embedded query vector (for cosine similarity).
         category: Optional category filter applied to both searches.
         top_k: Maximum results to return.
-        threshold: The VECTOR arm's relevance floor — real cosine similarity —
-            applied BEFORE RRF fusion (see :func:`palinode.core.ranker.rank_hybrid`).
+        threshold: The VECTOR arm's ABSOLUTE relevance floor — real cosine
+            similarity — applied BEFORE RRF fusion (see
+            :func:`palinode.core.ranker.rank_hybrid`).
+        vector_relative_floor: That arm's RELATIVE floor — a candidate is kept
+            only when its cosine is at least this fraction of the best cosine
+            in the same candidate set (``config.search.vector_relative_floor``
+            when ``None``; measured default 0.85; ``0.0`` = no relative
+            floor). The absolute floor decides whether a candidate is
+            plausible at all; this one decides whether it is plausible beside
+            the match the query found, which is what stops ``top_k * 2`` weak
+            neighbours filling the slate. Measured against the best candidate,
+            so the top match always survives — it bounds a slate and never
+            empties one.
         fts_threshold: The FTS arm's own floor, as a fraction of the best
             keyword match in this result set (``config.search.fts_threshold``
-            when ``None``; measured default 0.4; ``0.0`` = no FTS floor). Until
+            when ``None``; measured default 0.4; ``0.0`` = no FTS floor —
+            ``config.search.lexical_fts_threshold``, measured default 0.35,
+            when the keyword arm is the only arm). Until
             this existed the cosine floor was applied to normalized BM25 too,
             and at 0.4/0.5 it discarded most correct keyword hits — every
             single-identifier hit among them — before fusion.
@@ -2142,7 +2276,13 @@ def search_hybrid(
         fts_results = search_fts(query_text, category=category, top_k=top_k * 2,
                                  kind_exclude_list=kind_exclude_list)
         effective_hybrid_weight = 1.0
-        fts_threshold = 0.0
+        # Single-arm slate: its own floor (``search.lexical_fts_threshold``),
+        # looser than the two-arm ``fts_threshold`` because nothing else can
+        # admit a candidate here. It used to be hard-set to 0.0, i.e. no floor
+        # at all, which is what filled ``top_k`` unconditionally on this path.
+        # An explicit caller value still wins.
+        if fts_threshold is None:
+            fts_threshold = config.search.lexical_fts_threshold
     elif use_fts:
         try:
             fts_results = search_fts(query_text, category=category, top_k=top_k * 2,
@@ -2189,6 +2329,7 @@ def search_hybrid(
         top_k=top_k,
         threshold=threshold,
         fts_threshold=fts_threshold,
+        vector_relative_floor=vector_relative_floor,
         hybrid_weight=effective_hybrid_weight,
         priority_weight=_PRIORITY_RANK_WEIGHT,
         context_files=context_files,
@@ -2459,26 +2600,46 @@ def add_trigger(
 def check_triggers(
     query_embedding: list[float],
     cooldown_bypass: bool = False,
+    deliverable: Callable[[str], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Check if any triggers match the current context.
-    
+
     Args:
         query_embedding: Embedding of the current user message.
         cooldown_bypass: If True, ignore cooldown (useful for testing).
-    
+        deliverable: Optional predicate on ``memory_file``. A trigger whose
+            target fails it is dropped *before* the fire is recorded, so an
+            undeliverable target neither burns its cooldown nor inflates
+            ``fire_count`` — those are the delivery ledger, and a row the
+            caller never receives was not delivered.
+
     Returns:
         List of fired trigger dicts with memory_file and trigger info.
     """
     db = get_db()
     query_vec_json = json.dumps(query_embedding)
-    
+
+    # vec0 KNN cannot pre-filter on a joined column, so every filter below —
+    # enabled, expiry, threshold, cooldown, deliverability — runs on whatever
+    # the KNN window returned. A fixed window (it was 10) is therefore a
+    # silent eligibility cap: ten disabled, expired, cooling-down or
+    # undeliverable near-neighbours fill it and a trigger that would have
+    # fired is never even scored. Asking for the whole table makes every
+    # registered trigger a candidate. Trigger tables are operator-sized
+    # (registered by hand or one per consolidation layer), so this is a
+    # bounded scan of a small vec0 index, not a corpus-wide one.
+    candidate_count = db.execute("SELECT COUNT(*) FROM triggers_vec").fetchone()[0]
+    if not candidate_count:
+        db.close()
+        return []
+
     rows = db.execute("""
         SELECT t.*, v.distance
         FROM triggers_vec v
         JOIN triggers t ON v.id = t.id
-        WHERE v.embedding MATCH ? AND k = 10
-    """, (query_vec_json,)).fetchall()
-    
+        WHERE v.embedding MATCH ? AND k = ?
+    """, (query_vec_json, candidate_count)).fetchall()
+
     results = []
     now = _utc_now()
     
@@ -2507,7 +2668,10 @@ def check_triggers(
                     hours_since = (now - last_fired_date).total_seconds() / 3600
                     if hours_since < row["cooldown_hours"]:
                         continue  # In cooldown
-            
+
+            if deliverable is not None and not deliverable(row["memory_file"]):
+                continue  # Nothing to deliver — do not record a fire
+
             results.append({
                 "id": row["id"],
                 "description": row["description"],

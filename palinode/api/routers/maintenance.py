@@ -9,6 +9,11 @@ Extracted from palinode/api/server.py:
   GET /entities/{entity_ref:path}
   GET /entities
   POST /lint
+  POST /corrections
+  POST /corrections/preview
+  POST /corrections/apply
+  POST /corrections/dismiss
+  POST /corrections/undo
   POST /migrate/openclaw
   GET /depends/_unblocked
   GET /depends/{slug:path}
@@ -19,13 +24,14 @@ import glob
 import logging
 import os
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from palinode.core import store
 from palinode.core.config import config
+from palinode.core.parity import CORRECTION_ACTIONS
 from palinode.core.path_guard import to_rel_path
 
 from palinode.api._util import _reindex_lock, _reindex_state, _safe_500, _utc_now
@@ -260,6 +266,204 @@ def review_api(req: ReviewRequest) -> dict[str, Any]:
     nothing."""
     from palinode.core.review import run_review
     return run_review(project=req.project)
+
+
+class CorrectionsRequest(BaseModel):
+    #: Project slug (``"harbor-notes"``) or typed ref; filters the queue.
+    project: str | None = None
+    #: Only candidates from the last N days. Also narrows a scan's lookback.
+    since_days: int | None = None
+    #: Run a detection pass over the configured transcripts before listing.
+    #: Deliberately absent from the MCP tool, which stays a read-only listing.
+    scan: bool = False
+
+
+@router.post("/corrections")
+def corrections_api(req: CorrectionsRequest) -> dict[str, Any]:
+    """List transcript-derived correction candidates. Nothing is applied.
+
+    Each candidate is a proposal: a bounded quoted span from a user's own turn,
+    its session/turn anchor, its project scope, and a classification. ``scan``
+    additionally runs a detection pass over the configured harness transcript
+    paths — which does nothing unless the source is enabled in config, and
+    honours the capture policy like every other automatic capture source.
+    """
+    from palinode.corrections.scan import corrections_report
+
+    return corrections_report(
+        project=req.project, since_days=req.since_days, scan=req.scan
+    )
+
+
+# ── correction review: preview → apply / dismiss, and undo ──────────────────
+#
+# One backend contract behind four surfaces. The handlers below are transport
+# only: they map :mod:`palinode.corrections.review`'s refusals onto status
+# codes and pass everything else straight through. 409 is the code for "the
+# caller must look again and decide" — a stale revision, an ambiguous target,
+# a target the correction never named — because the request was well-formed
+# and the store is not in the state it was previewed in. An apply that got one
+# of its two writes in carries the same code and is told apart by its payload:
+# a refusal carries `error`, a partial carries `applied: "partial"`.
+
+
+class CorrectionPreviewRequest(BaseModel):
+    #: Memory ref to correct: ``decisions/x.md``, ``decisions/x``, or a bare
+    #: slug. A slug naming two memories is refused with both, never guessed.
+    target: str | None = None
+    #: Narrow the correction to one ``<!-- fact:id -->`` claim in the target.
+    claim_id: str | None = None
+    #: The text that would stand instead. Omit (or set ``action="retire"``)
+    #: to withdraw the target with no successor.
+    replacement: str | None = None
+    #: Explicitly permit the omitted original text listed by preview.
+    allow_content_loss: bool = False
+    #: ``supersede`` or ``retire``. Derived from ``replacement`` when omitted.
+    action: Literal[*CORRECTION_ACTIONS] | None = None  # type: ignore[valid-type]
+    #: Why. Recorded in the history sibling and the commit subject.
+    reason: str | None = None
+    #: The transcript candidate this correction came from, if any.
+    candidate_id: str | None = None
+    #: Project scope. Inferred from the target's own entities when omitted.
+    project: str | None = None
+    #: The replacement's own supporting records, as typed ``backed_by`` refs.
+    #: The superseded original is never cited as support for its replacement.
+    backed_by: list[str] | None = None
+    #: Memory type for the replacement. Inherits the target's when omitted.
+    type: str | None = None
+    #: Slug for the replacement. Derived from the target's when omitted.
+    slug: str | None = None
+
+
+class CorrectionApplyRequest(CorrectionPreviewRequest):
+    #: The revision the preview showed. A mismatch is refused, never merged.
+    expect_revision: str = ""
+    #: Explicit confirmation. Apply is never the default on any surface.
+    confirm: bool = False
+
+
+class CorrectionDismissRequest(BaseModel):
+    candidate_id: str
+    #: Required: a dismissal with no reason is indistinguishable from a
+    #: candidate that was never detected.
+    reason: str
+
+
+class CorrectionUndoRequest(BaseModel):
+    target: str
+    expect_revision: str = ""
+    confirm: bool = False
+    reason: str | None = None
+
+
+def _correction_http(error: Exception) -> HTTPException:
+    """Map a review refusal onto a status code without losing its payload."""
+    from palinode.core.path_guard import PathTraversalError
+    from palinode.corrections import review as review_module
+
+    if isinstance(error, PathTraversalError):
+        return HTTPException(status_code=400 if error.malformed else 403, detail="Invalid path")
+    if isinstance(error, review_module.TargetNotFoundError):
+        return HTTPException(status_code=404, detail=error.as_dict())
+    if isinstance(error, review_module.CorrectionError):
+        return HTTPException(status_code=409, detail=error.as_dict())
+    return _safe_500(error, "Correction failed")
+
+
+@router.post("/corrections/preview")
+def correction_preview_api(req: CorrectionPreviewRequest) -> dict[str, Any]:
+    """Preview one correction. Reads only — nothing is written or committed.
+
+    Returns the old text, the proposed new text, the affected document (and
+    claim), its exact source revision, the rationale, where the correction came
+    from, the project scope, the replacement relation that would be recorded,
+    every other record that quotes or derives from the target, and the exact
+    recovery command. `confirm.expect_revision` is what `/corrections/apply`
+    requires back.
+    """
+    from palinode.corrections.review import preview_correction
+
+    try:
+        return preview_correction(**req.model_dump())
+    except Exception as error:  # noqa: BLE001 — mapped, never swallowed
+        raise _correction_http(error)
+
+
+@router.post("/corrections/apply")
+def correction_apply_api(req: CorrectionApplyRequest) -> dict[str, Any]:
+    """Apply a previewed correction. Requires `confirm` and the preview's revision.
+
+    Persists only through the existing validated write path — `save_memory` +
+    `archive_memory` for a document, the executor's own SUPERSEDE/ARCHIVE op
+    for a claim — so the git provenance, the `-history.md` audit sibling and
+    the index propagation are whatever those contracts already produce. The
+    actor names this a reviewed correction and carries the candidate id when
+    one was the source. A stale revision or an ambiguous target is refused
+    with 409 and the information needed to decide.
+
+    A document-level correction that saved the replacement and then failed to
+    retire the original is **not** a refusal and not a 500: it returns 409 with
+    `applied: "partial"` and the block naming what was written, what was not,
+    and the command that completes it. 409 because this router's 409 already
+    means "the store is not in the state your request assumed — look, then
+    decide", which is exactly what a partial needs from its caller; a 5xx would
+    lose the payload (`_safe_500` sanitizes the detail down to a context
+    string, on purpose) and would read to generic client tooling as a blind
+    retry, which is the wrong move on a store that is already half-written.
+    """
+    from palinode.core.parity import CORRECTION_APPLIED_PARTIAL
+    from palinode.corrections.review import apply_correction
+
+    try:
+        result = apply_correction(**req.model_dump())
+    except Exception as error:  # noqa: BLE001 — mapped, never swallowed
+        raise _correction_http(error)
+    if result.get("applied") == CORRECTION_APPLIED_PARTIAL:
+        raise HTTPException(status_code=409, detail=result)
+    return result
+
+
+@router.post("/corrections/dismiss")
+def correction_dismiss_api(req: CorrectionDismissRequest) -> dict[str, Any]:
+    """Record that a reviewer declined a candidate. Writes no memory.
+
+    The queue row is marked `dismissed` through the queue's own atomic writer
+    and kept: the dedupe key is (session id, span hash), read from every row,
+    so the dismissed row is what stops the next scan re-proposing the span.
+    """
+    from palinode.corrections.review import dismiss_candidate
+
+    try:
+        return dismiss_candidate(req.candidate_id, reason=req.reason)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="No such correction candidate")
+    except Exception as error:  # noqa: BLE001 — mapped, never swallowed
+        raise _correction_http(error)
+
+
+@router.post("/corrections/undo")
+def correction_undo_api(req: CorrectionUndoRequest) -> dict[str, Any]:
+    """Preview (default) or apply the undo of a correction.
+
+    Without `confirm` this is a read: it states what would be restored, what
+    would not be deleted, and what cannot be reached at all. With `confirm` and
+    the preview's revision it calls `restore_memory` — the exact inverse of the
+    archive. It refuses to resurrect anything separately retracted or withdrawn
+    by a forget request; those have their own surfaces.
+    """
+    from palinode.corrections.review import apply_undo, preview_undo
+
+    try:
+        if req.confirm:
+            return apply_undo(
+                target=req.target,
+                expect_revision=req.expect_revision,
+                confirm=True,
+                reason=req.reason,
+            )
+        return preview_undo(target=req.target)
+    except Exception as error:  # noqa: BLE001 — mapped, never swallowed
+        raise _correction_http(error)
 
 
 class MigrateOpenClawRequest(BaseModel):

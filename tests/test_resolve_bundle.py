@@ -875,12 +875,7 @@ def test_the_rendered_text_carries_the_same_receipt_id(mem):
 
 
 def test_building_the_receipt_writes_no_retrieval_row_through_rest(mem, client):
-    """Read-only in both ledgers, receipt or no receipt.
-
-    ``/search`` writes a retrieval row per delivery by design; a receipt is a
-    description of a delivery, not an event in one, so resolve produces one
-    without producing the other.
-    """
+    """Receipt metadata is persisted without creating file-retrieval events."""
     seed_current(mem)
     audit = mem / ".audit" / "retrievals.jsonl"
 
@@ -888,7 +883,9 @@ def test_building_the_receipt_writes_no_retrieval_row_through_rest(mem, client):
         body = client.post("/resolve", json={"query": "endpoint production traffic"}).json()
         assert body["receipt"]["bundle_id"] == body["receipt_ref"]
 
-    assert not audit.exists() or audit.read_text(encoding="utf-8").strip() == ""
+    entries = [json.loads(line) for line in audit.read_text().splitlines()]
+    assert len(entries) == 3
+    assert all(e["event_type"] == "bundle_receipt" and not e.get("file_path") for e in entries)
 
 
 def test_evidence_only_records_report_a_file_revision_not_unknown(mem):
@@ -1029,6 +1026,10 @@ def test_cli_renders_the_same_text(client, mem, name, monkeypatch):
 
     from palinode.cli.resolve import api_client
 
+    # The CLI resolves this shell's project and sends it. Pinned to the
+    # scenario's own project so the rendering does not depend on the checkout
+    # the suite runs in: a scoped request leaves other projects' records out.
+    monkeypatch.setenv("PALINODE_PROJECT", "demo")
     monkeypatch.setattr(
         api_client,
         "resolve",
@@ -1062,6 +1063,9 @@ async def test_mcp_renders_the_same_text(client, mem, name, monkeypatch):
         return _Resp(client.post("/resolve", json=json).json())
 
     monkeypatch.setattr(mcp, "_post", _fake_post)
+    # As in the CLI test: the client's project is the scenario's, not the
+    # checkout's.
+    monkeypatch.setenv("PALINODE_PROJECT", "demo")
     out = await mcp._tool_resolve({"query": query})
     assert _stable_text(out[0].text).strip() == expected["text"].strip()
 
@@ -1081,13 +1085,19 @@ async def test_mcp_forwards_every_canonical_param(monkeypatch):
         return _Resp()
 
     monkeypatch.setattr(mcp, "_post", _fake_post)
+    # The client's resolved project rides along beside the canonical params;
+    # pinned here so the test does not depend on the checkout it runs in.
+    monkeypatch.setenv("PALINODE_PROJECT", "harbor-notes")
     await mcp._tool_resolve({
         "query": "q", "ref": "decisions/x", "context": ["decisions/y"],
         "intent": "current_state", "max_items": 3, "max_chars": 500,
+        "include_retired": True,
     })
     assert captured[0] == {
         "query": "q", "ref": "decisions/x", "intent": "current_state",
         "context": ["decisions/y"], "max_items": 3, "max_chars": 500,
+        "include_retired": True,
+        "project": "project/harbor-notes",
     }
 
 

@@ -3,6 +3,7 @@ import json as _json
 import click
 from palinode.cli._api import HTTPStatusError, api_client
 from palinode.cli._format import console, print_result, get_default_format, OutputFormat
+from palinode.core.lifecycle_render import render_retained_copies
 from palinode.core.parity import MEMORY_TYPES
 
 @click.command()
@@ -347,6 +348,12 @@ def save(
                     "semantic recall follows once the embedder is reachable "
                     "(run `palinode doctor` if this persists)."
                 )
+            # A forget request retired memories; the ones quoting or citing
+            # them were not reached and stay in recall.
+            for line in render_retained_copies(
+                (result.get("forget") or {}).get("retained_copies")
+            ):
+                click.echo(line)
             if sync and "write_time_check" in result:
                 check = result["write_time_check"]
                 ops = check.get("operations", [])

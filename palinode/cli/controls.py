@@ -125,6 +125,12 @@ def build_disclosure(
             "opt_in": "not inferred from MCP installation; selected harness setup must opt in",
             "observed_source": "Claude Code SessionEnd hook only when shown above as observed generated setup",
             "observed_range": "eligible floor capture sends a message count and a 200-character first-prompt topic hint; it is not a full transcript import",
+            # The correction miner is a second, separate transcript reader with
+            # its own switch. Reported from API status, which is the runtime
+            # authority: config on this machine is not proof of what the server
+            # reads.
+            "correction_mining": status.get("transcript_correction_capture")
+            or {"enabled": "unknown (not reported by API)"},
         },
         "capture_and_recall": {
             "automatic": "observed Claude hooks may attempt automatic lifecycle work; MCP/Codex tool use is explicit unless that client follows project instructions",
@@ -195,6 +201,30 @@ def _emit(data: dict[str, Any], fmt: str | None) -> None:
         console.print(f"  Git: {destinations['push_policy']}; remotes: {'; '.join(remotes) if remotes else 'none configured'}")
         transcript = data["transcript_capture"]
         console.print(f"  Transcript capture: opt-in; {transcript['observed_source']}")
+        mining = transcript.get("correction_mining") or {}
+        if mining.get("enabled") is True:
+            console.print(
+                f"  Correction mining: enabled for {', '.join(mining.get('harnesses') or []) or 'no harness'}; "
+                f"reads {mining.get('reads')}; stores {mining.get('stores')}"
+            )
+            # Reading and classifying are separate opt-ins, so they are reported
+            # as separate facts: the destination is the part a reader cannot
+            # infer, and "enabled" alone must not imply anything is transmitted.
+            console.print(
+                f"  Correction mining classification: {_enabled_label(mining.get('classify_enabled'))}"
+            )
+            # Parentheses, not brackets: ``console.print`` reads ``[...]`` as
+            # rich markup and silently consumes it, which is exactly how a
+            # destination disclosure would come to be printed as nothing.
+            console.print(
+                f"  Correction mining sends: {mining.get('sends')} "
+                f"(destination: {mining.get('sends_to') or 'none'})"
+            )
+        else:
+            console.print(
+                f"  Correction mining: {_enabled_label(mining.get('enabled'))}; "
+                "no transcript path is read and nothing is sent"
+            )
         console.print(
             f"  Scope: pauses affect {PAUSE_SCOPE}; exclusions: {EXCLUSION_SCOPE}"
         )

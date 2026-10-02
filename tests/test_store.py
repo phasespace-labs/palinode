@@ -133,9 +133,12 @@ def test_search_hybrid_raw_score_from_vector():
     with patch("palinode.core.store.search") as mock_vec:
         with patch("palinode.core.store.search_fts") as mock_fts:
             with patch("palinode.core.store.get_db"):
+                # Both cosines sit inside the vector arm's relative floor of
+                # each other, so what is under test here is the pass-through of
+                # raw_score and not which candidates survive.
                 mock_vec.return_value = [
                     {"file_path": "a.md", "section_id": "root", "content": "text a", "score": 0.9, "raw_score": 0.9},
-                    {"file_path": "b.md", "section_id": "root", "content": "text b", "score": 0.7, "raw_score": 0.7},
+                    {"file_path": "b.md", "section_id": "root", "content": "text b", "score": 0.8, "raw_score": 0.8},
                 ]
                 mock_fts.return_value = [
                     {"file_path": "a.md", "section_id": "root", "content": "text a", "score": 0.8},
@@ -152,7 +155,7 @@ def test_search_hybrid_raw_score_from_vector():
 
                 # b.md also came from vector search
                 assert len(b_results) == 1
-                assert b_results[0]["raw_score"] == 0.7
+                assert b_results[0]["raw_score"] == 0.8
 
                 # RRF score should differ from raw_score (it's normalized)
                 assert a_results[0]["score"] != a_results[0]["raw_score"]

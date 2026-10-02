@@ -8,6 +8,15 @@
   <h1>Commit history</h1>
   <p class="lede">Read-only Git history for <code>{{ file_path }}</code>, newest first (up to {{ history_limit }} commits).</p>
 
+  {% if visibility and visibility.hidden %}
+  <div class="visibility-note">
+    <b>Hidden from discovery</b> — {{ visibility.label }}.
+    This timeline renders because you asked for this record by name. No
+    correction, retirement or restore is offered from the inspector for it —
+    use the CLI or API, where the caller's authority is explicit.
+  </div>
+  {% endif %}
+
   {% if history_unavailable %}
   <p class="empty">Git history is currently unavailable for this memory.</p>
   {% elif history %}

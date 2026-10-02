@@ -31,7 +31,7 @@ from palinode.core import store, embedder, git_tools
 from palinode.core.lifecycle import eligibility, is_retired_fact_text, parse_moment
 from palinode.core.ollama_client import OllamaError, OllamaRole, get_ollama_client
 from palinode.core.parser import split_frontmatter
-from palinode.consolidation import retirement, status_doc
+from palinode.consolidation import retirement, status_doc, watermark
 from palinode.consolidation.fact_ids import FACT_LINE_RE, count_body_facts
 from palinode.consolidation.log_lines import LogLine, older_than
 from palinode.consolidation.op_parse import op_kind, op_reason, parse_result
@@ -298,8 +298,23 @@ def _note_date(filepath: str, meta: dict) -> str:
     return datetime.fromtimestamp(os.path.getmtime(filepath), UTC).strftime("%Y-%m-%d")
 
 
+def _modified_at(filepath: str) -> datetime:
+    """When the file was last written, as a timezone-aware UTC timestamp.
+
+    The nightly's watermark compares against this rather than against the
+    note's date: a ``YYYY-MM-DD`` string is coarser than the timestamps it
+    filters and its boundary is UTC midnight, which is the middle of the
+    working day in most of the world. A file appended to after its own date
+    has passed — a session that ran past midnight UTC, a backdated capture —
+    is invisible to the date comparison and obvious to this one.
+    """
+    return datetime.fromtimestamp(os.path.getmtime(filepath), UTC)
+
+
 def _collect_daily_notes(
-    lookback_days: int, sources: Sequence[str] | None = None
+    lookback_days: int | None = None,
+    sources: Sequence[str] | None = None,
+    since: datetime | None = None,
 ) -> tuple[list[dict], int]:
     """Collect recent notes from the selected corpora.
 
@@ -313,6 +328,15 @@ def _collect_daily_notes(
     The default is now ``DEFAULT_CONSOLIDATION_SOURCES``, which includes
     ``insights/``; pass ``sources`` explicitly to narrow or widen it.
 
+    Two selectors, one per pass. ``lookback_days`` is the weekly's calendar
+    window and is unchanged. ``since`` is the nightly's watermark: a file is
+    collected when it was *written* after that moment, with no date arithmetic
+    anywhere in the comparison. Passing ``since`` ignores ``lookback_days``.
+
+    Every note carries ``modified_at`` regardless, so the caller can filter
+    further — the nightly does, per project, since one collection serves
+    several marks.
+
     Returns:
         Tuple of (notes list, skipped_count) where skipped_count is the
         number of files whose YAML frontmatter failed to parse.
@@ -321,7 +345,11 @@ def _collect_daily_notes(
     """
     selected = tuple(sources) if sources else DEFAULT_CONSOLIDATION_SOURCES
 
-    cutoff_date = (_utc_now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    cutoff_date = (
+        ""
+        if since is not None
+        else (_utc_now() - timedelta(days=lookback_days or 0)).strftime("%Y-%m-%d")
+    )
     notes = []
     skipped = 0
     candidates: list[str] = []
@@ -337,14 +365,21 @@ def _collect_daily_notes(
 
     for filepath in candidates:
         meta: dict = {}
+        modified_at = _modified_at(filepath)
 
-        # Fast path, and the reason daily behaviour is unchanged: a date-named
-        # file older than the cutoff is rejected without being opened, exactly
-        # as before. Only files whose date must come from frontmatter get read
-        # in order to be filtered.
-        named = _DATED_FILENAME.match(os.path.basename(filepath))
-        if named and named.group(1) < cutoff_date:
-            continue
+        if since is not None:
+            # The watermark path: one stat, no date parsing, and the file is
+            # not opened unless it was written after the mark.
+            if modified_at <= since:
+                continue
+        else:
+            # Fast path, and the reason weekly behaviour is unchanged: a
+            # date-named file older than the cutoff is rejected without being
+            # opened, exactly as before. Only files whose date must come from
+            # frontmatter get read in order to be filtered.
+            named = _DATED_FILENAME.match(os.path.basename(filepath))
+            if named and named.group(1) < cutoff_date:
+                continue
 
         with open(filepath, "r", encoding="utf-8") as f:
             content = f.read()
@@ -373,7 +408,7 @@ def _collect_daily_notes(
                     content = parts[2].strip() if len(parts) >= 3 else content
 
         date_str = _note_date(filepath, meta)
-        if date_str < cutoff_date:
+        if since is None and date_str < cutoff_date:
             continue
 
         # Frontmatter `entities:` is the reliable signal for a typed memory —
@@ -404,6 +439,7 @@ def _collect_daily_notes(
         notes.append({
             "filepath": filepath,
             "date": date_str,
+            "modified_at": modified_at,
             "content": content,
             "mentions": mentions
         })
@@ -421,6 +457,104 @@ def _group_by_project(daily_notes: list[dict]) -> dict[str, list[dict]]:
                     groups[pid] = []
                 groups[pid].append(note)
     return groups
+
+
+def _notes_written_between(
+    earlier: datetime, later: datetime, sources: Sequence[str]
+) -> int:
+    """How many note files in ``sources`` were written in ``(earlier, later]``.
+
+    Only called when the catch-up floor clamps a mark, to put a number on what
+    the clamp excluded. A file count rather than a per-project count: the
+    excluded files were never read, so nothing here knows which projects they
+    mention, and claiming otherwise would be a guess dressed as a report.
+    """
+    total = 0
+    for source in sources:
+        source_dir = os.path.join(config.memory_dir, source)
+        if not os.path.exists(source_dir):
+            continue
+        for filepath in glob.glob(os.path.join(source_dir, "*.md")):
+            if earlier < _modified_at(filepath) <= later:
+                total += 1
+    return total
+
+
+def _select_by_watermark(
+    grouped: dict[str, list[dict]],
+    *,
+    marks: dict[str, datetime],
+    cold_start_at: datetime,
+    floor: datetime,
+    catchup_days: int,
+    sources: Sequence[str],
+    resumes: dict[str, watermark.Resume] | None = None,
+) -> tuple[dict[str, list[dict]], list[str], dict[str, watermark.Resume]]:
+    """Narrow each group to the notes written since *that project's* mark.
+
+    The collection step is bounded by the catch-up floor, which is the oldest
+    any mark may be; this is where the per-project part happens. A group left
+    with no notes is dropped — the project has nothing new, and an empty
+    prompt is a wasted inference.
+
+    A project whose last pass stopped part-way (``resumes``) selects from its
+    resume position instead: the unfinished note and everything after it in
+    ``(modified_at, path)`` order, ties included.
+
+    Returns the surviving groups, the ids whose mark the floor clamped, and
+    the resume positions that still apply (a clamped one does not).
+    A clamp is a WARNING with the gap it skipped in it: one abandoned project
+    must not hand the model months of notes, and the bound that prevents that
+    must not do it silently.
+    """
+    kept: dict[str, list[dict]] = {}
+    clamped: list[str] = []
+    applied: dict[str, watermark.Resume] = {}
+    resumes = resumes or {}
+    for project_id, notes in grouped.items():
+        start = watermark.since_for(
+            project_id, marks=marks, cold_start_at=cold_start_at, floor=floor
+        )
+        resume = resumes.get(project_id)
+        if start.clamped_from is not None:
+            clamped.append(project_id)
+            # A resume position's own note sits *at* the mark, and the gap
+            # count below is exclusive of its lower end.
+            gap_from = (
+                start.clamped_from - timedelta(microseconds=1)
+                if resume is not None
+                else start.clamped_from
+            )
+            logger.warning(
+                "palinode.consolidation: %s — its watermark (%s) is older than the "
+                "%d-day catch-up bound, so this pass starts at %s instead and %d "
+                "note file(s) written in that gap are not selected. Widen the bound "
+                "(consolidation.nightly.lookback_days, or --days N on the cron line) "
+                "and re-run to cover them.",
+                project_id,
+                watermark.stamp(start.clamped_from),
+                catchup_days,
+                watermark.stamp(floor),
+                _notes_written_between(gap_from, floor, sources),
+            )
+            resume = None
+        if resume is not None and resume.modified_at == start.since:
+            position = (resume.modified_at, resume.path)
+            fresh = [note for note in notes if _progress_key(note) >= position]
+            applied[project_id] = resume
+        else:
+            fresh = [note for note in notes if note["modified_at"] > start.since]
+        if fresh:
+            kept[project_id] = fresh
+        else:
+            logger.debug(
+                "palinode.consolidation: %s — nothing written since its watermark "
+                "(%s, %s); not sent to the model",
+                project_id,
+                watermark.stamp(start.since),
+                start.source,
+            )
+    return kept, sorted(clamped), applied
 
 
 def _target_file_for(project_id: str) -> str | None:
@@ -662,7 +796,100 @@ def _record_gate_run(
             ", ".join(result.get("failed_projects") or []) or "unnamed",
         )
         return
+    if result.get("notes_pending"):
+        # Pending input is work the pass knows it has not done. Stamping the
+        # clock would let a quiet week defer it until the catch-up bound
+        # clamps it away; leaving it lets the next tick continue.
+        logger.info(
+            "palinode.consolidation: %s pass left %d note(s) pending — more than "
+            "its prompts held; leaving the activity gate's clock alone so the "
+            "next tick continues",
+            mode,
+            result["notes_pending"],
+        )
+        return
     activity_gate.record_run(mode, now=started_at)
+
+
+def _advance_watermarks(
+    result: dict[str, Any], started_at: datetime, *, dry_run: bool
+) -> None:
+    """Move the mark of every project this nightly pass actually resolved.
+
+    Resolved means the model saw the project's notes and the pass reached a
+    decision about them: compacted, proposed nothing, or had every proposal
+    removed by ``allowed_ops``. Everything else is deliberately absent, and
+    each absence is the self-heal working — a group whose call failed, was cut
+    off at the token cap, or raised inside the executor keeps its old mark and
+    is re-selected next run. So does a group with no target document or no
+    fact markers: nothing ever read those notes.
+
+    "Saw" is literal. A group whose prompt could not carry all of its notes
+    resolved only the contiguous prefix it was shown, and its mark records a
+    resume position at the end of that prefix (``watermark_resume``) instead
+    of the pass's start — an empty proposal must not acknowledge text the
+    model never received. When a pass sends a project several prompts, the
+    position is the end of the last one that resolved.
+
+    Stamped with the pass's *start* for the same reason ``_record_gate_run``
+    is: a note written during the pass was not in its selection.
+
+    A dry run advances nothing. Neither does a deferred run (the gate returns
+    before the pass) or one refused by the run lock (it raises before the pass
+    starts), which is why neither needs a check here.
+    """
+    if dry_run:
+        return
+    resolved = [str(project) for project in result.get("projects_resolved") or []]
+    # A project whose first prompts resolved and a later one failed is in
+    # both lists; its mark moves to the end of the last resolved prompt.
+    held = sorted(
+        (
+            set(result.get("failed_projects") or [])
+            | set(result.get("skipped_no_target_projects") or [])
+            | set(result.get("skipped_untagged_projects") or [])
+        )
+        - set(resolved)
+    )
+    if held:
+        logger.info(
+            "palinode.consolidation: nightly watermark held for %d project(s) — "
+            "their notes are selected again next run: %s",
+            len(held),
+            ", ".join(held),
+        )
+    if not resolved:
+        return
+    # A resolved project whose prompt could not carry its whole selection
+    # resolved only the prefix it was shown, so its mark moves to where that
+    # prefix ends rather than to the pass's start.
+    resume: dict[str, watermark.Resume] = {}
+    for project_id, raw in (result.get("watermark_resume") or {}).items():
+        position = watermark.Resume.from_state(raw)
+        if position is not None and project_id in resolved:
+            resume[project_id] = position
+    advanced = watermark.advance(resolved, started_at, resume=resume)
+    if advanced:
+        result["watermark_advanced"] = advanced
+        result["watermark_at"] = watermark.stamp(started_at)
+        logger.info(
+            "palinode.consolidation: nightly watermark advanced to %s for %d "
+            "project(s): %s",
+            result["watermark_at"],
+            len(advanced),
+            ", ".join(advanced),
+        )
+        for project_id in sorted(set(advanced) & set(resume)):
+            position = resume[project_id]
+            logger.info(
+                "palinode.consolidation: %s — mark records a resume position "
+                "instead (%s, %s, character %d): the notes after it were not "
+                "presented in full",
+                project_id,
+                watermark.stamp(position.modified_at),
+                position.path,
+                position.offset,
+            )
 
 
 def _record_run_outcome(
@@ -907,6 +1134,122 @@ def _system_prompt(prompt_file: str) -> str:
     return _read_prompt_body(str(packaged_path))
 
 
+#: Characters of note entries (heading + text) one compaction prompt carries.
+MAX_NOTES_CHARS = 6000
+#: The weekly pass's per-note clip. The nightly plans spans instead.
+MAX_NOTE_CHARS = 1500
+
+
+def _progress_path(filepath: str) -> str:
+    """A note's path as the watermark records it: relative, ``/``-separated."""
+    return os.path.relpath(filepath, config.memory_dir).replace(os.sep, "/")
+
+
+def _progress_key(note: dict) -> tuple[datetime, str]:
+    """The nightly's total order over notes: written-at, then path for ties."""
+    return note["modified_at"], _progress_path(note["filepath"])
+
+
+def _note_heading(note: dict) -> str:
+    """A note entry's heading: its date, its ref, and — for a part — which part."""
+    ref = _note_ref(note.get("filepath"))
+    head = f"### {note['date']} (ref: {ref})" if ref else f"### {note['date']}"
+    span = note.get("span")
+    if span is not None:
+        start, end, length = span
+        if (start, end) != (0, length):
+            head += f" [excerpt: characters {start}-{end} of {length}]"
+    return head
+
+
+class NightlyInput(NamedTuple):
+    """What one project's nightly prompt carries, and what that leaves pending.
+
+    ``notes`` are copies whose ``content`` is exactly the span presented, in
+    ``(modified_at, path)`` order. ``resume`` is where the next pass must
+    start if this one resolves — ``None`` when the plain mark (the pass's
+    start) already covers everything this pass did not finish.
+    """
+
+    notes: list[dict]
+    #: Every selected note's path, in presentation order.
+    selection: tuple[str, ...]
+    #: How many of ``notes`` are presented to their end.
+    complete: int
+    resume: watermark.Resume | None
+
+    @property
+    def selected(self) -> int:
+        return len(self.selection)
+
+    @property
+    def presented(self) -> int:
+        return len(self.notes)
+
+    @property
+    def pending(self) -> int:
+        return self.selected - self.complete
+
+
+def _plan_nightly_input(
+    notes: list[dict], *, resume: watermark.Resume | None, until: datetime
+) -> NightlyInput:
+    """Fit a project's selection into one prompt as a contiguous prefix.
+
+    Oldest first, in ``(modified_at, path)`` order, each note from where the
+    last pass stopped inside it (``resume``) and for as much of the remaining
+    budget as it needs. The plan stops at the first note it cannot finish, so
+    what the model is shown is always a prefix of the selection and a
+    resolution can acknowledge exactly that prefix. Every pass
+    presents at least part of the first unfinished note, so a backlog of any
+    size — including one note longer than the whole budget — is consumed.
+
+    ``until`` is the pass's start. A stopping point written after it is not
+    recorded: a note written during the pass may have been missed by the
+    collection, and the plain mark at ``until`` already covers every note
+    before the stopping point.
+    """
+    ordered = sorted(notes, key=_progress_key)
+    planned: list[dict] = []
+    total = 0
+    complete = 0
+    stop: tuple[tuple[datetime, str], int] | None = None
+    for note in ordered:
+        key = _progress_key(note)
+        text = note["content"]
+        length = len(text)
+        start = 0
+        if resume is not None and key == (resume.modified_at, resume.path):
+            start = resume.offset if resume.offset <= length else 0
+        whole = _note_heading({**note, "span": (start, length, length)})
+        if total + len(whole) + 1 + (length - start) <= MAX_NOTES_CHARS:
+            end = length
+        else:
+            # Sized with an excerpt marker at least as wide as the real one.
+            widest = _note_heading({**note, "span": (start, length, length + 1)})
+            room = MAX_NOTES_CHARS - total - len(widest) - 1
+            if room <= 0:
+                stop = (key, start)
+                break
+            end = start + room
+        piece = {**note, "content": text[start:end], "span": (start, end, length)}
+        planned.append(piece)
+        total += len(_note_heading(piece)) + 1 + (end - start)
+        if end < length:
+            stop = (key, end)
+            break
+        complete += 1
+
+    next_resume = None
+    if stop is not None:
+        (modified_at, path), offset = stop
+        if modified_at <= until:
+            next_resume = watermark.Resume(modified_at, path, offset)
+    return NightlyInput(
+        planned, tuple(note["filepath"] for note in ordered), complete, next_resume
+    )
+
+
 class AssembledPrompt(NamedTuple):
     """One group's user prompt and, as identifiers, what it contains."""
 
@@ -973,14 +1316,21 @@ def _assemble_prompt(project_id: str, notes: list[dict]) -> AssembledPrompt | No
     # copy into `falsified_by` / `contradicts` — the same reason a decision's
     # ref is rendered beside its title. The refs of the notes that fit the
     # budget are what the guard later accepts as "in context".
-    MAX_NOTES_CHARS = 6000
+    #
+    # A note carrying ``span`` was sized by :func:`_plan_nightly_input`, which
+    # owns the budget for it; it is rendered exactly as planned, because the
+    # plan is what the nightly's watermark records as seen.
     notes_parts = []
     note_refs: list[str] = []
     total = 0
     for n in reversed(notes):
         ref = _note_ref(n.get("filepath"))
-        head = f"### {n['date']} (ref: {ref})" if ref else f"### {n['date']}"
-        entry = f"{head}\n{n['content'][:1500]}"
+        if "span" in n:
+            notes_parts.append(f"{_note_heading(n)}\n{n['content']}")
+            if ref:
+                note_refs.append(ref)
+            continue
+        entry = f"{_note_heading(n)}\n{n['content'][:MAX_NOTE_CHARS]}"
         if total + len(entry) > MAX_NOTES_CHARS:
             break
         notes_parts.append(entry)
@@ -1886,12 +2236,24 @@ def _run_consolidation_unlocked(
     return result
 
 
-def run_nightly(lookback_days: int | None = None, dry_run: bool = False, llm_fn: LlmFn | None = None) -> dict[str, Any]:
+def run_nightly(
+    lookback_days: int | None = None,
+    dry_run: bool = False,
+    llm_fn: LlmFn | None = None,
+) -> dict[str, Any]:
     """Run nightly consolidation under the memory store's shared run lock.
 
     Records against the gate's ``nightly`` clock on the same terms as
     ``run_consolidation`` records against ``weekly``; the two modes are tracked
     separately so whichever ran last cannot starve the other.
+
+    Also advances the per-project watermarks, on the same success-only terms
+    and from the same ``started_at`` — one clock decides both what the pass
+    selected and what it records having consolidated.
+
+    ``lookback_days`` (the cron's ``--days N``) is no longer a window: it is
+    the catch-up bound, the furthest back a mark may reach. See
+    :func:`_run_nightly_unlocked`.
     """
     from palinode.consolidation import activity_gate
     from palinode.consolidation.run_lock import consolidation_run_lock
@@ -1904,35 +2266,92 @@ def run_nightly(lookback_days: int | None = None, dry_run: bool = False, llm_fn:
                 lookback_days=lookback_days,
                 dry_run=dry_run,
                 llm_fn=llm_fn,
+                started_at=started_at,
             )
         except Exception as error:
             _record_run_outcome(
                 "nightly", None, started_at, dry_run=dry_run, lookback_days=lookback, error=error
             )
             raise
+        _advance_watermarks(result, started_at, dry_run=dry_run)
         _record_gate_run("nightly", result, started_at, dry_run=dry_run)
         _record_run_outcome("nightly", result, started_at, dry_run=dry_run, lookback_days=lookback)
         return result
 
 
-def _run_nightly_unlocked(lookback_days: int | None = None, dry_run: bool = False, llm_fn: LlmFn | None = None) -> dict[str, Any]:
-    """Lightweight nightly consolidation — process today's daily notes only.
+def _run_nightly_unlocked(
+    lookback_days: int | None = None,
+    dry_run: bool = False,
+    llm_fn: LlmFn | None = None,
+    started_at: datetime | None = None,
+) -> dict[str, Any]:
+    """Lightweight nightly consolidation — everything not yet consolidated.
 
     Restricted to UPDATE and SUPERSEDE ops. No ARCHIVE or MERGE (those
     are weekly concerns). Smaller LLM context = better JSON output.
 
+    Selection is a **per-project watermark**, not a calendar window: each
+    project's notes are those written since the last pass that resolved *that*
+    project (:mod:`palinode.consolidation.watermark`). A note is therefore sent
+    exactly once when passes succeed, and a failed pass re-sends only what it
+    failed on. ``lookback_days`` — the cron's ``--days N`` — survives as the
+    catch-up bound: how far back a cold or long-failed mark may reach, which
+    is the only thing the number still governs.
+
     Pinned to ``NIGHTLY_CONSOLIDATION_SOURCES`` rather than inheriting the
-    weekly default: "today's daily notes only" is this function's contract, and
+    weekly default: "the daily capture stream" is this function's contract, and
     an unpinned call would have widened it silently the moment the weekly
     default grew.
     """
     from palinode.consolidation.executor import apply_operations
 
-    lookback = lookback_days or config.consolidation.nightly.lookback_days
-    notes, yaml_skipped = _collect_daily_notes(
-        lookback, sources=NIGHTLY_CONSOLIDATION_SOURCES
+    started_at = started_at or _utc_now()
+    catchup_days = max(int(lookback_days or config.consolidation.nightly.lookback_days), 1)
+    floor = watermark.floor_at(started_at, catchup_days)
+    marks = watermark.load()
+    resumes = watermark.load_resume()
+    cold_start_at, cold_start_reason = watermark.cold_start(floor)
+    logger.info(
+        "palinode.consolidation: nightly selects per-project watermarks — %d "
+        "recorded mark(s); a project with none starts at %s (%s); catch-up "
+        "bounded to %d day(s), i.e. nothing older than %s (a bound, not a "
+        "window: notes are selected once and re-selected only when a pass fails)",
+        len(marks),
+        watermark.stamp(cold_start_at),
+        cold_start_reason,
+        catchup_days,
+        watermark.stamp(floor),
     )
-    if not notes:
+
+    # One microsecond under the floor: a resume position sitting exactly on it
+    # selects its own note inclusively. The per-project filter below decides.
+    notes, yaml_skipped = _collect_daily_notes(
+        sources=NIGHTLY_CONSOLIDATION_SOURCES, since=floor - timedelta(microseconds=1)
+    )
+    if yaml_skipped:
+        logger.warning(
+            "palinode.consolidation: %d daily note(s) had unparseable YAML frontmatter "
+            "— run `palinode lint` to inspect. Proceeding with body text only.",
+            yaml_skipped,
+        )
+
+    grouped = _group_by_project(notes)
+    grouped, watermark_clamped, resumes = _select_by_watermark(
+        grouped,
+        marks=marks,
+        cold_start_at=cold_start_at,
+        floor=floor,
+        catchup_days=catchup_days,
+        sources=NIGHTLY_CONSOLIDATION_SOURCES,
+        resumes=resumes,
+    )
+    # Counted after the per-project filter: the honest answer to "what did this
+    # pass process" is the notes at least one group actually sent, not every
+    # file inside the catch-up bound.
+    selected = {
+        note["filepath"] for project_notes in grouped.values() for note in project_notes
+    }
+    if not grouped:
         if dry_run:
             return {
                 "status": "no_new_notes",
@@ -1943,14 +2362,6 @@ def _run_nightly_unlocked(lookback_days: int | None = None, dry_run: bool = Fals
             }
         return {"status": "no_new_notes", "processed_notes": 0, "projects_compacted": 0}
 
-    if yaml_skipped:
-        logger.warning(
-            "palinode.consolidation: %d daily note(s) had unparseable YAML frontmatter "
-            "— run `palinode lint` to inspect. Proceeding with body text only.",
-            yaml_skipped,
-        )
-    
-    grouped = _group_by_project(notes)
     grouped, skipped_no_target = _partition_by_target(grouped)
     if skipped_no_target:
         logger.info(
@@ -1967,19 +2378,32 @@ def _run_nightly_unlocked(lookback_days: int | None = None, dry_run: bool = Fals
     failed_projects: list[str] = []
     projects_no_ops: list[str] = []
     projects_all_ops_filtered: list[str] = []
+    # The ids behind ``projects_processed``, kept because the watermark moves
+    # per project and a count cannot say which.
+    projects_compacted: list[str] = []
     model_used = "primary"
     proposed_changes: list[dict[str, str]] = []
     mutated_files: list[str] = []
+    # Input coverage: what each group selected, what each of its prompts
+    # actually carried, and which prompt a resolution of it may move the mark
+    # to the end of.
+    plans: dict[str, list[NightlyInput]] = {}
+    last_resolved: dict[str, NightlyInput] = {}
+    max_prompts = max(int(config.consolidation.nightly.max_prompts_per_project), 1)
 
-    for project_id, pnotes in grouped.items():
+    def _send(project_id: str, pnotes: list[dict]) -> str:
+        """One prompt for one project: propose, guard, filter, apply.
+
+        Returns ``"failed"``, ``"no_ops"``, ``"all_filtered"`` or
+        ``"compacted"``. Everything but a failure resolved the prompt.
+        """
+        nonlocal model_used
         try:
             operations, model_used_current = _consolidate_project(project_id, pnotes, is_nightly=True, llm_fn=llm_fn)
             if model_used_current == LLM_FAILED:
-                failed_projects.append(project_id)
-                continue
+                return "failed"
             if not operations:
-                projects_no_ops.append(project_id)
-                continue
+                return "no_ops"
 
             model_used = model_used_current
 
@@ -2004,14 +2428,12 @@ def _run_nightly_unlocked(lookback_days: int | None = None, dry_run: bool = Fals
             allowed_ops = set(config.consolidation.nightly.allowed_ops)
             operations = [op for op in operations if (op_kind(op) or "KEEP") in allowed_ops]
             if not operations:
-                projects_all_ops_filtered.append(project_id)
-                continue
+                return "all_filtered"
 
             if dry_run:
                 proposed_changes.extend(_proposed_changes(target, operations))
-                projects_processed += 1
                 logger.info(f"Previewed nightly compaction for {project_id}: {len(operations)} operation(s)")
-                continue
+                return "compacted"
 
             pre_apply_ids = _fact_ids_before_apply(target)
             applied_merges: list[int] = []
@@ -2028,25 +2450,83 @@ def _run_nightly_unlocked(lookback_days: int | None = None, dry_run: bool = Fals
             )
 
             mutated_files.extend(_touched_files(target))
-
-            projects_processed += 1
             logger.info(f"Nightly compacted {project_id}: {stats}")
+            return "compacted"
 
         except Exception as e:
-            failed_projects.append(project_id)
             logger.error(f"Nightly compaction failed for {project_id}: {e}")
+            return "failed"
+
+    for project_id, selection in grouped.items():
+        # Up to ``max_prompts`` prompts, each planned exactly as a single
+        # pass plans one and resumed where the previous one stopped. The next
+        # prompt is sent only after this one resolved and left a resume
+        # position; a failed, truncated or unreadable reply ends the project's
+        # pass there, and its mark stays at the end of the last resolved one.
+        resume = resumes.get(project_id)
+        remaining = selection
+        sent: list[NightlyInput] = []
+        outcomes: set[str] = set()
+        while True:
+            plan = _plan_nightly_input(remaining, resume=resume, until=started_at)
+            sent.append(plan)
+            outcome = _send(project_id, plan.notes)
+            if outcome == "failed":
+                failed_projects.append(project_id)
+                break
+            outcomes.add(outcome)
+            last_resolved[project_id] = plan
+            if plan.resume is None or len(sent) >= max_prompts:
+                break
+            resume = plan.resume
+            position = (resume.modified_at, resume.path)
+            remaining = [note for note in remaining if _progress_key(note) >= position]
+        plans[project_id] = sent
+
+        # One entry per project in the lists below, however many prompts it
+        # took: compacted if any prompt applied something.
+        if "compacted" in outcomes:
+            projects_processed += 1
+            projects_compacted.append(project_id)
+        elif "all_filtered" in outcomes:
+            projects_all_ops_filtered.append(project_id)
+        elif "no_ops" in outcomes:
+            projects_no_ops.append(project_id)
+
+        chosen, shown, finished = _project_files(sent)
+        if chosen - finished:
+            logger.warning(
+                "palinode.consolidation: %s — %d of %d selected note(s) do not fit "
+                "this pass's %d prompt(s) in full (%d presented, %d of them partly); "
+                "the rest stay pending and are selected again next pass",
+                project_id,
+                len(chosen - finished),
+                len(chosen),
+                len(sent),
+                len(shown),
+                len(shown - finished),
+            )
 
     _log_no_op_groups(projects_no_ops, projects_all_ops_filtered)
 
     # Nightly does NOT archive daily notes (left for weekly)
 
+    # Every group the pass reached a decision about — compacted, proposed
+    # nothing, or had every op filtered. All three saw their notes, which is
+    # the condition for advancing a mark; a failed or skipped group is absent
+    # by construction and keeps the mark it had.
+    projects_resolved = sorted(
+        set(projects_compacted) | set(projects_no_ops) | set(projects_all_ops_filtered)
+    )
+
     if dry_run:
         nightly_result = {
             "status": _run_status(failed_projects),
-            "processed_notes": len(notes),
+            "processed_notes": len(selected),
             "projects_compacted": projects_processed,
             "projects_failed": len(failed_projects),
             "projects_skipped": len(skipped_no_target) + len(skipped_untagged),
+            "projects_resolved": projects_resolved,
             "dry_run": True,
             "proposed_changes": proposed_changes,
             **{key: total_stats[key] for key in GUARD_STATS},
@@ -2055,14 +2535,17 @@ def _run_nightly_unlocked(lookback_days: int | None = None, dry_run: bool = Fals
             nightly_result["yaml_parse_errors"] = yaml_skipped
         if failed_projects:
             nightly_result["failed_projects"] = failed_projects
+        if watermark_clamped:
+            nightly_result["watermark_clamped"] = watermark_clamped
         _record_skips(
             nightly_result, no_target=skipped_no_target, untagged=skipped_untagged
         )
         _record_no_ops(
             nightly_result, no_ops=projects_no_ops, all_ops_filtered=projects_all_ops_filtered
         )
+        _record_coverage(nightly_result, plans, last_resolved)
         return nightly_result
-    
+
     if projects_processed > 0:
         _git_commit(
             f"palinode: nightly {_utc_now().strftime('%Y-%m-%d')} — "
@@ -2073,21 +2556,94 @@ def _run_nightly_unlocked(lookback_days: int | None = None, dry_run: bool = Fals
     
     nightly_result: dict[str, Any] = {
         "status": _run_status(failed_projects),
-        "processed_notes": len(notes),
+        "processed_notes": len(selected),
         "projects_compacted": projects_processed,
         "projects_failed": len(failed_projects),
         "projects_skipped": len(skipped_no_target) + len(skipped_untagged),
+        "projects_resolved": projects_resolved,
         **total_stats,
     }
     if yaml_skipped:
         nightly_result["yaml_parse_errors"] = yaml_skipped
     if failed_projects:
         nightly_result["failed_projects"] = failed_projects
+    if watermark_clamped:
+        nightly_result["watermark_clamped"] = watermark_clamped
     _record_skips(nightly_result, no_target=skipped_no_target, untagged=skipped_untagged)
     _record_no_ops(
         nightly_result, no_ops=projects_no_ops, all_ops_filtered=projects_all_ops_filtered
     )
+    _record_coverage(nightly_result, plans, last_resolved)
     return nightly_result
+
+
+def _project_files(sent: list[NightlyInput]) -> tuple[set[str], set[str], set[str]]:
+    """``(selected, presented, finished)`` note files across one project's prompts.
+
+    The pass's selection is the first prompt's; a later prompt selects a
+    suffix of it. A note split across prompts is presented once and finished
+    once, so nothing is counted twice.
+    """
+    selected = set(sent[0].selection) if sent else set()
+    presented: set[str] = set()
+    finished: set[str] = set()
+    for plan in sent:
+        for note in plan.notes:
+            presented.add(note["filepath"])
+            if note["span"][1] == note["span"][2]:
+                finished.add(note["filepath"])
+    return selected, presented, finished
+
+
+def _project_coverage(sent: list[NightlyInput]) -> dict[str, int]:
+    """One project's ``{selected, presented, pending}`` over the prompts it was sent."""
+    selected, presented, finished = _project_files(sent)
+    return {
+        "selected": len(selected),
+        "presented": len(presented),
+        "pending": len(selected - finished),
+    }
+
+
+def _record_coverage(
+    result: dict[str, Any],
+    plans: dict[str, list[NightlyInput]],
+    last_resolved: dict[str, NightlyInput],
+) -> None:
+    """Report what the model was shown against what the pass selected.
+
+    Counts are distinct note files across every prompt sent to the model:
+    ``notes_selected`` were chosen, ``notes_presented`` appeared in a prompt at
+    least in part, ``notes_pending`` were not presented in full to at least one
+    group and are selected again next pass. ``coverage`` breaks the same three
+    down per project, and ``prompts_sent`` says how many prompts each project
+    took. ``watermark_resume`` names, for each project whose last *resolved*
+    prompt stopped part-way, the position its mark records instead of the
+    pass's start — the one thing :func:`_advance_watermarks` writes
+    differently.
+    """
+    selected: set[str] = set()
+    presented: set[str] = set()
+    pending: set[str] = set()
+    coverage: dict[str, dict[str, int]] = {}
+    for project_id, sent in plans.items():
+        chosen, shown, finished = _project_files(sent)
+        selected |= chosen
+        presented |= shown
+        pending |= chosen - finished
+        coverage[project_id] = _project_coverage(sent)
+    result["notes_selected"] = len(selected)
+    result["notes_presented"] = len(presented)
+    result["notes_pending"] = len(pending)
+    result["coverage"] = coverage
+    result["prompts_sent"] = {project_id: len(sent) for project_id, sent in plans.items()}
+    resumes = {
+        project_id: plan.resume.to_state()
+        for project_id, plan in last_resolved.items()
+        if plan.resume is not None
+    }
+    if resumes:
+        result["watermark_resume"] = resumes
 
 
 def apply_proposed_operations(

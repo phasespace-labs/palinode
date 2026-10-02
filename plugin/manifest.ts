@@ -40,8 +40,8 @@ function registeredToolNames(): string[] {
   const api = {
     pluginConfig: {},
     logger: { info: noop, warn: noop, error: noop },
-    registerTool: (def: { name: string }) => {
-      names.push(def.name);
+    registerTool: (def: { name: string } | ((context: object) => { name: string })) => {
+      names.push((typeof def === "function" ? def({}) : def).name);
     },
     on: noop,
     registerCli: noop,

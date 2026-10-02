@@ -108,6 +108,7 @@ Environment variables the hooks respect:
 |----------|---------|---------|
 | `PALINODE_API_URL` | `http://localhost:6340` | Where the API lives (both hooks) |
 | `PALINODE_API_TOKEN` | *(unset)* | Bearer token for token-protected deployments (session-start hook) |
+| `PALINODE_PROJECT` | *(unset)* | This session's project slug. Sent with the session-start prime and the per-turn resolve; when unset the server resolves the project from the session's `cwd`. The server may be on another host, so it never uses its own directory |
 | `PALINODE_HOOK_MIN_MESSAGES` | `3` | Minimum user messages before capture fires (skips trivial sessions) |
 | `PALINODE_HOOK_REASONS` | `clear logout prompt_input_exit other` | Space-separated SessionEnd reasons to capture on. Narrow to e.g. `"clear"` for /clear-only, or extend with `resume` / `bypass_permissions_disabled` if you want to capture those lifecycle events too |
 | `PALINODE_HOOK_START_SOURCES` | `startup clear` | Space-separated SessionStart sources to fire on. Add `resume` / `compact` to re-inject after those events |

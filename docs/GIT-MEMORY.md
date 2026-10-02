@@ -57,7 +57,7 @@ If an agent mistakenly consolidates or overwrites data, you can revert the file.
 palinode rollback projects/my-app.md a1b2c3d
 ```
 
-> **Note:** Rollback defaults to a dry run. To actually apply the change, pass `--no-dry-run`.
+> **Note:** Rollback defaults to a dry run. To actually apply the change, pass `--no-dry-run`. A rollback that would undo a retirement (archive, supersede, retraction) is named in the preview and refused unless you also pass `--undo-retirements`; `palinode restore` is the supported way to bring a retired memory back.
 
 ### 5. Push (Admin Only)
 

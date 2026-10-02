@@ -18,7 +18,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from palinode.api.server import app
+from palinode.core import aliases, store
 from palinode.core.config import config
+from palinode.core.scope import ScopeChain, resolve_scope_chain, with_other_projects
 
 client = TestClient(app)
 
@@ -41,6 +43,9 @@ DIGEST_KEYS = {
     # both caps at 0 carries neither this nor `_contested_partial`; see
     # tests/test_context_prime_budget.py.
     "_budget",
+    # How many core memories tagged to another project the scoped digest
+    # left out, so an empty scoped digest says why.
+    "other_projects_withheld",
 }
 
 
@@ -49,6 +54,8 @@ def scoped_memory_dir(tmp_path, monkeypatch):
     monkeypatch.delenv("PALINODE_PROJECT", raising=False)
     old_memory_dir = config.memory_dir
     config.memory_dir = str(tmp_path)
+    monkeypatch.setattr(config, "db_path", str(tmp_path / ".palinode.db"))
+    store.init_db()
 
     os.makedirs(os.path.join(tmp_path, "decisions"))
     os.makedirs(os.path.join(tmp_path, "insights"))
@@ -73,6 +80,93 @@ def scoped_memory_dir(tmp_path, monkeypatch):
 
 def _core_files(res) -> set[str]:
     return {row["file"] for row in res.json()["core_memories"]}
+
+
+NON_PROJECT_LEVELS = ("session", "agent", "harness", "member", "org")
+
+
+@pytest.fixture
+def all_level_memory_dir(scoped_memory_dir, tmp_path):
+    for level in NON_PROJECT_LEVELS:
+        for name in ("abc", "other"):
+            (tmp_path / "decisions" / f"{level}-{name}.md").write_text(
+                f"---\ntitle: {level} {name}\ncore: true\nscope: {level}/{name}\n---\nbody",
+                encoding="utf-8",
+            )
+    return scoped_memory_dir
+
+
+@pytest.mark.parametrize("level", NON_PROJECT_LEVELS)
+@pytest.mark.parametrize("entity_ref", [False, True], ids=["bare", "entity-ref"])
+def test_nonproject_override_forms_select_same_scoped_core(
+    all_level_memory_dir, level, entity_ref,
+):
+    bare = client.post("/context/prime", json={"scope": {level: "abc"}})
+    value = f"{level}/abc" if entity_ref else "abc"
+    res = client.post("/context/prime", json={"scope": {level: value}})
+    assert bare.status_code == res.status_code == 200
+    expected = ([f"{level}/abc"], {"decisions/legacy.md", f"decisions/{level}-abc.md"})
+    assert (bare.json()["scope_chain"], _core_files(bare)) == expected
+    assert (res.json()["scope_chain"], _core_files(res)) == expected
+
+
+@pytest.mark.parametrize("level", NON_PROJECT_LEVELS)
+def test_nonproject_override_preserves_other_level_prefix(all_level_memory_dir, level):
+    res = client.post("/context/prime", json={"scope": {level: "project/palinode"}})
+    assert res.status_code == 200
+    assert res.json()["scope_chain"] == [f"{level}/project/palinode"]
+    assert _core_files(res) == {"decisions/legacy.md"}
+
+
+@pytest.mark.parametrize("level", NON_PROJECT_LEVELS)
+@pytest.mark.parametrize("entity_ref", [False, True], ids=["bare", "entity-ref"])
+def test_resolved_nonproject_forms_select_same_scoped_core(
+    all_level_memory_dir, monkeypatch, level, entity_ref,
+):
+    from palinode.api.routers.search import SearchRequest, _resolve_search_scope_chain
+
+    value = f"{level}/abc" if entity_ref else "abc"
+    session_id = value if level == "session" else None
+    for identity_level in NON_PROJECT_LEVELS[1:]:
+        monkeypatch.setattr(config.scope, identity_level, None)
+    if level != "session":
+        monkeypatch.setattr(config.scope, level, value)
+
+    chain = resolve_scope_chain(config, session_id=session_id)
+    assert getattr(chain, level) == "abc"
+    assert chain.as_list() == [f"{level}/abc"]
+    res = client.post("/context/prime", json={"session_id": session_id})
+    assert res.status_code == 200
+    assert res.json()["scope_chain"] == chain.as_list()
+    assert _core_files(res) == {"decisions/legacy.md", f"decisions/{level}-abc.md"}
+
+    search_chain = _resolve_search_scope_chain(SearchRequest(
+        query="test", context=["project/palinode"], session_id=session_id,
+    ))
+    assert search_chain is not None
+    assert getattr(search_chain, level) == "abc"
+    assert search_chain.as_list() == ScopeChain(**{level: "abc"}, project="palinode").as_list()
+
+
+@pytest.mark.parametrize("level", NON_PROJECT_LEVELS)
+def test_scope_level_name_strips_only_one_own_prefix(level, monkeypatch):
+    from palinode.core.scope import scope_level_name
+
+    for value, name in (
+        (None, None), ("", ""), ("abc", "abc"), (f"{level}/abc", "abc"),
+        (f"{level}/{level}/abc", f"{level}/abc"), ("project/abc", "project/abc"),
+    ):
+        assert scope_level_name(level, value) == name
+        chain = ScopeChain(**{level: name})
+        assert getattr(chain, level) == name
+        assert chain.as_list() == ([f"{level}/{name}"] if name else [])
+        assert with_other_projects(chain).as_list() == chain.as_list()
+        if level == "session":
+            resolved = resolve_scope_chain(config, session_id=value)
+        else:
+            monkeypatch.setattr(config.scope, level, value)
+            resolved = resolve_scope_chain(config)
+        assert getattr(resolved, level) == name
 
 
 # ── the frozen hook contract ──────────────────────────────────────────────
@@ -149,6 +243,55 @@ def test_invalid_request_mode_is_rejected(scoped_memory_dir):
 
 
 # ── explicit scope override (ADR-009 §3.5) ────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "request_body",
+    [
+        {"project": "palinode"},
+        {"project": "project/palinode"},
+        {"scope": {"project": "palinode"}},
+        {"scope": {"project": "project/palinode"}},
+        {"project": "palinode-alias"},
+        {"project": "project/PALINODE-ALIAS"},
+        {"scope": {"project": "palinode-alias"}},
+        {"scope": {"project": "project/PALINODE-ALIAS"}},
+    ],
+    ids=[
+        "project-slug", "project-ref", "override-slug", "override-ref",
+        "project-alias", "project-alias-ref", "override-alias", "override-alias-ref",
+    ],
+)
+def test_project_forms_select_same_scoped_core(scoped_memory_dir, tmp_path, request_body):
+    (tmp_path / "entity-aliases.yaml").write_text(
+        "aliases:\n  project/palinode:\n    - project/palinode-alias\n", encoding="utf-8",
+    )
+    aliases.reset_cache()
+    try:
+        res = client.post("/context/prime", json=request_body)
+        assert res.status_code == 200
+        assert res.json()["scope_chain"] == ["project/palinode"]
+        assert _core_files(res) == {"decisions/legacy.md", "decisions/ours.md"}
+    finally:
+        aliases.reset_cache()
+
+
+@pytest.mark.parametrize("override", [{}, {"project": None}, {"project": "project/palinode"}])
+def test_override_project_is_independent_of_ambient_project(
+    scoped_memory_dir, monkeypatch, override,
+):
+    monkeypatch.setenv("PALINODE_PROJECT", "other")
+    res = client.post(
+        "/context/prime",
+        json={"cwd": "/w/other", "project": "other", "scope": override},
+    )
+    assert res.status_code == 200
+    if override.get("project"):
+        assert res.json()["scope_chain"] == ["project/palinode"]
+        assert _core_files(res) == {"decisions/legacy.md", "decisions/ours.md"}
+    else:
+        assert res.json()["scope_chain"] == []
+        assert _core_files(res) == {"decisions/legacy.md"}
 
 
 def test_explicit_scope_override_drives_the_chain(scoped_memory_dir):

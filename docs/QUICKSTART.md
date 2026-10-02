@@ -163,9 +163,17 @@ For example, v0.21.0 emits a TOML fragment for Codex:
 The explicit project is emitted as `PALINODE_PROJECT` for this stdio server
 process, so later searches and fresh sessions keep `harbor-notes` even from a
 linked worktree. A `palinode_session_init` project argument scopes that call;
-it does not change the scope of later calls. For a different project, generate
-a separate client entry. This option is stdio-only; HTTP clients share the
-remote server process.
+it does not change the scope of later calls. For a project-local `.mcp.json`,
+`palinode init --pin-project` writes the same setting. For a different project,
+generate a separate client entry. For a remote HTTP server, `--http --project
+harbor-notes` emits the same scope as an `X-Palinode-Project` request header:
+the server cannot see the client's directory, and without the header a remote
+call is unscoped rather than scoped to the server's own checkout.
+
+Every scoped response then names the project and the source that decided it —
+search leads with `Scope: project/harbor-notes (environment)` and the
+session-start digest heads with `Session context: project/harbor-notes
+(environment; known)`.
 
 Merge the result into the destination named in its instructions, then restart
 the client. Use [MCP install recipes](MCP-INSTALL-RECIPES.md) for the selected
@@ -250,6 +258,13 @@ rationale, and quote integrity does not establish that a quoted claim is true.
 The separately saved concurrent-writers requirement is the recorded support
 for the new rationale; assess that requirement's source and claim status on
 its own merits.
+
+The two steps above — save the replacement, then archive the original with
+`--superseded-by` — are also available as one reviewed operation that previews
+first, checks that the target has not changed since you looked, and prints the
+recovery command: `palinode corrections preview` / `apply`. See
+[CORRECTIONS.md](CORRECTIONS.md) for that walkthrough, what gets refused and
+why, and the undo path.
 
 ## 7. A conflict stays unresolved without evidence
 

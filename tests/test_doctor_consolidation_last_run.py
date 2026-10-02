@@ -131,6 +131,8 @@ def test_one_partial_is_reported_but_does_not_fail(store: Path) -> None:
 
 
 def test_two_consecutive_failures_warn_and_say_why(store: Path) -> None:
+    """Two in a row is "the nightly has stopped working" — before anything is
+    lost, which under a watermark it is not yet."""
     _record(store, "nightly", "success", hours_ago=62)
     _record(store, "nightly", "partial", hours_ago=38, failed=("palinode",))
     _record(store, "nightly", "partial", hours_ago=14, failed=("palinode",))
@@ -140,16 +142,18 @@ def test_two_consecutive_failures_warn_and_say_why(store: Path) -> None:
     assert result.passed is False
     assert result.severity == "warn"
     assert "2 consecutive failures" in result.message
-    assert "the next consecutive failure loses a day of notes" in result.message
-    assert "3-day lookback" in result.message
-    assert "in view for 3 runs" in result.message
+    assert "nothing is lost yet" in result.message
+    assert "1 more day(s) of catch-up remain" in result.message
+    assert "3-day catch-up bound" in result.message
     assert "weekly's 3-day window" in result.message
     assert "last success 2026-09-13T11:00:00Z (62 h ago" in result.message
     assert result.remediation
     assert "palinode consolidate --nightly" in result.remediation
 
 
-def test_three_consecutive_failures_fail(store: Path) -> None:
+def test_a_streak_as_long_as_the_catchup_bound_fails(store: Path) -> None:
+    """The error is the streak that actually drops notes: a mark older than
+    the bound is clamped by the floor, and the gap leaves the nightly's view."""
     _record(store, "nightly", "success", hours_ago=86)
     for hours in (62, 38, 14):
         _record(store, "nightly", "partial", hours_ago=hours, failed=("palinode",))
@@ -159,57 +163,62 @@ def test_three_consecutive_failures_fail(store: Path) -> None:
     assert result.passed is False
     assert result.severity == "error"
     assert "3 consecutive failures" in result.message
-    assert "3 in a row" in result.message
-    assert "has left every window" in result.message
+    assert "3 in a row reaches the 3-day catch-up bound" in result.message
+    assert "no longer selected" in result.message
     assert result.remediation
 
 
-def test_thresholds_follow_the_recorded_nightly_lookback() -> None:
-    """Warn one short of the streak that drops a day; the host's 3 gives 2/3."""
+def test_thresholds_are_the_catchup_bound_with_a_fixed_warn() -> None:
+    """Error where notes start being dropped; warn at two regardless, since a
+    failed nightly no longer costs a day."""
+    assert check_module.nightly_thresholds(7) == (2, 7)  # the shipped default
     assert check_module.nightly_thresholds(3) == (2, 3)
-    assert check_module.nightly_thresholds(2) == (1, 2)
+    assert check_module.nightly_thresholds(2) == (2, 2)
     assert check_module.nightly_thresholds(1) == (1, 1)
     assert check_module.nightly_thresholds(0) == (1, 1)
 
 
-def test_shipped_default_lookback_makes_a_single_failure_the_lost_day(store: Path) -> None:
-    """``nightly.lookback_days`` ships as 1: the first failure is already the
-    day nobody consolidates, so it is an error outright — no warn level."""
-    _record(store, "nightly", "success", hours_ago=38, days=1)
+def test_the_shipped_default_bound_makes_two_failures_a_warning(store: Path) -> None:
+    """The message has to be true on a default install: with the shipped 7-day
+    bound a single failure costs nothing, so it is not an error."""
+    _record(store, "nightly", "success", hours_ago=38, days=7)
+    _record(store, "nightly", "partial", hours_ago=14, failed=("palinode",), days=7)
+
+    one = consolidation_last_run(_ctx(store))
+    assert one.passed is True
+    assert one.severity == "info"
+    assert "1 consecutive failure;" in one.message
+
+    _record(store, "nightly", "partial", hours_ago=10, failed=("palinode",), days=7)
+    two = consolidation_last_run(_ctx(store))
+    assert two.passed is False
+    assert two.severity == "warn"
+    assert "7-day catch-up bound" in two.message
+    assert "5 more day(s) of catch-up remain" in two.message
+
+
+def test_a_one_day_bound_is_an_error_on_the_first_failure(store: Path) -> None:
+    """A bound that thin leaves no room to warn first: the next run's mark is
+    already outside it."""
     _record(store, "nightly", "partial", hours_ago=14, failed=("palinode",), days=1)
 
     result = consolidation_last_run(_ctx(store))
 
-    assert result.passed is False
     assert result.severity == "error"
-    assert "1 consecutive failure;" in result.message
-    assert "1 in a row" in result.message
-    assert "1-day lookback keeps a day's notes in view for one run" in result.message
-    assert "3-day" not in result.message.split("weekly's")[0]
-
-
-def test_a_two_day_lookback_warns_at_one_and_fails_at_two(store: Path) -> None:
-    _record(store, "nightly", "partial", hours_ago=14, failed=("palinode",), days=2)
-    one = consolidation_last_run(_ctx(store))
-    assert one.severity == "warn"
-    assert "the next consecutive failure loses a day" in one.message
-    assert "2-day lookback" in one.message
-
-    _record(store, "nightly", "partial", hours_ago=10, failed=("palinode",), days=2)
-    two = consolidation_last_run(_ctx(store))
-    assert two.severity == "error"
-    assert "2 in a row" in two.message
+    assert "1 in a row reaches the 1-day catch-up bound" in result.message
+    assert "one run" in result.message
 
 
 def test_a_record_without_a_lookback_falls_back_to_the_configured_one(store: Path) -> None:
-    """The consequence is stated in the configured number, not a literal 3."""
-    _record(store, "nightly", "partial", hours_ago=14, failed=("palinode",), days=None)
+    """The consequence is stated in the configured number, not a literal."""
+    for hours in (38, 14):
+        _record(store, "nightly", "partial", hours_ago=hours, failed=("palinode",), days=None)
 
     result = consolidation_last_run(_ctx(store))
 
-    # Config() ships nightly.lookback_days = 1 and weekly lookback_days = 3.
-    assert result.severity == "error"
-    assert "1-day lookback" in result.message
+    # Config() ships nightly.lookback_days = 7 and weekly lookback_days = 3.
+    assert result.severity == "warn"
+    assert "7-day catch-up bound" in result.message
     assert "weekly's 3-day window" in result.message
 
 

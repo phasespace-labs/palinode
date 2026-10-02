@@ -273,6 +273,12 @@ def _search_pref(pref: str) -> list[dict[str, Any]]:
         top_k=config.consolidation.forget.search_k,
         threshold=0.0,  # RRF scores are rank artifacts; never threshold them
         record_access=False,
+        # The best vector match for a pref phrase is usually the forget
+        # REQUEST itself, which resolution then discards. A floor measured
+        # against that hit cuts the records this search exists to find, so
+        # this caller keeps the unbounded arm — delivery-slate bounds are for
+        # what a caller reads, not for a resolver's candidate set.
+        vector_relative_floor=0.0,
     )
 
 
@@ -552,6 +558,13 @@ def check_forget_on_save(file_path: str, content: str) -> dict[str, Any] | None:
         result["prior_requests"] = [
             os.path.relpath(os.path.realpath(p), base) for p in prior
         ]
+    if archived:
+        # The copies the forget did not reach: memories quoting or citing a
+        # retired target stay in default recall and are named, never changed.
+        # Reporting must not be able to fail a save that already landed.
+        from palinode.corrections.review import retained_copies_reported
+
+        result["retained_copies"] = retained_copies_reported(archived)
     if retracted:
         result["retracted"] = retracted
     if skipped:
@@ -571,7 +584,7 @@ def _iter_memory_files(root: str):
 
 
 def withdraw_forget_request(
-    file_path: str, reason: str | None = None
+    file_path: str, reason: str | None = None, *, dry_run: bool = False
 ) -> dict[str, Any]:
     """Take a forget request back: undo what it did and retire its record.
 
@@ -593,6 +606,11 @@ def withdraw_forget_request(
     memories at two granularities, and the request record must stop
     standing as the visible retraction — restoring a target while the record
     stays live leaves the store saying two things at once.
+
+    ``dry_run`` walks the same targets and returns ``status: would_withdraw``
+    with what each step would do — the memories that would be restored, the
+    spans that would be un-struck (each step's own dry run), the request
+    records that would be archived — and writes nothing.
 
     Raises:
         ValueError: the path is malformed or escapes ``memory_dir``;
@@ -629,6 +647,8 @@ def withdraw_forget_request(
     restored: list[str] = []
     unretracted: list[dict[str, Any]] = []
     failed: list[dict[str, str]] = []
+    would_restore: list[dict[str, Any]] = []
+    would_unretract: list[dict[str, Any]] = []
     for path in _iter_memory_files(config.memory_dir):
         target_rel = _rel(path)
         if target_rel in record_set:
@@ -636,8 +656,21 @@ def withdraw_forget_request(
         meta = _frontmatter_of(path)
         if not meta:
             continue
-        if (meta.get("status") == ARCHIVED_STATUS
-                and str(meta.get("superseded_by") or "") in record_set):
+        restorable = (meta.get("status") == ARCHIVED_STATUS
+                      and str(meta.get("superseded_by") or "") in record_set)
+        recorded = meta.get("retracted_prefs")
+        unretractable = isinstance(recorded, list) and norm in recorded
+        if dry_run:
+            if restorable:
+                would_restore.append(
+                    restore_memory(target_rel, reason=why, dry_run=True)
+                )
+            if unretractable:
+                would_unretract.append(
+                    unretract_mentions(target_rel, pref, reason=why, dry_run=True)
+                )
+            continue
+        if restorable:
             try:
                 out = restore_memory(target_rel, reason=why)
                 if out["status"] == "active":
@@ -646,8 +679,7 @@ def withdraw_forget_request(
                 logger.warning("withdraw: failed to restore %s (non-fatal)",
                                target_rel, exc_info=True)
                 failed.append({"path": target_rel, "op": "restore"})
-        recorded = meta.get("retracted_prefs")
-        if isinstance(recorded, list) and norm in recorded:
+        if unretractable:
             try:
                 out = unretract_mentions(target_rel, pref, reason=why)
                 if out["status"] == "unretracted":
@@ -658,6 +690,32 @@ def withdraw_forget_request(
                 logger.warning("withdraw: failed to unretract %s (non-fatal)",
                                target_rel, exc_info=True)
                 failed.append({"path": target_rel, "op": "unretract"})
+
+    if dry_run:
+        return {
+            "file": rel,
+            "status": "would_withdraw",
+            "dry_run": True,
+            "pref": pref,
+            "reason": reason,
+            "would_restore": would_restore,
+            "would_unretract": would_unretract,
+            "requests_to_archive": [
+                archive_memory(record_rel, reason=why, dry_run=True)
+                for record_rel in record_rels
+            ],
+            "committed": False,
+            "recovery": {
+                "command": None,
+                "note": (
+                    "a withdrawal is undone by saving the forget request "
+                    "again, which re-applies it to every memory the pref "
+                    "still matches; `palinode restore` on the request record "
+                    "alone brings the record back but does not re-run the "
+                    "forget"
+                ),
+            },
+        }
 
     records_archived: list[str] = []
     for record_rel in record_rels:
@@ -676,8 +734,15 @@ def withdraw_forget_request(
         len(records_archived),
     )
     result: dict[str, Any] = {
+        # A step that failed is reported rather than raised (each target is
+        # its own mutation), so the top-level status has to carry that or the
+        # composition reads as complete when it is not: an operator who took a
+        # request back and got "withdrawn" would have no reason to look at the
+        # `failed` list below it. `partial` is the accurate word — some
+        # memories are back in recall and some are still retired — and the
+        # three surfaces lead with it.
         "file": rel,
-        "status": "withdrawn",
+        "status": "partial" if failed else "withdrawn",
         "pref": pref,
         "reason": reason,
         "restored": restored,

@@ -127,6 +127,7 @@ function captureRegisteredTools(): Map<string, CapturedTool> {
       error: () => undefined,
     },
     registerTool: (toolDef: any, _meta?: any) => {
+      if (typeof toolDef === "function") toolDef = toolDef({});
       if (!toolDef || typeof toolDef.name !== "string") return;
       tools.set(toolDef.name, {
         name: toolDef.name,
@@ -547,6 +548,7 @@ describe("ADR-015 §5 plugin parity (#480)", () => {
         },
         logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
         registerTool: (toolDef: any) => {
+          if (typeof toolDef === "function") toolDef = toolDef({});
           if (toolDef.name === "palinode_search") capturedExecute = toolDef.execute;
         },
         on: () => undefined,

@@ -34,6 +34,9 @@ def _decay_and_context_off(monkeypatch):
     monkeypatch.setattr(config.decay, "enabled", False)
     monkeypatch.setattr(config.context, "enabled", False)
     monkeypatch.setattr(config.search, "daily_penalty", 1.0)
+    # Per-file dedup is the subject here, so the vector arm's relative floor is
+    # off: these slates vary cosine to separate ranks, not to be competitive.
+    monkeypatch.setattr(config.search, "vector_relative_floor", 0.0)
 
 
 def _run(vec, fts=(), **kw):

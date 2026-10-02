@@ -9,7 +9,7 @@ from palinode.core import store, embedder
 from palinode.core.config import config
 from palinode.core.parity import CATEGORIES, MEMORY_TYPES, RESOLVE_MODES, TIERS
 from palinode.core.path_guard import to_rel_path
-from palinode.api._util import _retrieval_logger, _safe_500
+from palinode.api._util import _retrieval_logger, _safe_500, effective_project_scope
 from palinode.api.rate_limit import _RATE_LIMIT_SEARCH, _check_rate_limit
 from palinode.api.search_helpers import (
     _apply_tier,
@@ -36,6 +36,7 @@ _VISIBILITY_OVERFETCH = 5
 def _resolve_scope_chain(
     context: list[str] | None = None,
     session_id: str | None = None,
+    include_other_projects: bool = False,
 ):
     """Resolve the session scope chain for ADR-009 Layer 2 search gating.
 
@@ -51,8 +52,12 @@ def _resolve_scope_chain(
     would silently hide every explicitly-scoped shared memory. ``None`` still
     withholds ``private``/``restricted`` memories at the choke point; it only
     turns off *scope isolation*.
+
+    A chain carrying a project isolates to it: records tagged to a different
+    project are withheld at the same choke point, unless
+    ``include_other_projects`` asks for them.
     """
-    from palinode.core.scope import resolve_scope_chain
+    from palinode.core.scope import resolve_scope_chain, with_other_projects
 
     project = None
     for ref in (context or []):
@@ -60,12 +65,38 @@ def _resolve_scope_chain(
             project = ref.split("/", 1)[1]
             break
     chain = resolve_scope_chain(config, project=project, session_id=session_id)
-    return chain if chain.has_identity() else None
+    if not chain.has_identity():
+        return None
+    return with_other_projects(chain) if include_other_projects else chain
 
 
 def _resolve_search_scope_chain(req: "SearchRequest"):
     """``_resolve_scope_chain`` for a /search request body."""
-    return _resolve_scope_chain(context=req.context, session_id=req.session_id)
+    return _resolve_scope_chain(
+        context=req.context, session_id=req.session_id,
+        include_other_projects=bool(req.include_other_projects),
+    )
+
+
+def _label_other_projects(results: list[dict[str, Any]], chain) -> None:
+    """Mark each hit tagged to a project other than the request's.
+
+    Only reached when the request opted in with ``include_other_projects``;
+    by default such a hit was never delivered. ``other_project`` lists the
+    record's own project refs, so a reader sees whose decision it is.
+    """
+    from palinode.core.visibility import other_project_refs
+
+    if chain is None or not chain.include_other_projects:
+        return
+    for hit in results:
+        cached = hit.get("metadata")
+        refs = other_project_refs(
+            chain, hit.get("file_path"),
+            fallback_metadata=cached if isinstance(cached, dict) else {},
+        )
+        if refs:
+            hit["other_project"] = refs
 
 
 def _fetch_visible(
@@ -74,6 +105,7 @@ def _fetch_visible(
     base_limit: int,
     *,
     record_recall: Callable[[list[str]], None] | None = None,
+    other_projects: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch rows and apply the ADR-009 Layer 2 visibility gate.
 
@@ -101,16 +133,24 @@ def _fetch_visible(
     the retrieval log is written once, on the final set. Callers with no
     recall write-back (recency, associative) pass ``record_recall=None`` and
     take the plain wider re-fetch unchanged.
+
+    ``other_projects`` collects the records project isolation withheld from
+    the window that was finally used, for the delivery's withheld count.
     """
     from palinode.core.visibility import filter_visible
 
+    def gate(fetched: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if other_projects is not None:
+            other_projects.clear()
+        return filter_visible(chain, fetched, other_projects=other_projects)
+
     rows = run(base_limit)
-    visible = filter_visible(chain, rows)
+    visible = gate(rows)
     if len(visible) == len(rows) or len(rows) < base_limit:
         return visible
     if record_recall is None:
         # No recall write-back on this path: a plain wider re-fetch, unchanged.
-        return filter_visible(chain, run(base_limit * _VISIBILITY_OVERFETCH))
+        return gate(run(base_limit * _VISIBILITY_OVERFETCH))
     # The initial pass already recorded access for its rows. Suppress the
     # store-level write on the wider pass and record access once here for only
     # the rows the wider window newly surfaced, so a row present in both passes
@@ -118,7 +158,7 @@ def _fetch_visible(
     counted = {r.get("id") for r in rows}
     wide = run(base_limit * _VISIBILITY_OVERFETCH, record_access=False)
     record_recall([r.get("id") for r in wide if r.get("id") not in counted])
-    return filter_visible(chain, wide)
+    return gate(wide)
 
 
 class SearchRequest(BaseModel):
@@ -175,6 +215,11 @@ class SearchRequest(BaseModel):
     # contested, or the evidence is insufficient. Omitted / "none" attaches
     # nothing, so an ordinary request stays byte-identical.
     resolve: Literal[*RESOLVE_MODES] | None = None
+    # History on request. With `resolve`, retired records the evidence layer
+    # reaches (discovery, replaced predecessors, retired sources) are left out
+    # of each hit's evidence by default, as they are out of the hits; true
+    # keeps them, each labelled with its `retired` currency.
+    include_retired: bool = False
     # Delivery-receipt transport. `/search` returns a bare JSON array and that
     # is a frozen contract, so the receipt cannot simply become a top-level
     # key: with `receipt=true` the response is
@@ -190,6 +235,11 @@ class SearchRequest(BaseModel):
     automatic: bool = False
     cwd: str | None = None
     source_path: str | None = None
+    # A request scoped to a project leaves out records tagged to a different
+    # project (records naming no project are global and stay). True delivers
+    # them too, each labelled with its own project under ``other_project``.
+    # Unset (not False) by default so the receipt's request key is unchanged.
+    include_other_projects: bool | None = None
 
 
 def _attach_evidence(results: list[dict[str, Any]], req: "SearchRequest", chain) -> None:
@@ -206,6 +256,10 @@ def _attach_evidence(results: list[dict[str, Any]], req: "SearchRequest", chain)
 
         evidence = attach_evidence(results, mode=req.resolve, chain=chain)
         attach_resolution(results, evidence)
+        if not req.include_retired:
+            from palinode.core.evidence import withhold_retired
+
+            withhold_retired(results, evidence)
 
 
 def _build_receipt(results: list[dict[str, Any]], req: "SearchRequest", chain):
@@ -228,7 +282,23 @@ def _build_receipt(results: list[dict[str, Any]], req: "SearchRequest", chain):
     )
 
 
-def _delivery(results: list[dict[str, Any]], req: "SearchRequest", receipt, *, active_mode: str = "recency", chain=None):
+def _assess_confidence(results: list[dict[str, Any]], active_mode: str):
+    """This delivery's confidence verdict (:mod:`palinode.core.confidence`).
+
+    Read off the rows about to be returned — each already carries its two
+    pre-fusion arm scores — so it costs no second retrieval and describes
+    exactly the slate the caller gets, after the visibility gate, the type
+    filters and the ``limit`` trim have all had their say.
+    """
+    from palinode.core.confidence import assess
+
+    return assess(results, active_mode=active_mode)
+
+
+def _delivery(results: list[dict[str, Any]], req: "SearchRequest", receipt, *,
+              active_mode: str = "recency", chain=None, scope=None,
+              confidence: dict[str, Any] | None = None,
+              other_projects_withheld: int = 0):
     """Shape the response: today's bare array, or the receipt envelope.
 
     With ``resolve`` on, the envelope carries the receipt's **public** view —
@@ -237,14 +307,34 @@ def _delivery(results: list[dict[str, Any]], req: "SearchRequest", receipt, *, a
     no evidence to qualify, so it carries the compact reference
     (``bundle_id`` + ``evaluated_at``). Both shapes add caller-visible retrieval
     diagnostics, including on an empty result, without exposing global counts.
+
+    The envelope also names the project this delivery was scoped to and the
+    source that decided it, under the same ``project`` /
+    ``project_resolved_by`` keys ``/context/prime`` already returns — so a
+    caller can see *why* a search was scoped the way it was without a second
+    request. The bare array stays byte-identical: that shape is frozen.
+
+    The diagnostics carry this delivery's ``confidence`` verdict and the arm
+    evidence behind it, alongside the ``outcome`` they always carried: rows
+    came back is one question, any of them being worth trusting is another.
+
+    A project-scoped delivery also says how many records tagged to other
+    projects it withheld (``other_projects_withheld``), so a scoped empty
+    result reads as "isolated", not as "nothing in memory".
     """
     if not req.receipt:
         return results
     view = receipt.public() if (req.resolve and req.resolve != "none") else receipt.reference()
     from palinode.core.retrieval import search_diagnostics
 
-    view["retrieval"] = search_diagnostics(active_mode, matched=bool(results), chain=chain)
-    return {"results": results, "receipt": view}
+    view["retrieval"] = search_diagnostics(
+        active_mode, matched=bool(results), chain=chain, confidence=confidence,
+    )
+    view["retrieval"]["other_projects_withheld"] = other_projects_withheld
+    envelope: dict[str, Any] = {"results": results, "receipt": view}
+    if scope is not None:
+        envelope.update(scope.fields())
+    return envelope
 
 
 class SearchAssociativeRequest(BaseModel):
@@ -345,15 +435,22 @@ def search_api(
     """
     from palinode.core.capture_policy import evaluate_capture_policy
 
+    # The scope this delivery applies, resolved once through the shared
+    # resolver: the caller's own ``context`` when it sent one, else the pinned
+    # setting. Resolved *before* the capture-policy check so a pinned project
+    # is the project the policy is evaluated against, and reported on the way
+    # out. One resolution decides all three, so what the response reports is
+    # always what the search applied — an explicit ``context`` (including an
+    # empty one) is never overridden here, which is why the substitution is
+    # guarded on the field being absent rather than on it being falsy.
+    scope = effective_project_scope(req.context)
+    if req.context is None:
+        req.context = scope.context
     decision = evaluate_capture_policy(
         "recall",
         automatic=req.automatic or req.mode == "passive",
         cwd=req.cwd,
-        project=next(
-            (ref.split("/", 1)[1] for ref in (req.context or [])
-             if isinstance(ref, str) and ref.startswith("project/")),
-            None,
-        ),
+        project=scope.project.removeprefix("project/") if scope.project else None,
         source_path=req.source_path,
     )
     if not decision.allowed:
@@ -380,6 +477,7 @@ def search_api(
         # directly ordered by created_at desc, apply types/date_after filter.
         if not req.query.strip():
             recent_limit = limit * 5 if req.min_priority else limit
+            recent_other: set[str] = set()
             recent = _fetch_visible(
                 scope_chain,
                 lambda n: store.list_recent(
@@ -391,6 +489,7 @@ def search_api(
                     kind_exclude_list=kind_exclude_list,
                 ),
                 recent_limit,
+                other_projects=recent_other,
             )
             # apply type_deny post-fetch (list_recent does allow-filter
             # types, but has no deny param — mirror the same pattern as below).
@@ -401,8 +500,11 @@ def search_api(
             _enrich_with_snippets(recent, "", _resolve_snippet_max_chars(req.max_chars))
             _apply_tier(recent, req.tier)
             _enrich_with_rel_path(recent)
+            _label_other_projects(recent, scope_chain)
             _attach_evidence(recent, req, scope_chain)
-            return _delivery(recent, req, _build_receipt(recent, req, scope_chain), chain=scope_chain)
+            return _delivery(recent, req, _build_receipt(recent, req, scope_chain),
+                             chain=scope_chain, scope=scope,
+                             other_projects_withheld=len(recent_other))
 
         # ADR-008: Augment query with project context before embedding
         embed_query = req.query
@@ -509,6 +611,7 @@ def search_api(
         # The store fetch records ADR-007 recall metadata itself; when the
         # visibility gate widens the window it re-fetches, so recall write-back
         # is deferred to _fetch_visible to keep it counted once per retrieval.
+        other_withheld: set[str] = set()
         results = _fetch_visible(
             scope_chain,
             _run,
@@ -516,6 +619,7 @@ def search_api(
             record_recall=lambda ids: store.record_recall(
                 ids, mode=recall_mode, session_id=req.session_id
             ),
+            other_projects=other_withheld,
         )
 
         # Apply type filters post-fetch, then trim to caller's limit.
@@ -537,6 +641,7 @@ def search_api(
         _enrich_with_snippets(final, req.query, _resolve_snippet_max_chars(req.max_chars))
         _apply_tier(final, req.tier)
         _enrich_with_rel_path(final)
+        _label_other_projects(final, scope_chain)
 
         # Issue emit retrieval events (explicit — came in via /search API).
         # Source attribution: the X-Palinode-Source header tells us the surface
@@ -553,6 +658,7 @@ def search_api(
         # linked correction rides on its seed's `evidence` block, so no top-k
         # window can keep the stale record and cut off what corrects it.
         _attach_evidence(final, req, scope_chain)
+        confidence = _assess_confidence(final, active_mode)
         receipt = _build_receipt(final, req, scope_chain)
         # The retrieval log is written last so each row carries the receipt
         # this delivery produced (bundle, policy, scope, revision,
@@ -565,8 +671,11 @@ def search_api(
             mode=recall_mode,
             session_id=req.session_id,
             receipt=receipt,
+            confidence=confidence["confidence"] if confidence else None,
         )
-        return _delivery(final, req, receipt, active_mode=active_mode, chain=scope_chain)
+        return _delivery(final, req, receipt, active_mode=active_mode,
+                         chain=scope_chain, scope=scope, confidence=confidence,
+                         other_projects_withheld=len(other_withheld))
     except embedder.EmbeddingInputError:
         raise  # typed 422 via the app-level handler in server.py
     except embedder.EmbeddingUnavailable:

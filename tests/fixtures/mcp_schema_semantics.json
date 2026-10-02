@@ -2,6 +2,7 @@
   "palinode_archive": {
     "description": "Retire one specific memory that is wrong or obsolete. Sets `status: archived` so it leaves default recall, records the reason in the file's history sibling, and commits \u2014 never hard-deletes, so the content stays auditable. Pass `superseded_by` to name the memory that replaces it (a SUPERSEDE rather than a plain archive). Use this instead of re-saving a memory with a hand-written tombstone body: that leaves the wrong content live in search.",
     "params": {
+      "dry_run": {},
       "file_path": {},
       "reason": {},
       "superseded_by": {}
@@ -49,6 +50,83 @@
     },
     "required": []
   },
+  "palinode_correction_apply": {
+    "description": "Apply a correction previewed by palinode_correction_preview. Requires `confirm=true` and the `expect_revision` that preview returned; a target that changed since the preview, or a ref matching more than one memory, is refused with what it found rather than resolved by guesswork. Writes only through the existing validated path \u2014 the replacement is saved and the original is archived with `superseded_by`, so the original stays on disk, in git and retrievable as history. An ordinary later observation must NOT be routed here: this is the explicit, confirmed path, and it is the only one that retires anything. `applied: \"partial\"` means the replacement was saved and the original was NOT retired \u2014 do not re-run the correction; run the `complete_command` it returns.",
+    "params": {
+      "action": {
+        "enum": [
+          "supersede",
+          "retire"
+        ]
+      },
+      "allow_content_loss": {},
+      "backed_by": {},
+      "candidate_id": {},
+      "claim_id": {},
+      "confirm": {},
+      "expect_revision": {},
+      "project": {},
+      "reason": {},
+      "replacement": {},
+      "target": {}
+    },
+    "required": [
+      "target",
+      "expect_revision",
+      "confirm"
+    ]
+  },
+  "palinode_correction_dismiss": {
+    "description": "Record that a correction candidate was reviewed and declined. Writes no memory: the candidate's queue row is marked dismissed, with the reason, and kept \u2014 which is what stops a later transcript scan proposing the same span again. A reason is required, because a dismissal with none is indistinguishable from a candidate nobody ever looked at.",
+    "params": {
+      "candidate_id": {},
+      "reason": {}
+    },
+    "required": [
+      "candidate_id",
+      "reason"
+    ]
+  },
+  "palinode_correction_preview": {
+    "description": "Show exactly what correcting or retiring one memory would change \u2014 and change nothing. Returns the old text, the proposed new text, the affected document (and claim), its exact source revision, the rationale, where the correction came from, the project scope, the supersedes/superseded_by relation that would be recorded, every other record that quotes or derives from the target (reported, never rewritten), and the recovery command. Call this before palinode_correction_apply: the revision it returns is what apply requires back, so a target that changed in between is refused rather than silently merged.",
+    "params": {
+      "action": {
+        "enum": [
+          "supersede",
+          "retire"
+        ]
+      },
+      "allow_content_loss": {},
+      "backed_by": {},
+      "candidate_id": {},
+      "claim_id": {},
+      "project": {},
+      "reason": {},
+      "replacement": {},
+      "target": {}
+    },
+    "required": []
+  },
+  "palinode_correction_undo": {
+    "description": "Preview (default) or apply the undo of a correction. Without `confirm` this reads: it states what would be restored, what would NOT be deleted, and what cannot be reached at all \u2014 restoring a previous assertion, deleting history and undoing an agent's external actions are three different things and only the first is on offer. With `confirm=true` and the preview's `expect_revision` it brings the archived record back to status: active. It refuses to resurrect a record that was separately retracted or withdrawn by a forget request.",
+    "params": {
+      "confirm": {},
+      "expect_revision": {},
+      "reason": {},
+      "target": {}
+    },
+    "required": [
+      "target"
+    ]
+  },
+  "palinode_corrections": {
+    "description": "List correction candidates mined from harness session transcripts: moments the user overturned a decision, rejected an approach and said why, or asked for something to be remembered. Each candidate quotes a bounded span of the user's own words with the session, turn and project it came from. Advisory and read-only \u2014 candidates are proposals awaiting review, never applied, and the list is empty unless the store's operator enabled transcript capture and named the transcript paths in config. Running a fresh detection pass is deliberately an operator action on the CLI or REST API, not something this tool can trigger.",
+    "params": {
+      "project": {},
+      "since_days": {}
+    },
+    "required": []
+  },
   "palinode_dedup_suggest": {
     "description": "Given draft memory content the LLM is about to save, return the top-K existing memory files whose embeddings are semantically near it. Use BEFORE writing a new memory to decide 'create new' vs 'update existing'. Each result includes a `strong_dup` flag \u2014 when true (similarity \u2265 0.90), the existing file is a near-paraphrase and the LLM should usually update rather than create. Preprocessing strips wikilink syntax and the auto-generated `## See also` footer so notes linking the same entities don't false-positive as duplicates.",
     "params": {
@@ -93,9 +171,20 @@
     },
     "required": []
   },
+  "palinode_explain": {
+    "description": "Explain one delivery of context: given the bundle_id a search receipt returned, show which memories were supplied, the exact revision of each (and whether its source changed since), the resolved scope, the calling surface, each record's disposition, and the coverage qualifiers. Fields that were never recorded are reported as unavailable with the reason, never guessed. This is supplied context only \u2014 no evidence that anyone acted on it is recorded. Read-only.",
+    "params": {
+      "bundle_id": {},
+      "limit": {}
+    },
+    "required": [
+      "bundle_id"
+    ]
+  },
   "palinode_forget_withdraw": {
     "description": "Take a forget request back. Given the memory that holds the request ('please forget that I\u2026'), restores every memory it archived, un-strikes every mention it retracted, and archives the request record(s) so they stop acting as the retraction. Each step is its own audited commit; failures are reported per target.",
     "params": {
+      "dry_run": {},
       "file_path": {},
       "reason": {}
     },
@@ -211,9 +300,11 @@
     ]
   },
   "palinode_resolve": {
-    "description": "Ask what memory holds RIGHT NOW about a question, or about one record. Returns the assertions that stand (with their evidence and source revisions), what replaced what, conflicts with every side intact, and what is explicitly unknown. Use instead of palinode_search when you want the current answer rather than a list of hits. Read-only; a tight budget can shrink the answer but never turns a conflict into a settled one.",
+    "description": "Ask what memory holds RIGHT NOW about a question, or about one record. Returns the assertions that stand (with their evidence and source revisions), what replaced what, conflicts with every side intact, and what is explicitly unknown. Use instead of palinode_search when you want the current answer rather than a list of hits. Read-only; a tight budget can shrink the answer but never turns a conflict into a settled one. Retired records are left out, as in search, unless include_retired=true.",
     "params": {
       "context": {},
+      "include_other_projects": {},
+      "include_retired": {},
       "intent": {
         "enum": [
           "current_state"
@@ -229,6 +320,7 @@
   "palinode_restore": {
     "description": "Bring one archived memory back into default recall \u2014 the inverse of `palinode_archive` for every archive path (on-demand, forget request, TTL expiry, consolidation). Flips `status` back to `active`, drops `superseded_by`, records `restored_at` / `restored_from` provenance and a history line, and commits. Does not un-strike retraction markers (use `palinode_unretract`) or re-enable triggers.",
     "params": {
+      "dry_run": {},
       "file_path": {},
       "reason": {}
     },
@@ -244,11 +336,12 @@
     "required": []
   },
   "palinode_rollback": {
-    "description": "Revert a memory file to a previous version. Safe: creates a new commit preserving the old version in history. Defaults to dry run.",
+    "description": "Revert a memory file to a previous version. Safe: creates a new commit preserving the old version in history. Defaults to dry run. A rollback that would undo a retirement (archive/supersede/retraction) is named in the preview and refused unless undo_retirements=true; prefer palinode_restore to bring a retired memory back.",
     "params": {
       "commit": {},
       "dry_run": {},
-      "file_path": {}
+      "file_path": {},
+      "undo_retirements": {}
     },
     "required": [
       "file_path"
@@ -318,6 +411,8 @@
       "date_before": {},
       "full": {},
       "include_daily": {},
+      "include_other_projects": {},
+      "include_retired": {},
       "include_telemetry": {},
       "limit": {},
       "min_priority": {},
@@ -425,6 +520,7 @@
   "palinode_unretract": {
     "description": "Withdraw one preference's mention-level retraction from one memory: un-strikes every `~~\u2026~~ [RETRACTED \u2026]` span the pref produced and removes the pref from the file's `retracted_prefs` record, so a later forget request for the same pref can strike again. Pass the pref phrase as recorded in the file's history sibling. The file's `status` is never changed.",
     "params": {
+      "dry_run": {},
       "file_path": {},
       "pref": {},
       "reason": {}

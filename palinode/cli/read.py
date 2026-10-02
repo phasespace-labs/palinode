@@ -63,6 +63,11 @@ def read(file_path, fmt, meta, tier):
         raise click.ClickException(f"Read failed: {e.response.text}") from e
 
     effective_fmt = OutputFormat(fmt) if fmt else get_default_format()
+    # Text mode leads with what the record's flagged part is. On stderr, so
+    # stdout stays the file's text for a pipe; JSON carries the field itself.
+    notice = result.get("agent_directed_notice")
+    if notice and effective_fmt != OutputFormat.JSON:
+        click.echo(notice, err=True)
 
     if meta:
         if effective_fmt == OutputFormat.JSON:
