@@ -8,6 +8,8 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Changed
 
+- **README: current-release wording for v0.22.0.** Drops the pre-release "v0.21-capable source checkout" phrasing for lexical mode and client fragments, and says how a remote HTTP client keeps recall scoped (`palinode mcp-config --http --project <slug>`), since a request without the `X-Palinode-Project` header is unscoped.
+
 ### Fixed
 
 ### Removed

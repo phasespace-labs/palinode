@@ -131,9 +131,9 @@ That's the entire client config. Works with Claude Code, Claude Desktop, Cursor,
 - **Python 3.11+**
 - **Git**
 - **Ollama** with `bge-m3` (`ollama pull bge-m3`, ≈1.2 GB), or another supported
-  embedding endpoint — for hybrid indexing and search. A v0.21-capable source
-  checkout can instead use explicit lexical mode; it is keyword/FTS retrieval,
-  not a fallback when hybrid's endpoint fails. Saves persist without an
+  embedding endpoint — for hybrid indexing and search. Since v0.21 you can
+  instead choose explicit lexical mode; it is keyword/FTS retrieval, not a
+  fallback when hybrid's endpoint fails. Saves persist without an
   embedder, but hybrid search returns HTTP 503 until it is reachable
   (`palinode resolve` degrades to keyword-only and says so). See the
   [Homebrew setup guide](docs/HOMEBREW.md) for installation and verification.
@@ -174,10 +174,15 @@ With compose, your memory stays on the **host** at `~/.palinode` (override with 
 ## Connect your editor
 
 Palinode speaks MCP. Follow the connection step in the
-[Quickstart](docs/QUICKSTART.md): v0.21 generates a native fragment for the
-selected client, while the current release's recipes retain the supported
-manual configuration. `palinode mcp-config` is read-only; it never edits a
-client configuration file. Full per-harness detail:
+[Quickstart](docs/QUICKSTART.md): `palinode mcp-config` generates a native
+fragment for the selected client, and the recipes keep the supported manual
+configuration. It is read-only; it never edits a client configuration file.
+
+Connecting to a server on another machine over HTTP? Pass your project:
+`palinode mcp-config --http --project <slug>` adds an `X-Palinode-Project`
+header. Since v0.22 a remote server no longer scopes recall to its own working
+directory, so a client without the header gets unscoped results, reported as
+`Scope: none`. See the [v0.22.0 compatibility notes](https://github.com/phasespace-labs/palinode/releases/tag/v0.22.0). Full per-harness detail:
 [docs/MCP-INSTALL-RECIPES.md](docs/MCP-INSTALL-RECIPES.md).
 
 Merge the Palinode entry into existing settings; redirecting generated output
