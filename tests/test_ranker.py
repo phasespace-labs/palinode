@@ -230,6 +230,48 @@ def test_date_window_applied_before_top_k_truncation():
     )
 
 
+def test_date_window_compares_instants_not_strings():
+    """Bounds with an offset, a space separator, or a bare date must be
+    compared as instants. String comparison puts ``' '`` before ``'T'`` and
+    ignores offsets, so these bounds used to pick the wrong side.
+    """
+    rec = _res("rec.md", metadata={"last_updated": "2026-10-12T23:45:36.821850+00:00"})
+
+    def kept(**window):
+        return "rec.md" in _order(_run([dict(rec)], [], **window))
+
+    # 20:00-05:00 is 01:00Z on the 13th, after the record.
+    assert not kept(date_after="2026-10-12T20:00:00-05:00")
+    # 00:30+02:00 is 22:30Z on the 12th, before the record.
+    assert kept(date_after="2026-10-13T00:30:00+02:00")
+    # A space separator and no offset: 23:55 UTC, after the record.
+    assert not kept(date_after="2026-10-12 23:55:00")
+    # 22:00-05:00 is 03:00Z on the 13th, after the record.
+    assert kept(date_before="2026-10-12T22:00:00-05:00")
+    # A bare date as the upper bound includes that whole day.
+    assert kept(date_before="2026-10-12")
+    assert not kept(date_before="2026-10-11")
+    # Plain Z bounds keep working.
+    assert kept(date_after="2026-10-12T23:00:00Z")
+    assert not kept(date_before="2026-10-12T23:00:00Z")
+
+
+def test_parse_iso_utc_shapes():
+    from datetime import UTC, datetime
+
+    want = datetime(2026, 10, 13, 1, 0, tzinfo=UTC)
+    assert ranker.parse_iso_utc("2026-10-12T20:00:00-05:00") == want
+    assert ranker.parse_iso_utc("2026-10-13T01:00:00Z") == want
+    assert ranker.parse_iso_utc("2026-10-13 01:00:00") == want  # no offset → UTC
+    assert ranker.parse_iso_utc("2026-10-13") == datetime(2026, 10, 13, tzinfo=UTC)
+    assert ranker.parse_iso_utc("2026-10-13", end_of_day=True) == datetime(
+        2026, 10, 13, 23, 59, 59, 999999, tzinfo=UTC
+    )
+    assert ranker.parse_iso_utc("") is None
+    assert ranker.parse_iso_utc(None) is None
+    assert ranker.parse_iso_utc("last tuesday") is None
+
+
 def test_threshold_exempts_vectorless_fts_candidates():
     """An FTS candidate the store marked ``has_vector=False`` (a chunk with
     no ``chunks_vec`` row — written FTS-only by a per-input embed rejection

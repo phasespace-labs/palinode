@@ -1,5 +1,5 @@
 """Tests for /search types, since_days, and recency-only mode."""
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 from palinode.api.server import (
     SearchRequest,
@@ -48,6 +48,31 @@ def test_effective_date_after_picks_more_restrictive():
     )
     out2 = _compute_effective_date_after(req_explicit_wins)
     assert out2 == explicit_recent
+
+
+def test_effective_date_after_compares_instants():
+    """The "more restrictive" pick compares instants, not strings. An explicit
+    bound one hour after the since_days threshold, written at -05:00, sorts
+    before the derived "...Z" string (its wall time is 4 hours earlier) but is
+    the later instant."""
+    derived = datetime.now(UTC) - timedelta(days=1)
+    minus5 = timezone(timedelta(hours=-5))
+    explicit = (derived + timedelta(hours=1)).astimezone(minus5).isoformat()
+    req = SearchRequest(query="x", since_days=1, date_after=explicit)
+    assert _compute_effective_date_after(req) == explicit
+
+
+def test_search_request_rejects_unparseable_date_bounds():
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        SearchRequest(query="x", date_after="last tuesday")
+    with pytest.raises(ValidationError):
+        SearchRequest(query="x", date_before="2026-13-45")
+    # Dates, offsets, Z and space separators are all accepted.
+    for ok in ("2026-10-12", "2026-10-12T20:00:00-05:00", "2026-10-12T20:00:00Z", "2026-10-12 20:00:00"):
+        SearchRequest(query="x", date_after=ok, date_before=ok)
 
 
 def test_effective_date_after_zero_since_days_ignored():

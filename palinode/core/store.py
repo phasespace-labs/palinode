@@ -39,6 +39,7 @@ from palinode.core.ranker import (  # noqa: F401
     _is_daily_file,
     _priority_value,
     effective_importance,
+    in_date_window,
     rank_hybrid,
 )
 
@@ -1150,13 +1151,10 @@ def search(query_embedding: list[float], category: str | None = None,
         if _excluded_by_kind(meta, kind_exclude_list):
             continue
 
-        if date_after or date_before:
-            updated = meta.get("last_updated", row["created_at"]) or ""
-            if updated:
-                if date_after and updated < date_after:
-                    continue
-                if date_before and updated > date_before:
-                    continue
+        if (date_after or date_before) and not in_date_window(
+            meta.get("last_updated", row["created_at"]), date_after, date_before
+        ):
+            continue
 
         # Mathematical conversion: L2 distance → Cosine similarity
         # Applies because BGE-M3 (default embedding engine) produces strictly L2-normalized vectors.
@@ -1693,8 +1691,9 @@ def list_recent(
         category: Filter by directory category (people, projects, etc.).
         date_after/date_before: ISO-8601 inclusive bounds against
             `metadata.last_updated` (falls back to `chunks.created_at`).
-            Compared as strings — fine for ISO-8601 with consistent zero-padding,
-            including across `T`/space and `Z`/`+00:00` separator variants.
+            Compared as instants (see ``ranker.parse_iso_utc``): offsets are
+            honoured, a value without one is UTC, and a bare-date
+            ``date_before`` covers that whole day.
         limit: Maximum results to return.
 
     Returns:
@@ -1733,13 +1732,10 @@ def list_recent(
         # ADR-015 §2.3: hard-exclude telemetry/machine writes from default recall.
         if _excluded_by_kind(meta, kind_exclude_list):
             continue
-        if date_after or date_before:
-            updated = meta.get("last_updated", row["created_at"]) or ""
-            if updated:
-                if date_after and updated < date_after:
-                    continue
-                if date_before and updated > date_before:
-                    continue
+        if (date_after or date_before) and not in_date_window(
+            meta.get("last_updated", row["created_at"]), date_after, date_before
+        ):
+            continue
         list_entry: dict[str, Any] = {
             "file_path": row["file_path"],
             "section_id": row["section_id"],

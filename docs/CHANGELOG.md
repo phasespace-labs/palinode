@@ -12,6 +12,8 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- **Search date filters compare instants, not strings.** `date_after` / `date_before` (and the `since_days` vs `date_after` pick) were compared to `last_updated` as text, so a bound with a UTC offset (`2026-10-12T20:00:00-05:00`), a space separator, or a bare-date `date_before` landed on the wrong side of a record. Both sides are now parsed to UTC by one helper, `ranker.parse_iso_utc` (a value without an offset is UTC, a bare-date `date_before` covers that whole day), on the vector, hybrid/lexical and recency-list paths. A bound that is not ISO-8601 is now a 422 instead of a silent string comparison.
+
 ### Removed
 
 ### Security

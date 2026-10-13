@@ -37,10 +37,57 @@ and friends keep resolving for existing callers and tests.
 from __future__ import annotations
 
 import math
-from datetime import UTC, datetime
+import re
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from palinode.core.config import config
+
+_DATE_ONLY = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def parse_iso_utc(value: Any, *, end_of_day: bool = False) -> datetime | None:
+    """Parse an ISO-8601 date or timestamp into an aware UTC datetime.
+
+    Search date bounds and ``last_updated`` stamps come in several shapes: a
+    ``Z`` or numeric offset, a ``T`` or space separator, a bare date. Compared
+    as strings, ``' '`` sorts before ``'T'`` and offsets are ignored, so the
+    date window compares parsed instants instead. A value without an offset is
+    read as UTC, as elsewhere in palinode. A bare date is midnight UTC, or the
+    last instant of that day when ``end_of_day`` is set, so an inclusive upper
+    bound of ``2026-10-12`` keeps records from that day.
+
+    Returns None for an empty or non-ISO value.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if end_of_day and _DATE_ONLY.fullmatch(text):
+        dt += timedelta(days=1, microseconds=-1)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
+
+
+def in_date_window(updated: Any, date_after: str | None, date_before: str | None) -> bool:
+    """Whether ``updated`` falls inside the inclusive ``date_after``/``date_before`` window.
+
+    A record with no readable timestamp is kept, as an empty one always was.
+    """
+    stamp = parse_iso_utc(updated)
+    if stamp is None:
+        return True
+    after = parse_iso_utc(date_after)
+    if after is not None and stamp < after:
+        return False
+    before = parse_iso_utc(date_before, end_of_day=True)
+    return not (before is not None and stamp > before)
 
 
 def effective_importance(
@@ -363,11 +410,7 @@ def rank_hybrid(
             r = result_map[key]
             meta = r.get("metadata", {})
             updated = meta.get("last_updated", r.get("created_at", ""))
-            if not updated:
-                return True
-            if date_after and updated < date_after:
-                return False
-            return not (date_before and updated > date_before)
+            return in_date_window(updated, date_after, date_before)
 
         deduped_keys = [key for key in deduped_keys if _in_window(key)]
         overflow_keys = [key for key in overflow_keys if _in_window(key)]

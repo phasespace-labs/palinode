@@ -112,6 +112,28 @@ def test_filters_and_live_visibility(lexical):
     assert not _search(client)["results"]
 
 
+def test_date_bounds_compare_instants_on_every_path(lexical):
+    """Offset, space-separated and date-only bounds are compared as instants
+    on the query path (ranker) and the empty-query path (list_recent)."""
+    from datetime import UTC, datetime, timedelta, timezone
+
+    client, _, _ = lexical
+    _save(client)
+    stamp = _search(client)["results"][0]["metadata"]["last_updated"]
+    saved_at = datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).astimezone(UTC)
+    minus5 = timezone(timedelta(hours=-5))
+    plus2 = timezone(timedelta(hours=2))
+    after_it = (saved_at + timedelta(hours=1)).astimezone(minus5).isoformat()
+    before_it = (saved_at - timedelta(hours=1)).astimezone(plus2).isoformat()
+    for query in ("orionledger", ""):
+        assert not _search(client, query, date_after=after_it)["results"], query
+        assert _search(client, query, date_after=before_it)["results"], query
+        assert _search(client, query, date_before=after_it)["results"], query
+        assert _search(client, query, date_before=saved_at.date().isoformat())["results"], query
+    bad = client.post("/search", json={"query": "orionledger", "date_after": "yesterday"})
+    assert bad.status_code == 422
+
+
 def test_lexical_correction_evidence_and_lifecycle(lexical):
     client, _, _ = lexical
     old = _save(client, "Orionledger uses PostgreSQL.", slug="old")

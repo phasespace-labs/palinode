@@ -209,3 +209,31 @@ def test_detect_entities_in_text():
         assert "person/alice" in res
         assert "project/alpha" in res
         assert "person/bob" not in res
+
+
+def test_vector_search_date_window_compares_instants(tmp_store_db):
+    """store.search applies date bounds as instants, not strings: an offset
+    bound on the far side of the record's UTC stamp must not flip the result."""
+    from tests._store_helpers import upsert_chunks
+
+    vec = [0.0] * 1024
+    vec[0] = 1.0
+    upsert_chunks([{
+        "id": "rec",
+        "file_path": "decisions/billing-db.md",
+        "section_id": None,
+        "category": "decisions",
+        "content": "Use Postgres for billing.",
+        "metadata": {"last_updated": "2026-10-12T23:45:36.821850+00:00"},
+        "created_at": "2026-10-12T23:45:36.821850+00:00",
+        "last_updated": "2026-10-12T23:45:36.821850+00:00",
+        "embedding": vec,
+    }])
+
+    def ids(**window):
+        return {r["id"] for r in store.search(query_embedding=vec, threshold=0.0, **window)}
+
+    assert "rec" not in ids(date_after="2026-10-12T20:00:00-05:00")
+    assert "rec" in ids(date_after="2026-10-13T00:30:00+02:00")
+    assert "rec" in ids(date_before="2026-10-12T22:00:00-05:00")
+    assert "rec" in ids(date_before="2026-10-12")

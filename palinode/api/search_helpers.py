@@ -19,6 +19,7 @@ from fastapi import HTTPException
 
 from palinode.core import embedder, store
 from palinode.core.agent_directed import withhold_agent_directed
+from palinode.core.ranker import parse_iso_utc
 from palinode.core.tiers import apply_tier
 from palinode.core.config import config
 from palinode.core.defaults import (
@@ -47,7 +48,8 @@ def _compute_effective_date_after(req: Any) -> str | None:
         derived = threshold_dt.isoformat().replace("+00:00", "Z")
     explicit = req.date_after
     if derived and explicit:
-        return derived if derived > explicit else explicit
+        explicit_dt = parse_iso_utc(explicit)
+        return derived if explicit_dt is None or threshold_dt > explicit_dt else explicit
     return derived or explicit
 
 

@@ -4,11 +4,12 @@ import re
 import logging
 from typing import Any, Callable, Literal
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from palinode.core import store, embedder
 from palinode.core.config import config
 from palinode.core.parity import CATEGORIES, MEMORY_TYPES, RESOLVE_MODES, TIERS
 from palinode.core.path_guard import to_rel_path
+from palinode.core.ranker import parse_iso_utc
 from palinode.api._util import _retrieval_logger, _safe_500, effective_project_scope
 from palinode.api.rate_limit import _RATE_LIMIT_SEARCH, _check_rate_limit
 from palinode.api.search_helpers import (
@@ -240,6 +241,18 @@ class SearchRequest(BaseModel):
     # them too, each labelled with its own project under ``other_project``.
     # Unset (not False) by default so the receipt's request key is unchanged.
     include_other_projects: bool | None = None
+
+    @field_validator("date_after", "date_before")
+    @classmethod
+    def _date_bound_is_iso(cls, value: str | None) -> str | None:
+        # The window compares parsed instants; a bound that does not parse
+        # would otherwise drop out of the filter silently.
+        if value is not None and value.strip() and parse_iso_utc(value) is None:
+            raise ValueError(
+                "must be an ISO-8601 date or timestamp, "
+                "e.g. 2026-10-12 or 2026-10-12T20:00:00-05:00"
+            )
+        return value
 
 
 def _attach_evidence(results: list[dict[str, Any]], req: "SearchRequest", chain) -> None:
