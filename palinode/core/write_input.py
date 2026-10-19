@@ -108,6 +108,7 @@ class Param:
 SAVE_PARAMS: tuple[Param, ...] = (
     Param("source", omit_if_empty=True),
     Param("slug", omit_if_empty=True),
+    Param("path"),
     Param("project", omit_if_empty=True),
     Param("title", omit_if_empty=True),
     Param("core"),

@@ -34,6 +34,11 @@ logger = logging.getLogger("palinode.core.typed_links")
 _REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 
 
+def is_well_formed_ref(ref: str) -> bool:
+    """Whether ``ref`` can be cited as a typed link, exactly as written."""
+    return ".." not in ref and not ref.startswith("/") and "\n" not in ref and bool(_REF_RE.match(ref))
+
+
 class TypedLinkError(ValueError):
     """Raised when a typed-link ref list is malformed (caller maps to HTTP 400)."""
 
@@ -62,7 +67,7 @@ def normalize_link_refs(raw: Any, field: str) -> list[str]:
         if not isinstance(ref, str) or not ref.strip():
             raise TypedLinkError(f"{field}[{i}] must be a non-empty string")
         r = ref.strip()
-        if ".." in r or r.startswith("/") or "\n" in r or not _REF_RE.match(r):
+        if not is_well_formed_ref(r):
             raise TypedLinkError(f"{field}[{i}] is not a well-formed ref: {ref!r}")
         if r not in seen:
             seen.add(r)
