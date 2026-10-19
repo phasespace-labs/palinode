@@ -95,6 +95,11 @@ These are the spellings the registry agreed on. Forbidden aliases are flagged in
 | Minimum recall priority filter  | `min_priority`       | `min_importance`                        |
 | Source-surface attribution      | `X-Palinode-Source` header (preferred) or `source` field | per-surface `source` literals |
 
+**`path` on `save` is the one place `path` is canonical.** It names the file a save
+will create, relative to the memory dir, where `file_path` names a memory that
+already exists. It is the same parameter, spelled `path` or `--path`, on every
+surface.
+
 **`--execute` means one thing: apply mode on a CLI-only maintenance command.**
 `repair-status`, `worktree-reconcile`, and `migrate frontmatter` are dry-run by
 default and take `--execute` to write; they are admin-exempt and have no
