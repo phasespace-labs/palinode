@@ -64,7 +64,7 @@ from palinode.core.packing import (
     estimate_tokens,
     pack,
 )
-from palinode.core.skip_dirs import is_skipped_path
+from palinode.core.skip_dirs import SKIP_FOR_DIGEST, is_skipped_path
 
 #: Bounded digest sizes — the digest rides the session cold-start path.
 MAX_CORE_MEMORIES = 10
@@ -86,14 +86,6 @@ PALINODE_HINT = (
     "Use palinode_session_end only for requested wrap-ups or new durable information. "
     "Skip recall-only writes; honor no-save requests."
 )
-
-# On top of the never-memory dirs every surface skips
-# (``skip_dirs.ALWAYS_SKIP`` — ``logs``, ``.obsidian`` and the store's own
-# ``specs/prompts`` copies). Unlike the /list browse surface, `inbox` is NOT
-# skipped — ActionItems live there, and open action items are one of the
-# digest's three sections.
-_SKIP_DIRS = frozenset({"daily", "archive"})
-
 
 #: The closed resolution-source vocabulary, in precedence order. Every surface
 #: that carries scope reports the project it resolved *and* one of these, so a
@@ -320,7 +312,7 @@ def _scan_memories(base_dir: str) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for filepath in glob.glob(os.path.join(base_dir, "**/*.md"), recursive=True):
         rel = os.path.relpath(filepath, base_dir)
-        if is_skipped_path(rel, _SKIP_DIRS):
+        if is_skipped_path(rel, SKIP_FOR_DIGEST):
             continue
         try:
             with open(filepath, encoding="utf-8") as f:

@@ -15,6 +15,7 @@ from palinode.core import revalidation
 from palinode.core import typed_links
 from palinode.core.packing import estimate_tokens
 from palinode.core.relative_dates import anchor_for, find_relative_dates
+from palinode.core.skip_dirs import SKIP_FOR_LINT, is_skipped_path
 
 #: What to do about a `core: true` memory that has grown past a gist. Carried
 #: on every finding so the instruction reaches whichever surface renders it.
@@ -426,8 +427,6 @@ def run_lint_pass(*, file_paths: Collection[str] | None = None) -> dict[str, Any
     entity_references: dict[str, int] = {}
     all_files = []
     
-    skip_dirs = {"archive", "logs", ".obsidian"}
-    
     candidates = glob.glob(pattern, recursive=True)
     if file_paths is not None:
         candidates = sorted(
@@ -441,7 +440,7 @@ def run_lint_pass(*, file_paths: Collection[str] | None = None) -> dict[str, Any
             for depth in range(1, len(parts) + 1)
         ):
             continue
-        if parts[0] in skip_dirs:
+        if is_skipped_path(rel_path, SKIP_FOR_LINT):
             continue
             
         try:

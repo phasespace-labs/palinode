@@ -41,16 +41,7 @@ from palinode.core import git_tools
 from palinode.core.config import config
 from palinode.core.memory_write import _apply_wiki_footer
 from palinode.core.parser import parse_markdown
-
-# Directories skipped by all palinode tooling — mirrors lint.py's skip set
-# plus Obsidian's private config dir.
-_SKIP_DIRS: frozenset[str] = frozenset({
-    "archive",
-    "logs",
-    ".obsidian",
-    ".palinode",
-})
-
+from palinode.core.skip_dirs import SKIP_FOR_LINT, is_skipped_path
 
 def _walk_memory_files(
     memory_dir: str,
@@ -80,10 +71,7 @@ def _walk_memory_files(
     results: list[str] = []
     for filepath in raw:
         rel = os.path.relpath(filepath, memory_dir)
-        parts = rel.split(os.sep)
-
-        # Skip top-level skip_dirs
-        if parts[0] in _SKIP_DIRS:
+        if is_skipped_path(rel, SKIP_FOR_LINT):
             continue
 
         # Apply exclude glob (relative to memory_dir)

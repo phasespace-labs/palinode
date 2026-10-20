@@ -27,6 +27,7 @@ import frontmatter as _frontmatter
 from palinode.core.config import config
 from palinode.core import parser
 from palinode.core.ollama_client import OllamaError, OllamaRole, get_ollama_client
+from palinode.core.skip_dirs import SKIP_FOR_LINT, is_skipped_path
 
 logger = logging.getLogger("palinode.lint.contradictions")
 
@@ -76,14 +77,12 @@ def _collect_decision_memories(memory_dir: str) -> list[dict[str, Any]]:
         body (str): markdown body (frontmatter stripped)
         embedding (list[float]): may be empty if embedding unavailable
     """
-    skip_dirs = {"archive", "logs", ".obsidian"}
     pattern = os.path.join(memory_dir, "**", "*.md")
     memories: list[dict[str, Any]] = []
 
     for filepath in glob.glob(pattern, recursive=True):
         rel = os.path.relpath(filepath, memory_dir)
-        parts = rel.split(os.sep)
-        if parts[0] in skip_dirs:
+        if is_skipped_path(rel, SKIP_FOR_LINT):
             continue
         try:
             with open(filepath, "r", encoding="utf-8") as fh:

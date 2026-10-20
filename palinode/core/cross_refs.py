@@ -39,22 +39,10 @@ from palinode.core import git_tools
 from palinode.core import parser as _parser
 from palinode.core.config import config
 from palinode.core.scope import ScopeChain, other_project, project_entities
+from palinode.core.skip_dirs import SKIP_FOR_CROSS_REFS, is_skipped_path
 from palinode.core.visibility import is_visible
 
 logger = logging.getLogger("palinode.cross_refs")
-
-# Directories that are not first-class memories to cross-link (mirrors the
-# watcher ignore set + lint skip set). ``daily`` notes are excluded as both
-# source and target — they are episodic and would create churn. Matched against
-# EVERY directory segment of a path, not just the first — see :func:`_is_skipped`.
-#
-# Deliberately NOT :data:`palinode.core.skip_dirs.ALWAYS_SKIP`: that set excludes
-# all of ``specs/``, while cross-linking excludes only the ``prompts`` segment
-# inside it, so a hand-written ``specs/amr.md`` stays linkable. The every-segment
-# match is what both need, and that is what is shared.
-SKIP_DIRS: frozenset[str] = frozenset(
-    {"daily", "archive", "logs", "inbox", "prompts", ".obsidian", ".git"}
-)
 
 # Generic single-word titles that would false-match common prose. A memory
 # titled exactly one of these is matched only by its ref/slug, never its title.
@@ -98,20 +86,14 @@ def _whole_match(candidate: str, text_lower: str) -> bool:
     return _candidate_pattern(candidate).search(text_lower) is not None
 
 
+def _is_spec_document(rel_path: str) -> bool:
+    """A hand-written ``specs/<name>.md`` that is not a prompt, draft or log."""
+    head, _, rest = rel_path.replace("\\", "/").partition("/")
+    return head == "specs" and not is_skipped_path(rest, SKIP_FOR_CROSS_REFS)
+
+
 def _is_skipped(rel_path: str) -> bool:
-    """True when ANY directory segment of ``rel_path`` is in :data:`SKIP_DIRS`.
-
-    Testing only the first segment let the store's own prompt copies at
-    ``specs/prompts/*.md`` through — ``parts[0] == "specs"`` — so the auto-updater
-    rewrote their frontmatter and committed it, and ``prompt sync``, which compares
-    a whole-file sha256 against ``shipped-hashes.json``, then read every store
-    prompt as operator-edited and refused to refresh it.
-
-    Only *directory* segments are considered, so a memory named ``logs.md`` is
-    still linkable; ``daily/2026-06-28.md`` and everything else previously
-    skipped is skipped exactly as before.
-    """
-    return any(part in SKIP_DIRS for part in rel_path.split(os.sep)[:-1])
+    return is_skipped_path(rel_path, SKIP_FOR_CROSS_REFS) and not _is_spec_document(rel_path)
 
 
 def path_to_ref(rel_path: str) -> str:
@@ -148,9 +130,9 @@ def build_registry(
     Reads each memory's frontmatter (title/name and project entities). With
     ``source_metadata``, targets must share a project or be global. A global
     source retains unscoped matching; read-time filtering applies the reader's
-    scope independently. Files with any directory
-    segment in :data:`SKIP_DIRS` are excluded (see :func:`_is_skipped`), so
-    ``specs/prompts/compaction.md`` is never offered as a link target.
+    scope independently. Files the shared rule skips
+    are excluded, so ``specs/prompts/compaction.md`` is never offered as a link
+    target, but a hand-written ``specs/<name>.md`` is.
     ``exclude_ref`` (the scanned file's own ref) is omitted so a
     memory never cross-links to itself.
 
