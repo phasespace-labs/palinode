@@ -141,7 +141,7 @@ def _reference_registry(memory_dir: str, exclude_ref: str | None) -> dict[str, d
     for filepath in glob.glob(os.path.join(memory_dir, "**", "*.md"), recursive=True):
         rel = os.path.relpath(filepath, memory_dir)
         parts = rel.split(os.sep)
-        if parts[0] in cross_refs.SKIP_DIRS:
+        if cross_refs._is_skipped(rel):
             continue
         ref = cross_refs.path_to_ref(rel)
         if exclude_ref is not None and ref == exclude_ref:
@@ -202,7 +202,7 @@ def test_reindex_parses_each_frontmatter_block_about_once(
 
     parser._load_frontmatter_block.cache_clear()
     monkeypatch.setattr(parser, "_load_frontmatter_block", counting)
-    linkable = [p for p in corpus if p.relative_to(config.memory_dir).parts[0] not in cross_refs.SKIP_DIRS]
+    linkable = [p for p in corpus if not cross_refs._is_skipped(str(p.relative_to(config.memory_dir)))]
     for p in linkable:
         cross_refs.update_file_cross_refs(str(p))
     n = len(linkable)
@@ -218,7 +218,7 @@ def test_update_file_cross_refs_results_match_reference_registry(corpus: list[Pa
     root = config.memory_dir
     for p in corpus:
         rel = os.path.relpath(str(p), root)
-        if rel.split(os.sep)[0] in cross_refs.SKIP_DIRS:
+        if cross_refs._is_skipped(rel):
             continue
         self_ref = cross_refs.path_to_ref(rel)
         try:

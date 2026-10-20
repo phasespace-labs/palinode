@@ -25,6 +25,7 @@ import yaml
 from palinode.core import git_tools
 from palinode.core.config import config
 from palinode.core.parser import slugify as _base_slugify
+from palinode.core.skip_dirs import is_skipped_path
 
 logger = logging.getLogger("palinode.migration.openclaw")
 
@@ -118,6 +119,8 @@ def _existing_hashes(memory_dir: str) -> set[str]:
             if not fname.endswith(".md"):
                 continue
             fpath = os.path.join(root, fname)
+            if is_skipped_path(os.path.relpath(fpath, memory_dir)):
+                continue
             try:
                 with open(fpath, "r", encoding="utf-8") as f:
                     hashes.add(_body_hash(f.read()))

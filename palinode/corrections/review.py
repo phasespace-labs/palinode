@@ -72,6 +72,7 @@ from palinode.core import path_guard
 from palinode.core.config import config
 from palinode.core.parity import CORRECTION_APPLIED_PARTIAL
 from palinode.core.revalidation import normalize_ref
+from palinode.core.skip_dirs import is_skipped_path
 from palinode.corrections.content import content_loss
 from palinode.corrections.queue import load_candidates
 
@@ -349,6 +350,8 @@ def referencing_records(rel: str) -> list[dict[str, str]]:
         except ValueError:
             continue
         other = os.path.relpath(path, root)
+        if is_skipped_path(other):
+            continue
         if other == rel:
             continue
         try:

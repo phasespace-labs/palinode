@@ -266,21 +266,12 @@ schedules summary and description generation."""
         self._description_timer.start()
         
     def is_valid_file(self, path: str) -> bool:
-        """Return True if *path* is a Markdown file outside ignored directories.
+        """Return True if *path* is a Markdown file the index holds.
 
-        Two filters. The first is the shared non-memory directory set
-        (:data:`palinode.core.skip_dirs.ALWAYS_SKIP`), matched on every segment
-        of the path *relative to the store root* — so the store's own editable
-        consolidation prompts at ``specs/prompts/*.md`` stay out of the index,
-        and a store that itself lives under a directory named ``specs`` still
-        indexes normally. Nothing reads prompts through the index (every
-        consumer globs them off disk), so indexing them only put prompt text
-        into recall. A ``palinode reindex`` drops chunks already there: the
-        reindex walk filters through this predicate and its GC pass removes
-        every indexed path the walk no longer yields.
-
-        The second is the historical substring list below: database sidecars,
-        virtualenvs, build noise, and processed inbox items.
+        The shared rule, :func:`palinode.core.skip_dirs.is_skipped_path`, reads the
+        path relative to the store root, so a store under ``venv/`` or a dot folder
+        still indexes. ``/reindex`` filters through this predicate and its GC pass
+        drops every indexed path the walk no longer yields.
 
         Args:
             path (str): Path to check.
@@ -298,14 +289,6 @@ schedules summary and description generation."""
         if rel and not rel.startswith(os.pardir + os.sep) and is_skipped_path(rel):
             return False
 
-        ignore_patterns = [
-            '/.git/', '/logs/', '/.palinode.db', '/venv/', 
-            '/node_modules/', '/__pycache__/', '/palinode.egg-info/', 
-            '.db-journal', '.db-wal', '.db-shm', '/inbox/processed/'
-        ]
-        if any(p in path for p in ignore_patterns):
-            return False
-            
         return True
 
     def _process_file(self, filepath: str, *, retry_empty: bool = False) -> None:

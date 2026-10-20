@@ -246,9 +246,6 @@ def _note_ref(filepath: str | None) -> str | None:
         return None
 
 
-_CONSOLIDATION_SKIP_DIRS = {"daily", "archive", "inbox", "logs", "prompts", "specs"}
-
-
 #: Default corpus for the weekly consolidation pass.
 #:
 #: ``daily/`` is the ephemeral capture stream consolidation was built for.

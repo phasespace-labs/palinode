@@ -1,64 +1,70 @@
 """One definition of "this path is not a memory file".
 
-Five surfaces walked the store with their own copy of a skip-dir set — the
-``GET /list`` listing path (and therefore the SessionStart hook's ``core_only``
-injection), the provenance UI, the advisory project review, the session-start
-context digest, and ``backed_by`` propagation. Each named the legacy top-level
-``prompts`` directory; none named ``specs``. The store keeps its editable
-consolidation prompts at ``specs/prompts/*.md`` (see
-:data:`palinode.prompts.STORE_PROMPTS_SUBPATH`), and those files carry
-``id``/``task``/``model``/``active``/``version`` frontmatter — enough to look
-like a memory to every one of those walks. So a provisioned store listed,
-browsed, reviewed, primed and propagated into its own prompt files.
+Every walker of the store asks :func:`is_skipped_path`. A path is never memory
+when a directory segment:
 
-Two failure modes, one fix:
+- is in :data:`ALWAYS_SKIP` (``specs``, ``prompts``, ``logs`` and tool folders);
+- starts with ``.``;
+- is build noise: ``venv``, ``node_modules``, ``__pycache__`` or ``*.egg-info``;
+- is ``processed`` directly under ``inbox``.
 
-- **Only the first segment was tested.** ``specs/prompts/compaction.md`` has
-  ``parts[0] == "specs"``, so naming ``prompts`` never helped. The mechanical
-  cross-linker hit this first and fixed it by testing *every* directory
-  segment; :func:`is_skipped_path` has the same shape.
-- **Five copies of the set.** Adding a directory meant finding all five.
+Only the path relative to the store counts, so a store that lives under a dot or
+build folder still indexes. The index skips nothing beyond that. A surface that
+shows less passes one of the ``SKIP_FOR_*`` constants as ``extra``; ``extra``
+only adds skips.
 
-:data:`ALWAYS_SKIP` is deliberately narrow: it holds only the directories that
-are not memory on *any* surface. ``daily``, ``archive`` and ``inbox`` are not
-in it, because whether they are memory depends on who is asking — the digest
-reads ``inbox`` (open ActionItems are one of its three sections) while ``/list``
-skips it, and ``archive`` stays searchable everywhere. Those stay per-surface
-``extra`` arguments, so a caller's existing behaviour is exactly preserved.
-
-Not adopted here (each documents its own reason): the consolidation runner,
-which already skipped ``specs``; ``core.lint`` and ``lint.contradictions``,
-which lint ``daily``/``inbox`` on purpose and whose sets are narrower than any
-of these; and ``core.cross_refs``, which skips only the ``prompts`` segment
-inside ``specs/`` so a hand-written ``specs/amr.md`` stays linkable — it shares
-the every-segment *shape*, not this set.
+``core.cross_refs`` has one further exception, ``_is_spec_document``: a
+hand-written ``specs/<name>.md`` can be linked.
 """
 from __future__ import annotations
 
-import os
 from collections.abc import Iterable
 
-#: Directories that never hold memory files, on any surface. Matched against
-#: every directory segment of a path, not just the first.
+#: Directories that never hold memory files, on any surface.
 ALWAYS_SKIP: frozenset[str] = frozenset(
     {"specs", "prompts", "logs", ".palinode", ".obsidian", ".git"}
 )
 
+#: ``/list``, the browse UI, project review, propagation and revalidation show curated current memory.
+SKIP_FOR_LISTING: frozenset[str] = frozenset({"daily", "archive", "inbox"})
+
+#: The session digest reads ``inbox/`` for open ActionItems.
+SKIP_FOR_DIGEST: frozenset[str] = frozenset({"daily", "archive"})
+
+#: Lint checks ``daily`` and ``inbox`` on purpose; Obsidian sync mirrors lint.
+SKIP_FOR_LINT: frozenset[str] = frozenset({"archive"})
+
+#: Daily notes expire by their own rule, not by TTL.
+SKIP_FOR_TTL: frozenset[str] = frozenset({"daily"})
+
+#: Cross-refs link curated current memory, as the listing shows it.
+SKIP_FOR_CROSS_REFS: frozenset[str] = frozenset({"daily", "archive", "inbox"})
+
+_BUILD_NOISE: frozenset[str] = frozenset({"venv", "node_modules", "__pycache__"})
+
+
+def _is_never_memory_segment(segment: str, previous: str | None) -> bool:
+    return (
+        segment.startswith(".")
+        or segment in ALWAYS_SKIP
+        or segment in _BUILD_NOISE
+        or segment.endswith(".egg-info")
+        or (segment == "processed" and previous == "inbox")
+    )
+
 
 def is_skipped_path(rel_path: str, extra: Iterable[str] = frozenset()) -> bool:
-    """True when any *directory* segment of ``rel_path`` is a non-memory dir.
+    """True when any *directory* segment of ``rel_path`` is not memory.
 
-    ``rel_path`` is relative to the memory dir, with either separator
-    (``specs/prompts/compaction.md`` and its Windows spelling both match).
-    ``extra`` adds the caller's surface-specific directories to
-    :data:`ALWAYS_SKIP` — it never subtracts from it.
-
-    Only directory segments count, so a memory named ``logs.md`` or
-    ``specs.md`` is still a memory, and a top-level ``specsheet/`` is
-    untouched (whole segments, not prefixes).
+    ``rel_path`` is relative to the memory dir, with either separator. ``extra``
+    adds a surface's own folders and never removes a skip. A file name never
+    counts: ``logs.md`` is still a memory.
     """
-    segments = rel_path.replace(os.sep, "/").split("/")[:-1]
-    if not segments:
-        return False
-    skip = ALWAYS_SKIP | frozenset(extra)
-    return any(segment in skip for segment in segments)
+    segments = [s for s in rel_path.replace("\\", "/").split("/")[:-1] if s not in ("", ".")]
+    skip = frozenset(extra)
+    previous: str | None = None
+    for segment in segments:
+        if segment in skip or _is_never_memory_segment(segment, previous):
+            return True
+        previous = segment
+    return False

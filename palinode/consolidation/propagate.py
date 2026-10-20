@@ -50,7 +50,7 @@ from typing import Any
 
 from palinode.core import git_tools
 from palinode.core.config import config
-from palinode.core.skip_dirs import is_skipped_path
+from palinode.core.skip_dirs import SKIP_FOR_LISTING, is_skipped_path
 from palinode.core.typed_links import parse_link_refs
 
 logger = logging.getLogger("palinode.consolidation.propagate")
@@ -67,12 +67,6 @@ RETIRING_OPS: tuple[str, ...] = ("supersede", "archive", "retract", "merge")
 RESTORE_CHECK_OP = "restore-check"
 
 _OP_ORDER: tuple[str, ...] = (*RETIRING_OPS, RESTORE_CHECK_OP)
-
-# Directories that are never dependents, on top of the never-memory dirs every
-# surface skips (``skip_dirs.ALWAYS_SKIP`` — ``logs``, ``.obsidian``, ``.git``
-# and the store's own ``specs/prompts`` copies).
-_SKIP_DIRS: frozenset[str] = frozenset({"archive", "daily", "inbox"})
-
 
 def _utc_now() -> datetime:
     """Timezone-aware UTC now (module-level so tests can pin it)."""
@@ -127,7 +121,7 @@ def find_dependents(source_refs: list[str], base_dir: str | None = None) -> list
     out: list[str] = []
     for path in sorted(glob.glob(os.path.join(base, "**", "*.md"), recursive=True)):
         rel = os.path.relpath(path, base).replace(os.sep, "/")
-        if is_skipped_path(rel, _SKIP_DIRS) or rel.endswith("-history.md"):
+        if is_skipped_path(rel, SKIP_FOR_LISTING) or rel.endswith("-history.md"):
             continue
         if _normalize_ref(rel) in wanted:
             continue  # a memory is not its own dependent
