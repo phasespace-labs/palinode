@@ -89,6 +89,7 @@ from datetime import UTC, date, datetime
 from typing import Any, Callable
 
 from palinode.core.config import config
+from palinode.core.skip_dirs import is_skipped_path
 
 logger = logging.getLogger("palinode.forget")
 
@@ -580,7 +581,8 @@ class NotAForgetRequest(ValueError):
 
 def _iter_memory_files(root: str):
     for path in glob.glob(os.path.join(root, "**", "*.md"), recursive=True):
-        yield path
+        if not is_skipped_path(os.path.relpath(path, root)):
+            yield path
 
 
 def withdraw_forget_request(

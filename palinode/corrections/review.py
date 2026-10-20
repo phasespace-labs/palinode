@@ -72,6 +72,7 @@ from palinode.core import path_guard
 from palinode.core.config import config
 from palinode.core.parity import CORRECTION_APPLIED_PARTIAL
 from palinode.core.revalidation import normalize_ref
+from palinode.core.skip_dirs import is_skipped_path
 from palinode.corrections.content import content_loss
 from palinode.corrections.queue import load_candidates
 
@@ -263,7 +264,7 @@ def resolve_target(ref: str) -> tuple[str, str]:
         matches = {
             os.path.relpath(found, root)
             for found in glob.glob(os.path.join(root, "**", f"{stem}.md"), recursive=True)
-            if os.path.isfile(found)
+            if os.path.isfile(found) and not is_skipped_path(os.path.relpath(found, root))
         }
         if len(matches) == 1:
             rel = matches.pop()
@@ -349,6 +350,8 @@ def referencing_records(rel: str) -> list[dict[str, str]]:
         except ValueError:
             continue
         other = os.path.relpath(path, root)
+        if is_skipped_path(other):
+            continue
         if other == rel:
             continue
         try:

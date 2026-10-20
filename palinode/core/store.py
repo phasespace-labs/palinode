@@ -32,6 +32,7 @@ from palinode.core.lifecycle import (
 )
 from palinode.core.path_guard import to_rel_path
 from palinode.core.quote_verify import QuoteStatus, verify_source_anchors
+from palinode.core.skip_dirs import is_skipped_path
 from palinode.core.where import matches_where
 # The hybrid-search scoring pipeline + its pure decay/predicate helpers live in
 # ranker.py. Re-exported here so `store.effective_importance`,
@@ -230,9 +231,11 @@ def scan_memory_content(content: str) -> tuple[bool, str]:
     return True, "ok"
 
 def _glob_md_files(directory: str):
-    """Yield .md file paths under *directory* (recursive)."""
+    """Yield the memory .md file paths under *directory* (recursive)."""
     import glob as _glob
-    yield from _glob.iglob(os.path.join(directory, "**", "*.md"), recursive=True)
+    for path in _glob.iglob(os.path.join(directory, "**", "*.md"), recursive=True):
+        if not is_skipped_path(os.path.relpath(path, directory)):
+            yield path
 
 
 def _ensure_db() -> None:

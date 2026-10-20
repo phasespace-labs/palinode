@@ -229,7 +229,9 @@ Palinode's source of truth. Its filters include:
 - `stale` (more than 90 days)
 
 The browsable list omits operational or special-purpose paths: `daily/`,
-`archive/`, `inbox/`, `logs/`, `prompts/`, `.obsidian/`, and consolidation
+`archive/`, `inbox/`, the folders no surface treats as memory (`specs/`, `prompts/`,
+`logs/`, dot folders, build folders; see
+[How memory works](HOW-MEMORY-WORKS.md#what-gets-indexed)), and consolidation
 siblings ending in `-history.md`. History files remain available from the
 Compaction view.
 

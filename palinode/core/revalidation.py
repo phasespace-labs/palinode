@@ -1043,9 +1043,8 @@ def sweep_revalidations(
     and commit path as every other deferred write, and a failure is visible in
     the same place.
     """
-    from palinode.consolidation.propagate import _SKIP_DIRS
     from palinode.core.config import config
-    from palinode.core.skip_dirs import is_skipped_path
+    from palinode.core.skip_dirs import SKIP_FOR_LISTING, is_skipped_path
 
     import frontmatter as _frontmatter
 
@@ -1055,7 +1054,7 @@ def sweep_revalidations(
     out: list[str] = []
     for path in sorted(glob.glob(os.path.join(base, "**", "*.md"), recursive=True)):
         rel = os.path.relpath(path, base).replace(os.sep, "/")
-        if is_skipped_path(rel, _SKIP_DIRS) or rel.endswith("-history.md"):
+        if is_skipped_path(rel, SKIP_FOR_LISTING) or rel.endswith("-history.md"):
             continue
         try:
             meta = _frontmatter.load(path).metadata

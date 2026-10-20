@@ -28,6 +28,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from palinode.core.skip_dirs import is_skipped_path
 from palinode.diagnostics.registry import register
 from palinode.diagnostics.types import CheckResult, DoctorContext
 
@@ -203,10 +204,9 @@ def chunks_match_md_count(ctx: DoctorContext) -> CheckResult:
     memory_dir = Path(ctx.config.memory_dir).expanduser().resolve()
     db_path = Path(ctx.config.db_path).expanduser().resolve()
 
-    # Count *.md files, excluding hidden dirs.
     md_files = [
         f for f in glob.glob(str(memory_dir / "**" / "*.md"), recursive=True)
-        if "/.palinode" not in f  # skip any md files inside the hidden palinode dir
+        if not is_skipped_path(str(Path(f).relative_to(memory_dir)))
     ]
     md_count = len(md_files)
 

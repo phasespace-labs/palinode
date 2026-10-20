@@ -94,6 +94,7 @@ import yaml
 from palinode.core import git_tools
 from palinode.core.config import config
 from palinode.core.memory_write import _MEMORY_CATEGORY_DIRS, _TYPE_TO_CATEGORY
+from palinode.core.skip_dirs import SKIP_FOR_LINT, is_skipped_path
 
 logger = logging.getLogger("palinode.migration.frontmatter_backfill")
 
@@ -132,9 +133,6 @@ DAILY_DIR: str = "daily"
 #: ``minimal`` — opt-in ``id`` + ``category`` + dates; still never a ``type:``.
 #: A full typed daily memory is absent by design — see the module docstring.
 VALID_DAILY_MODES: tuple[str, ...] = ("skip", "minimal")
-
-#: Mirrors ``run_lint_pass``'s skip set so the two agree on the file universe.
-SKIP_DIRS: frozenset[str] = frozenset({"archive", "logs", ".obsidian"})
 
 #: ``daily/<YYYY-MM-DD>.md`` — the filename the session-end writer uses.
 _DAILY_FILENAME_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
@@ -197,8 +195,8 @@ class BackfillPlan:
 def _iter_memory_files(base_dir: str) -> list[str]:
     """Return memory-dir-relative paths of every candidate ``.md`` file.
 
-    Same universe as ``run_lint_pass``: a recursive ``**/*.md`` glob (which
-    already skips dot-directories) minus :data:`SKIP_DIRS`. Every hit is
+    Same universe as ``run_lint_pass``: a recursive ``**/*.md`` glob minus the
+    shared rule with :data:`~palinode.core.skip_dirs.SKIP_FOR_LINT`. Every hit is
     additionally required to resolve *inside* ``base_dir``, so a symlink
     pointing out of the memory dir is dropped rather than followed and
     rewritten — the path-validation rule that applies to every palinode surface
@@ -208,8 +206,7 @@ def _iter_memory_files(base_dir: str) -> list[str]:
     out: list[str] = []
     for filepath in sorted(glob.glob(os.path.join(base_dir, "**/*.md"), recursive=True)):
         rel_path = os.path.relpath(filepath, base_dir)
-        parts = rel_path.split(os.sep)
-        if parts[0] in SKIP_DIRS:
+        if is_skipped_path(rel_path, SKIP_FOR_LINT):
             continue
         resolved = os.path.realpath(filepath)
         if resolved != base_real and not resolved.startswith(base_real + os.sep):

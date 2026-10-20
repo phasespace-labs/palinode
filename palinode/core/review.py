@@ -29,12 +29,7 @@ import frontmatter
 
 from palinode.core.config import config
 from palinode.core.lint import run_lint_pass
-from palinode.core.skip_dirs import is_skipped_path
-
-# Directories that hold no first-class project memories, on top of the
-# never-memory dirs every surface skips (``skip_dirs.ALWAYS_SKIP`` — ``logs``,
-# ``.obsidian``, ``.git`` and the store's ``specs/prompts`` copies).
-_SKIP_DIRS: frozenset[str] = frozenset({"daily", "archive", "inbox"})
+from palinode.core.skip_dirs import SKIP_FOR_LISTING, is_skipped_path
 
 
 def _normalize_project_ref(project: str | None) -> str | None:
@@ -56,7 +51,7 @@ def _scope_files(project_ref: str | None) -> set[str] | None:
     scope: set[str] = set()
     for filepath in glob.glob(os.path.join(base, "**", "*.md"), recursive=True):
         rel = os.path.relpath(filepath, base)
-        if is_skipped_path(rel, _SKIP_DIRS):
+        if is_skipped_path(rel, SKIP_FOR_LISTING):
             continue
         try:
             entities = frontmatter.load(filepath).metadata.get("entities", [])

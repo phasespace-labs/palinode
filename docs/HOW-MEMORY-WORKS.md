@@ -636,18 +636,35 @@ is re-derived. `palinode doctor` reports how many chunks are still behind.
 | `insights/` | ✅ | Lessons learned |
 | `daily/` | ✅ | Session logs |
 | `research/` | ✅ | Reference material |
-| `archive/` | ❌ | Processed, excluded |
+| `archive/` | ✅ | Retired memory stays searchable |
+| `inbox/` | ✅ | Open action items |
 | `inbox/processed/` | ❌ | Processed drops |
-| `specs/` | ❌ | The store's own consolidation prompts — config you edit, not memory |
-| `.git/` | ❌ | Git internals |
-| `venv/`, `node_modules/` | ❌ | Build artifacts |
+| `specs/`, `prompts/`, `logs/` | ❌ | The store's own prompts, config and logs, not memory |
+| `.git/`, `.obsidian/`, `.palinode/`, any other dot folder | ❌ | Tool state |
+| `venv/`, `node_modules/`, `__pycache__/`, `*.egg-info/` | ❌ | Build artifacts |
 
-**What counts as memory:** `specs/`, `prompts/`, `logs/` and the store's dot-directories
-are not memory on any surface — one predicate, matched against *every* directory segment
-of a path, keeps them out of `/list` (and so the SessionStart injection), the provenance
-UI, the advisory review, the session-start digest, `backed_by` propagation, and the
-index. `daily/`, `archive/` and `inbox/` are per-surface decisions: the digest reads
-`inbox/` because open action items live there, while the browse surfaces skip it.
+**What counts as memory:** one predicate, `palinode.core.skip_dirs.is_skipped_path`,
+decides it for every walker of the store: the watcher, `palinode reindex`, search, `/list`
+(and so the SessionStart injection), the provenance UI, the advisory review, the
+session-start digest, `backed_by` propagation, lint, the TTL sweep, cross-refs, forget,
+the handoff export and import, corrections, and the file counts in `doctor`, the config
+banner and `palinode retrieval-stats`. A path is never memory when any directory segment
+of its path *inside the store* is in the table above. A folder above the store root never
+counts, so a store under `~/.local/share/` or a `venv/` folder indexes normally.
+
+A surface that shows less than the index adds folders to that rule and never removes any:
+
+| Surface | Also skips | Why |
+| --- | --- | --- |
+| Index, search, forget, export and import, counts | nothing | `archive/` stays searchable |
+| `/list`, browse UI, review, propagation, revalidation | `daily/`, `archive/`, `inbox/` | they show curated current memory; `/list?include_inbox=true` adds `inbox/` back |
+| Session-start digest | `daily/`, `archive/` | it reads `inbox/` for open action items |
+| Lint, deep contradictions, frontmatter backfill, Obsidian sync | `archive/` | lint checks `daily/` and `inbox/` on purpose |
+| TTL sweep | `daily/` | daily notes are episodic session logs, exempt from TTL |
+| Cross-refs | `daily/`, `archive/`, `inbox/` | a hand-written `specs/<name>.md` can still be linked |
+
+Each row is a named constant in `palinode/core/skip_dirs.py` (`SKIP_FOR_LISTING`,
+`SKIP_FOR_DIGEST`, `SKIP_FOR_LINT`, `SKIP_FOR_TTL`, `SKIP_FOR_CROSS_REFS`).
 
 ---
 

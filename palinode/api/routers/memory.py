@@ -13,7 +13,7 @@ from palinode.core.tiers import apply_tier
 from palinode.core.parser import VALID_EPISTEMICS, VALID_UPDATE_POLICIES
 from palinode.core.scope import ScopeChain, other_project, resolve_scope_chain
 from palinode.core.cross_refs import filter_read_cross_refs
-from palinode.core.skip_dirs import is_skipped_path
+from palinode.core.skip_dirs import SKIP_FOR_LISTING, is_skipped_path
 from palinode.core.expiry import core_has_expired
 from palinode.core.lifecycle import eligibility, retired_reason
 from palinode.core.visibility import is_visible
@@ -320,13 +320,6 @@ class SaveRequest(BaseModel):
     )
 
 
-# What the browse surface skips *in addition to* the never-memory directories
-# every surface skips (``palinode.core.skip_dirs.ALWAYS_SKIP``: specs, prompts,
-# logs, .palinode, .obsidian, .git). Episodic and retired memories are a browse
-# decision, not a universal one — the context digest reads ``inbox``.
-_DEFAULT_LIST_SKIP_DIRS = frozenset({"daily", "archive", "inbox"})
-
-
 def _iso_or_none(value: Any) -> str | None:
     """Frontmatter ``expires_at`` as a JSON-safe string (YAML may yield a datetime)."""
     if value is None or value == "":
@@ -383,12 +376,10 @@ def collect_memory_files(
     consumer that injects what this returns and does not know about the flag
     gets the withholding behaviour, not the leak.
 
-    ``skip_dirs`` replaces this surface's own skip dirs (``daily``,
-    ``archive``, ``inbox``); the never-memory directories in
-    :data:`palinode.core.skip_dirs.ALWAYS_SKIP` are skipped regardless of what
-    a caller passes, and are matched on every path segment — which is what
-    keeps the store's own prompts at ``specs/prompts/*.md`` out of every
-    listing. ``include_history`` controls whether ``-history.md``
+    ``skip_dirs`` replaces this surface's own skip dirs
+    (:data:`palinode.core.skip_dirs.SKIP_FOR_LISTING`); the never-memory rule in
+    :func:`palinode.core.skip_dirs.is_skipped_path` applies regardless of what
+    a caller passes. ``include_history`` controls whether ``-history.md``
     consolidation-audit siblings are included; the default (``True``)
     preserves the classic ``GET /list`` contract, and the UI passes ``False``
     since those siblings aren't browsable memories. ``where`` keeps only the
@@ -402,7 +393,7 @@ def collect_memory_files(
     base_dir = _memory_base_dir()
     search_pattern = os.path.join(base_dir, "**/*.md")
 
-    effective_skip_dirs = set(skip_dirs) if skip_dirs is not None else _DEFAULT_LIST_SKIP_DIRS
+    effective_skip_dirs = set(skip_dirs) if skip_dirs is not None else SKIP_FOR_LISTING
 
     for filepath in glob.glob(search_pattern, recursive=True):
         try:
@@ -513,7 +504,7 @@ def list_api(
         category=category,
         core_only=core_only,
         include_retired_core=include_retired_core,
-        skip_dirs=(_DEFAULT_LIST_SKIP_DIRS - {"inbox"}) if include_inbox else None,
+        skip_dirs=(SKIP_FOR_LISTING - {"inbox"}) if include_inbox else None,
         where=parse_where(where),
     )
 

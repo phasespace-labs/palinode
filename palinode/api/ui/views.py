@@ -19,15 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from palinode.core.skip_dirs import is_skipped_path
+from palinode.core.skip_dirs import SKIP_FOR_LISTING, is_skipped_path
 from palinode.core.scoring import describe_match
-
-# Passed to collect_memory_files(skip_dirs=...): the same non-browsable dirs
-# ``list_api`` skips, on top of the never-memory dirs every surface skips
-# (``palinode.core.skip_dirs.ALWAYS_SKIP`` — which is where ``.obsidian``,
-# ``logs`` and the store's own ``specs/prompts`` copies live), so the UI list
-# matches the canonical "memories a human browses" definition.
-_LIST_SKIP_DIRS = frozenset({"daily", "archive", "inbox"})
 
 # Freshness buckets (days since last_updated). "stale" mirrors lint's 90-day
 # threshold so the memory-list freshness filter and the quality view agree.
@@ -43,9 +36,8 @@ def is_browsable_memory(rel_path: str) -> bool:
     this so they can't disagree (the bug where the sidebar badge showed 3 while
     the list showed 2 because lint counted a ``-history.md`` sibling the scan
     excluded). A path is browsable when it is a ``.md`` file, not under a
-    skip-dir at ANY depth (``daily``/``archive``/``inbox`` plus
-    :data:`palinode.core.skip_dirs.ALWAYS_SKIP`, which is what keeps the
-    store's own ``specs/prompts/*.md`` off the browse surface), and not a
+    skip-dir at ANY depth (the shared rule plus
+    :data:`palinode.core.skip_dirs.SKIP_FOR_LISTING`), and not a
     ``-history.md`` consolidation sibling (those belong to the compaction
     view, not the memory list).
     """
@@ -53,7 +45,7 @@ def is_browsable_memory(rel_path: str) -> bool:
     if not rel.endswith(".md"):
         return False
     parts = rel.split("/")
-    if is_skipped_path(rel, _LIST_SKIP_DIRS):
+    if is_skipped_path(rel, SKIP_FOR_LISTING):
         return False
     if parts[-1].endswith("-history.md"):
         return False
@@ -122,10 +114,9 @@ def scan_memory_files() -> list[dict[str, Any]]:
 
     Delegates the file walk and the (load-bearing) visibility gate to
     :func:`palinode.api.routers.memory.collect_memory_files` — the same
-    selection path behind ``GET /list`` — passing the UI's skip-dir set
-    (``_LIST_SKIP_DIRS``, which adds ``.obsidian`` on top of ``list_api``'s)
-    and ``include_history=False`` so ``-history.md`` consolidation siblings
-    never surface as browsable memories. This used to be a second, parallel
+    selection path behind ``GET /list`` — passing
+    ``SKIP_FOR_LISTING`` and ``include_history=False`` so ``-history.md``
+    consolidation siblings never surface as browsable memories. This used to be a second, parallel
     file walk that never imported ``core.visibility`` — ``private`` and
     ``restricted`` memories rendered here even though ``collect_memory_files``
     withholds them everywhere else.
@@ -138,7 +129,7 @@ def scan_memory_files() -> list[dict[str, Any]]:
 
     now = datetime.now(timezone.utc)
     rows: list[dict[str, Any]] = []
-    for r in collect_memory_files(skip_dirs=_LIST_SKIP_DIRS, include_history=False):
+    for r in collect_memory_files(skip_dirs=SKIP_FOR_LISTING, include_history=False):
         rel = r["file"]
         parts = Path(rel).parts
         if any(
