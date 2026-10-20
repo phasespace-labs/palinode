@@ -660,7 +660,7 @@ A surface that shows less than the index adds folders to that rule and never rem
 | `/list`, browse UI, review, propagation, revalidation | `daily/`, `archive/`, `inbox/` | they show curated current memory; `/list?include_inbox=true` adds `inbox/` back |
 | Session-start digest | `daily/`, `archive/` | it reads `inbox/` for open action items |
 | Lint, deep contradictions, frontmatter backfill, Obsidian sync | `archive/` | lint checks `daily/` and `inbox/` on purpose |
-| TTL sweep | `daily/` | daily notes expire by their own rule |
+| TTL sweep | `daily/` | daily notes are episodic session logs, exempt from TTL |
 | Cross-refs | `daily/`, `archive/`, `inbox/` | a hand-written `specs/<name>.md` can still be linked |
 
 Each row is a named constant in `palinode/core/skip_dirs.py` (`SKIP_FOR_LISTING`,

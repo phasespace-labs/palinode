@@ -34,7 +34,7 @@ SKIP_FOR_DIGEST: frozenset[str] = frozenset({"daily", "archive"})
 #: Lint checks ``daily`` and ``inbox`` on purpose; Obsidian sync mirrors lint.
 SKIP_FOR_LINT: frozenset[str] = frozenset({"archive"})
 
-#: Daily notes expire by their own rule, not by TTL.
+#: Daily notes are episodic session logs, exempt from TTL.
 SKIP_FOR_TTL: frozenset[str] = frozenset({"daily"})
 
 #: Cross-refs link curated current memory, as the listing shows it.
