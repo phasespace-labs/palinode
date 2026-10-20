@@ -523,9 +523,12 @@ def _save_through_the_watcher(path: Path) -> None:
 def test_a_file_saved_in_a_dot_folder_is_not_indexed_and_a_reindex_changes_nothing(
     root: Path, client: TestClient, embedder_stub
 ) -> None:
-    fixture.write_store(root)
-    for stem in (".trash/t", "notes/a"):
-        _save_through_the_watcher(root / f"{stem}.md")
+    _write_one_note(root)
+    trash = root / ".trash" / "t.md"
+    trash.parent.mkdir()
+    trash.write_text((root / "notes" / "a.md").read_text())
+    for path in (trash, root / "notes" / "a.md"):
+        _save_through_the_watcher(path)
     before = _indexed_stems()
 
     assert client.post("/reindex").status_code == 200
@@ -615,3 +618,66 @@ def test_a_history_sibling_is_still_listed_by_the_api_hidden_by_the_ui_and_index
     assert "notes/a-history" not in browsed
     assert "notes/a-history" not in dependents
     assert "notes/a-history" in _indexed_stems()
+
+
+# ── The dependency graph and the correction target lookup ────────────────────
+
+
+def _slug_of(stem: str) -> str:
+    return "fx-" + stem.replace("/", "-").replace(".", "")
+
+
+def test_the_dependency_graph_reads_only_memory_files(root: Path) -> None:
+    from palinode.core.depends import find_unblocked
+
+    fixture.write_store(root, slug=_slug_of, status="active")
+
+    reached = _stems(row["file_path"] for row in find_unblocked(str(root)))
+
+    assert reached == fixture.INDEX, (
+        f"extra: {sorted(reached - fixture.INDEX)}, missing: {sorted(fixture.INDEX - reached)}"
+    )
+
+
+def test_a_dependency_on_a_never_memory_file_is_an_orphan(root: Path) -> None:
+    from palinode.core.depends import traverse_depends
+
+    fixture.write_store(
+        root,
+        slug=_slug_of,
+        status="active",
+        depends_on=lambda stem: [_slug_of("prompts/p")] if stem == "notes/a" else None,
+    )
+
+    neighbourhood = traverse_depends(_slug_of("notes/a"), str(root))
+
+    assert neighbourhood["depends_on"] == [
+        {"slug": _slug_of("prompts/p"), "status": None, "found": False}
+    ]
+    assert neighbourhood["orphans"] == [_slug_of("prompts/p")]
+
+
+def _write_note(root: Path, stem: str) -> None:
+    path = root / f"{stem}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"---\nid: {stem.replace('/', '-')}\ntype: Decision\n---\n\nbody {stem}\n")
+
+
+def test_a_bare_name_shared_with_never_memory_files_resolves_to_the_memory(root: Path) -> None:
+    from palinode.corrections.review import resolve_target
+
+    for stem in ("notes/x", "prompts/x", "specs/prompts/x", "node_modules/pkg/x", "inbox/processed/x"):
+        _write_note(root, stem)
+
+    assert resolve_target("x") == ("notes/x.md", str(root / "notes" / "x.md"))
+
+
+def test_a_bare_name_that_only_a_never_memory_file_carries_is_not_found(root: Path) -> None:
+    from palinode.corrections.review import TargetNotFoundError, resolve_target
+
+    _write_note(root, "prompts/only-here")
+    _write_note(root, "node_modules/pkg/only-there")
+
+    for name in ("only-here", "only-there"):
+        with pytest.raises(TargetNotFoundError):
+            resolve_target(name)
