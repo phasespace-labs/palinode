@@ -27,6 +27,7 @@ from typing import Any
 import frontmatter as _frontmatter
 
 from palinode.core.config import config
+from palinode.core.skip_dirs import is_skipped_path
 
 logger = logging.getLogger("palinode.depends")
 
@@ -41,8 +42,10 @@ def _memory_dir() -> str:
 
 
 def _iter_md_files(base: str):
-    """Yield absolute paths of all .md files under *base*."""
-    yield from glob.iglob(os.path.join(base, "**", "*.md"), recursive=True)
+    """Yield absolute paths of the memory .md files under *base*."""
+    for path in glob.iglob(os.path.join(base, "**", "*.md"), recursive=True):
+        if not is_skipped_path(os.path.relpath(path, base)):
+            yield path
 
 
 def _load_frontmatter(path: str) -> dict[str, Any]:

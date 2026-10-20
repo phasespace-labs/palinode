@@ -264,7 +264,7 @@ def resolve_target(ref: str) -> tuple[str, str]:
         matches = {
             os.path.relpath(found, root)
             for found in glob.glob(os.path.join(root, "**", f"{stem}.md"), recursive=True)
-            if os.path.isfile(found)
+            if os.path.isfile(found) and not is_skipped_path(os.path.relpath(found, root))
         }
         if len(matches) == 1:
             rel = matches.pop()
