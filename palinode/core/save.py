@@ -31,6 +31,7 @@ import hashlib
 import logging
 import os
 import re
+import stat
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -47,7 +48,14 @@ from palinode.core.memory_write import (
     _normalize_entities,
     compose_appended_body,
 )
-from palinode.core.path_guard import to_rel_path
+from palinode.core.path_guard import (
+    PathTraversalError,
+    memory_base_dir,
+    resolve_memory_path,
+    to_rel_path,
+)
+from palinode.core.skip_dirs import ALWAYS_SKIP
+from palinode.core.typed_links import is_well_formed_ref
 
 logger = logging.getLogger("palinode.core.save")
 
@@ -215,6 +223,128 @@ def _holds_this_content(path: str, incoming_hash: str) -> bool:
     return str(existing_meta.get("content_hash", "")) == incoming_hash
 
 
+#: The longest file name, in bytes, that APFS, ext4 and NTFS all accept.
+_NAME_MAX_BYTES = 255
+
+
+def _parse_save_path(path: str) -> str:
+    """The POSIX form of a caller-chosen save ``path``, relative to the memory dir.
+
+    Raises:
+        SaveValidationError: naming the one condition the path breaks.
+    """
+    written = path.replace("\\", "/")
+    if "\x00" in written:
+        raise SaveValidationError(f"path {path!r} holds a NUL byte")
+    if written.startswith("/"):
+        raise SaveValidationError(
+            f"path {path!r} is absolute; give it relative to the memory dir"
+        )
+    if ":" in written:
+        raise SaveValidationError(
+            f"path {path!r} holds a ':', which Windows reads as a drive or a data stream"
+        )
+    parts = [part for part in written.split("/") if part not in ("", ".")]
+    if ".." in parts:
+        raise SaveValidationError(
+            f"path {path!r} has a '..' segment; it must stay inside the memory dir"
+        )
+    reserved = _find_reserved_part(parts)
+    if reserved:
+        raise SaveValidationError(f"path {path!r} lies under {reserved!r}, a reserved folder")
+    if written.endswith("/") or not parts or not parts[-1].endswith(".md") or parts[-1] == ".md":
+        raise SaveValidationError(f"path {path!r} must name a file ending in .md")
+    normalised = "/".join(parts)
+    if not is_well_formed_ref(normalised.removesuffix(".md")):
+        raise SaveValidationError(
+            f"path {path!r} could not be cited as a link: a ref starts with a letter or digit, "
+            "holds only letters, digits, '.', '_', '-' and '/', and never '..'"
+        )
+    _assert_save_path_is_writable_in_store(path, normalised)
+    return normalised
+
+
+def _assert_save_path_is_writable_in_store(path: str, normalised: str) -> None:
+    """Refuse a save ``path`` that cannot be written inside the store as it stands.
+
+    Raises:
+        SaveValidationError: naming the condition the caller's path ran into.
+    """
+    base_dir = memory_base_dir()
+    parts = normalised.split("/")
+    escape_message = f"path {path!r} resolves outside the memory dir through a link"
+    # The write goes through a temp file beside the file, whose name is longer.
+    file_name_max = _NAME_MAX_BYTES - git_tools.WRITE_TEMP_EXTRA_BYTES
+    if any(len(part.encode()) > _NAME_MAX_BYTES for part in parts[:-1]) or (
+        len(parts[-1].encode()) > file_name_max
+    ):
+        raise SaveValidationError(
+            f"path {path!r} has a name too long: the limit is {_NAME_MAX_BYTES} bytes "
+            f"for a folder and {file_name_max} for the file"
+        )
+    path_max = _get_path_max_bytes(config.palinode_dir) - git_tools.WRITE_TEMP_EXTRA_BYTES
+    # The kernel counts both the path as written and the one a link in the store's root expands to.
+    longest_form = max(len(os.path.join(root, *parts).encode()) for root in (config.palinode_dir, base_dir))
+    if longest_form >= path_max:
+        raise SaveValidationError(
+            f"path {path!r} is too long: the full path must stay under {path_max} bytes"
+        )
+    for depth in range(1, len(parts) + 1):
+        ref = "/".join(parts[:depth])
+        entry = os.path.join(base_dir, *parts[:depth])
+        if os.path.islink(entry):
+            raise SaveValidationError(f"path {path!r} runs through {ref!r}, a symbolic link")
+        # Checked before anything is said about the entry, so no answer describes a target outside.
+        if not _is_inside(os.path.realpath(entry), base_dir):
+            raise SaveValidationError(escape_message)
+        try:
+            is_folder = stat.S_ISDIR(os.stat(entry).st_mode)
+        except FileNotFoundError:
+            break
+        is_last = depth == len(parts)
+        if is_last and is_folder:
+            raise SaveValidationError(f"path {path!r} names a folder, not a file")
+        if not is_last and not is_folder:
+            raise SaveValidationError(f"path {path!r} uses the file {ref!r} as a folder")
+    try:
+        _, resolved = resolve_memory_path(normalised)
+    except PathTraversalError as exc:
+        raise SaveValidationError(escape_message) from exc
+    reserved = _find_reserved_part(os.path.relpath(resolved, base_dir).split(os.sep))
+    if reserved:
+        raise SaveValidationError(f"path {path!r} resolves under {reserved!r}, a reserved folder")
+
+
+def _is_inside(real_path: str, base_dir: str) -> bool:
+    try:
+        return os.path.commonpath([real_path, base_dir]) == base_dir
+    except ValueError:
+        # Windows: the two lie on different drives.
+        return False
+
+
+def _get_path_max_bytes(memory_dir: str) -> int:
+    try:
+        path_max = os.pathconf(memory_dir, "PC_PATH_MAX")
+    except AttributeError:
+        # Windows has no pathconf; MAX_PATH is its classic limit.
+        return 260
+    except OSError:
+        # A store not made yet; macOS's limit is the smallest of the POSIX ones.
+        return 1024
+    return path_max if path_max > 0 else 1024
+
+
+def _find_reserved_part(parts: list[str]) -> str | None:
+    # Case-insensitive filesystems, and Windows' trimming of trailing dots and spaces,
+    # map ".GIT" and ".git." onto ".git".
+    for part in parts:
+        name = part.rstrip(". ").casefold()
+        if name in ALWAYS_SKIP:
+            return name
+    return None
+
+
 def _disambiguate_derived_slug(
     slug: str, file_path: str, content: str
 ) -> tuple[str, str]:
@@ -285,6 +415,7 @@ def save_memory(
     claims: Any = None,
     sync: bool = False,
     push: bool | None = None,
+    path: str | None = None,
 ) -> dict[str, Any]:
     """Create a typed memory file, commit it to git, and index it inline.
 
@@ -336,9 +467,15 @@ def save_memory(
             ``push=False`` threads through to the individual-file save it makes
             internally. ``True`` is accepted but redundant for a caller that
             already pushes explicitly afterward.
+        path: The file to write, relative to the memory dir, in place of
+            ``<category>/<slug>.md``. ``type`` still sets the front matter.
+            Refused alongside ``slug``, and unless it is relative, ends in
+            ``.md``, holds no NUL, ``:`` or ``..``, lies outside every
+            ``skip_dirs.ALWAYS_SKIP`` folder, and meets no symbolic link below the memory dir.
 
     Returns:
-        A dict carrying ``file_path``, ``rel_path``, ``id``, ``save_outcome``
+        A dict carrying ``file_path``, ``rel_path`` (and ``path``, the same
+        value, when the caller gave one), ``id``, ``save_outcome``
         (one of ``created``, ``resaved``, ``disambiguated``, ``appended``, or
         ``replaced``),
         ``disambiguated_from``, the index health flags
@@ -376,7 +513,18 @@ def save_memory(
         logger.warning("save rejected: %s", complaint)
         raise SaveValidationError(complaint)
 
-    if slug:
+    save_path: str | None = None
+    if path is not None:
+        if slug:
+            raise SaveValidationError(
+                "give either path or slug, not both: path names the file, slug names it "
+                "inside the type's folder"
+            )
+        save_path = _parse_save_path(path)
+        # The file's stem stands in for the slug; a path is chosen, never derived.
+        slug = save_path.rsplit("/", 1)[-1].removesuffix(".md")
+
+    if slug and save_path is None:
         # Prevent any potential JSON escape or traversal exploits if user defines slug
         slug = re.sub(r'[^a-z0-9]+', '-', slug.lower()).strip('-')
 
@@ -394,6 +542,8 @@ def save_memory(
     # module-level map (shared with the description-eligibility predicate
     # so the writer and the count/worklist derive from one literal).
     category = _TYPE_TO_CATEGORY.get(type, "inbox")
+    # What names this memory in ids, commits and links: its path relative to the store.
+    rel_ref = save_path or f"{category}/{slug}.md"
 
     # ADR-015 §2.1: validate the write-semantics axis. Reject an
     # unknown update_policy outright rather than silently coercing — a typo'd
@@ -548,11 +698,11 @@ def save_memory(
         raise SaveValidationError(f"Security scan failed: {reason}")
 
     original_slug = slug
-    file_path = os.path.join(config.palinode_dir, category, f"{slug}.md")
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    file_path = os.path.join(config.palinode_dir, *rel_ref.split("/"))
 
     if slug_was_derived:
         slug, file_path = _disambiguate_derived_slug(slug, file_path, content)
+        rel_ref = f"{category}/{slug}.md"
 
     # Classify the save after derived-slug resolution but before the write.
     # Looking only at the base path would mislabel a repeat save of an existing
@@ -699,7 +849,7 @@ def save_memory(
         # caller also supplied one) so the field is never absent and never
         # a value this implementation does not actually implement.
         "auditable_memory": _AMR_SPEC_VERSION,
-        "id": f"{category}-{slug}",
+        "id": rel_ref.removesuffix(".md").replace("/", "-"),
         "category": category,
         "type": type,
         "entities": normalized_entities,
@@ -838,7 +988,7 @@ def save_memory(
     # non-empty so frontmatter stays clean otherwise.
     _claims_in = claims if claims is not None else _meta_dict.get("claims")
     if _claims_in is not None:
-        _resolved_claims = _normalize_claims_or_reject(_claims_in, f"{category}/{slug}.md")
+        _resolved_claims = _normalize_claims_or_reject(_claims_in, rel_ref)
         if _resolved_claims:
             frontmatter_dict["claims"] = _resolved_claims
 
@@ -877,6 +1027,8 @@ def save_memory(
 
     doc = f"---\n{yaml.safe_dump(frontmatter_dict, default_flow_style=False, allow_unicode=True)}---\n\n{body_content}\n"
 
+    # Folders are made only once the save has passed every check, so a refusal leaves none behind.
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
     git_tools.write_memory_file(file_path, doc)
 
     # auto_summary is no longer generated inline. The watcher detects
@@ -904,7 +1056,7 @@ def save_memory(
     git_committed: bool = False
     git_error: str | None = None
     if config.git.auto_commit:
-        commit_msg = f"{config.git.commit_prefix} auto-save: {category}/{slug}.md"
+        commit_msg = f"{config.git.commit_prefix} auto-save: {rel_ref}"
         outcome = git_tools.try_commit_memory_files([file_path], commit_msg)
         git_committed = outcome.committed
         git_error = outcome.error
@@ -940,7 +1092,7 @@ def save_memory(
     if _resolved_contradicts:
         try:
             from palinode.core.typed_links import add_reciprocal_contradicts
-            source_ref = f"{category}/{slug}"
+            source_ref = rel_ref.removesuffix(".md")
             add_reciprocal_contradicts(
                 config.palinode_dir,
                 source_ref,
@@ -1016,6 +1168,8 @@ def save_memory(
         # subprocess succeeded. False when disabled or when git errors.
         "git_committed": git_committed,
     }
+    if save_path is not None:
+        result["path"] = save_path
     if git_error:
         result["git_error"] = git_error
     if index_error and not indexed:

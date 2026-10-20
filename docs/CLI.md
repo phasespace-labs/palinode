@@ -1827,6 +1827,7 @@ README; the frontmatter fields are explained in
 | `--file PATH` | none | Read content from a file instead of the argument |
 | `--title TEXT` | derived | Title override |
 | `--slug TEXT` | derived from content | URL-safe filename slug |
+| `--path TEXT` | `<category>/<slug>.md` | File to write, relative to the memory dir and ending in `.md`. Refused together with `--slug`. See [Saving to a chosen path](#saving-to-a-chosen-path) |
 | `--core / --no-core` | unset | Mark as core (injected at every session start) |
 | `--confidence FLOAT` | none | Confidence 0.0–1.0, consumed by consolidation |
 | `--importance INTEGER` | none | Human-assigned priority 1–5, stored as `priority` |
@@ -1848,9 +1849,47 @@ palinode save --type Decision -p checkout \
   "Chose SQLite over Postgres for the cache layer. Reason: no ops burden."
 palinode save --ps "Halfway through the auth migration; mobile client next."
 palinode save --file notes.md --backed-by research/paper --epistemic inference
+palinode save --type Insight --path team/designer/role.md "Designers review before merge."
 ```
 
 Output: **auto**.
+
+#### Saving to a chosen path
+
+`--path` (`path` on the API, the MCP tool and the OpenClaw plugin) names the file
+a save writes, in place of `<category>/<slug>.md`. Without it a save lands where
+it always did. `--type` still sets the memory's `type` and `category` in its front
+matter. A second save to the same path is a re-save under its `update_policy`,
+exactly as a save with an explicit slug, and it keeps the file's `visibility`,
+`scope` and `access` unless the save supplies them.
+
+The path is refused, with nothing written and no folder made, when it:
+
+- is absolute, or holds a drive or a `:`, or a `..` segment, or a NUL byte;
+- does not end in `.md`, or holds a character a typed link cannot cite;
+- lies under a folder Palinode never indexes (`specs`, `prompts`, `logs`,
+  `.palinode`, `.obsidian`, `.git`, on any directory segment and in any case). A
+  file named `logs.md` or a folder named `specsheet/` is fine;
+- runs through a symbolic link anywhere below the memory dir. The memory dir
+  itself may be a link.
+
+The memory's id, its claims, its `contradicts` back-links, its `cross_refs` and the
+auto-commit message all name the path, so `team/alice.md` and `people/alice.md`
+are two memories with ids `team-alice` and `people-alice`. The id is the path
+without `.md`, with `/` turned to `-`; two paths that differ only by `/` versus
+`-` (`a-b/c.md` and `a/b-c.md`) therefore share an id, which nothing in the index
+keys on.
+
+Existing memories are never moved. These features do not follow a custom location:
+
+- consolidation reads flat source folders, so a memory elsewhere is not a source;
+- layer splitting scans only `projects/` and `people/`;
+- fact ids are bootstrapped only in `people/`, `projects/`, `decisions/` and
+  `insights/`;
+- age-based archive recognises a profile document by its top folder (`people/`,
+  and `projects/` apart from status files) and holds back only `decisions/`. A
+  memory saved elsewhere stays protected only through its front matter:
+  `type: PersonMemory`, `core: true` or `update_policy: replace`.
 
 ### `palinode search`
 

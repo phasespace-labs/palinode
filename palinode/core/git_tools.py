@@ -170,6 +170,12 @@ def _validate_write_target(file_path: str) -> None:
     path_guard.resolve_memory_path(candidate)
 
 
+_WRITE_TEMP_SUFFIX = ".tmp"
+#: Bytes the atomic write's temp file adds to the target's name:
+#: a leading and a separating ".", tempfile's 8 random characters, and the suffix.
+WRITE_TEMP_EXTRA_BYTES = len("..") + 8 + len(_WRITE_TEMP_SUFFIX)
+
+
 def write_memory_file(file_path: str, content: str) -> None:
     """Atomically write ``content`` to ``file_path`` (temp + fsync + rename).
 
@@ -188,7 +194,7 @@ def write_memory_file(file_path: str, content: str) -> None:
     _validate_write_target(file_path)
     directory = os.path.dirname(file_path) or "."
     prefix = f".{os.path.basename(file_path)}."
-    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=prefix, suffix=".tmp")
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=prefix, suffix=_WRITE_TEMP_SUFFIX)
     try:
         if os.path.exists(file_path):
             mode = os.stat(file_path).st_mode & 0o777

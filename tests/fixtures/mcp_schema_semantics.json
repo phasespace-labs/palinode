@@ -351,7 +351,7 @@
     ]
   },
   "palinode_save": {
-    "description": "Save a memory (fact, decision, insight, project update) worth keeping across sessions. Requires exactly one of `type` or `ps=true`. On timeout the save may still have committed \u2014 palinode_search a distinctive phrase before retrying, or you'll duplicate it.",
+    "description": "Save a memory (fact, decision, insight, project update) worth keeping across sessions. Requires exactly one of `type` or `ps=true`. On timeout the save may still have committed \u2014 palinode_search a distinctive phrase before retrying, or you'll duplicate it. `path` (e.g. team/x.md) names the file in place of <folder>/<slug>.md.",
     "params": {
       "backed_by": {},
       "claims": {},
@@ -370,6 +370,7 @@
       },
       "external_refs": {},
       "metadata": {},
+      "path": {},
       "priority": {},
       "project": {},
       "ps": {},

@@ -30,6 +30,12 @@ from palinode.core.parity import MEMORY_TYPES
     help="URL-safe filename slug.  Auto-generated from content if omitted.",
 )
 @click.option(
+    "--path",
+    "path",
+    help="File to write, relative to the memory dir and ending in .md "
+    "(e.g. team/designer/role.md), in place of <category>/<slug>.md. Not with --slug.",
+)
+@click.option(
     "--core/--no-core",
     "core",
     default=None,
@@ -168,6 +174,7 @@ def save(
     file_path,
     title,
     slug,
+    path,
     core,
     confidence,
     priority,
@@ -290,6 +297,7 @@ def save(
             sync=sync,
             project=project,
             slug=slug,
+            path=path,
             core=core,
             confidence=confidence,
             priority=priority,
