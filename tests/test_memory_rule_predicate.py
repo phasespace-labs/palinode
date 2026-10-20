@@ -112,6 +112,21 @@ def test_the_windows_separator_matches_like_the_posix_one(rel: str) -> None:
     assert is_skipped_path(rel)
 
 
+@pytest.mark.parametrize(
+    ("rel", "expected"),
+    [
+        ("./notes/a.md", False),
+        ("./specs/x.md", True),
+        ("notes//a.md", False),
+        ("inbox//processed/p.md", True),
+    ],
+)
+def test_a_current_directory_segment_or_a_doubled_separator_changes_nothing(
+    rel: str, expected: bool
+) -> None:
+    assert is_skipped_path(rel) is expected
+
+
 def test_extra_adds_folders_to_the_skip_set() -> None:
     assert is_skipped_path("archive/a.md", {"archive"})
     assert is_skipped_path("team/archive/n.md", frozenset({"archive"}))
