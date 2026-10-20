@@ -169,9 +169,16 @@ def _revalidation_sweep(root: Path, client: TestClient) -> set[str]:
     return _stems(sweep_revalidations(str(root), enqueue=False))
 
 
+def _browsable_predicate(root: Path, client: TestClient) -> set[str]:
+    from palinode.api.ui.views import is_browsable_memory
+
+    return {stem for stem in fixture.FILES if is_browsable_memory(f"{stem}.md")}
+
+
 LISTING_SURFACES: dict[str, Callable[..., set[str]]] = {
     "GET /list": _list_endpoint,
     "browse UI": _browse_ui,
+    "UI browsable predicate": _browsable_predicate,
     "project review": _project_review,
     "backed_by propagation": _backed_by_propagation,
     "revalidation sweep": _revalidation_sweep,
@@ -294,11 +301,16 @@ def test_the_ttl_sweep_skips_daily_at_any_depth_and_nothing_else(
 # ── Cross references ─────────────────────────────────────────────────────────
 
 
-_SPEC_HOLES = ("specs/.drafts/d", "specs/logs/l")
+_SPEC_HOLES = (
+    "specs/.drafts/d", "specs/logs/l", "specs/archive/a", "specs/daily/d", "specs/inbox/i",
+)
+_SPEC_NESTED = ("specs/design/d",)
+_SPEC_EXTRAS = (*_SPEC_HOLES, *_SPEC_NESTED)
+_CROSS_REFS_WITH_NESTED_SPEC = fixture.CROSS_REFS | set(_SPEC_NESTED)
 
 
-def _write_spec_holes(root: Path) -> None:
-    for stem in _SPEC_HOLES:
+def _write_spec_extras(root: Path) -> None:
+    for stem in _SPEC_EXTRAS:
         path = root / f"{stem}.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"---\nid: {stem.replace('/', '-')}\ntype: Decision\n---\n\nfixture body harbor {stem}\n")
@@ -308,13 +320,12 @@ def test_a_cross_ref_target_is_a_curated_current_memory_or_a_hand_written_spec(r
     from palinode.core.cross_refs import build_registry
 
     fixture.write_store(root)
-    _write_spec_holes(root)
+    _write_spec_extras(root)
 
     reached = _stems(f"{ref}.md" for ref in build_registry(str(root)))
 
-    assert reached == fixture.CROSS_REFS, (
-        f"extra: {sorted(reached - fixture.CROSS_REFS)}, missing: {sorted(fixture.CROSS_REFS - reached)}"
-    )
+    expected = _CROSS_REFS_WITH_NESTED_SPEC
+    assert reached == expected, f"extra: {sorted(reached - expected)}, missing: {sorted(expected - reached)}"
 
 
 def test_a_cross_ref_source_is_a_curated_current_memory_or_a_hand_written_spec(
@@ -324,8 +335,8 @@ def test_a_cross_ref_source_is_a_curated_current_memory_or_a_hand_written_spec(
 
     monkeypatch.setattr(config.capture.cross_refs, "enabled", True)
     fixture.write_store(root)
-    _write_spec_holes(root)
-    stems = (*fixture.FILES, *_SPEC_HOLES)
+    _write_spec_extras(root)
+    stems = (*fixture.FILES, *_SPEC_EXTRAS)
     body = "See " + " ".join(stems) + "."
 
     reached = {
@@ -334,9 +345,16 @@ def test_a_cross_ref_source_is_a_curated_current_memory_or_a_hand_written_spec(
         if update_file_cross_refs(str(root / f"{stem}.md"), content=body)["refs"]
     }
 
-    assert reached == fixture.CROSS_REFS, (
-        f"extra: {sorted(reached - fixture.CROSS_REFS)}, missing: {sorted(fixture.CROSS_REFS - reached)}"
-    )
+    expected = _CROSS_REFS_WITH_NESTED_SPEC
+    assert reached == expected, f"extra: {sorted(reached - expected)}, missing: {sorted(expected - reached)}"
+
+
+def test_the_spec_exception_reads_either_separator() -> None:
+    from palinode.core.cross_refs import _is_skipped
+
+    assert not _is_skipped("specs\\amr.md")
+    assert not _is_skipped("specs\\design\\d.md")
+    assert _is_skipped("specs\\prompts\\p.md")
 
 
 # ── The rest of the index group: records, counts and dedup ───────────────────
@@ -429,6 +447,32 @@ def test_a_record_walk_reaches_exactly_the_memory_files(
     assert reached == fixture.INDEX, (
         f"extra: {sorted(reached - fixture.INDEX)}, missing: {sorted(fixture.INDEX - reached)}"
     )
+
+
+_NOT_A_MEMORY_DIRECTORY = "origin_path is not a memory directory"
+
+
+@pytest.mark.parametrize(
+    ("rel", "problem"),
+    [
+        ("specs/x.md", _NOT_A_MEMORY_DIRECTORY),
+        ("prompts/x.md", _NOT_A_MEMORY_DIRECTORY),
+        ("logs/x.md", _NOT_A_MEMORY_DIRECTORY),
+        ("notes/node_modules/x.md", _NOT_A_MEMORY_DIRECTORY),
+        ("notes/venv/x.md", _NOT_A_MEMORY_DIRECTORY),
+        ("notes/palinode.egg-info/x.md", _NOT_A_MEMORY_DIRECTORY),
+        ("inbox/processed/x.md", _NOT_A_MEMORY_DIRECTORY),
+        ("notes/x.md", None),
+        ("archive/x.md", None),
+        ("daily/x.md", None),
+        ("inbox/x.md", None),
+        ("team/archive/x.md", None),
+    ],
+)
+def test_an_import_destination_follows_the_index_rule_and_no_more(rel: str, problem: str | None) -> None:
+    from palinode.core.handoff_import import _path_problem
+
+    assert _path_problem(rel) == problem
 
 
 # ── Counts: every number that says "how many memory files" ───────────────────
@@ -598,6 +642,16 @@ def test_listing_with_include_inbox_adds_inbox_and_not_processed_items(
     )
 
 
+def test_a_file_outside_the_store_is_not_judged_by_the_stores_rule(root: Path, tmp_path: Path) -> None:
+    from palinode.indexer.watcher import PalinodeHandler
+
+    handler = PalinodeHandler()
+    try:
+        assert handler.is_valid_file(str(tmp_path / "elsewhere" / "x.md"))
+    finally:
+        handler.shutdown()
+
+
 def test_a_history_sibling_is_still_listed_by_the_api_hidden_by_the_ui_and_indexed(
     root: Path, client: TestClient, embedder_stub
 ) -> None:
@@ -681,3 +735,13 @@ def test_a_bare_name_that_only_a_never_memory_file_carries_is_not_found(root: Pa
     for name in ("only-here", "only-there"):
         with pytest.raises(TargetNotFoundError):
             resolve_target(name)
+
+
+def test_a_bare_name_found_only_in_archive_daily_or_inbox_still_resolves(root: Path) -> None:
+    from palinode.corrections.review import resolve_target
+
+    for stem in ("archive/old", "daily/day", "inbox/new"):
+        _write_note(root, stem)
+
+    for name, rel in (("old", "archive/old.md"), ("day", "daily/day.md"), ("new", "inbox/new.md")):
+        assert resolve_target(name) == (rel, str(root / rel))
