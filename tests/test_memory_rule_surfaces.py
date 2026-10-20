@@ -294,10 +294,21 @@ def test_the_ttl_sweep_skips_daily_at_any_depth_and_nothing_else(
 # ── Cross references ─────────────────────────────────────────────────────────
 
 
+_SPEC_HOLES = ("specs/.drafts/d", "specs/logs/l")
+
+
+def _write_spec_holes(root: Path) -> None:
+    for stem in _SPEC_HOLES:
+        path = root / f"{stem}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"---\nid: {stem.replace('/', '-')}\ntype: Decision\n---\n\nfixture body harbor {stem}\n")
+
+
 def test_a_cross_ref_target_is_a_curated_current_memory_or_a_hand_written_spec(root: Path) -> None:
     from palinode.core.cross_refs import build_registry
 
     fixture.write_store(root)
+    _write_spec_holes(root)
 
     reached = _stems(f"{ref}.md" for ref in build_registry(str(root)))
 
@@ -313,11 +324,13 @@ def test_a_cross_ref_source_is_a_curated_current_memory_or_a_hand_written_spec(
 
     monkeypatch.setattr(config.capture.cross_refs, "enabled", True)
     fixture.write_store(root)
-    body = "See " + " ".join(fixture.FILES) + "."
+    _write_spec_holes(root)
+    stems = (*fixture.FILES, *_SPEC_HOLES)
+    body = "See " + " ".join(stems) + "."
 
     reached = {
         stem
-        for stem in fixture.FILES
+        for stem in stems
         if update_file_cross_refs(str(root / f"{stem}.md"), content=body)["refs"]
     }
 
@@ -539,7 +552,10 @@ def _write_one_note(memory_dir: Path) -> None:
     note.write_text("---\nid: notes-a\ntype: Decision\ncategory: notes\n---\n\nfixture body harbor\n")
 
 
-_ABOVE_STORE = ["venv", "node_modules", "__pycache__", "palinode.egg-info", "mypkg.egg-info", "logs"]
+_ABOVE_STORE = [
+    "venv", "node_modules", "__pycache__", "palinode.egg-info", "mypkg.egg-info", "logs",
+    ".local", ".palinode",
+]
 
 
 @pytest.mark.parametrize("above_store", _ABOVE_STORE)
