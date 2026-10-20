@@ -21,9 +21,9 @@ from dataclasses import field
 from typing import Literal
 from pydantic.dataclasses import dataclass
 from pydantic import TypeAdapter, ValidationError
+import yaml
 
 from palinode.core.skip_dirs import is_skipped_path
-import yaml
 
 _logger = logging.getLogger("palinode.config")
 ToolSurface = Literal["core", "full"]
