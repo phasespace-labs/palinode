@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest import mock
 
+import frontmatter
 import pytest
 from fastapi.testclient import TestClient
 from watchdog.events import FileCreatedEvent
@@ -338,11 +339,16 @@ def test_a_cross_ref_source_is_a_curated_current_memory_or_a_hand_written_spec(
     _write_spec_extras(root)
     stems = (*fixture.FILES, *_SPEC_EXTRAS)
     body = "See " + " ".join(stems) + "."
+    for stem in stems:
+        path = root / f"{stem}.md"
+        post = frontmatter.loads(path.read_text())
+        post.content = body
+        path.write_text(frontmatter.dumps(post) + "\n")
 
     reached = {
         stem
         for stem in stems
-        if update_file_cross_refs(str(root / f"{stem}.md"), content=body)["refs"]
+        if update_file_cross_refs(str(root / f"{stem}.md"))["refs"]
     }
 
     expected = _CROSS_REFS_WITH_NESTED_SPEC
