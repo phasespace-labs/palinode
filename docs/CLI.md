@@ -1867,6 +1867,12 @@ The path is refused, with nothing written and no folder made, when it:
 
 - is absolute, or holds a drive or a `:`, or a `..` segment, or a NUL byte;
 - does not end in `.md`, or holds a character a typed link cannot cite;
+- has any file or folder segment starting with `.`; glob-based listing and
+  reindex do not retain those paths;
+- uses a different case for a standard top-level folder, even before that
+  folder exists, or uses a capitalized slug-shaped file name directly inside
+  one (`Decisions/why.md`, `insights/Keep.md`). Ordinary saves use lowercase,
+  so those aliases would give one file two index identities on macOS;
 - lies under a folder Palinode never indexes (`specs`, `prompts`, `logs`,
   `.palinode`, `.obsidian`, `.git`, on any directory segment and in any case). A
   file named `logs.md` or a folder named `specsheet/` is fine;
@@ -1893,6 +1899,8 @@ keys on.
 
 Existing memories are never moved. These features do not follow a custom location:
 
+- `list --category` filters by the top-level folder, so a Decision saved at
+  `team/x.md` does not appear in `list --category decisions`;
 - consolidation reads flat source folders, so a memory elsewhere is not a source;
 - layer splitting scans only `projects/` and `people/`;
 - fact ids are bootstrapped only in `people/`, `projects/`, `decisions/` and

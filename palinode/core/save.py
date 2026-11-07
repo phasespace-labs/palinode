@@ -260,6 +260,22 @@ def _parse_save_path(path: str) -> str:
             f"path {path!r} could not be cited as a link: a ref starts with a letter or digit, "
             "holds only letters, digits, '.', '_', '-' and '/', and never '..'"
         )
+    if any(part.startswith(".") for part in parts):
+        raise SaveValidationError(
+            f"path {path!r} names a hidden file or folder; reindex cannot retain it"
+        )
+    canonical_folders = {*_TYPE_TO_CATEGORY.values(), "inbox", "daily", "archive"}
+    top = parts[0].casefold()
+    if len(parts) > 1 and top in canonical_folders:
+        if parts[0] != top:
+            raise SaveValidationError(
+                f"path {path!r} differs in case from the canonical folder {top!r}"
+            )
+        stem = parts[-1].removesuffix(".md")
+        if len(parts) == 2 and stem != stem.lower() and re.fullmatch(r"[a-z0-9-]+", stem.lower()):
+            raise SaveValidationError(
+                f"path {path!r} differs in case from a slug save; use {stem.lower()!r}"
+            )
     _assert_save_path_is_writable_in_store(path, normalised)
     return normalised
 

@@ -341,7 +341,7 @@ class TestRefusedPaths:
         assert len(set(messages.values())) == len(_BROKEN), messages
 
     def test_a_path_that_only_looks_reserved_is_allowed(self, client, memory_dir):
-        looks_reserved = ["team/.gitkeep-notes/x.md", "gitlab/x.md", "palinode/x.md", "gitignore-notes/x.md"]
+        looks_reserved = ["team/gitkeep-notes/x.md", "gitlab/x.md", "palinode/x.md", "gitignore-notes/x.md"]
         for written in looks_reserved:
             res = _api_save(client, path=written)
             assert res.status_code == 200, (written, res.text)
@@ -349,10 +349,10 @@ class TestRefusedPaths:
         assert _files(memory_dir) == sorted(looks_reserved)
 
     def test_a_dotted_name_that_is_not_a_parent_segment_is_allowed(self, client, memory_dir):
-        res = _api_save(client, path="a/.b/c.d.md")
+        res = _api_save(client, path="a/b/c.d.md")
 
         assert res.status_code == 200, res.text
-        assert _files(memory_dir) == ["a/.b/c.d.md"]
+        assert _files(memory_dir) == ["a/b/c.d.md"]
 
 
 # ── A4 · one place ──────────────────────────────────────────────────────────
