@@ -1361,7 +1361,8 @@ def _all_tools() -> list[types.Tool]:
                 "Save a memory (fact, decision, insight, project update) worth keeping "
                 "across sessions. Requires exactly one of `type` or `ps=true`. "
                 "On timeout the save may still have committed — palinode_search a "
-                "distinctive phrase before retrying, or you'll duplicate it."
+                "distinctive phrase before retrying, or you'll duplicate it. "
+                "`path` (e.g. team/x.md) names the file in place of <folder>/<slug>.md."
             ),
             inputSchema={
                 "type": "object",
@@ -1383,6 +1384,8 @@ def _all_tools() -> list[types.Tool]:
                         "type": "string",
                         "description": "Optional URL-safe filename slug (auto-generated if omitted)",
                     },
+                    # Described in the tool description: the input schema sits at its size budget.
+                    "path": {"type": "string"},
                     "core": {
                         "type": "boolean",
                         "description": "If true, this memory is always injected at session start (core memory).",

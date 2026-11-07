@@ -387,6 +387,7 @@ REGISTRY: tuple[Operation, ...] = (
             CanonicalParam(name="external_refs", type="object"),
             CanonicalParam(name="title", type="string"),
             CanonicalParam(name="slug", type="string"),
+            CanonicalParam(name="path", type="string"),
             CanonicalParam(name="core", type="boolean"),
             CanonicalParam(name="source", type="string"),
             # ADR-015 §5: write-semantics axis. On a save to an existing

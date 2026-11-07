@@ -176,6 +176,9 @@ class SaveRequest(BaseModel):
     content: str
     type: Literal[*MEMORY_TYPES]
     slug: str | None = None
+    #: The file to write, relative to the memory dir, in place of
+    #: ``<category>/<slug>.md``; refused together with ``slug``.
+    path: str | None = None
     entities: list[str] | None = None
     metadata: Any | None = None
     core: bool | None = None

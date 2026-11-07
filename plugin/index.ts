@@ -695,6 +695,13 @@ const palinodePlugin = {
               description: "URL-safe filename slug (auto-generated if omitted)",
             }),
           ),
+          path: Type.Optional(
+            Type.String({
+              description:
+                "File to write, relative to the memory dir and ending in .md (e.g. team/designer/role.md), " +
+                "in place of <category>/<slug>.md. Not with slug.",
+            }),
+          ),
           core: Type.Optional(
             Type.Boolean({
               description: "If true, this memory is always injected at session start (core memory)",

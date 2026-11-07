@@ -183,7 +183,7 @@ The three `ServerAlive*` / `TCPKeepAlive` options keep the SSH session alive acr
 | `palinode_session_init` | Session-start context digest: resolved project scope, core memories, recent decisions, open action items |
 | `palinode_search` | Semantic + keyword hybrid search over memory; `resolve: linked\|full` attaches bounded replacement / conflict / support evidence per hit with explicit coverage, plus a resolution — a current answer, an unresolved conflict with both sides, or insufficient evidence |
 | `palinode_resolve` | Bounded resolution: what memory holds *right now* for a question or one record — the assertions that stand with their source revisions, what replaced what, conflicts with every side intact, and what is explicitly unknown, under an output budget that can shrink the answer but never settle a conflict |
-| `palinode_save` | Write a new memory item (persists to git) |
+| `palinode_save` | Write a new memory item (persists to git); `path` names the file to write in place of `<category>/<slug>.md` |
 | `palinode_ingest` | Fetch a URL and save as research reference |
 | `palinode_status` | Health check + index stats |
 | `palinode_list` | List memory files by category |

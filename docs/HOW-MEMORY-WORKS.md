@@ -669,7 +669,7 @@ Every memory change is a git commit. This enables:
 
 | Event | Commit Message |
 | --- | --- |
-| `palinode_save` | `palinode auto-save: {category}/{slug}.md` |
+| `palinode_save` | `palinode auto-save: {category}/{slug}.md`, or the `path` the save chose |
 | `-es` capture | `palinode auto-save: {category}/{slug}.md` |
 | Consolidation | `palinode: weekly consolidation {date}` |
 | Description / summary backfill | `palinode backfill: N descriptions, M summaries (palinode {version})` |
