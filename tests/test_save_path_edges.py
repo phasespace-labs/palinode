@@ -125,7 +125,7 @@ _CITABLE = [
     "Team/Designer_Role.md",
     "x/y/z/deep-name_1.v2.md",
     "9lives/x.md",
-    "team/.gitkeep-notes/x.md",
+    "team/gitkeep-notes/x.md",
     "team/a.b/c.d.md",
     "gitlab/x.md",
     "team/-x.md",
