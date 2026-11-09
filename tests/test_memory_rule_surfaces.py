@@ -658,6 +658,80 @@ def test_a_file_outside_the_store_is_not_judged_by_the_stores_rule(root: Path, t
         handler.shutdown()
 
 
+def _is_valid_for_the_watcher(path: Path) -> bool:
+    from palinode.indexer.watcher import PalinodeHandler
+
+    handler = PalinodeHandler()
+    try:
+        return handler.is_valid_file(str(path))
+    finally:
+        handler.shutdown()
+
+
+@pytest.mark.parametrize(
+    "rel, expected",
+    [
+        ("notes/x.md", True),
+        ("logs/x.md", False),
+        ("inbox/processed/x.md", False),
+        (".trash/x.md", False),
+    ],
+)
+def test_the_watcher_applies_the_rule_when_the_store_root_is_a_symlink_and_events_use_the_real_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rel: str, expected: bool
+) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    monkeypatch.setattr(config, "memory_dir", str(link))
+
+    assert _is_valid_for_the_watcher(real / rel) is expected
+
+
+@pytest.mark.parametrize(
+    "rel, expected",
+    [("notes/x.md", True), ("logs/x.md", False), (".trash/x.md", False)],
+)
+def test_the_watcher_applies_the_rule_when_the_store_root_is_real_and_events_use_a_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rel: str, expected: bool
+) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    monkeypatch.setattr(config, "memory_dir", str(real))
+
+    assert _is_valid_for_the_watcher(link / rel) is expected
+
+
+def test_a_file_reached_through_a_symlinked_folder_inside_the_store_is_judged_by_its_store_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "store"
+    root.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (root / "notes").symlink_to(elsewhere)
+    monkeypatch.setattr(config, "memory_dir", str(root))
+
+    assert _is_valid_for_the_watcher(root / "notes" / "x.md")
+
+
+@pytest.mark.parametrize("above_store", [".local", "venv"])
+@pytest.mark.parametrize("rel, expected", [("notes/x.md", True), ("logs/x.md", False)])
+def test_a_symlinked_store_root_whose_real_path_lies_under_a_dot_or_build_folder_still_indexes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, above_store: str, rel: str, expected: bool
+) -> None:
+    real = tmp_path / above_store / "real"
+    real.mkdir(parents=True)
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    monkeypatch.setattr(config, "memory_dir", str(link))
+
+    assert _is_valid_for_the_watcher(real / rel) is expected
+
+
 def test_a_history_sibling_is_still_listed_by_the_api_hidden_by_the_ui_and_indexed(
     root: Path, client: TestClient, embedder_stub
 ) -> None:
