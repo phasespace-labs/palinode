@@ -712,6 +712,25 @@ def test_a_file_reached_through_a_symlinked_folder_inside_the_store_is_judged_by
     assert _is_valid_for_the_watcher(root / "notes" / "x.md")
 
 
+def test_a_folder_link_inside_the_store_is_judged_by_its_store_path_not_by_its_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "store"
+    (root / "logs").mkdir(parents=True)
+    (root / "shortcut").symlink_to(root / "logs")
+    monkeypatch.setattr(config, "memory_dir", str(root))
+
+    assert _is_valid_for_the_watcher(root / "shortcut" / "x.md")
+
+
+def test_the_parent_of_the_store_is_outside_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "a.md" / "store"
+    root.mkdir(parents=True)
+    monkeypatch.setattr(config, "memory_dir", str(root))
+
+    assert not _is_valid_for_the_watcher(root.parent)
+
+
 @pytest.mark.parametrize("above_store", [".local", "venv"])
 @pytest.mark.parametrize("rel, expected", [("notes/x.md", True), ("logs/x.md", False)])
 def test_a_symlinked_store_root_whose_real_path_lies_under_a_dot_or_build_folder_still_indexes(
