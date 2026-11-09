@@ -648,14 +648,8 @@ def test_listing_with_include_inbox_adds_inbox_and_not_processed_items(
     )
 
 
-def test_a_file_outside_the_store_is_not_judged_by_the_stores_rule(root: Path, tmp_path: Path) -> None:
-    from palinode.indexer.watcher import PalinodeHandler
-
-    handler = PalinodeHandler()
-    try:
-        assert handler.is_valid_file(str(tmp_path / "elsewhere" / "x.md"))
-    finally:
-        handler.shutdown()
+def test_a_file_outside_the_store_is_not_valid_in_either_spelling_of_the_root(root: Path, tmp_path: Path) -> None:
+    assert not _is_valid_for_the_watcher(tmp_path / "elsewhere" / "x.md")
 
 
 def _is_valid_for_the_watcher(path: Path) -> bool:
