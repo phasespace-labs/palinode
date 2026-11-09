@@ -412,15 +412,14 @@ def test_top_level_documents_are_excluded(memory_dir):
     assert result["files"] == []
 
 
-def test_non_memory_directories_are_excluded_and_named(memory_dir):
-    """``specs/`` has no honest category or type — say so, don't invent one."""
+def test_a_never_memory_directory_is_neither_planned_nor_named_as_excluded(memory_dir):
+    """``specs/`` is never memory, so backfill does not walk it (issue 251)."""
     _write(memory_dir, "specs/some-spec.md", "Body\n")
 
     result = run_backfill()
 
-    excluded = {e["path"]: e["reason"] for e in result["excluded"]}
-    assert "specs/some-spec.md" in excluded
-    assert "not a memory-category directory" in excluded["specs/some-spec.md"]
+    assert result["excluded"] == []
+    assert result["scanned"] == 0
     assert result["files"] == []
 
 

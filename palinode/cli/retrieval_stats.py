@@ -18,6 +18,7 @@ from typing import Any
 import click
 
 from palinode.core.config import config
+from palinode.core.skip_dirs import is_skipped_path
 from palinode.cli._format import console
 
 
@@ -73,7 +74,8 @@ def _stats(events: list[dict[str, Any]]) -> dict[str, Any]:
             for fn in fnames:
                 if fn.endswith(".md"):
                     rel = os.path.relpath(os.path.join(root, fn), memory_dir)
-                    all_md.append(rel)
+                    if not is_skipped_path(rel):
+                        all_md.append(rel)
     except OSError:
         pass
 

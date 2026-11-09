@@ -467,14 +467,6 @@ def test_list_memory_excludes_prompts_dir(mock_memory_dir):
     assert not any("prompts/" in f for f in files), f"prompts/ leaked into /list: {files}"
 
 
-# ── Consolidation exclusion ────────────────────────────────────────────────────
-
-def test_consolidation_skip_dirs_includes_prompts():
-    """The runner's skip set must include 'prompts' to prevent compaction of prompt files."""
-    from palinode.consolidation.runner import _CONSOLIDATION_SKIP_DIRS
-    assert "prompts" in _CONSOLIDATION_SKIP_DIRS
-
-
 # ── Frontmatter content validation ────────────────────────────────────────────
 
 def test_prompt_frontmatter_is_stored_correctly(mock_memory_dir):

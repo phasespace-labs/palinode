@@ -103,7 +103,6 @@ _UNCITABLE = [
     "team/role .md",
     "-draft/x.md",
     "-x.md",
-    ".hidden/x.md",
     ".x.md",
     "zażółć/x.md",
     "team/café.md",
@@ -117,8 +116,10 @@ _UNCITABLE = [
     "team/a,b.md",
     "team/a~b.md",
     "team/a..b.md",
-    "a/..b/c.md",
 ]
+
+#: Neither a link could cite them nor the index keep them; save refuses before the link check.
+_UNCITABLE_DOT_FOLDERS = [".hidden/x.md", "a/..b/c.md"]
 
 _CITABLE = [
     "team/designer/role.md",
@@ -179,7 +180,30 @@ class TestCitableNames:
         assert res.status_code == 200, (written, res.text)
         assert _files(memory_dir) == [written]
 
-    @pytest.mark.parametrize("written", _UNCITABLE + _CITABLE)
+    @pytest.mark.parametrize("written", _UNCITABLE_DOT_FOLDERS)
+    def test_api_refuses_a_dot_folder_path_and_writes_nothing(self, client, memory_dir, written):
+        res = _api_save(client, path=written)
+
+        assert 400 <= res.status_code < 500, (written, res.status_code, res.text)
+        assert "path" in res.text.lower()
+        assert _files(memory_dir) == []
+        assert _directories(memory_dir) == []
+
+    @pytest.mark.parametrize("written", _UNCITABLE_DOT_FOLDERS)
+    def test_core_raises_a_save_validation_error_for_a_dot_folder_path(self, memory_dir, written):
+        with pytest.raises(SaveValidationError):
+            save_memory(content=_BODY, type="Insight", path=written)
+
+        assert _directories(memory_dir) == []
+
+    @pytest.mark.parametrize("written", _UNCITABLE_DOT_FOLDERS)
+    def test_mcp_returns_an_error_for_a_dot_folder_path(self, mcp_via_api, memory_dir, written):
+        text = _mcp_save(path=written)
+
+        assert text.startswith(mcp.DISPATCH_ERROR_PREFIXES), text
+        assert _files(memory_dir) == []
+
+    @pytest.mark.parametrize("written", _UNCITABLE + _UNCITABLE_DOT_FOLDERS + _CITABLE)
     def test_the_rule_is_the_typed_link_ref_check_on_the_path_without_md(
         self, client, memory_dir, written
     ):

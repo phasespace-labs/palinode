@@ -37,13 +37,9 @@ from palinode.consolidation.archive import set_archived_frontmatter
 from palinode.consolidation.retirement import SUPERSEDED_ONLY, classify
 from palinode.core import expiry, parser, store, git_tools
 from palinode.core.config import config
+from palinode.core.skip_dirs import SKIP_FOR_TTL, is_skipped_path
 
 logger = logging.getLogger("palinode.ttl")
-
-# Top-level directories exempt from TTL sweeps: ``daily/`` notes are episodic
-# session logs, and ``*-history.md`` files are already-archived snapshots
-# (skipped anyway by the status check below).
-_SKIP_TOP_DIRS = {"daily"}
 
 _DURATION_RE = re.compile(r"^(\d+)\s*([smhdw])$")
 _DURATION_MULT = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
@@ -134,7 +130,7 @@ def is_expired(meta: dict, now: datetime) -> bool:
 def _iter_memory_files(root: str):
     for path in glob.glob(os.path.join(root, "**", "*.md"), recursive=True):
         rel = os.path.relpath(path, root)
-        if rel.split(os.sep)[0] in _SKIP_TOP_DIRS:
+        if is_skipped_path(rel, SKIP_FOR_TTL):
             continue
         yield path
 
