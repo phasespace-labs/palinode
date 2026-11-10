@@ -26,6 +26,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from palinode.api._util import effective_project_scope
 from palinode.core.config import config
 from palinode.core.scope import ScopeChain, resolve_scope_chain, scope_level_name
 
@@ -95,16 +96,13 @@ def context_prime_api(req: PrimeRequest) -> dict[str, Any]:
     (:mod:`palinode.core.receipt`, public view): every supplied ref at the
     exact revision it was supplied at, its disposition, the known origin
     lineage, the resolved scope and policy, the evaluation time and the next
-    known temporal transition among the delivered records. No retrieval-log
-    rows are written for a prime: a session-start injection ledger is a
-    separate contract, and this endpoint has never written to that log.
+    known temporal transition among the delivered records. A receipt-only audit envelope records the delivery without recall events.
     """
     from palinode.core.capture_policy import evaluate_capture_policy
     from palinode.core.context_prime import (
         RESOLUTION_BASES,
         ProjectResolution,
         build_context_digest,
-        resolve_context,
     )
     from palinode.core.receipt import build_digest_receipt
 
@@ -130,7 +128,7 @@ def context_prime_api(req: PrimeRequest) -> dict[str, Any]:
     # project level also drives the digest's project sections so the response
     # stays internally coherent.
     project_arg = req.project or (req.scope.project if req.scope else None)
-    resolution = resolve_context(cwd=req.cwd, project=project_arg)
+    resolution = effective_project_scope(None, cwd=req.cwd, project=project_arg)
     if req.project_resolved_by and resolution.basis == "explicit":
         if req.project_resolved_by not in RESOLUTION_BASES:
             raise HTTPException(status_code=422, detail="Unknown project resolution source")
@@ -142,7 +140,7 @@ def context_prime_api(req: PrimeRequest) -> dict[str, Any]:
         for level in ("session", "agent", "harness", "member", "org"):
             levels[level] = scope_level_name(level, levels[level])
         if levels["project"]:
-            override_project = resolve_context(project=levels["project"]).project
+            override_project = effective_project_scope(None, project=levels["project"]).project
             levels["project"] = override_project.split("/", 1)[1] if override_project else None
         chain = ScopeChain(**levels)
     else:
@@ -173,9 +171,17 @@ def context_prime_api(req: PrimeRequest) -> dict[str, Any]:
         scope=chain.as_list(),
         memory_dir=config.memory_dir,
     )
+    from palinode.core.retrieval_log import RetrievalLogger
+
+    public_receipt = receipt.public()
+    RetrievalLogger(config.memory_dir).record_public_receipt(
+        public_receipt, source="context_prime", session_id=req.session_id,
+        cwd=req.cwd, project=resolved.removeprefix("project/") if resolved else None,
+        source_path=req.source_path,
+    )
     return {
         **digest,
         "mode": mode,
         "scope_chain": chain.as_list(),
-        "receipt": receipt.public(),
+        "receipt": public_receipt,
     }

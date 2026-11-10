@@ -32,6 +32,18 @@
           }
         ]
       }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/palinode-post-compact.sh",
+            "timeout": 35,
+            "async": true
+          }
+        ]
+      }
     ]
   }
 }

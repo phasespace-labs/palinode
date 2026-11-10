@@ -220,3 +220,22 @@ async def test_search_forwards_include_telemetry_to_api(captured_post):
 async def test_search_omits_include_telemetry_by_default(captured_post):
     await _dispatch_tool("palinode_search", {"query": "uptime"})
     assert "include_telemetry" not in captured_post["body"]
+
+
+@pytest.mark.asyncio
+async def test_blame_sessions_combines_with_claims_and_search(monkeypatch):
+    captured = {}
+
+    async def fake_get(path, params=None, timeout=30.0):
+        captured.update(params or {})
+        return _FakeResp({"blame": "blame text", "claims": [], "sessions": {
+            "sessions": [], "deliveries_without_session_id": 2,
+        }})
+
+    monkeypatch.setattr(mcp, "_get", fake_get)
+    result = await _dispatch_tool("palinode_blame", {
+        "file_path": "note.md", "sessions": True, "claims": True, "search": "needle",
+    })
+    assert captured == {"sessions": "true", "claims": "true", "search": "needle"}
+    assert "Claims:" in result[0].text
+    assert "2 matching deliveries" in result[0].text

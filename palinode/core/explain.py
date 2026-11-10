@@ -29,7 +29,7 @@ not record, or that is no longer available, is an :func:`unavailable` marker
 carrying a reason from :data:`UNAVAILABLE_REASONS` — so the difference between
 "the log holds no rows for this id" (:data:`NO_MATCHING_ROWS`) and "this surface
 never writes rows" (:data:`SURFACE_WRITES_NO_ROWS`) is a difference a reader can
-see. ``/context/prime`` returns receipts without persisting them; the
+see. The
 :data:`NON_LOGGING_SURFACES` list is reported alongside the other candidate
 causes rather than left for the reader to guess.
 
@@ -119,13 +119,13 @@ UNAVAILABLE_REASONS: tuple[str, ...] = (
 #: available in the response that carried it. Stated as data so the explanation,
 #: the renderer and the docs cannot drift.
 NON_LOGGING_SURFACES: tuple[str, ...] = (
-    "POST /context/prime — the session-start digest",
     "POST /search with an empty query — the recency branch",
 )
 
 #: What each recorded ``source`` means in words. An unrecognised value is
 #: reported verbatim rather than glossed.
 _SOURCE_LABELS: dict[str, str] = {
+    "context_prime": "session-start context digest",
     "resolve": "bounded resolution (API, hook, CLI, MCP or plugin)",
     "palinode_search": "search, called as an MCP tool",
     "api_search": "search, called over the REST API",
@@ -692,7 +692,7 @@ def explain_delivery(
     if is_bundle:
         receipt = head["receipt"]
         head = {
-            **head, **receipt, "source": "resolve",
+            **head, **receipt, "source": head.get("source", "resolve"),
             "disposition": NONE_DELIVERED,
         }
         rows = [{
@@ -798,8 +798,10 @@ def explain_delivery(
     }
     if is_bundle:
         delivery["requested_time"] = head["requested_time"]
-        delivery["budget"] = head["budget"]
-        selection_path["steps"] = head["selection_path"]
+        if "budget" in head:
+            delivery["budget"] = head["budget"]
+        if "selection_path" in head:
+            selection_path["steps"] = head["selection_path"]
 
     query = (
         _value(head.get("query"), reason=NOT_RECORDED,

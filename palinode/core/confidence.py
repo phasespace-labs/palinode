@@ -139,8 +139,37 @@ answerable prompt moves. The rule governs the keyword arm's own claim only.
 Its corroboration of the vector arm is unchanged: requiring the figure there
 too demoted a sixth of the published answerable questions in a simulation over
 the same rows, because on a small store most corroborating rows are ordinary
-combinations. A vector-led delivery on a large homogeneous store is therefore
-still reachable by an everyday command; that calibration is open.
+combinations. A vector-led delivery on a large homogeneous store was therefore
+still reachable by an everyday command, which is what the next two rules close
+for automatic recall.
+
+*Subject coverage (prompt mode only).* Neither arm's score tells a command
+from a question. On a 14,000-chunk store of development notes, "bump the
+version and tag it" scored keyword 1.20 against release-prep notes holding
+all three words, rarer than chance under independence because those words
+travel together. How rare a word is in the store does not separate them
+either: "what threshold do new triggers default to" matched only words more
+common there than "bump". What separates them is what the prompt is about.
+:func:`palinode.core.prompt_query.parse_prompt` splits it, deterministically,
+into subject terms and working-state terms (the working copy, the session,
+words pointing back into the conversation), and the keyword arm may vouch for
+a prompt only through a row that matched a subject term. ``subject_units`` is
+that set; a delivery the rule holds below ``confident`` says
+``subject_coverage: "no_subject"`` (the prompt names nothing) or
+``"working_state_only"`` (its keyword match missed the subject). On the
+dogfood store this took prompt-shaped no-answers from 17 of 40 to 6, held-out
+commands from 11 of 14 to 1, and moved no answerable question, together with
+the vector mark below.
+
+*The vector mark over the store's background (prompt mode only).* The 0.60
+cosine mark was calibrated on a store where a contentless prompt ("continue")
+scores 0.471; on that development store it scores 0.601, so any prompt
+clears 0.60 there. ``vector_confident_at`` lets the caller raise the mark to
+``background + 0.129`` (:mod:`palinode.core.vector_baseline`), the calibrated
+mark's height above its own background. It never lowers the mark. On a large
+homogeneous store the vector arm then almost never vouches alone; meaning-only
+questions scored 0.51–0.61 there, inside the background, so it could not tell
+them from noise in any case.
 """
 from __future__ import annotations
 
@@ -219,13 +248,14 @@ def _best(results: Sequence[Mapping[str, Any]], key: str) -> float | None:
     return max(values) if values else None
 
 
-def _keyword_vouches(results: Sequence[Mapping[str, Any]]) -> bool:
-    """Whether some row at the keyword confident mark holds its query terms
-    together more rarely than chance would (see *Co-occurrence*).
+def _keyword_rows(results: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """Rows at the keyword confident mark whose terms are together more rarely
+    than chance would put them (see *Co-occurrence*).
 
     A row without the figure (``None``: a one-term query, or a row from a
     caller that does not compute it) is judged on its score alone, as before.
     """
+    rows = []
     for row in results:
         if not isinstance(row, Mapping):
             continue
@@ -234,12 +264,33 @@ def _keyword_vouches(results: Sequence[Mapping[str, Any]]) -> bool:
             continue
         chance = row.get("keyword_chance")
         if chance is None or float(chance) < KEYWORD_CHANCE_BELOW:
-            return True
-    return False
+            rows.append(row)
+    return rows
+
+
+def _covers_subject(row: Mapping[str, Any], subject_units: frozenset[str]) -> bool:
+    """Whether a keyword row matched at least one of the prompt's subject units.
+
+    A row that does not say which units it holds (``keyword_units`` absent: a
+    caller that does not compute it) is not judged.
+    """
+    units = row.get("keyword_units")
+    if units is None:
+        return True
+    return any(str(unit).lower() in subject_units for unit in units)
+
+
+def _keyword_vouches(results: Sequence[Mapping[str, Any]]) -> bool:
+    """Whether some row at the keyword confident mark is rarer than chance."""
+    return bool(_keyword_rows(results))
 
 
 def assess(
-    results: Sequence[Mapping[str, Any]], *, active_mode: str
+    results: Sequence[Mapping[str, Any]],
+    *,
+    active_mode: str,
+    subject_units: frozenset[str] | None = None,
+    vector_confident_at: float | None = None,
 ) -> dict[str, Any] | None:
     """The confidence verdict for one delivery, with the arm evidence behind it.
 
@@ -266,11 +317,18 @@ def assess(
     delivery whose confident keyword rows are all chance-level is reported
     ``weak`` with ``co_occurrence: "chance"`` (*Co-occurrence*, above). As
     with corroboration, the arm still reports its own verdict.
+
+    ``subject_units`` (prompt-mode recall) are the prompt's subject terms as
+    match units; when given, a keyword row vouches only if its
+    ``keyword_units`` include one (*Subject coverage*). ``vector_confident_at``
+    raises the vector arm's confident mark, never lowers it.
     """
     if active_mode not in RANKED_MODES:
         return None
     arms: dict[str, Any] = {}
     for name, key, confident_at, weak_at in _ARM_KEYS:
+        if name == "vector" and vector_confident_at is not None:
+            confident_at = max(confident_at, vector_confident_at)
         best = _best(results, key)
         arms[name] = {
             "best": best,
@@ -281,8 +339,15 @@ def assess(
 
     vector, keyword = arms["vector"]["verdict"], arms["keyword"]["verdict"]
     block: dict[str, Any] = {}
-    chance_level = keyword == CONFIDENT and not _keyword_vouches(results)
-    if chance_level:
+    vouching = _keyword_rows(results) if keyword == CONFIDENT else []
+    chance_level = keyword == CONFIDENT and not vouching
+    uncovered: str | None = None
+    if keyword == CONFIDENT and vouching and subject_units is not None:
+        if not subject_units:
+            uncovered = "no_subject"
+        elif not any(_covers_subject(row, subject_units) for row in vouching):
+            uncovered = "working_state_only"
+    if chance_level or uncovered:
         keyword = WEAK
     if (
         active_mode in CORROBORATING_MODES
@@ -296,6 +361,8 @@ def assess(
         # Named only where it is why the delivery is below the arm's own
         # verdict; a vector-led confident delivery needs no excuse.
         block["co_occurrence"] = "chance"
+    if uncovered and verdict != CONFIDENT:
+        block["subject_coverage"] = uncovered
     return {"confidence": verdict, "arms": arms, **block}
 
 

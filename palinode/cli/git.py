@@ -14,24 +14,27 @@ from palinode.cli._format import OutputFormat, console, get_default_format, prin
         "span justifies each claim, with live integrity status."
     ),
 )
-def blame(file_path, search, claims):
+@click.option("--sessions", is_flag=True, help="Also list recorded session deliveries")
+def blame(file_path: str, search: str | None, claims: bool, sessions: bool) -> None:
     """Show when lines were changed."""
     try:
-        data = api_client.blame(file_path, search, claims=claims)
+        data = api_client.blame(file_path, search, claims=claims, **({"sessions": True} if sessions else {}))
         output_format = get_default_format()
         if output_format == OutputFormat.JSON:
             print_result(data, fmt=output_format)
-        elif claims:
+        elif claims or sessions:
             from palinode.core.claims import format_claims_resolution
 
             # markup=False: blame/claims lines carry [status] and [git: …]
             # brackets that Rich would otherwise consume as style tags.
             console.print(data.get("blame", ""), markup=False)
             console.print("")
-            console.print(
-                format_claims_resolution(file_path, data.get("claims", [])),
-                markup=False,
-            )
+            if claims:
+                console.print(format_claims_resolution(file_path, data.get("claims", [])), markup=False)
+            if sessions:
+                from palinode.core.session_deliveries import format_session_deliveries
+
+                console.print(format_session_deliveries(data.get("sessions", {})), markup=False)
         else:
             console.print(data)
     except Exception as e:

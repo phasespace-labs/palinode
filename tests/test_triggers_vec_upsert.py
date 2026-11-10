@@ -51,19 +51,19 @@ class TestAddTriggerReRegistration:
         auto-register path (layer_split.py) derives a deterministic
         `auto-{base}` id and calls add_trigger on every run.
         """
-        store.add_trigger("t1", "desc-v1", "file-v1.md", _EMBEDDING_A)
+        store.add_trigger("t1", "release notes for v1", "file-v1.md", _EMBEDDING_A)
 
         # Must not raise sqlite3.OperationalError: UNIQUE constraint failed
         # on triggers_vec primary key.
-        store.add_trigger("t1", "desc-v2", "file-v2.md", _EMBEDDING_B)
+        store.add_trigger("t1", "release notes for v2", "file-v2.md", _EMBEDDING_B)
 
     def test_reregistering_replaces_metadata_and_embedding(self, db_path):
         """The second registration must actually win — both the `triggers`
         row (description/memory_file) and the `triggers_vec` row (embedding)
         must reflect the second call, not the first.
         """
-        store.add_trigger("t1", "desc-v1", "file-v1.md", _EMBEDDING_A)
-        store.add_trigger("t1", "desc-v2", "file-v2.md", _EMBEDDING_B)
+        store.add_trigger("t1", "release notes for v1", "file-v1.md", _EMBEDDING_A)
+        store.add_trigger("t1", "release notes for v2", "file-v2.md", _EMBEDDING_B)
 
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
@@ -74,13 +74,13 @@ class TestAddTriggerReRegistration:
         conn.close()
 
         assert row is not None
-        assert row["description"] == "desc-v2"
+        assert row["description"] == "release notes for v2"
         assert row["memory_file"] == "file-v2.md"
 
     def test_reregistering_leaves_exactly_one_triggers_vec_row(self, db_path):
         """No duplicate / orphaned rows in the vec0 index after an update."""
-        store.add_trigger("t1", "desc-v1", "file-v1.md", _EMBEDDING_A)
-        store.add_trigger("t1", "desc-v2", "file-v2.md", _EMBEDDING_B)
+        store.add_trigger("t1", "release notes for v1", "file-v1.md", _EMBEDDING_A)
+        store.add_trigger("t1", "release notes for v2", "file-v2.md", _EMBEDDING_B)
 
         db = store.get_db()
         rows = db.execute("SELECT id FROM triggers_vec WHERE id = ?", ("t1",)).fetchall()
@@ -95,10 +95,10 @@ class TestAddTriggerReRegistration:
         match against the NEW embedding, not the stale one left behind by a
         failed replace.
         """
-        store.add_trigger("t1", "desc-v1", "file-v1.md", _EMBEDDING_A)
-        store.add_trigger("t1", "desc-v2", "file-v2.md", _EMBEDDING_B)
+        store.add_trigger("t1", "release notes for v1", "file-v1.md", _EMBEDDING_A)
+        store.add_trigger("t1", "release notes for v2", "file-v2.md", _EMBEDDING_B)
 
-        fired = store.check_triggers(_EMBEDDING_B, cooldown_bypass=True)
+        fired = store.check_triggers(_EMBEDDING_B, "release notes for v2", cooldown_bypass=True)
         assert any(f["id"] == "t1" and f["memory_file"] == "file-v2.md" for f in fired), (
             f"expected updated trigger to fire against its new embedding, got {fired}"
         )

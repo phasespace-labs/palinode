@@ -305,6 +305,11 @@ REGISTRY: tuple[Operation, ...] = (
             CanonicalParam(name="where", type="array"),
             # Lifts the inbox/ skip; ActionItems are saved there.
             CanonicalParam(name="include_inbox", type="boolean"),
+            # Project isolation opt-out, as on search: a project-scoped list
+            # leaves out records tagged to another project; true lists them,
+            # labelled. REST and the CLI additionally take `project`, the
+            # scope itself; the MCP tool sends its session's project.
+            CanonicalParam(name="include_other_projects", type="boolean"),
         ),
         cli_command="list",
         mcp_tool="palinode_list",
@@ -551,6 +556,7 @@ REGISTRY: tuple[Operation, ...] = (
         canonical_params=(
             CanonicalParam(name="description", type="string", required=True),
             CanonicalParam(name="memory_file", type="string", required=True),
+            CanonicalParam(name="phrasings", type="array"),
             CanonicalParam(name="trigger_id", type="string"),
             CanonicalParam(
                 name="threshold",
@@ -657,9 +663,11 @@ REGISTRY: tuple[Operation, ...] = (
             # source anchors to their cited spans with live integrity status,
             # so blame answers "which source span justifies this claim".
             CanonicalParam(name="claims", type="boolean"),
+            CanonicalParam(name="sessions", type="boolean"),
         ),
         cli_command="blame",
         mcp_tool="palinode_blame",
+        plugin_tool="palinode_blame",
         api_endpoint=("GET", "/blame/{file_path:path}"),
         known_drift={},
     ),

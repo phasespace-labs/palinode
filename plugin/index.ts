@@ -382,11 +382,31 @@ async function palinodeFetch(
 
 type AutomaticScope = { cwd?: string; project?: string };
 
-/** A hit the caller asked for across projects carries its own project(s). */
-function otherProjectLabel(r: any): string {
-  return Array.isArray(r?.other_project) && r.other_project.length
-    ? ` [other project: ${r.other_project.join(", ")}]`
-    : "";
+function asProjectRef(project: string): string {
+  return project.toLowerCase().startsWith("project/") ? project : `project/${project}`;
+}
+
+function isOtherProject(r: any): boolean {
+  return Array.isArray(r?.other_project) && r.other_project.length > 0;
+}
+
+/**
+ * The label that opens a hit the caller asked for across projects: whose
+ * record it is and, side by side, the project this request is scoped to.
+ * Same text as the MCP and CLI renderers (`other_project_label`).
+ */
+function otherProjectLabel(r: any, project: string | null): string {
+  if (!isOtherProject(r)) return "";
+  const own = r.other_project.join(", ");
+  return project
+    ? `[other project: ${own} — not ${asProjectRef(project)}] `
+    : `[other project: ${own}] `;
+}
+
+/** The heading over opted-in records from other projects (`other_projects_heading`). */
+function otherProjectsHeading(project: string | null): string {
+  const scope = project ? ` (this project: ${asProjectRef(project)})` : "";
+  return `Other projects — context only, not this project's decisions${scope}`;
 }
 
 function automaticScope(event: any, context: any): AutomaticScope {
@@ -451,6 +471,44 @@ function describeMatch(result: { score?: number; raw_score?: number | null }): s
     return `${Math.round(result.raw_score * 100)}% match`;
   }
   return `rank ${rank}`;
+}
+
+/**
+ * The line an empty search carries when its `where` or `types` filter emptied
+ * it (`receipt.retrieval.filter_exclusion`), so it does not read as "nothing
+ * matched this query". Keep aligned with `describe_filter_exclusion` in
+ * palinode/core/scoring.py.
+ */
+export function describeFilterExclusion(retrieval: any): string {
+  const exclusion = retrieval?.filter_exclusion;
+  if (!exclusion || typeof exclusion !== "object") return "";
+  const by: string[] = Array.isArray(exclusion.by) ? exclusion.by.map(String) : [];
+  const named: string[] = [];
+  if (by.includes("where")) {
+    named.push(`where: ${(Array.isArray(exclusion.where) ? exclusion.where : []).map(String).join(", ")}`);
+  }
+  if (by.includes("types")) {
+    named.push(`types: ${(Array.isArray(exclusion.types) ? exclusion.types : []).map(String).join(", ")}`);
+  }
+  if (named.length === 0) return "";
+  const filters = named.join(" and ");
+  let line: string;
+  if (exclusion.matches === null || exclusion.matches === undefined) {
+    line = `No record in scope matches ${filters}`;
+    const missing = (Array.isArray(exclusion.missing_keys) ? exclusion.missing_keys : [])
+      .map((key: unknown) => `\`${String(key)}\``);
+    if (missing.length === 1) line += `; no record in scope has the key ${missing[0]}`;
+    else if (missing.length) line += `; no record in scope has any of the keys ${missing.join(", ")}`;
+    line += ".";
+  } else {
+    const count = Math.trunc(Number(exclusion.matches));
+    const atLeast = Boolean(exclusion.matches_at_least);
+    const one = count === 1 && !atLeast;
+    line = `${atLeast ? "at least " : ""}${count} ${one ? "match" : "matches"} for this search ` +
+      `${one ? "was" : "were"} excluded by ${filters}.`;
+    line = line[0].toUpperCase() + line.slice(1);
+  }
+  return `${line} ${named.length > 1 ? "The filters" : "The filter"}, not the query, emptied this result.`;
 }
 
 // ============================================================================
@@ -552,9 +610,12 @@ const palinodePlugin = {
           include_other_projects: Type.Optional(
             Type.Boolean({
               description:
-                "Also return memories tagged to other projects, each labelled " +
-                "with its project. Default false: a project-scoped search leaves " +
-                "them out.",
+                "Also return memories tagged to other projects. They come after " +
+                "this project's results, under their own heading, each labelled " +
+                "with its project and this one's: context only, never this " +
+                "project's decisions. Default false: a project-scoped search " +
+                "leaves them out. Don't turn this on to find a value this " +
+                "project's memory lacks; ask the user instead.",
             }),
           ),
           include_retired: Type.Optional(
@@ -632,20 +693,34 @@ const palinodePlugin = {
               : "");
 
             if (!results || results.length === 0) {
+              const excluded = describeFilterExclusion(retrieval);
               return {
                 details: {},
                 content: [
-                  { type: "text", text: diagnostic + "No relevant memories found in Palinode." },
+                  {
+                    type: "text",
+                    text: diagnostic + (excluded ? `${excluded}\n` : "") +
+                      "No relevant memories found in Palinode.",
+                  },
                 ],
               };
             }
 
-            const text = results
-              .map(
-                (r: any, i: number) =>
-                  `${i + 1}. [${r.category || "?"}]${otherProjectLabel(r)} ${r.content.slice(0, 200)}${r.content.length > 200 ? "..." : ""} (${describeMatch(r)}, file: ${path.basename(r.file_path)})`,
-              )
-              .join("\n\n");
+            // Opted-in records from other projects are listed after this
+            // project's own, under their own heading, each opening with whose
+            // record it is and whose it is not.
+            const requestProject =
+              typeof payload?.project === "string" && payload.project ? payload.project : null;
+            const own = results.filter((r: any) => !isOtherProject(r));
+            const others = results.filter((r: any) => isOtherProject(r));
+            const line = (r: any, i: number) =>
+              `${i + 1}. ${otherProjectLabel(r, requestProject)}[${r.category || "?"}] ${r.content.slice(0, 200)}${r.content.length > 200 ? "..." : ""} (${describeMatch(r)}, file: ${path.basename(r.file_path)})`;
+            const ownText = own.map((r: any, i: number) => line(r, i)).join("\n\n");
+            const otherText = others.length
+              ? `${otherProjectsHeading(requestProject)}\n\n` +
+                others.map((r: any, i: number) => line(r, own.length + i)).join("\n\n")
+              : "";
+            const text = [ownText, otherText].filter(Boolean).join("\n\n");
 
             return {
               details: {},
@@ -958,13 +1033,18 @@ const palinodePlugin = {
         label: "Palinode Blame",
         description: "Trace when a fact was recorded and by which session.",
         parameters: Type.Object({
-            file: Type.String({ description: "Memory file path" }),
+            file_path: Type.String({ description: "Memory file path" }),
+            claims: Type.Optional(Type.Boolean()),
+            sessions: Type.Optional(Type.Boolean()),
             search: Type.Optional(Type.String({ description: "Filter to matching lines" })),
         }),
         async execute(_id: string, params: any) {
-            const query = params.search ? `?search=${encodeURIComponent(params.search)}` : "";
-            const res = await palinodeFetch(cfg.palinodeApiUrl, `/blame/${params.file}${query}`);
-            return { details: {}, content: [{ type: "text", text: res.blame }] };
+            const query = new URLSearchParams();
+            if (params.search) query.set("search", params.search);
+            if (params.claims) query.set("claims", "true");
+            if (params.sessions) query.set("sessions", "true");
+            const res = await palinodeFetch(cfg.palinodeApiUrl, `/blame/${params.file_path ?? params.file}?${query}`);
+            return { details: res, content: [{ type: "text", text: params.sessions || params.claims ? JSON.stringify(res) : res.blame }] };
         },
     }, { name: "palinode_blame" });
 

@@ -42,6 +42,33 @@ Needs Python ≥ 3.11 and PyYAML (a palinode dependency).
 The harness and corpus ship. Results and reports are internal documents — they
 carry details of the environment a run used — and are not committed here.
 
+## Background corpus
+
+A run's throwaway store otherwise holds only the cells' own records: a few
+dozen chunks that all share the task's vocabulary. In a store like that every
+task term sits at FTS5's IDF floor, the keyword arm cannot corroborate the
+vector arm, and `/resolve` stays `weak`, so the per-prompt hook never fires.
+`background` writes a realistic background that the driver copies into the
+store before any cell runs:
+
+```bash
+python3 -m bench.agent_tasks background --out BG_DIR --as-of YYYY-MM-DD \
+    --target-chunks 6000 --plan PLAN_DIR/plan.json [--extra-root SITE_PACKAGES]
+```
+
+- **Sources.** The `bench.relevance` fixture records, plus one short note per
+  documented module, class or function in the local Python standard library.
+  `--extra-root` adds other installed open-source package trees. Docstrings are
+  read with `ast`, never imported, and nothing is committed: the text comes
+  from the interpreter that runs the command.
+- **Isolation.** Notes carry `stdlib-*` project tags, or none; a cell's
+  project always ends in a hex suffix, so the two never collide. Every section
+  with a batch-ID-shaped token or a mention of a batch ID is dropped, and so is
+  every section containing one of `--plan`'s stamped tokens or projects.
+- **Determinism.** Output is deterministic for a given standard library and
+  `--as-of`. `manifest.json` records the Python version, the roots, the counts
+  and a content digest.
+
 ## Free-text judge
 
 Run on the original plan and run directories, including existing P1 plans:

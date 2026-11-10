@@ -201,10 +201,11 @@ class RetrievalLogger:
     def record_bundle_receipt(
         self, bundle: "Bundle", request: "BundleRequest", *,
         cwd: str | None = None, project: str | None = None,
+        session_id: str | None = None,
     ) -> None:
         """Persist an analysis receipt, never a retrieval or recall event.
 
-        One bounded append after rendering; no query, session, titles or body
+        One bounded append after rendering; no query, titles or body
         text. The absent top-level file_path keeps this out of file-recall
         history. It records a recall that already happened, so the recall
         controls govern it: the recall pause and automatic exclusions apply even
@@ -212,17 +213,9 @@ class RetrievalLogger:
         the receipt carries no memory content, like a search row, and a paused
         capture must not leave a delivered receipt id unexplainable.
         """
-        from palinode.core.capture_policy import evaluate_capture_policy
-        from palinode.core.config import config
-
-        if (not self._enabled or self._path is None or instrumentation_disabled_by_env()
-                or not config.instrumentation.capture_retrievals or not bundle.receipt):
+        if not bundle.receipt:
             return
         try:
-            if any(not evaluate_capture_policy(
-                action, automatic=True, cwd=cwd, project=project,
-            ).allowed for action in ("recall",)):
-                return
             details: dict[str, dict[str, Any]] = {}
             for section, assertions in (
                 ("selected", [item.assertion for item in bundle.selected]),
@@ -249,6 +242,7 @@ class RetrievalLogger:
             ]
             entry = {
                 "event_type": BUNDLE_RECEIPT,
+                "source": "resolve", "session_id": session_id,
                 "bundle_id": bundle.receipt_ref,
                 "timestamp": receipt["evaluated_at"],
                 "receipt": receipt,
@@ -257,17 +251,70 @@ class RetrievalLogger:
                     ("query", request.query), ("ref", request.ref), ("context", request.context),
                 ) if value] + ["full_evidence", "resolution", "budget_packing"],
             }
+            self._record_receipt(entry, cwd=cwd, project=project)
+        except Exception:
+            logger.warning("Bundle receipt write failed", exc_info=True)
+
+    def record_public_receipt(
+        self, receipt: dict[str, Any], *, source: str,
+        session_id: str | None = None, cwd: str | None = None,
+        project: str | None = None, source_path: str | None = None,
+    ) -> None:
+        """Append an already-built public delivery receipt without recall effects."""
+        try:
+            self._record_receipt({
+                "event_type": BUNDLE_RECEIPT, "source": source,
+                "session_id": session_id, "bundle_id": receipt["bundle_id"],
+                "timestamp": receipt["evaluated_at"], "receipt": receipt,
+            }, cwd=cwd, project=project, source_path=source_path)
+        except Exception:
+            logger.warning("Public receipt write failed", exc_info=True)
+
+    def record_trigger_fires(
+        self, fires: list[dict[str, Any]], *, session_id: str | None = None,
+        cwd: str | None = None, project: str | None = None,
+    ) -> None:
+        """Record only delivered trigger IDs and normalized target refs."""
+        if not fires:
+            return
+        try:
+            self._record_receipt({
+                "event_type": "trigger_receipt", "source": "check_triggers",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "session_id": session_id,
+                "fires": [{"trigger_id": fire["id"],
+                           "ref": _ref_of(fire["memory_file"], self._memory_dir)}
+                          for fire in fires],
+            }, cwd=cwd, project=project)
+        except Exception:
+            logger.warning("Trigger receipt write failed", exc_info=True)
+
+    def _record_receipt(
+        self, entry: dict[str, Any], *, cwd: str | None = None,
+        project: str | None = None, source_path: str | None = None,
+    ) -> None:
+        """Shared bounded, best-effort receipt-only append under recall controls."""
+        from palinode.core.capture_policy import evaluate_capture_policy
+        from palinode.core.config import config
+
+        try:
+            if (not self._enabled or self._path is None or instrumentation_disabled_by_env()
+                    or not config.instrumentation.capture_retrievals):
+                return
+            if not evaluate_capture_policy(
+                "recall", automatic=True, cwd=cwd, project=project, source_path=source_path,
+            ).allowed:
+                return
             encoded = (json.dumps(entry, separators=(",", ":")) + "\n").encode("utf-8")
             if len(encoded) > MAX_RECEIPT_BYTES:
-                logger.warning("Bundle receipt exceeds audit size limit")
+                logger.warning("Delivery receipt exceeds audit size limit")
                 return
             if not self._ensure_parent():
                 return
             with open(self._path, "ab") as fh:
                 fh.write(encoded)
         except Exception:
-            # Audit failure must never change the already-rendered delivery.
-            logger.warning("Bundle receipt write failed", exc_info=True)
+            logger.warning("Delivery receipt write failed", exc_info=True)
 
     def record_search_results(
         self,

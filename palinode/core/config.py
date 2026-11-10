@@ -18,9 +18,9 @@ import sys
 import glob
 from pathlib import Path
 from dataclasses import field
-from typing import Literal
+from typing import Annotated, Literal
 from pydantic.dataclasses import dataclass
-from pydantic import TypeAdapter, ValidationError
+from pydantic import Field, TypeAdapter, ValidationError
 import yaml
 
 from palinode.core.skip_dirs import is_skipped_path
@@ -607,6 +607,15 @@ class ConsolidationConfig:
     # 0 disables the sweep entirely. Only applied to age-eligible documents
     # (ADR-020): an identity/profile document is never retired by age.
     status_log_retention_days: int = 90
+    # How long a `daily/` note that names no project stays in `daily/` before
+    # the weekly pass moves it to `archive/` — deterministically, no model
+    # involved. A note retires through consolidation only once a project group
+    # that read it reaches a decision; a note naming no project forms no group,
+    # so that never happens and it would stay in `daily/`, current as far as
+    # recall can tell, forever. 30 days leaves a month to tag one or widen
+    # `keyword_map` so a pass can read it. Nothing is lost — `archive/` stays
+    # indexed and git keeps the move. 0 disables the sweep.
+    daily_note_retention_days: int = 30
 
 @dataclass
 class DecayConfig:
@@ -714,6 +723,8 @@ class WriteConfig:
 class LoggingConfig:
     """Log formatting and target directories constraints formats."""
     operations_log: str = "logs/operations.jsonl"
+    operations_max_bytes: Annotated[int, Field(strict=True, ge=0)] = 67_108_864
+    operations_backup_count: Annotated[int, Field(strict=True, ge=0)] = 5
     console: bool = True
 
 @dataclass

@@ -23,7 +23,7 @@ function stubFetch(routes: Record<string, unknown>, calls: Calls = []): typeof f
   }) as typeof fetch;
 }
 
-const QUIET = { "/context/prime": {}, "/list": [], "/check-triggers": [], "/search": { results: [] } };
+const QUIET = { "/context/prime": {}, "/check-triggers": [], "/search": { results: [] } };
 const HIT = {
   ...QUIET,
   "/search": { results: [{ rel_path: "decisions/rollback.md", raw_score: 0.7, snippet: "git revert + reindex" }],
@@ -176,7 +176,7 @@ describe("beforeModel — the prompt-cache invariant", () => {
   it("primes once per session (core digest rides with the first recall) and never again", async () => {
     const calls: Calls = [];
     const p = make(
-      { ...HIT, "/list": [{ file: "projects/p.md", name: "P", summary: "core thing" }] },
+      { ...HIT, "/context/prime": { core_memories: [{ file: "projects/p.md", summary: "P — core thing" }] } },
       calls,
     );
     const r1 = await p.hooks.beforeModel(request([user(PROMPT)]));
@@ -187,7 +187,7 @@ describe("beforeModel — the prompt-cache invariant", () => {
 
     await p.hooks.beforeModel(request([user("second prompt about the same rollback topic")], { runId: "run-2" }));
     expect(calls.filter((c) => c.url.includes("/context/prime"))).toHaveLength(1);
-    expect(calls.filter((c) => c.url.includes("/list"))).toHaveLength(1);
+    expect(calls.some((c) => c.url.includes("/list"))).toBe(false);
   });
 
   it("skips subagents — recall goes to the root agent only", async () => {

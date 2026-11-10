@@ -31,7 +31,7 @@ export type PluginManifest = {
   version: string;
   description: string;
   configSchema: Record<string, unknown>;
-  contracts: { tools: string[] };
+  contracts: { tools: string[]; parameters: Record<string, string[]> };
   activation: { onStartup: true };
   cliCommands: { name: string; description: string; hasSubcommands: boolean }[];
 };
@@ -69,7 +69,10 @@ export function buildPluginManifest(pluginRoot: string): PluginManifest {
     description: palinodePlugin.description,
     // The JSON round-trip drops TypeBox's symbol-keyed metadata; what remains is plain JSON Schema.
     configSchema: JSON.parse(JSON.stringify(PALINODE_CONFIG_SCHEMA)) as Record<string, unknown>,
-    contracts: { tools: registeredToolNames() },
+    contracts: {
+      tools: registeredToolNames(),
+      parameters: { palinode_blame: ["file_path", "search", "claims", "sessions"] },
+    },
     activation: { onStartup: true },
     cliCommands: [{ name: "palinode", description: "Palinode memory commands", hasSubcommands: true }],
   };

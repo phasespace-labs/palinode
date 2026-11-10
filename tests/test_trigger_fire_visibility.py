@@ -22,6 +22,10 @@ from palinode.core.config import config
 EMBED_DIM = 1024
 _VEC = [1.0] + [0.0] * (EMBED_DIM - 1)
 
+#: Shares three content words with the trigger descriptions below, so these
+#: cases clear the shared-term gate and test what they are about.
+PROMPT = "deploying the release to prod"
+
 
 @pytest.fixture()
 def trigger_store(tmp_path, monkeypatch):
@@ -58,33 +62,34 @@ def _row(trigger_id: str) -> dict:
 
 
 @pytest.mark.parametrize("target", ["decisions/hidden.md", "decisions/absent.md"])
-def test_undeliverable_target_returns_nothing_and_records_no_fire(client, target):
-    store.add_trigger("t-undeliverable", "deploying to prod", target, _VEC)
-    response = client.post("/check-triggers", json={"query": "deploying to prod"})
+def test_undeliverable_target_returns_nothing_and_records_no_fire(client, trigger_store, target):
+    store.add_trigger("t-undeliverable", "deploying the release to prod", target, _VEC)
+    response = client.post("/check-triggers", json={"query": "deploying the release to prod"})
     assert response.status_code == 200
     assert response.json() == []
     row = _row("t-undeliverable")
     assert row["fire_count"] == 0
     assert row["last_fired"] is None
+    assert not (trigger_store / ".audit/retrievals.jsonl").exists()
 
 
 def test_target_that_becomes_visible_fires_immediately(client, trigger_store):
     """The cooldown was not burned by the undelivered match."""
-    store.add_trigger("t-later", "deploying to prod", "decisions/hidden.md", _VEC)
-    assert client.post("/check-triggers", json={"query": "deploying to prod"}).json() == []
+    store.add_trigger("t-later", "deploying the release to prod", "decisions/hidden.md", _VEC)
+    assert client.post("/check-triggers", json={"query": "deploying the release to prod"}).json() == []
 
     (trigger_store / "decisions" / "hidden.md").write_text(
         "---\ncategory: decisions\n---\nnow visible\n", encoding="utf-8"
     )
-    second = client.post("/check-triggers", json={"query": "deploying to prod"})
+    second = client.post("/check-triggers", json={"query": "deploying the release to prod"})
     assert second.status_code == 200
     assert [row["id"] for row in second.json()] == ["t-later"]
     assert _row("t-later")["fire_count"] == 1
 
 
 def test_visible_target_fires_and_records_as_before(client):
-    store.add_trigger("t-visible", "deploying to prod", "decisions/visible.md", _VEC)
-    first = client.post("/check-triggers", json={"query": "deploying to prod"})
+    store.add_trigger("t-visible", "deploying the release to prod", "decisions/visible.md", _VEC)
+    first = client.post("/check-triggers", json={"query": "deploying the release to prod"})
     assert first.status_code == 200
     assert [row["memory_file"] for row in first.json()] == ["decisions/visible.md"]
     row = _row("t-visible")
@@ -92,7 +97,7 @@ def test_visible_target_fires_and_records_as_before(client):
     assert row["last_fired"] is not None
 
     # Unchanged: a delivered fire holds the trigger in cooldown.
-    second = client.post("/check-triggers", json={"query": "deploying to prod"})
+    second = client.post("/check-triggers", json={"query": "deploying the release to prod"})
     assert second.json() == []
     assert _row("t-visible")["fire_count"] == 1
     assert _row("t-visible")["last_fired"] == row["last_fired"]
@@ -100,15 +105,80 @@ def test_visible_target_fires_and_records_as_before(client):
 
 def test_store_without_predicate_still_fires_every_match(trigger_store):
     """``deliverable=None`` keeps the pre-existing store-level contract."""
-    store.add_trigger("t-bare", "deploying to prod", "decisions/absent.md", _VEC)
-    assert [row["id"] for row in store.check_triggers(_VEC)] == ["t-bare"]
+    store.add_trigger("t-bare", "deploying the release to prod", "decisions/absent.md", _VEC)
+    assert [row["id"] for row in store.check_triggers(_VEC, PROMPT)] == ["t-bare"]
     assert _row("t-bare")["fire_count"] == 1
 
 
 def test_store_predicate_sees_the_memory_file(trigger_store):
     seen: list[str] = []
-    store.add_trigger("t-pred", "deploying to prod", "decisions/visible.md", _VEC)
-    fired = store.check_triggers(_VEC, deliverable=lambda path: seen.append(path) or False)
+    store.add_trigger("t-pred", "deploying the release to prod", "decisions/visible.md", _VEC)
+    fired = store.check_triggers(_VEC, PROMPT, deliverable=lambda path: seen.append(path) or False)
     assert fired == []
     assert seen == ["decisions/visible.md"]
     assert _row("t-pred")["fire_count"] == 0
+
+
+@pytest.mark.parametrize("session_id", [None, "trigger-owner"])
+def test_trigger_receipt_only_records_delivered_refs(client, trigger_store, session_id):
+    import json
+    from palinode.cli.retrieval_stats import _stats
+
+    store.add_trigger("delivered", "secret trigger description", "decisions/visible.md", _VEC)
+    store.add_trigger("hidden", "secret trigger description", "decisions/hidden.md", _VEC)
+    target = trigger_store / "decisions/visible.md"
+    original = target.read_bytes()
+    request = {"query": "secret trigger description query", "session_id": session_id}
+    delivered = client.post("/check-triggers", json=request).json()
+    path = trigger_store / ".audit/retrievals.jsonl"
+    raw = path.read_text()
+    row = json.loads(raw)
+    assert row["session_id"] == session_id
+    assert row["fires"] == [{"trigger_id": f["id"], "ref": f["memory_file"].removesuffix(".md")}
+                            for f in delivered]
+    assert row["fires"] == [{"trigger_id": "delivered", "ref": "decisions/visible"}]
+    assert "file_path" not in row
+    for prose in ("secret trigger description", "secret trigger description query", "visible-trigger-body"):
+        assert prose not in raw
+    assert _stats([row])["total_events"] == 0
+    with TestClient(app) as second:
+        assert second.post("/check-triggers", json=request).json() == []
+    assert path.read_text() == raw
+    assert target.read_bytes() == original
+    assert _row("delivered")["fire_count"] == 1
+    assert _row("hidden")["fire_count"] == 0
+
+
+@pytest.mark.parametrize("control", ["recall", "excluded", "path", "invalid", "env", "config", "capture", "bound", "io"])
+def test_trigger_receipt_safeguards(client, trigger_store, monkeypatch, control):
+    from palinode.core.capture_policy import update_capture_policy
+    from palinode.core import retrieval_log
+
+    store.add_trigger("t-control", "deploy release production", "decisions/visible.md", _VEC)
+    if control == "recall":
+        update_capture_policy(recall_paused=True)
+    elif control == "capture":
+        update_capture_policy(capture_paused=True)
+    elif control == "excluded":
+        update_capture_policy(excluded_projects=["demo"])
+    elif control == "path":
+        update_capture_policy(excluded_paths=[str(trigger_store)])
+    elif control == "invalid":
+        (trigger_store / ".capture-policy.yaml").write_text("invalid")
+    elif control == "env":
+        monkeypatch.setenv("PALINODE_INSTRUMENTATION_DISABLED", "1")
+    elif control == "config":
+        monkeypatch.setattr(config.instrumentation, "capture_retrievals", False)
+    elif control == "bound":
+        monkeypatch.setattr(retrieval_log, "MAX_RECEIPT_BYTES", 0)
+    elif control == "io":
+        (trigger_store / ".audit/retrievals.jsonl").mkdir(parents=True)
+    response = client.post("/check-triggers", json={
+        "query": "deploy release production", "project": "demo", "cwd": str(trigger_store),
+    })
+    blocked = control in {"recall", "invalid"}
+    assert response.status_code == (403 if blocked else 200)
+    if not blocked:
+        assert [f["id"] for f in response.json()] == ["t-control"]
+        assert _row("t-control")["fire_count"] == 1
+    assert (trigger_store / ".audit/retrievals.jsonl").is_file() == (control == "capture")

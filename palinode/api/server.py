@@ -220,7 +220,11 @@ _parent_logger.addHandler(sh)
 
 # Directory and file are created on the first record, not at import (see
 # palinode.core.log_files).
-fh = LazyDirFileHandler(os.path.join(config.palinode_dir, config.logging.operations_log))
+fh = LazyDirFileHandler(
+    os.path.join(config.palinode_dir, config.logging.operations_log),
+    max_bytes=config.logging.operations_max_bytes,
+    backup_count=config.logging.operations_backup_count,
+)
 fh.setFormatter(JsonlFormatter())
 fh.addFilter(_secret_filter)
 _parent_logger.addHandler(fh)

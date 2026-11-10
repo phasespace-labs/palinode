@@ -95,6 +95,19 @@ def _in_daily(memory_dir: Path) -> set[str]:
     return {p.name for p in (memory_dir / "daily").glob("*.md")}
 
 
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_empty_results_include_compacted_ids(store, monkeypatch, dry_run):
+    monkeypatch.setattr(runner, "_collect_daily_notes", lambda *args, **kwargs: ([], 0))
+
+    weekly = runner.run_consolidation(dry_run=dry_run)
+    nightly = runner.run_nightly(dry_run=dry_run)
+
+    assert weekly["projects_compacted"] == 0
+    assert weekly["projects_compacted_ids"] == []
+    assert nightly["projects_compacted"] == 0
+    assert nightly["projects_compacted_ids"] == []
+
+
 # ---------------------------------------------------------------------------
 # One group fails at the LLM
 # ---------------------------------------------------------------------------
@@ -107,6 +120,7 @@ def test_llm_failure_keeps_that_groups_notes_in_place(store):
 
     assert result["status"] == "partial"
     assert result["projects_compacted"] == 1
+    assert result["projects_compacted_ids"] == ["alpha"]
     assert result["projects_failed"] == 1
     assert result["failed_projects"] == ["beta"]
     # alpha was actually consolidated by the real executor.
@@ -162,6 +176,8 @@ def test_no_target_note_is_not_archived_when_others_succeed(store):
     assert result["projects_failed"] == 0
     assert result["projects_skipped"] == 1
     assert result["projects_compacted"] == 2
+    assert result["projects_compacted_ids"] == ["alpha", "beta"]
+    assert result["projects_compacted"] == len(result["projects_compacted_ids"])
     assert _archived(memory_dir) == {notes["alpha"].name, notes["beta"].name, notes["both"].name}
     assert _in_daily(memory_dir) == {notes["ghost"].name}
     assert result["notes_left_in_place"] == 1
@@ -179,6 +195,7 @@ def test_all_groups_failing_archives_nothing(store):
 
     assert result["status"] == "partial"
     assert result["projects_compacted"] == 0
+    assert result["projects_compacted_ids"] == []
     assert result["projects_failed"] == 2
     assert result["notes_archived"] == 0
     assert result["notes_left_in_place"] == len(notes)
@@ -193,6 +210,8 @@ def test_dry_run_reports_failures_without_touching_disk(store):
     result = runner.run_consolidation(dry_run=True, llm_fn=llm)
 
     assert result["dry_run"] is True
+    assert result["projects_compacted_ids"] == ["alpha"]
+    assert result["projects_compacted"] == len(result["projects_compacted_ids"])
     assert result["status"] == "partial"
     assert result["projects_failed"] == 1
     assert result["failed_projects"] == ["beta"]
@@ -209,6 +228,7 @@ def test_nightly_status_is_partial_when_a_group_fails(store):
     assert result["status"] == "partial"
     assert result["projects_failed"] == 1
     assert result["projects_compacted"] == 1
+    assert result["projects_compacted_ids"] == ["alpha"]
     # Nightly never archives; every note is still in daily/.
     assert _in_daily(memory_dir) == {n.name for n in notes.values()}
 

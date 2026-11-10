@@ -125,7 +125,7 @@ def test_trigger_client_scope_does_not_burn_hidden_cooldown(precision_store):
                           memory_file=f"insights/note-{i}.md", embedding=vector,
                           threshold=0.75, cooldown_hours=24)
     with TestClient(app) as client:
-        fired = client.post("/check-triggers", json={"query": "nightly catchup",
+        fired = client.post("/check-triggers", json={"query": "nightly catchup reminder",
                                                       "project": "harborlight"}).json()
         assert [t["id"] for t in fired] == ["trigger-1"]
         hidden = next(t for t in store.list_triggers() if t["id"] == "trigger-2")

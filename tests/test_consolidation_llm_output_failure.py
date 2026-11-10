@@ -18,14 +18,16 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
 import pytest
 
 from palinode.consolidation import runner
 from palinode.core.config import config
-from palinode.core.ollama_client import ChatCompletionText
+from palinode.core.ollama_client import ChatCompletionText, OllamaClient, RetryPolicy
 
 
 def _today() -> str:
@@ -274,3 +276,87 @@ def test_consolidate_project_empty_array_keeps_the_model_name(store):
 
     assert ops == []
     assert model == "fake-model"
+
+
+@pytest.mark.parametrize("completion_tokens", [None, 75])
+def test_completion_tokens_at_threshold_or_missing_do_not_warn(
+    monkeypatch, caplog, completion_tokens,
+):
+    class Client:
+        def chat_completions(self, *args, **kwargs):
+            return ChatCompletionText("[]", completion_tokens=completion_tokens)
+
+    monkeypatch.setattr(runner, "get_ollama_client", lambda: Client())
+    monkeypatch.setattr(config.consolidation, "llm_max_tokens", 100)
+    with caplog.at_level(logging.WARNING, logger="palinode.consolidation"):
+        result, model = runner._call_llm_with_fallback("system", "user")
+
+    assert result == "[]"
+    assert model == config.consolidation.llm_model
+    assert "completion tokens" not in caplog.text
+
+
+def test_completion_tokens_above_threshold_warn_for_fallback(monkeypatch, caplog):
+    class Client:
+        calls = 0
+
+        def chat_completions(self, *args, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise runner.OllamaError("primary failed")
+            return ChatCompletionText("[]", completion_tokens=76)
+
+    monkeypatch.setattr(runner, "get_ollama_client", lambda: Client())
+    monkeypatch.setattr(config.consolidation, "llm_max_tokens", 100)
+    monkeypatch.setattr(
+        config.consolidation, "llm_fallbacks",
+        [{"model": "fallback-model", "url": "http://fallback"}],
+    )
+    with caplog.at_level(logging.WARNING, logger="palinode.consolidation"):
+        result, model = runner._call_llm_with_fallback("system", "user")
+
+    assert result == "[]"
+    assert model == "fallback-model"
+    assert "fallback-model" in caplog.text
+    assert "76 completion tokens" in caplog.text
+    assert "maximum 100" in caplog.text
+    assert "76.0% utilization" in caplog.text
+
+
+def test_fallback_success_logs_size_tokens_and_latency(monkeypatch, caplog):
+    def handler(request):
+        if request.url.host == "primary":
+            return httpx.Response(503, json={"error": "down"})
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": "[]"}}],
+            "usage": {"completion_tokens": 12},
+        })
+
+    client = OllamaClient(
+        retry_policy=RetryPolicy(retries=0),
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        sleep=lambda _: None,
+        rng=random.Random(0),
+    )
+    monkeypatch.setattr(runner, "get_ollama_client", lambda: client)
+    monkeypatch.setattr(config.consolidation, "llm_url", "http://primary")
+    monkeypatch.setattr(
+        config.consolidation, "llm_fallbacks",
+        [{"model": "fallback-model", "url": "http://fallback"}],
+    )
+    caplog.set_level(logging.INFO, logger="palinode.ollama.events")
+
+    result, model = runner._call_llm_with_fallback("system", "user")
+
+    success = next(
+        json.loads(record.message)
+        for record in caplog.records
+        if record.name == "palinode.ollama.events"
+        and json.loads(record.message)["outcome"] == "ok"
+    )
+    assert result == "[]"
+    assert model == "fallback-model"
+    assert success["model"] == "fallback-model"
+    assert success["response_chars"] == 2
+    assert success["completion_tokens"] == 12
+    assert success["latency_ms"] >= 0

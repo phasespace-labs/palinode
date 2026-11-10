@@ -68,6 +68,9 @@ export PALINODE_RETRIEVAL_MODE=lexical
 "$PALINODE_BIN/palinode" start
 ```
 
+While it runs, the same process serves a read-only memory inspector at
+<http://127.0.0.1:6340/ui/>. Step 4 opens your first saved memory there.
+
 ## 3. Before enabling automatic capture: inspect and control it
 
 Open terminal two while the API continues running in terminal one. Set its
@@ -125,6 +128,14 @@ path from **automatic** capture and recall, use bounded exclusions:
 "$PALINODE_BIN/palinode" controls exclude-path "$PWD/.env"
 ```
 
+Project exclusions also stop automatic enrichment (descriptions and summaries)
+and consolidation of that project’s stored notes. Project membership uses the
+note’s `project/<slug>` entities and the same project aliases as recall; daily
+consolidation also uses its existing project-reference grouping. Notes remain
+stored, indexed, and searchable by explicit recall. Path exclusions apply to
+capture sources only (transcript source paths and cwd), not memory-file paths;
+they do not stop enrichment or consolidation of stored notes.
+
 Exclusions do not block an explicit save, explicit recall, or other explicit
 user/API input, and they are not a secret-scanner guarantee. Do not submit
 secrets as explicit content. Transcript capture remains an opt-in harness
@@ -132,6 +143,79 @@ feature; MCP installation alone does not enable it, and the command cannot
 certify a client process is running. See [HARNESSES.md](HARNESSES.md) for source/range and
 automatic-versus-explicit behavior, and [PRIVACY.md](PRIVACY.md) for visibility
 and access limits.
+
+### Switch the hooks off
+
+Pausing is reversible without changing hook registrations. To pause both future
+API-routed capture and recall, then inspect the policy and observed hooks:
+
+```bash
+"$PALINODE_BIN/palinode" controls pause
+"$PALINODE_BIN/palinode" controls status
+```
+
+Use `controls pause --no-recall` for capture only; `controls resume` restores
+both. A pause leaves the hooks installed and does not stop background indexing,
+enrichment, or consolidation. Project exclusions have the additional stored-note
+processing scope described above.
+
+`palinode init --hook` opts in to four Claude Code hooks:
+
+| Event | Script | What it does |
+|---|---|---|
+| `SessionStart` | `palinode-session-start.sh` | Primes a session with memory context. |
+| `UserPromptSubmit` | `palinode-user-prompt-submit.sh` | Recalls relevant memory before a prompt. |
+| `SessionEnd` | `palinode-session-end.sh` | Submits a floor summary: message count, a first-prompt topic hint bounded to 200 characters, and the last assistant reply capped at 2000 characters by default (`PALINODE_HOOK_ENDING_MAX_CHARS`; `0` disables the ending). |
+| `PostCompact` | `palinode-post-compact.sh` | Saves Claude Code’s compaction summary as a session checkpoint. |
+
+To remove these hooks permanently, inspect all three registration locations:
+user `~/.claude/settings.json`, project `.claude/settings.json`, and project-local
+`.claude/settings.local.json`. `palinode controls status` lists the observed
+Palinode hooks with their settings scope; it does not certify a running client.
+In each applicable JSON file, remove the Palinode command object from the
+corresponding event’s `hooks` array. Remove an enclosing entry/event only if it
+is then empty; keep other hooks and settings intact. A registration in another
+scope can still run the hook.
+
+After removing every registration for a script, delete the script at the path
+its command named, typically `.claude/hooks/<script>` or
+`~/.claude/hooks/<script>`. For example, after removing the project’s SessionEnd
+registration (and checking that no other registration uses that copy):
+
+```bash
+rm .claude/hooks/palinode-session-end.sh
+```
+
+Repeat for whichever of the four scripts you are removing, then run
+`palinode controls status` again and start a new Claude Code session. Removing
+hooks deletes no memories, index, or Git history. MCP tools and instruction-driven
+explicit saves can still be used. `palinode init --no-hook` skips hook
+installation; it does not uninstall existing registrations or scripts.
+
+For Codex, `palinode init --codex-hook` opts in to the `SessionStart`,
+`UserPromptSubmit` and `SessionEnd` scripts, registered in `.codex/hooks.json`.
+Codex runs them after you trust them with `/hooks`. To remove them, delete the
+three palinode entries from `.codex/hooks.json` (leave other tools' entries in
+place) and the scripts under `.codex/hooks/`. If you registered them yourself in
+the user-level `~/.codex/hooks.json`, remove them there too; `controls status`
+lists Codex hooks from both files. See
+[examples/hooks/](../examples/hooks/README.md#codex).
+
+For Cursor, `palinode init --cursor-hooks` registers `sessionStart` and
+`beforeSubmitPrompt` in `.cursor/hooks.json`. For Antigravity, `--agy-hooks`
+registers `SessionStart` and `PreInvocation` under the `palinode` hook in
+`.agents/hooks.json`. Both are recall only: they inject memory and capture
+nothing. To remove them, delete the palinode entries from that `hooks.json`
+(keep other entries) and the scripts under `.cursor/hooks/` or `.agents/hooks/`.
+`controls status` lists them as recall-only hooks.
+
+Pause or remove? `controls pause` acts on the server, for every client that
+routes through this API, and `controls resume` undoes it; the hooks still run
+and are refused. Removing a hook acts on one client and one scope, and stays
+until you reinstall it. Neither recalls context already delivered: memory a hook
+injected into a running session stays in that client's conversation until the
+session ends, and anything the client sent to its own model provider is outside
+Palinode's control.
 
 ## 4. Verify and save a decision in terminal two
 
@@ -150,6 +234,25 @@ Expected results: `save` reports `retrieval_mode: lexical`, `indexed: true`,
 and `git_committed: true`; the search returns `decisions/harbor-notes-storage`.
 If it does not, run `doctor` first. Do not infer a semantic-match quality claim
 from lexical mode: it is exact-term retrieval for a supported minimal path.
+
+### Open your memory
+
+With terminal one still running, open the decision you just saved in a browser:
+
+<http://127.0.0.1:6340/ui/memory/decisions/harbor-notes-storage>
+
+(`open` on macOS, `xdg-open` on many Linux desktops, or paste the URL on
+Windows.) The page shows the saved text, its metadata, and a provenance panel
+with the source file and the Git commit that saved it. The dashboard at
+<http://127.0.0.1:6340/ui/> links to the Memory, Diffs, Compaction and Quality
+views. If you changed `PALINODE_API_PORT`, use that port instead of `6340`.
+
+The inspector is **read-only**: browsing it never edits, archives or commits a
+memory. Its *Correct or retire this* section lists commands to run elsewhere;
+step 6 does exactly that. It serves only on loopback and has no sign-in form,
+so on a token-enabled server the browser must already send the bearer token
+with every request. For a store on another machine, use the SSH-forwarding
+pattern and the access limits in [UI.md](UI.md).
 
 ## 5. Connect a client, then prove a fresh session
 
@@ -203,11 +306,9 @@ Before changing anything, inspect the exact markdown and provenance:
 "$PALINODE_BIN/palinode" read decisions/harbor-notes-storage.md --meta
 ```
 
-The local inspector is read-only and loopback-only. It lets you browse the
-saved decision and its history; it is not an authorization boundary. Visit
-<http://127.0.0.1:6340/ui/> in a browser (`open` on macOS, `xdg-open` on many
-Linux desktops, or paste the URL on Windows). See [UI.md](UI.md) for its
-visibility and deployment limits.
+Or reopen it in the inspector from step 4. The inspector is read-only and
+loopback-only, and loopback is not an authorization boundary. See
+[UI.md](UI.md) for its visibility and deployment limits.
 
 First save a neighboring decision that must remain unchanged, then save the
 separate requirement that supports the hosted-service decision. Record the
@@ -265,6 +366,32 @@ first, checks that the target has not changed since you looked, and prints the
 recovery command: `palinode corrections preview` / `apply`. See
 [CORRECTIONS.md](CORRECTIONS.md) for that walkthrough, what gets refused and
 why, and the undo path.
+
+### Correct or retire through your agent
+
+A connected client can do the same thing with Palinode's tools. Ask it, for
+example: *"Archive decisions/harbor-notes-storage.md, superseded by
+decisions/harbor-notes-storage-shared.md, because the shared hosted service needs
+concurrent-write coordination."* It calls `palinode_archive` with those
+arguments. Check the result with `read --meta` or in the inspector rather than
+taking the reply on trust.
+
+To retire a memory that has no replacement, leave out the successor. Preview
+first, and undo with `restore`:
+
+```bash
+"$PALINODE_BIN/palinode" archive decisions/harbor-notes-timestamps.md \
+  --reason "Example only: no longer applies." --dry-run
+"$PALINODE_BIN/palinode" restore decisions/harbor-notes-storage.md --dry-run
+```
+
+Both commands above are previews and write nothing; drop `--dry-run` to apply.
+
+**Archive is not erasure.** An archived memory leaves default recall and search,
+but the Markdown file, its `-history.md` audit sibling and its Git history all
+remain, and `restore` brings it back. Removing data permanently, Git history
+included, is a separate, destructive, manual procedure with no single command:
+see [the erasure procedure](DATA-LIFECYCLE.md#the-erasure-procedure).
 
 ## 7. A conflict stays unresolved without evidence
 

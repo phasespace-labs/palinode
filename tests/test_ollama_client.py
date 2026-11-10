@@ -693,6 +693,41 @@ def test_chat_completions_result_is_still_a_str():
     assert out == "verdict" and out.upper() == "VERDICT"
 
 
+def test_chat_completions_result_carries_reported_completion_tokens():
+    out = _chat("stop", content="verdict", extra={"usage": {"completion_tokens": 17}})
+
+    assert isinstance(out, str)
+    assert out.completion_tokens == 17
+
+
+@pytest.mark.parametrize("usage", [None, {}, {"completion_tokens": "17"}, {"completion_tokens": -1}])
+def test_chat_completions_ignores_missing_or_malformed_usage(usage):
+    extra = {} if usage is None else {"usage": usage}
+
+    assert _chat("stop", extra=extra).completion_tokens is None
+
+
+def test_chat_completions_success_log_includes_size_tokens_and_latency(caplog):
+    caplog.set_level(logging.INFO, logger="palinode.ollama.events")
+
+    _chat("stop", content="verdict", extra={"usage": {"completion_tokens": 17}})
+
+    event = json.loads(caplog.records[-1].message)
+    assert event["latency_ms"] >= 0
+    assert event["response_chars"] == 7
+    assert event["completion_tokens"] == 17
+
+
+def test_chat_completions_success_log_omits_missing_usage(caplog):
+    caplog.set_level(logging.INFO, logger="palinode.ollama.events")
+
+    _chat("stop", content="verdict")
+
+    event = json.loads(caplog.records[-1].message)
+    assert event["response_chars"] == 7
+    assert "completion_tokens" not in event
+
+
 def test_finish_reason_length_is_truncated():
     out = _chat("length")
 

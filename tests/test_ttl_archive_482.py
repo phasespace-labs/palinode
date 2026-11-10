@@ -69,6 +69,11 @@ def test_compute_expires_at_invalid_returns_none():
     assert ttl.compute_expires_at("nope") is None
 
 
+def test_compute_expires_at_rejects_out_of_range_ttl():
+    with pytest.raises(ttl.TTLRangeError, match="out of range"):
+        ttl.compute_expires_at("999999999d")
+
+
 def test_normalize_expiry_resolves_ttl_and_drops_it():
     base = datetime(2026, 1, 1, tzinfo=UTC)
     fm = {"ttl": "24h"}
@@ -88,6 +93,11 @@ def test_normalize_expiry_explicit_expires_at_wins_over_ttl():
 
 def test_normalize_expiry_rejects_bad_ttl():
     assert ttl.normalize_expiry({"ttl": "banana"}) is not None
+
+
+def test_normalize_expiry_rejects_out_of_range_ttl():
+    with pytest.raises(ttl.TTLRangeError, match="shorter duration"):
+        ttl.normalize_expiry({"ttl": "999999999d"})
 
 
 def test_normalize_expiry_rejects_bad_expires_at():
@@ -279,6 +289,18 @@ def test_save_rejects_bad_ttl(api_client):
         "metadata": {"ttl": "banana"},
     })
     assert resp.status_code == 400
+
+
+def test_save_rejects_out_of_range_ttl_without_writing(api_client):
+    client, memory_dir = api_client
+    resp = client.post("/save", json={
+        "content": "far future ttl", "type": "Insight", "slug": "huge-ttl",
+        "metadata": {"ttl": "999999999d"},
+    })
+    assert resp.status_code == 422
+    assert "out of range" in resp.json()["detail"]
+    assert "shorter duration" in resp.json()["detail"]
+    assert not os.path.exists(os.path.join(memory_dir, "insights", "huge-ttl.md"))
 
 
 def test_save_rejects_bad_expires_at(api_client):

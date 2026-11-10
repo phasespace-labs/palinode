@@ -217,3 +217,25 @@ def test_capture_pause_still_records_an_explainable_receipt(mem):
     assert body["receipt_ref"]
     explanation = explain_delivery(body["receipt_ref"], memory_dir=str(mem))
     assert explanation["status"] == "explained", explanation
+
+
+@pytest.mark.parametrize("session_id", [None, "resolve-owner"])
+def test_resolve_persists_caller_identity(mem, session_id):
+    scenarios.seed_current(mem)
+    counts = scenarios._recall_counts()
+    files = {path: path.read_bytes() for path in mem.rglob("*.md")}
+    with TestClient(app) as client:
+        body = client.post("/resolve", json={
+            "query": "endpoint production traffic", "session_id": session_id,
+        }).json()
+        public = client.get(f"/explain/{body['receipt_ref']}").json()
+        own = client.get(f"/explain/{body['receipt_ref']}", params={
+            "view": "diagnostics", "session_id": session_id or "",
+        }).json()
+    row = json.loads((mem / ".audit/retrievals.jsonl").read_text())
+    assert scenarios._recall_counts() == counts
+    assert all(path.read_bytes() == content for path, content in files.items())
+    assert row["session_id"] == session_id
+    assert public["delivery"]["session_id"]["reason"] == "withheld_diagnostics_only"
+    if session_id:
+        assert own["delivery"]["session_id"] == session_id

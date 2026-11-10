@@ -145,7 +145,16 @@ def _normalize_path(value: object) -> str:
     try:
         for part in raw.parts[1:]:
             probe /= part
-            if probe.is_symlink():
+            # ``os.lstat``, not ``Path.is_symlink()``: from Python 3.14 the
+            # latter returns False on any OSError, so a component this process
+            # cannot inspect (EACCES) would pass as verified. Only a missing
+            # component is allowed through, since an exclusion may name a
+            # directory that does not exist yet.
+            try:
+                mode = os.lstat(probe).st_mode
+            except (FileNotFoundError, NotADirectoryError):
+                continue
+            if stat.S_ISLNK(mode):
                 raise CapturePolicyError("Invalid path exclusion")
         return str(raw.resolve(strict=False))
     except (OSError, RuntimeError) as exc:
@@ -253,6 +262,54 @@ def _matches_excluded_path(value: str, exclusions: tuple[str, ...]) -> bool:
     return any(candidate.is_relative_to(Path(exclusion)) for exclusion in exclusions)
 
 
+@dataclass(frozen=True)
+class ResolvedProcessingPolicy:
+    """Project exclusions and alias comparisons fixed for one processing pass."""
+
+    deny_all: bool
+    excluded_projects: frozenset[str]
+    alias_index: dict[str, str]
+
+
+def resolve_processing_policy() -> ResolvedProcessingPolicy:
+    """Load fresh controls once, without loading aliases when none are excluded."""
+    from palinode.core.scope import alias_index, canonical_project
+
+    try:
+        policy = load_capture_policy()
+    except CapturePolicyError:
+        return ResolvedProcessingPolicy(True, frozenset(), {})
+    if not policy.excluded_projects:
+        return ResolvedProcessingPolicy(False, frozenset(), {})
+    index = alias_index()
+    excluded = frozenset(canonical_project(p, index) for p in policy.excluded_projects)
+    return ResolvedProcessingPolicy(False, excluded, index)
+
+
+def automatic_note_processing_allowed(
+    metadata: dict, *, project_refs: tuple[str, ...] | list[str] = (),
+    resolved: ResolvedProcessingPolicy | None = None,
+) -> bool:
+    """Project exclusions gate model processing of stored notes, not indexing.
+
+    Reuse recall's entity and alias comparisons. Consolidation can also supply
+    the project refs its existing grouping logic resolves from daily notes or
+    a target document's identity. Capture pauses and source-path exclusions
+    deliberately do not govern stored-note processing.
+    """
+    from palinode.core.scope import canonical_project, project_entities
+
+    policy = resolved if resolved is not None else resolve_processing_policy()
+    if policy.deny_all:
+        return False
+    if not policy.excluded_projects:
+        return True
+    return not any(
+        canonical_project(ref, policy.alias_index) in policy.excluded_projects
+        for ref in [*project_entities(metadata), *project_refs]
+    )
+
+
 def evaluate_capture_policy(
     action: Literal["capture", "recall"],
     *,
@@ -279,20 +336,36 @@ def evaluate_capture_policy(
         return PolicyDecision(True, None)
     try:
         normalized_project = _validate_project(project) if project is not None else None
-        candidates = tuple(
-            _normalize_path(value)
-            for value in (cwd, source_path)
-            if value is not None
-        )
     except CapturePolicyError:
         return PolicyDecision(False, "invalid_scope")
-    if normalized_project is None and cwd is not None:
+    # The paths are the caller's (a hook's cwd and transcript), so this server
+    # may be unable to inspect them: another host, or a directory its user
+    # cannot read (``/root`` or a 0700 home raises EACCES). An unverifiable
+    # path only matters when there is an exclusion to check it against; with
+    # none configured it is dropped, never resolved through.
+    normalized_cwd: str | None = None
+    candidates: list[str] = []
+    unverifiable = False
+    for is_cwd, value in ((True, cwd), (False, source_path)):
+        if value is None:
+            continue
+        try:
+            normalized = _normalize_path(value)
+        except CapturePolicyError:
+            unverifiable = True
+            continue
+        candidates.append(normalized)
+        if is_cwd:
+            normalized_cwd = normalized
+    if unverifiable and (policy.excluded_paths or policy.excluded_projects):
+        return PolicyDecision(False, "invalid_scope")
+    if normalized_project is None and normalized_cwd is not None:
         # The preflight is useful to generated hooks precisely when a linked
         # worktree has no separately configured project.  Reuse the canonical
         # git-aware resolver rather than inferring from a basename.
         try:
             from palinode.core.context_prime import resolve_context
-            resolved = resolve_context(cwd=candidates[0], project=None).project
+            resolved = resolve_context(cwd=normalized_cwd, project=None).project
             normalized_project = resolved.removeprefix("project/") if resolved else None
         except Exception:
             normalized_project = None
@@ -312,5 +385,6 @@ def evaluate_capture_policy(
 
 __all__ = [
     "CapturePolicy", "CapturePolicyError", "POLICY_FILENAME", "POLICY_VERSION",
-    "PolicyDecision", "evaluate_capture_policy", "load_capture_policy", "update_capture_policy",
+    "ResolvedProcessingPolicy", "resolve_processing_policy",
+    "PolicyDecision", "automatic_note_processing_allowed", "evaluate_capture_policy", "load_capture_policy", "update_capture_policy",
 ]

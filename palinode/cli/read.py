@@ -68,6 +68,15 @@ def read(file_path, fmt, meta, tier):
     notice = result.get("agent_directed_notice")
     if notice and effective_fmt != OutputFormat.JSON:
         click.echo(notice, err=True)
+    # Another project's record says whose it is, the same way and for the
+    # same reason; JSON carries the refs as ``other_project``.
+    other = result.get("other_project")
+    if other and effective_fmt != OutputFormat.JSON:
+        from palinode.core.context_prime import ambient_cwd, resolve_context
+        from palinode.core.scoring import other_project_read_notice
+
+        reader = resolve_context(cwd=ambient_cwd()).project
+        click.echo(other_project_read_notice(other, reader), err=True)
 
     if meta:
         if effective_fmt == OutputFormat.JSON:

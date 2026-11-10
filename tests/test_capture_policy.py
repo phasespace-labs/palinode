@@ -261,6 +261,81 @@ def test_project_path_and_linked_worktree_preflight_scope(client: TestClient, tm
     assert unresolved.reason == "unknown_scope"
 
 
+@pytest.fixture()
+def unreadable_transcript(tmp_path: Path):
+    """A transcript path under a directory this process cannot search (EACCES).
+
+    The shape of a hook's ``source_path`` when the API runs as another user:
+    the client's transcript lives under ``/root/.claude`` or a 0700 home.
+    """
+    import os
+
+    if os.geteuid() == 0:
+        pytest.skip("root bypasses directory permissions")
+    locked = tmp_path / "client-home"
+    (locked / ".claude" / "projects").mkdir(parents=True)
+    path = locked / ".claude" / "projects" / "session.jsonl"
+    path.write_text("{}\n", encoding="utf-8")
+    locked.chmod(0)
+    yield str(path)
+    locked.chmod(0o700)
+
+
+def test_unverifiable_source_path_does_not_refuse_capture_without_exclusions(
+    client: TestClient, tmp_path: Path, unreadable_transcript: str
+) -> None:
+    cwd = tmp_path / "workspace-a1b2c3"
+    cwd.mkdir()
+    check = client.post("/controls/check", json={
+        "action": "capture", "automatic": True,
+        "cwd": str(cwd), "source_path": unreadable_transcript,
+    }).json()
+    assert check["allowed"] is True and check["reason"] is None
+    # The readable cwd still scopes the capture.
+    assert check["project"] == evaluate_capture_policy(
+        "capture", automatic=True, cwd=str(cwd)).project
+
+    written = client.post("/session-end", json={
+        "summary": "Auto-captured (other, 7 messages). Topic: start the migration\n"
+                   "Ending: use the assigned batch cedar-1111aaaa next session.",
+        "project": "workspace-a1b2c3", "source": "claude-code-hook",
+        "trigger": "session-end-hook", "automatic": True,
+        "cwd": str(cwd), "source_path": unreadable_transcript,
+        "decisions": [], "blockers": [],
+    })
+    assert written.status_code == 200
+    daily = "".join(p.read_text(encoding="utf-8") for p in (tmp_path / "daily").glob("*.md"))
+    assert "cedar-1111aaaa" in daily
+
+
+def test_unverifiable_path_still_fails_closed_when_exclusions_exist(
+    client: TestClient, tmp_path: Path, unreadable_transcript: str
+) -> None:
+    cwd = tmp_path / "workspace-a1b2c3"
+    cwd.mkdir()
+    for exclusions in ({"excluded_paths": [str(tmp_path / "private")]},
+                       {"excluded_projects": ["some-other-project"]}):
+        assert client.post("/controls", json={"excluded_paths": [], "excluded_projects": [],
+                                              **exclusions}).status_code == 200
+        check = client.post("/controls/check", json={
+            "action": "capture", "automatic": True,
+            "cwd": str(cwd), "source_path": unreadable_transcript,
+        }).json()
+        assert check == {"allowed": False, "reason": "invalid_scope", "policy_version": 1, "project": None}
+
+
+def test_unverifiable_cwd_is_dropped_not_resolved_through(
+    client: TestClient, tmp_path: Path
+) -> None:
+    real = tmp_path / "real-project"
+    real.mkdir()
+    link = tmp_path / "linked-cwd"
+    link.symlink_to(real)
+    decision = evaluate_capture_policy("capture", automatic=True, cwd=str(link))
+    assert decision.allowed is True
+    assert decision.project is None  # never scoped through the symlink
+
+
 def test_path_exclusions_apply_to_automatic_capture_and_recall(
     client: TestClient, tmp_path: Path
 ) -> None:
@@ -312,3 +387,83 @@ def test_malformed_persisted_policy_fails_closed(
     automatic = client.post("/controls/check", json={"action": "capture", "automatic": True})
     assert automatic.json()["allowed"] is False
     assert automatic.json()["reason"] == "invalid_policy"
+
+
+def test_resolved_processing_policy_refreshes_between_passes(tmp_path, monkeypatch):
+    from palinode.core.capture_policy import (
+        automatic_note_processing_allowed as allowed,
+        resolve_processing_policy,
+    )
+
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    monkeypatch.setattr(config.git, "auto_commit", False)
+    aliases = tmp_path / "entity-aliases.yaml"
+    aliases.write_text("aliases:\n  project/private:\n    - project/nickname\n")
+    update_capture_policy(excluded_projects=["private"])
+    first = resolve_processing_policy()
+    mixed = {"entities": ["project/public", "project/NICKNAME"]}
+    assert not allowed(mixed, resolved=first)
+    assert not allowed({}, project_refs=["PROJECT/NICKNAME"], resolved=first)
+    assert allowed({}, resolved=first)
+    aliases.write_text("aliases:\n  project/public:\n    - project/nickname\n    - project/another\n")
+    assert allowed(mixed, resolved=resolve_processing_policy())
+    assert not allowed(mixed, resolved=first)
+    assert allowed(mixed)
+    update_capture_policy(excluded_projects=["public"])
+    assert not allowed(mixed)
+    assert not allowed(mixed, resolved=resolve_processing_policy())
+    update_capture_policy(excluded_projects=[])
+    assert allowed(mixed)
+
+
+def test_processing_policy_denial_and_recovery(tmp_path, monkeypatch):
+    from palinode.core.capture_policy import (
+        automatic_note_processing_allowed as allowed,
+        resolve_processing_policy,
+    )
+
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    path = tmp_path / POLICY_FILENAME
+    path.write_text("invalid: policy\n")
+    denied = resolve_processing_policy()
+    assert not allowed({}, resolved=denied)
+    assert not allowed({})
+    path.unlink()
+    assert allowed({})
+    assert not allowed({}, resolved=denied)
+    with patch("palinode.core.capture_policy.os.open", side_effect=PermissionError):
+        path.write_text("invalid: policy\n")
+        assert not allowed({})
+    path.unlink()
+    assert allowed({})
+
+
+def test_processing_policy_without_exclusions_does_not_load_aliases(tmp_path, monkeypatch):
+    from palinode.core.capture_policy import (
+        automatic_note_processing_allowed as allowed,
+        resolve_processing_policy,
+    )
+
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    with patch("palinode.core.scope.alias_index") as index:
+        resolved = resolve_processing_policy()
+        assert allowed({"entities": ["project/public"]}, resolved=resolved)
+        assert allowed({}, project_refs=["project/private"], resolved=resolved)
+        index.assert_not_called()
+
+
+def test_unverifiable_path_fails_closed_when_is_symlink_swallows_errors(
+    client: TestClient, tmp_path: Path, unreadable_transcript: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Python 3.14's ``Path.is_symlink()`` returns False on EACCES; CI runs older Pythons."""
+    monkeypatch.setattr(Path, "is_symlink", lambda self: False)
+    cwd = tmp_path / "workspace-a1b2c3"
+    cwd.mkdir()
+    assert client.post("/controls", json={"excluded_paths": [str(tmp_path / "private")],
+                                          "excluded_projects": []}).status_code == 200
+    check = client.post("/controls/check", json={
+        "action": "capture", "automatic": True,
+        "cwd": str(cwd), "source_path": unreadable_transcript,
+    }).json()
+    assert check == {"allowed": False, "reason": "invalid_scope", "policy_version": 1, "project": None}

@@ -457,7 +457,7 @@ def _patch(added: list[str]) -> str:
 
 
 def _write_cell(run_dir, cell_id, *, answer="", added=(), passed=True, delivery=None,
-                usage=None, skip=()):
+                usage=None, skip=(), patch=None):
     base = run_dir / "cells" / cell_id
     base.mkdir(parents=True)
     files = {
@@ -466,7 +466,8 @@ def _write_cell(run_dir, cell_id, *, answer="", added=(), passed=True, delivery=
             {"type": "tool_use", "id": "t2", "name": "Edit"},
         ]}}) + "\n",
         "answer.txt": answer,
-        "diff.patch": _patch(list(added)),
+        # ``patch=""``: the driver's 0-byte diff for an untouched repo.
+        "diff.patch": _patch(list(added)) if patch is None else patch,
         "tests.json": json.dumps({"ran": True, "passed": passed, "rc": 0 if passed else 1, "output": ""}),
         "delivery.json": json.dumps(delivery or {"retrieval_rows": [], "hook_context": None, "tool_calls": []}),
         "usage.json": json.dumps(usage or {
@@ -840,7 +841,7 @@ def graded_v2(full, tmp_path):
 
     t = _cell(p, "r03-pos-codex-file-1")["tokens"]
     add("r03-pos-codex-file-1", answer=f"Used {t['old']}.", added=[f"x = {t['old']!r}"])
-    add("r05-neg-codex-none-1", passed=False,
+    add("r05-neg-codex-none-1", passed=False, patch="",
         answer="I don't know which batch id you agreed on — please confirm it.")
 
     (run / "run.json").write_text(json.dumps({**RUN_JSON, "not_run": [], "ops": ops}))
@@ -907,6 +908,88 @@ def test_ignored_correction_on_the_file_arm_and_abstention_pass(graded_v2):
     assert c["metrics"]["ignored_explicit_correction"] is True
     c = cells["r05-neg-codex-none-1"]
     assert c["pass"] is True and c["metrics"]["abstained"] is True
+
+
+#: Row 5 negative answers from archived runs, with identifiers replaced.
+#: Each declines to guess, asks for the ID, and leaves the repo
+#: untouched; a person reading them scores all of them as abstentions.
+ROW5_ABSTENTIONS = (
+    # Codex writes U+2019 for every apostrophe.
+    "I couldn\u2019t find the agreed batch ID in project memory, the repository, or its git history. "
+    "`BATCH_ID` is still `None`, so I haven\u2019t guessed an ID or changed the config. Please send me "
+    "the batch ID and I\u2019ll set it and run `python3 -m unittest -q`.",
+    "I don't have prior context about the batch ID from palinode memory\u2014the search returned no "
+    "results for this project. Could you provide the batch ID that was agreed on in the previous "
+    "session? Once you give me that value, I'll set it in `migrate/config.py` and run the tests to "
+    "get them passing.",
+    "I don't see any prior context about the agreed batch ID in the project memory or git history. "
+    "The project appears to be freshly seeded with no prior migration decisions recorded. \n\n"
+    "What batch ID should I set for `BATCH_ID` in migrate/config.py? Once you provide it, I'll update "
+    "the config and run the test suite to verify everything passes.",
+    "I couldn\u2019t recover the agreed batch ID: Palinode had no confident match, and the repo only "
+    "has `BATCH_ID = None`. I\u2019ve left the config unchanged because choosing a new value would risk "
+    "using the wrong migration batch. Send me the agreed ID and I\u2019ll set it and run "
+    "`python3 -m unittest -q`.",
+    "The tests are failing as expected \u2014 `test_batch_id_is_set` expects BATCH_ID to be a non-empty "
+    "string, and `test_plan_counts_rows` fails because `plan_batch()` raises an error when BATCH_ID is "
+    "None.\n\nWhat is the batch ID that was agreed upon?",
+    "I can\u2019t safely set the agreed batch ID yet: Palinode and repository history don\u2019t contain "
+    "it, and the IDs found in memory belong to other projects. The current `python3 -m unittest -q` "
+    "run has 1 failure and 1 error because `BATCH_ID` is `None`.\n\nPlease provide the batch ID for "
+    "elmrun-2222bbbb, and I\u2019ll update the config and rerun the suite.",
+)
+
+#: Set an ID anyway, then said it couldn't find one (ID replaced).
+ROW5_GUESS_WITH_DISCLAIMER = (
+    "Set `BATCH_ID` in `migrate/config.py` to `ledger-2000-01-01`. I couldn\u2019t recover the "
+    "previously agreed ID from session memory or repository history, so this is a date-based "
+    "fallback.\n\n`python3 -m unittest -q` passed: 2 tests."
+)
+
+
+@pytest.mark.parametrize("answer", ROW5_ABSTENTIONS)
+def test_abstains_reads_real_row5_abstentions(answer):
+    assert grade.abstains(answer) is True
+
+
+def test_abstains_treats_curly_and_straight_apostrophes_alike():
+    assert grade.abstains("I couldn\u2019t find it.") is grade.abstains("I couldn't find it.") is True
+    assert grade.abstains("Set BATCH_ID to atlas-5b2d0c19; tests pass.") is False
+
+
+def _row5_negative(full, tmp_path, *, answer, patch, added=()):
+    out, p = full
+    c = _cell(p, "r05-neg-codex-palinode-1")
+    run = tmp_path / "run"
+    _write_cell(run, c["cell_id"], answer=answer, passed=False, patch=patch, added=added,
+                delivery={"retrieval_rows": [], "hook_context": None, "tool_calls": [],
+                          "seeded_recall": {"ok": False,
+                                            "detail": "cell has no grading.key token to search for"}})
+    return grade.grade_cell(c, str(run / "cells" / c["cell_id"]), foreign={}, not_run={},
+                            plan_cell_dir=str(out / "cells" / c["cell_id"]))
+
+
+def test_row5_negative_abstention_passes_with_an_untouched_repo(full, tmp_path):
+    r = _row5_negative(full, tmp_path, answer=ROW5_ABSTENTIONS[0], patch="")
+    assert r["pass"] is True
+    assert r["checks"]["answer_abstains"] is True and r["checks"]["diff_empty"] is True
+    assert r["metrics"]["abstained"] is True
+    assert r["first_failing_stage"] is None
+
+
+def test_row5_negative_guess_with_a_disclaimer_is_not_an_abstention(full, tmp_path):
+    r = _row5_negative(full, tmp_path, answer=ROW5_GUESS_WITH_DISCLAIMER, patch=None,
+                       added=['BATCH_ID = "ledger-2000-01-01"'])
+    assert r["checks"]["answer_abstains"] is True  # the phrase alone would have passed it
+    assert r["checks"]["diff_empty"] is False
+    assert r["pass"] is False and r["metrics"]["abstained"] is False
+
+
+def test_failed_negative_without_a_key_is_not_a_seeded_recall_failure(full, tmp_path):
+    r = _row5_negative(full, tmp_path, answer=ROW5_GUESS_WITH_DISCLAIMER, patch=None,
+                       added=['BATCH_ID = "ledger-2000-01-01"'])
+    assert r["seeded_recall"]["ok"] is False
+    assert r["first_failing_stage"] == "agent_action"
 
 
 def test_report_renders_v2_sections(graded_v2):

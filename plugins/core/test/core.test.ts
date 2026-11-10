@@ -709,7 +709,7 @@ describe("bounded resolution (the per-turn consuming hook)", () => {
     const calls: Array<{ url: string }> = [];
     await buildCoreDigest(
       RCFG,
-      stubFetch({ "/context/prime": {}, "/list": [{ file: "a.md", name: "A" }] }, calls),
+      stubFetch({ "/context/prime": { core_memories: [{ file: "a.md", summary: "A" }] } }, calls),
     );
     expect(calls.some((c) => c.url.includes("/resolve"))).toBe(false);
   });
@@ -826,12 +826,11 @@ describe("the final injected string is never cut inside a unit", () => {
   it("keeps the startup digest and the per-turn payload on separate budgets", async () => {
     const rows = Array.from({ length: 10 }, (_, i) => ({
       file: `core/m${i}.md`,
-      name: `Memory ${i}`,
-      summary: "x".repeat(80),
+      summary: `Memory ${i} — ${"x".repeat(80)}`,
     }));
     const digest = await buildCoreDigest(
       { ...RCFG, coreMaxChars: 400, maxChars: 3000 },
-      stubFetch({ "/context/prime": {}, "/list": rows }),
+      stubFetch({ "/context/prime": { core_memories: rows } }),
     );
     expect(digest!.length).toBeLessThanOrEqual(400);
     // Cut between rows: no half-row, and the last line is a whole one.
@@ -846,14 +845,15 @@ describe("the final injected string is never cut inside a unit", () => {
 });
 
 describe("buildCoreDigest", () => {
-  it("primes the server and renders a bounded core digest", async () => {
+  it("primes the server and renders the digest's core memories", async () => {
     const calls: Array<{ url: string }> = [];
     const fetchFn = stubFetch(
       {
-        "/context/prime": {},
-        "/list": [
-          { file: "projects/palinode.md", name: "Palinode", summary: "memory system" },
-        ],
+        "/context/prime": {
+          core_memories: [
+            { file: "projects/palinode.md", summary: "Palinode — memory system" },
+          ],
+        },
       },
       calls,
     );
@@ -863,13 +863,48 @@ describe("buildCoreDigest", () => {
     expect(digest).toContain("session start");
   });
 
-  it("returns null with no core memories, and skips listing when disabled", async () => {
+  it("injects only what the scoped digest selected, never the unscoped /list", async () => {
+    // A server that would still answer /list with another project's core
+    // memory: the digest must come from /context/prime alone.
     const calls: Array<{ url: string }> = [];
-    const fetchFn = stubFetch({ "/context/prime": {}, "/list": [] }, calls);
-    expect(await buildCoreDigest(CFG, fetchFn)).toBeNull();
-    calls.length = 0;
-    expect(await buildCoreDigest({ ...CFG, coreMaxFiles: 0 }, fetchFn)).toBeNull();
+    const fetchFn = stubFetch(
+      {
+        "/context/prime": { core_memories: [{ file: "decisions/mine.md", summary: "Mine" }] },
+        "/list": [{ file: "decisions/theirs.md", name: "Theirs", core: true }],
+      },
+      calls,
+    );
+    const digest = await buildCoreDigest(CFG, fetchFn, "/tmp/proj", "s1");
+    expect(digest).toContain("decisions/mine.md");
+    expect(digest).not.toContain("decisions/theirs.md");
     expect(calls.some((c) => c.url.includes("/list"))).toBe(false);
+  });
+
+  it("carries a row's qualifiers as the server renders them", async () => {
+    const fetchFn = stubFetch({
+      "/context/prime": {
+        core_memories: [{
+          file: "decisions/a.md", summary: "A",
+          contradicts: ["decisions/b.md"], stale_backing: ["insights/c.md"], epistemic: "belief",
+        }],
+      },
+    });
+    const digest = await buildCoreDigest(CFG, fetchFn);
+    expect(digest).toContain(
+      "- [decisions/a.md] A [⚠ contradicts: decisions/b.md | ⚠ stale backing: insights/c.md | epistemic: belief]",
+    );
+  });
+
+  it("returns null with no core memories, and injects nothing when disabled", async () => {
+    const calls: Array<{ url: string }> = [];
+    const fetchFn = stubFetch({ "/context/prime": { core_memories: [] } }, calls);
+    expect(await buildCoreDigest(CFG, fetchFn)).toBeNull();
+    const enabled = stubFetch({ "/context/prime": { core_memories: [{ file: "a.md", summary: "A" }] } });
+    expect(await buildCoreDigest({ ...CFG, coreMaxFiles: 0 }, enabled)).toBeNull();
+  });
+
+  it("injects nothing when the server returns no digest (older server, refusal)", async () => {
+    expect(await buildCoreDigest(CFG, stubFetch({ "/context/prime": {} }))).toBeNull();
   });
 
   it("is fail-open when the API is down", async () => {

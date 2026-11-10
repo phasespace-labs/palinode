@@ -15,9 +15,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+from pydantic import TypeAdapter, ValidationError
+
 
 import palinode.core.config as config_module
-from palinode.core.config import load_config
+from palinode.core.config import Config, load_config
 
 
 # ---------------------------------------------------------------------------
@@ -201,3 +204,34 @@ class TestLoadConfigDivergenceWarning:
             # db_path is NOT under new_dir; divergence warning IS expected
             divergence_warnings = [r for r in caplog.records if "diverged" in r.message]
             assert divergence_warnings, "Expected a divergence warning but none was logged"
+
+
+def test_operations_log_rotation_defaults_and_custom_values() -> None:
+    defaults = Config().logging
+    assert defaults.operations_max_bytes == 67_108_864
+    assert defaults.operations_backup_count == 5
+
+    cfg = TypeAdapter(Config).validate_python({
+        "logging": {
+            "operations_max_bytes": 1234,
+            "operations_backup_count": 7,
+        }
+    })
+    assert cfg.logging.operations_max_bytes == 1234
+    assert cfg.logging.operations_backup_count == 7
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("operations_max_bytes", -1),
+        ("operations_backup_count", -1),
+        ("operations_max_bytes", "100"),
+        ("operations_backup_count", 1.5),
+    ],
+)
+def test_operations_log_rotation_values_are_non_negative_integers(
+    field: str, value: object
+) -> None:
+    with pytest.raises(ValidationError):
+        TypeAdapter(Config).validate_python({"logging": {field: value}})

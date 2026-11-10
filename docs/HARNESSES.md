@@ -16,7 +16,7 @@ loop runs automatically:
 
 | Tier | What runs without you asking | Where |
 |------|------------------------------|-------|
-| **Native hooks** | Session starts primed with core memories, relevant memory recalled before each prompt, and an eligible session-end floor can be submitted | Claude Code |
+| **Native hooks** | Session starts primed with core memories, relevant memory recalled before each prompt, and an eligible session-end floor can be submitted | Claude Code; Codex CLI (session start, per-prompt recall and the session-end floor); Cursor and Antigravity (session start and per-prompt recall, no session-end floor) |
 | **Native plugin** | The same full loop, wired into the harness's own extension API | Pi, Cline, OpenClaw |
 | **MCP** | Explicit tools — the agent searches and saves when it decides to | Everything that speaks MCP |
 
@@ -32,12 +32,12 @@ memory ambient, MCP tools let the agent dig deeper on demand.
 | **Pi** | Native extension | [plugins/pi/README.md](../plugins/pi/README.md) — per-turn recall, priming, capture |
 | **Cline (CLI / SDK)** | Native plugin | [plugins/cline/README.md](../plugins/cline/README.md) — per-turn recall, priming, capture; `cline plugin install` |
 | **OpenClaw** | Native plugin + MCP | see the plugin's install guide ([plugin/INSTALL.md](../plugin/INSTALL.md)) |
-| **Cursor** | MCP + rules file | `palinode mcp-config --stdio`; `palinode init` also writes `.cursor/rules/palinode.md` |
+| **Cursor** | Hooks + MCP + rules file | `palinode mcp-config --stdio`; `palinode init` also writes `.cursor/rules/palinode.md`, and `palinode init --cursor-hooks` installs session-start and per-prompt recall ([below](#cursor-hooks)) |
 | **Windsurf** | MCP | `palinode mcp-config --stdio` (or `--http` for a remote server) |
 | **Zed** | MCP | `palinode mcp-config --http` |
 | **VS Code (Cline / Continue)** | MCP | [MCP-INSTALL-RECIPES.md](MCP-INSTALL-RECIPES.md) — the Cline VS Code extension does not load `AgentPlugin`s yet |
-| **Codex CLI** | MCP + AGENTS.md | `~/.codex/config.toml`; `palinode init` appends a memory block to `AGENTS.md` |
-| **Antigravity** | MCP + AGENTS.md | native MCP menu; same `AGENTS.md` block |
+| **Codex CLI** | MCP + AGENTS.md, optional recall hooks | `~/.codex/config.toml`; `palinode init` appends a memory block to `AGENTS.md`; `palinode init --codex-hook` adds the session-start, per-prompt and session-end hooks ([examples/hooks/](../examples/hooks/README.md#codex)) |
+| **Antigravity** | Hooks + MCP + AGENTS.md | native MCP menu; same `AGENTS.md` block; `palinode init --agy-hooks` installs session-start and per-prompt recall (see "Antigravity hooks" below) |
 | **JetBrains (AI Assistant)** | MCP | [MCP-INSTALL-RECIPES.md](MCP-INSTALL-RECIPES.md) |
 
 Per-client config file locations: [MCP-CONFIG-HOMES.md](MCP-CONFIG-HOMES.md).
@@ -53,7 +53,7 @@ client's scope in its own way:
 
 | Tier | How the client's project reaches the server |
 |------|---------------------------------------------|
-| **Hooks** (Claude Code) | The session-start prime and the per-turn resolve send the session's `cwd`; the server resolves the project from it the same way the controls check does. Set `PALINODE_PROJECT` in the hook environment to name the project explicitly instead. |
+| **Hooks** (Claude Code, Codex, Cursor, Antigravity) | The session-start prime and the per-turn resolve send the session's `cwd` (the first workspace root, for Cursor and Antigravity); the server resolves the project from it the same way the controls check does. Set `PALINODE_PROJECT` in the hook environment to name the project explicitly instead. |
 | **Native plugins** (Pi, Cline) | The per-turn resolve and the session-start prime send the workspace directory. |
 | **MCP over stdio** | The MCP process runs on the client's machine, so its own directory (or `PALINODE_PROJECT`) is the client's. |
 | **MCP over HTTP** | Send the `X-Palinode-Project` header: `palinode mcp-config --http --project <slug>` emits it. Without it, a call is unscoped, and the search output says `Scope: none (none)`. |
@@ -73,12 +73,23 @@ A record that names the request's project among several belongs to that project
 too. An unscoped request is unchanged. Each payload counts what it left out:
 `other_projects_withheld` on the resolve bundle and the prime digest, and in the
 search receipt's `retrieval` block. That way an empty scoped result reads as
-isolated, not as "nothing in memory". Reaching another project is an
-explicit request, and the results come back labelled
-`other project: project/<name>`: `palinode_search` / `palinode_resolve` with
-`include_other_projects=true` (CLI `--include-other-projects`, REST
-`{"include_other_projects": true}`). A record the caller names by `ref` is
-always reported. The shipped hook and plugins never send the option.
+isolated, not as "nothing in memory". MCP `palinode_list` is scoped the same
+way; REST `/list` and CLI `list` apply it when given `project` / `--project`,
+and REST counts what it left out in the `X-Palinode-Other-Projects-Withheld`
+header. A `palinode_read` of another project's record by its path still
+returns it, opening with `[other project: project/<theirs> — not
+project/<yours>] Context only, not this project's decision.` Reaching another
+project is an explicit request: `palinode_search` / `palinode_resolve` /
+`palinode_list` with `include_other_projects=true` (CLI
+`--include-other-projects`, REST `{"include_other_projects": true}`). Each such record opens with both projects,
+`[other project: project/<theirs> — not project/<yours>]`. In search text (MCP,
+CLI, the plugin tool) they come after the request's own results, under
+"Other projects — context only, not this project's decisions (this project:
+project/<yours>)". REST keeps its order: a row's `other_project` and the
+envelope's `project` carry the same grouping. A record the caller names by
+`ref` is always reported. The shipped hook and plugins never send the option,
+and the agent instructions say not to opt in to find a value this project's
+memory lacks.
 
 Project names compare case-insensitively (`project/Orbit_App` is `orbit_app`'s). When
 one project's records carry several spellings, group them in the store's curated
@@ -154,6 +165,11 @@ Do not treat an installed MCP server as a hook.
 |------|-------|-----------------|------|----------------|
 | **Claude Code — hooks + MCP** | `SessionStart` provides its bounded digest automatically. | `UserPromptSubmit` can inject relevant trigger/search context; use MCP tools for a focused lookup or save. | `SessionEnd` attempts a minimal snapshot automatically when its floor applies; an agent-authored `palinode_session_end` is the richer explicit path. | First run `palinode controls status`, then run `palinode init --hook` in the project and approve the generated `.mcp.json` and `.claude/settings.json` hooks. |
 | **Codex CLI — MCP + project instructions** | MCP connects, but it does not recall a decision on its own. | The project `AGENTS.md` must tell the agent to call `palinode_session_init`, then `palinode_search` when it needs an answer. | The agent must explicitly call `palinode_session_end`. | Add the MCP server through Codex's normal configuration and run `palinode init --agents` in the project. |
+
+With `palinode init --codex-hook`, the Codex path also starts with the scoped
+core-memory digest, gets per-prompt recall, and gets the same `SessionEnd`
+floor snapshot as Claude Code, through the same scripts. There is no Codex
+compaction hook.
 
 Client-owned memory may remain enabled in either client. Palinode is a separate,
 auditable markdown store; it neither reads nor disables the client's own memory.
@@ -240,8 +256,11 @@ traffic.
 
 `palinode controls exclude-project PROJECT` and `exclude-path PATH` exclude one
 bounded project/path from automatic capture and recall; use `--remove` to undo
-either. Exclusions intentionally do not refuse explicit saves or recalls, and
-their tested scope does not constitute a general secret detector. A
+either. Project exclusions also stop automatic enrichment and consolidation of
+that project’s stored notes, which remain stored, indexed and explicitly
+searchable. Path exclusions apply to capture sources only (transcript paths
+and cwd), not stored memory files. Exclusions intentionally do not refuse
+explicit saves or recalls, and their tested scope does not constitute a general secret detector. A
 failed/old/malformed policy preflight should make an automatic hook or client
 decline capture or recall rather than fall through to a legacy path.
 
@@ -251,6 +270,10 @@ only a message count plus a truncated first-prompt topic hint—not a full
 transcript import. Codex CLI MCP and `AGENTS.md` instructions do not turn on
 transcript capture. Native plugins have their own lifecycle APIs, so the CLI can
 only report their configuration if exposed; it cannot certify they are running.
+
+To pause or remove the four Claude Code hook registrations and their scripts,
+see [Switch the hooks off](QUICKSTART.md#switch-the-hooks-off). Removing hooks
+deletes no memories.
 
 ### Mining transcripts for corrections
 
@@ -377,11 +400,16 @@ the whole session lifecycle. After `palinode init`:
 4. **Session end** — the `SessionEnd` hook can submit a minimal floor snapshot
    on its configured end reasons. It requires a transcript, at least three user
    messages, and no existing `palinode_session_end` call; it uses the checkout
-   basename as the project and only the first prompt's topic/count. It is not a
+   basename as the project and includes the message count, a first-prompt topic
+   hint bounded to 200 characters, and the last assistant reply capped at 2000
+   characters by default (`PALINODE_HOOK_ENDING_MAX_CHARS`; `0` disables the
+   ending). It is not a
    guarantee that every session is captured, and the explicit tool call remains
    the richer record.
 
 Tuning knobs for all three hooks: [examples/hooks/](../examples/hooks/).
+Codex runs steps 1, 2 and 4 with the same scripts after `palinode init
+--codex-hook` ([examples/hooks/](../examples/hooks/README.md#codex)).
 
 ### Why injected memory lands in the conversation, not the system prompt
 
@@ -396,6 +424,71 @@ cached. Every native plugin follows the same rule — the Pi and Cline plugins
 share one core (`plugins/core`) whose only injection output is a message
 body, and each plugin's test suite pins that it never lands in the system
 prompt.
+
+## Cursor hooks
+
+`palinode init --cursor-hooks` registers two project hooks in
+`.cursor/hooks.json` and merges them in beside any entries already there. Both
+run the Claude Code scripts through a small adapter
+([examples/hooks/](../examples/hooks/README.md#cursor)), so Cursor gets the
+same scoped digest and the same per-turn resolution:
+
+- **`sessionStart`** injects `/context/prime`'s core memories for the
+  workspace's project, as Cursor's `additional_context`. Another project's core
+  memories are withheld, as they are for Claude Code.
+- **`beforeSubmitPrompt`** runs per-turn recall over the prompt. Cursor
+  documents only `continue` and `user_message` for this event. Palinode's
+  answer also carries `additional_context`, which reached the model as a system
+  reminder on every turn in testing. It is always `continue: true`, so a slow
+  or absent server never blocks a prompt.
+
+What was verified, on `cursor-agent` 2026.10.16 and 2026.10.22:
+
+| Surface | `sessionStart` context | `beforeSubmitPrompt` context |
+|---------|------------------------|------------------------------|
+| `cursor-agent` interactive | reaches the model | reaches the model, every turn |
+| `cursor-agent -p` (print mode) | reaches the model | **does not fire**: no per-prompt recall |
+| Editor agent panel, Agents Window | not verified | not verified |
+
+- **Resumed chats:** `sessionStart` does not fire again on a resumed chat, but the first injection is still in context.
+- **Agents Window:** a third-party report says it ignored `sessionStart` context on Cursor 3.25.6.
+- **Cloud agents:** Cursor's docs say they run project hooks but not `sessionStart`.
+- **Session end:** Cursor has no session-end capture from Palinode; `palinode_session_end` over MCP is the way to capture.
+
+`palinode doctor` (`hooks_current`) and `palinode hooks update` cover the Cursor
+scripts too.
+
+## Antigravity hooks
+
+`palinode init --agy-hooks` (named for `agy`, Antigravity's CLI; it covers the
+IDE's workspace hooks too) adds a `palinode` hook definition to the
+workspace's `.agents/hooks.json` and keeps any other hooks there. Both events
+run the Claude Code scripts through an adapter
+(the Antigravity section of [examples/hooks/](../examples/hooks/README.md)):
+
+- **`SessionStart`** injects `/context/prime`'s core memories for the
+  workspace's project, as an `injectSteps` `systemMessage`. Another project's
+  core memories are withheld.
+- **`PreInvocation`** runs per-turn recall over the prompt and injects it as an
+  `ephemeralMessage`. The event fires before every model call, including after
+  each tool result, so recall runs only on the first call of a turn.
+
+Both land in the conversation as steps, not in the system instructions.
+
+What was verified, on the `agy` CLI 1.4.9:
+
+| Surface | `SessionStart` | `PreInvocation` |
+|---------|----------------|-----------------|
+| `agy -p` (print mode) | fires once per new conversation; the `systemMessage` reaches the model and stays for later turns | fires before every model call; the `ephemeralMessage` reaches the model and isn't carried into the next turn |
+| Antigravity IDE and App | not verified | not verified |
+
+- **Resumed conversations:** `SessionStart` does not fire again on a resumed conversation, but the first injection is still in context.
+- **IDE:** a third-party report says `SessionStart` may not fire there.
+- **Session end:** Antigravity has no session-end capture from Palinode; `palinode_session_end` over MCP is the way to capture.
+
+`palinode doctor` (`hooks_current`) and `palinode hooks update` cover the
+Antigravity scripts too. Antigravity's global `~/.gemini/config/hooks.json` is
+not written or walked.
 
 ## Coexisting with a client's own memory
 

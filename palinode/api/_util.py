@@ -53,7 +53,12 @@ def _project_from_cwd(cwd: str | None) -> str | None:
     return project.removeprefix("project/") if project else None
 
 
-def effective_project_scope(context: Sequence[str] | None) -> ProjectResolution:
+def effective_project_scope(
+    context: Sequence[str] | None,
+    *,
+    cwd: str | None = None,
+    project: str | None = None,
+) -> ProjectResolution:
     """The project scope a delivery applies, and where it came from.
 
     Three cases, and the difference between the last two is load-bearing —
@@ -63,7 +68,8 @@ def effective_project_scope(context: Sequence[str] | None) -> ProjectResolution:
     - **No ``context`` at all** — the caller resolved nothing (the REST and
       plugin surfaces). The pinned ``PALINODE_PROJECT`` applies, and only
       that: never the API host's own directory, which is not the caller's
-      repository.
+      repository. Routes accepting ``cwd`` / ``project`` use those caller
+      hints in the same resolver when no context list was supplied.
     - **A ``context`` naming a project** — the caller already resolved scope
       on the surface closest to it (the MCP server and the CLI both do,
       through the one shared resolver) and that decision stands: ``explicit``.
@@ -81,7 +87,7 @@ def effective_project_scope(context: Sequence[str] | None) -> ProjectResolution:
     if not config.context.enabled:
         return ProjectResolution(None, "disabled")
     if context is None:
-        return resolve_context()
+        return resolve_context(cwd=cwd, project=project)
     project = next((ref for ref in context
                     if isinstance(ref, str) and ref.startswith("project/")), None)
     return resolve_context(project=project) if project else ProjectResolution(None, "none")

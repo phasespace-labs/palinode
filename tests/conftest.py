@@ -187,6 +187,19 @@ def _isolate_doctor_search_roots(
 
 
 @pytest.fixture(autouse=True)
+def _isolate_codex_home(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never read the developer's real Codex config.
+
+    Hook discovery (``palinode hooks``, doctor's ``hooks_current``, ``controls
+    status``) honours ``$CODEX_HOME`` before ``~/.codex``, and a machine that
+    runs Codex through a wrapper often exports it. Unset, the fake ``HOME`` a
+    test sets decides where Codex's user layer is, as it does for Claude Code.
+    A test that covers ``CODEX_HOME`` sets it itself.
+    """
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _warm_embed_gate(monkeypatch):
     from palinode.indexer import reconcile as reconcile_mod
 

@@ -14,6 +14,7 @@ from palinode.core import parser
 from palinode.core import revalidation
 from palinode.core import typed_links
 from palinode.core.packing import estimate_tokens
+from palinode.core.ranker import parse_iso_utc
 from palinode.core.relative_dates import anchor_for, find_relative_dates
 from palinode.core.skip_dirs import SKIP_FOR_LINT, is_skipped_path
 
@@ -411,6 +412,7 @@ def run_lint_pass(*, file_paths: Collection[str] | None = None) -> dict[str, Any
     # long time is a staleness signal — it wants resolution into fact/inference
     # or supersession. Reuses the stale threshold (90 days).
     stale_open_questions: list[dict[str, Any]] = []
+    malformed_timestamps: list[dict[str, Any]] = []
     open_contradictions: list[dict[str, Any]] = []  # (G4)
     # A `backed_by` source that was superseded / retracted / archived / merged
     # away leaves a `stale_backing` entry on each dependent; the memory is
@@ -568,50 +570,34 @@ def run_lint_pass(*, file_paths: Collection[str] | None = None) -> dict[str, Any
         if (meta.get("core") is True or meta.get("type") == "Decision") and "priority" not in meta:
             missing_priority.append(path)
 
-        # 6. Stale
-        if meta.get("status") == "active":
-            last_updated = meta.get("last_updated") or meta.get("created_at")
-            if last_updated:
-                if isinstance(last_updated, str):
-                    try:
-                        dt = datetime.fromisoformat(last_updated.replace('Z', '+00:00'))
-                    except ValueError:
-                        dt = None  # malformed date string — skip this file
-                elif isinstance(last_updated, datetime):
-                    dt = last_updated
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
-                else:
-                    dt = None  # frontmatter held something that is not a date
+        timestamp_field = "last_updated" if meta.get("last_updated") else "created_at"
+        timestamp_value = meta.get(timestamp_field)
+        parsed_timestamp = parse_iso_utc(timestamp_value)
+        checks_staleness = (
+            meta.get("status") == "active"
+            or meta.get("epistemic") == "open_question"
+        )
+        if checks_staleness and timestamp_value and parsed_timestamp is None:
+            malformed_timestamps.append({
+                "file": path,
+                "field": timestamp_field,
+                "value": timestamp_value,
+            })
 
-                if dt is not None:
-                    days_old = (now - dt).days
-                    if days_old > 90:
-                        stale_files.append({"file": path, "days_old": days_old})
+        # 6. Stale
+        if meta.get("status") == "active" and parsed_timestamp is not None:
+            days_old = (now - parsed_timestamp).days
+            if days_old > 90:
+                stale_files.append({"file": path, "days_old": days_old})
 
         # 6b. Stale open questions — an unresolved open_question that's
         # months old wants attention. Independent of `status` (an open question
         # is about epistemic state, not lifecycle), so checked separately from
         # the status==active stale check above.
-        if meta.get("epistemic") == "open_question":
-            oq_updated = meta.get("last_updated") or meta.get("created_at")
-            if oq_updated:
-                if isinstance(oq_updated, str):
-                    try:
-                        oq_dt = datetime.fromisoformat(oq_updated.replace('Z', '+00:00'))
-                    except ValueError:
-                        oq_dt = None  # malformed date string — skip this file
-                elif isinstance(oq_updated, datetime):
-                    oq_dt = oq_updated
-                    if oq_dt.tzinfo is None:
-                        oq_dt = oq_dt.replace(tzinfo=timezone.utc)
-                else:
-                    oq_dt = None  # frontmatter held something that is not a date
-
-                if oq_dt is not None:
-                    oq_age = (now - oq_dt).days
-                    if oq_age > 90:
-                        stale_open_questions.append({"file": path, "days_old": oq_age})
+        if meta.get("epistemic") == "open_question" and parsed_timestamp is not None:
+            oq_age = (now - parsed_timestamp).days
+            if oq_age > 90:
+                stale_open_questions.append({"file": path, "days_old": oq_age})
 
         # 7. Wiki drift — frontmatter entities vs. body wikilinks.
         # Skipped for daily/ logs, the second outlier found in this pass: they
@@ -771,6 +757,7 @@ def run_lint_pass(*, file_paths: Collection[str] | None = None) -> dict[str, Any
         "source_anchor_issues": source_anchor_issues,
         "claim_anchor_issues": claim_anchor_issues,
         "stale_open_questions": stale_open_questions,
+        "malformed_timestamps": malformed_timestamps,
         "open_contradictions": open_contradictions,
         "stale_backing": stale_backing,
         "oversized_core": oversized_core,

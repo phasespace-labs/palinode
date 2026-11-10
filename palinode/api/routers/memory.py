@@ -3,11 +3,15 @@ import logging
 import os
 from datetime import datetime
 from typing import Annotated, Any, Iterable, Literal
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from palinode.core import store
 from palinode.core.agent_directed import read_notice, withhold_agent_directed
 from palinode.core.config import config
+from palinode.core.defaults import LIST_OTHER_PROJECTS_WITHHELD_HEADER
+from palinode.core.capture_policy import (
+    automatic_note_processing_allowed, resolve_processing_policy,
+)
 from palinode.core.parity import CATEGORIES, MEMORY_TYPES, TIERS
 from palinode.core.tiers import apply_tier
 from palinode.core.parser import VALID_EPISTEMICS, VALID_UPDATE_POLICIES
@@ -16,16 +20,17 @@ from palinode.core.cross_refs import filter_read_cross_refs
 from palinode.core.skip_dirs import SKIP_FOR_LISTING, is_skipped_path
 from palinode.core.expiry import core_has_expired
 from palinode.core.lifecycle import eligibility, retired_reason
-from palinode.core.visibility import is_visible
+from palinode.core.visibility import is_visible, other_project_refs, withheld_as_other_project
 from palinode.core.where import matches_where, parse_where
 from palinode.api._util import (
     WhereEntries, _auto_summary_state, _retrieval_logger, _safe_500, _utc_now,
+    effective_project_scope,
 )
 from palinode.api.path_safety import (
     _memory_base_dir, _open_memory_file_text, _resolve_memory_path,
 )
 from palinode.api.memory_write import _resolve_source
-from palinode.core.save import SaveValidationError, save_memory
+from palinode.core.save import SaveUnprocessableError, SaveValidationError, save_memory
 from palinode.api.rate_limit import (
     _MAX_REQUEST_BYTES, _RATE_LIMIT_WRITE, _check_rate_limit,
 )
@@ -78,10 +83,9 @@ def read_api(
     automatic: bool = False,
 ) -> dict[str, Any]:
     from palinode.core import parser
-    from palinode.core.context_prime import ProjectResolution, resolve_context
 
     # Empty means the client resolved no project; absent uses the server pin.
-    scope = ProjectResolution(None, "none") if project == "" else resolve_context(project=project)
+    scope = effective_project_scope([] if project == "" else None, project=project)
     chain = resolve_scope_chain(config, project=scope.project.removeprefix("project/") if scope.project else None)
     reader_chain = chain if chain.has_identity() else None
 
@@ -146,6 +150,13 @@ def read_api(
         notice = read_notice(content)
         if notice:
             result["agent_directed_notice"] = notice
+        # A known path stays readable across projects (docs/PRIVACY.md), but
+        # the record says whose it is, as an opted-in search row does: an
+        # agent that browsed to another project's file must not read its
+        # decision as this project's. Only when the reader has a project.
+        foreign = other_project_refs(reader_chain, resolved, metadata=raw_metadata)
+        if foreign:
+            result["other_project"] = foreign
 
         if meta:
             result["frontmatter"] = metadata
@@ -339,6 +350,7 @@ def collect_memory_files(
     include_history: bool = True,
     include_retired_core: bool = False,
     where: list[tuple[str, str]] | None = None,
+    other_projects: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Enumerate memory files as /list-shaped rows, newest first.
 
@@ -388,6 +400,13 @@ def collect_memory_files(
     since those siblings aren't browsable memories. ``where`` keeps only the
     files whose frontmatter satisfies every parsed ``(key, value)`` condition
     (:func:`palinode.core.where.matches_where`).
+
+    A chain carrying a project isolates to it, exactly as search does: a
+    record tagged to a different project is dropped by the same choke point,
+    and ``other_projects``, when given, collects its path so the caller can
+    say how many were withheld. With ``include_other_projects`` on the chain
+    such a record is kept and its row names its own projects under
+    ``other_project``, the key an opted-in search row carries.
     """
     import glob
     from palinode.core import parser
@@ -443,6 +462,10 @@ def collect_memory_files(
                     continue
 
             if not is_visible(scope_chain, filepath, metadata=metadata):
+                if other_projects is not None and withheld_as_other_project(
+                    scope_chain, filepath, metadata=metadata,
+                ):
+                    other_projects.add(rel_path)
                 continue
 
             raw_scope = metadata.get("scope")
@@ -452,7 +475,7 @@ def collect_memory_files(
                 else None
             )
 
-            results.append({
+            row = {
                 "file": rel_path,
                 "name": metadata.get("name") or parts[-1].replace('.md', ''),
                 "title": metadata.get("title"),
@@ -468,7 +491,12 @@ def collect_memory_files(
                 "last_updated": metadata.get("last_updated", ""),
                 "entities": metadata.get("entities", []),
                 "size_bytes": os.path.getsize(filepath)
-            })
+            }
+            if scope_chain is not None and scope_chain.include_other_projects:
+                foreign = other_project_refs(scope_chain, filepath, metadata=metadata)
+                if foreign:
+                    row["other_project"] = foreign
+            results.append(row)
         except Exception:
             pass
 
@@ -488,28 +516,56 @@ def list_api(
     include_retired_core: bool = False,
     where: Annotated[WhereEntries, Query()] = None,
     include_inbox: bool = False,
+    project: str | None = None,
+    include_other_projects: bool = False,
+    response: Response = None,
 ) -> list[dict[str, Any]]:
     """Browse memories, newest first.
 
-    Never scope-filters (no session chain here — that's /context/prime's job),
-    but ``private`` and ``restricted`` memories are always withheld: this is
-    the endpoint the SessionStart hook injects from, so access control cannot
-    be optional here. For the same reason ``core_only=true`` selects only core
-    memories that still *stand* — a retired one (superseded, archived,
-    deprecated, retracted, expired) reports ``core: false`` with
-    ``core_retired_reason``, and ``include_retired_core=true`` is how a browse
-    caller asks for it anyway.
+    Without ``project`` it never scope-filters (no session chain here — that's
+    /context/prime's job), but ``private`` and ``restricted`` memories are
+    always withheld: the OpenClaw plugin's automatic core recall selects from
+    this endpoint, so access control cannot be optional here. For the same
+    reason ``core_only=true`` selects only core memories that still *stand* —
+    a retired one (superseded, archived, deprecated, retracted, expired)
+    reports ``core: false`` with ``core_retired_reason``, and
+    ``include_retired_core=true`` is how a browse caller asks for it anyway.
+    The server's pinned project is deliberately not applied, unlike
+    ``/read``: a caller that sends no project gets the classic listing.
+
+    With ``project`` the listing is scoped as search scopes: the same chain
+    (:func:`palinode.api.routers.search._resolve_scope_chain`) through the
+    same choke point, so records tagged to another project are left out and
+    counted in the ``X-Palinode-Other-Projects-Withheld`` response header.
+    ``include_other_projects`` keeps them, each row naming its own projects
+    under ``other_project``. The MCP ``palinode_list`` tool sends the
+    session's project; the CLI sends one only when asked.
 
     ``where`` keeps the records whose frontmatter matches every ``key=value``
     entry; ``include_inbox`` lists ``inbox/``, where ActionItems are saved.
     """
-    return collect_memory_files(
+    from palinode.api.routers.search import _resolve_scope_chain
+
+    chain = None
+    if project:
+        scope = effective_project_scope(None, project=project)
+        if scope.project:
+            chain = _resolve_scope_chain(
+                context=scope.context, include_other_projects=include_other_projects,
+            )
+    withheld: set[str] = set()
+    rows = collect_memory_files(
         category=category,
         core_only=core_only,
+        scope_chain=chain,
         include_retired_core=include_retired_core,
         skip_dirs=(SKIP_FOR_LISTING - {"inbox"}) if include_inbox else None,
         where=parse_where(where),
+        other_projects=withheld,
     )
+    if chain is not None and response is not None:
+        response.headers[LIST_OTHER_PROJECTS_WITHHELD_HEADER] = str(len(withheld))
+    return rows
 
 
 @router.post("/save")
@@ -562,7 +618,8 @@ def save_api(
     The capability itself is :func:`palinode.core.save.save_memory`; what
     remains here is the transport: rate limiting, the request-size cap, the
     ``X-Palinode-Source`` header lookup, and the mapping of the capability's
-    ``SaveValidationError`` onto HTTP 400.
+    ``SaveValidationError`` onto HTTP 400, except unprocessable values, which
+    map to HTTP 422.
     """
     if request:
         client_ip = request.client.host if request.client else "unknown"
@@ -577,6 +634,8 @@ def save_api(
     payload["source"] = _resolve_source(req.source, request)
     try:
         return save_memory(**payload, sync=sync, push=push)
+    except SaveUnprocessableError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     except SaveValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -661,12 +720,15 @@ def generate_summaries_api() -> dict[str, Any]:
     # _fallback_state, and a test that reads server._fallback_state after calling
     # this endpoint observes the reset.
     _srv._fallback_state["remaining"] = config.auto_summary.llm_fallback_max_per_run
+    resolved = resolve_processing_policy()
     # Use palinode_dir since that's generally where memories are kept
     for filepath in glob.glob(os.path.join(config.palinode_dir, "**/*.md"), recursive=True):
         try:
             with open(filepath, encoding="utf-8") as f:
                 content = f.read()
             metadata, _ = parser.parse_frontmatter(content)
+            if not automatic_note_processing_allowed(metadata, resolved=resolved):
+                continue
 
             # backfill the deferred auto-description. Not core-gated —
             # every *eligible* memory file gets a description, matching the

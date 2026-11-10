@@ -2,11 +2,20 @@
 
 Creates:
   - .claude/CLAUDE.md  (memory section, appended if file exists)
-  - .claude/settings.json  (SessionStart + SessionEnd + UserPromptSubmit hook registration)
+  - .claude/settings.json  (SessionStart + SessionEnd + UserPromptSubmit + PostCompact hook registration)
   - .claude/hooks/palinode-session-start.sh  (core-memory inject + context prime)
   - .claude/hooks/palinode-session-end.sh  (/clear auto-capture)
   - .claude/hooks/palinode-user-prompt-submit.sh  (per-turn implicit recall — triggers + strict search)
   - .mcp.json  (MCP server block for palinode, if --mcp given)
+  - .cursor/hooks.json + .cursor/hooks/  (Cursor session-start and per-prompt
+    recall, only with --cursor-hooks; existing entries are kept)
+  - .agents/hooks.json + .agents/hooks/  (Antigravity session-start and
+    per-prompt recall, only with --agy-hooks; existing hooks are kept)
+
+With --codex-hook, additionally writes the Codex hooks (the same scripts):
+  - .codex/hooks/palinode-session-start.sh, .codex/hooks/palinode-user-prompt-submit.sh
+  - .codex/hooks/palinode-session-end.sh  (SessionEnd floor: topic + last reply)
+  - .codex/hooks.json  (merged after any hooks already registered there)
 
 Also provisions, in the *memory store* rather than the project:
   - $PALINODE_DIR/specs/prompts/*.md  (the consolidation prompts, from the
@@ -25,6 +34,7 @@ or skip, never overwrite without --force.
 """
 import json
 import re
+import shlex
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,8 +56,10 @@ This project uses Palinode for persistent memory via MCP (server name: `palinode
 ### At session start
 - Call `palinode_search` with the current task or project name to pull prior context.
 - If the MCP server is down, fall back to the CLI: `palinode search "<query>"`.
+- Records from other projects come back only when you pass `include_other_projects`, and they are context only, never this project's decisions. Don't opt in to find a value this project's memory lacks; ask the user instead.
 
 ### During work
+- When a value, ID, name, decision or plan is settled (for example a batch ID fixed or an approach agreed), save it right away with `palinode_save` as `type="Decision"`, with the value and why. Don't wait for the end of the session.
 - After a milestone (tests pass, feature shipped, bug root-caused), call
   `palinode_save` with the outcome. Include *why*, not just *what*.
 - When making an architectural or design decision, save the decision AND the
@@ -176,8 +188,8 @@ failure. See the installed `/wrap` command/skill for the exact contract.
 
 HOOK_SCRIPT = """\
 #!/bin/bash
-# palinode-hook-version: 0.23.0
-# palinode-session-end.sh — Auto-capture Claude Code sessions to Palinode.
+# palinode-hook-version: 0.24.2
+# palinode-session-end.sh — Auto-capture Claude Code and Codex sessions to Palinode.
 #
 # Fires on SessionEnd (including /clear, logout, exit). Reads the transcript
 # from stdin JSON, extracts a minimal summary, and POSTs to palinode-api.
@@ -248,16 +260,47 @@ if [ -z "$TRANSCRIPT_PATH" ] || [ ! -f "$TRANSCRIPT_PATH" ]; then
   exit 0
 fi
 
+# Codex (`palinode init --codex-hook`) runs this same script on its SessionEnd
+# event, whose transcript is a Codex rollout (first line `session_meta`).
+# Rewrite it into the Claude Code shape everything below reads: each user input
+# and each `*_call_output` becomes a user turn (so the triviality gate counts
+# alike), each agent message an assistant turn, and a palinode_session_end
+# call a tool_use. `source_path` stays the real transcript path. Codex caps a
+# SessionEnd hook at 3 seconds, so keep its registered timeout at 3.
+READ_PATH="$TRANSCRIPT_PATH"
+CLIENT_SOURCE="claude-code-hook"
+if jq -e -n 'input | .type == "session_meta"' "$TRANSCRIPT_PATH" >/dev/null 2>&1; then
+  CLIENT_SOURCE="codex-hook"
+  READ_PATH=$(mktemp "${TMPDIR:-/tmp}/palinode-codex-transcript.XXXXXX") || exit 0
+  trap 'rm -f "$READ_PATH"' EXIT
+  jq -c '(.payload // {}) as $p
+    | if .type == "event_msg" and $p.type == "item_completed" and $p.item.type == "UserMessage" then
+        {type: "user", message: {content: [ $p.item.content[]? | select(.text != null) | {type: "text", text: .text} ]}}
+      elif .type == "event_msg" and $p.type == "item_completed" and $p.item.type == "AgentMessage" then
+        {type: "assistant", message: {content: [ $p.item.content[]? | select(.text != null) | {type: "text", text: .text} ]}}
+      elif .type == "response_item" and (($p.type // "") | test("_call_output$")) then
+        {type: "user", message: {content: [ {type: "tool_result"} ]}}
+      elif .type == "response_item" and (($p.name // "") | test("palinode_session_end$")) then
+        {type: "assistant", message: {content: [ {type: "tool_use", name: $p.name} ]}}
+      elif .type == "event_msg" and (($p.invocation.tool // "") == "palinode_session_end") then
+        {type: "assistant", message: {content: [ {type: "tool_use", name: "palinode_session_end"} ]}}
+      elif .type == "event_msg" and $p.type == "item_completed" and ($p.item.type // "") == "McpToolCall"
+           and (($p.item.tool // "") == "palinode_session_end") then
+        {type: "assistant", message: {content: [ {type: "tool_use", name: "palinode_session_end"} ]}}
+      else empty end' "$TRANSCRIPT_PATH" > "$READ_PATH" 2>/dev/null || exit 0
+fi
+
 # Skip-if-/wrap-ran (floor/ceiling): if the human already ran /wrap this
-# session, the transcript holds a `palinode_session_end` tool call. That
+# session, the transcript holds a `palinode_session_end` tool call (Claude
+# Code records it as `mcp__<server>__palinode_session_end`). That
 # agent-authored capture (summary + decisions + blockers, each with a why) is
 # strictly richer than this deterministic floor, so writing the floor too just
 # duplicates. Skip. Override with PALINODE_HOOK_FORCE=1 to capture regardless.
 if [ "${PALINODE_HOOK_FORCE:-0}" != "1" ] \\
    && jq -e -s 'any(.[]; .type == "assistant"
        and any(.message.content[]?; .type == "tool_use"
-           and .name == "palinode_session_end"))' \\
-       "$TRANSCRIPT_PATH" >/dev/null 2>&1; then
+           and ((.name // "") | test("^(mcp__.+__)?palinode_session_end$"))))' \\
+       "$READ_PATH" >/dev/null 2>&1; then
   exit 0
 fi
 
@@ -265,14 +308,14 @@ fi
 #   user:      {type: "user", message: {role: "user", content: "text"}}
 #   assistant: {type: "assistant", message: {content: [{type: "text", text: "..."}]}}
 #
-# Both extractions use `jq -s` (slurp) so all reductions happen INSIDE jq.
+# All extractions use `jq -s` (slurp) so all reductions happen INSIDE jq.
 # Earlier versions piped `jq | head -1` and `jq | grep -c '.'`, which was
 # fragile under `set -o pipefail`: the downstream consumer exits early, the
 # next jq write hits a closed pipe → SIGPIPE → pipefail aborts the script.
 # Slurping reads JSONL lines into an array; map+filter+slice runs without an
 # early-exit downstream consumer, eliminating the SIGPIPE class entirely.
 MSG_COUNT=$(jq -r -s 'map(select(.type == "user") | .message.content // empty) | length' \\
-  "$TRANSCRIPT_PATH" 2>/dev/null || echo 0)
+  "$READ_PATH" 2>/dev/null || echo 0)
 MSG_COUNT=${MSG_COUNT:-0}
 
 # Skip trivial sessions (few messages = not worth a memory).
@@ -308,14 +351,45 @@ FIRST_PROMPT=$(jq -r -s '
       | gsub("</?(command-message|command-name|command-args|user-prompt-submit-hook|ide_selection|ide_opened_file)>"; " ")
       | gsub("\\\\s+"; " ") | sub("^ +"; "") | sub(" +$"; "")
       | select(length > 0) ] | .[0] // ""' \\
-  "$TRANSCRIPT_PATH" 2>/dev/null | cut -c1-200 || echo "")
+  "$READ_PATH" 2>/dev/null | cut -c1-200 || echo "")
+
+# Keep the last assistant reply with text, ignoring tool calls.
+ENDING_MAX_CHARS="${PALINODE_HOOK_ENDING_MAX_CHARS:-2000}"
+case "$ENDING_MAX_CHARS" in
+  *[!0-9]*) ENDING_MAX_CHARS=2000 ;;
+esac
+ENDING=""
+if [ "$ENDING_MAX_CHARS" != "0" ]; then
+  ENDING=$(jq -r -s --arg cap "$ENDING_MAX_CHARS" '
+    [ .[] | select(.type == "assistant")
+      | [ .message.content[]? | select(.type == "text") | .text // "" ] | join(" ")
+      | gsub("<local-command-caveat>.*?</local-command-caveat>"; ""; "s")
+      | gsub("<system-reminder>.*?</system-reminder>"; ""; "s")
+      | gsub("<local-command-std(out|err)>.*?</local-command-std(out|err)>"; ""; "s")
+      | gsub("<bash-(input|stdout|stderr)>.*?</bash-(input|stdout|stderr)>"; ""; "s")
+      | if test("<command-name>") and (gsub("<command-(name|message)>[^<]*</command-(name|message)>|<command-args>\\\\s*</command-args>"; "") | test("^\\\\s*$")) then "" else . end
+      | gsub("</?(command-message|command-name|command-args|user-prompt-submit-hook|ide_selection|ide_opened_file)>"; " ")
+      | gsub("\\\\s+"; " ") | sub("^ +"; "") | sub(" +$"; "")
+      | select(length > 0) ] | .[-1] // ""
+      | ($cap | tonumber) as $limit
+      | length as $total
+      | if $limit == 0 then ""
+        elif $total > $limit then .[:$limit] + "\\n[Truncated: kept \\($limit) of \\($total) characters.]"
+        else . end
+      | gsub("<"; "‹") | gsub(">"; "›")' \\
+    "$READ_PATH" 2>/dev/null || echo "")
+fi
 
 SUMMARY="Auto-captured (${SOURCE_REASON}, ${MSG_COUNT} messages). Topic: ${FIRST_PROMPT}"
+if [ -n "$ENDING" ]; then
+  SUMMARY="${SUMMARY}
+Ending: ${ENDING}"
+fi
 
 PAYLOAD=$(jq -n \\
   --arg summary "$SUMMARY" \\
   --arg project "$PROJECT" \\
-  --arg source "claude-code-hook" \\
+  --arg source "$CLIENT_SOURCE" \\
   --arg cwd "$CWD" \\
   --arg source_path "$TRANSCRIPT_PATH" \\
   --arg session_id "$SESSION_ID" \\
@@ -350,33 +424,43 @@ exit 0
 
 SESSION_START_HOOK_SCRIPT = """\
 #!/bin/bash
-# palinode-hook-version: 0.23.0
+# palinode-hook-version: 0.24.0
 # palinode-session-start.sh — warm + inject Palinode context on session start.
 #
-# Fires on Claude Code SessionStart (startup and /clear by default). Two
-# actions, both fail-silent:
+# Fires on Claude Code or Codex SessionStart (startup and /clear by default).
+# One request, fail-silent:
 #
-#   1. POST /context/prime — warms server-side session context for this CWD
-#      (or for PALINODE_PROJECT when it is set: the server may be on another
-#      machine and cannot see this session's environment)
-#      (ADR-012 Layer 4 + ADR-009 Layer 1). The endpoint returns the
-#      scope-aware context digest; this hook discards the body and injects
-#      via the /list digest below. An older server (pre-0.9.3) 404s
-#      harmlessly.
-#   2. GET /list?core_only=true — injects a bounded digest of core memories
-#      into the session as additionalContext, with a deterministic recall
-#      reminder. This is the "sessions start smart" half: grounding that does
-#      not depend on the agent remembering to search.
+#   POST /context/prime — the scope-aware session-start digest for this CWD
+#   (or for PALINODE_PROJECT when it is set: the server may be on another
+#   machine and cannot see this session's environment) (ADR-012 Layer 4 +
+#   ADR-009 Layer 1). The hook injects the digest's core memories as
+#   additionalContext, with a deterministic recall reminder: grounding that
+#   does not depend on the agent remembering to search. The server selects
+#   them at the visibility choke point, so another project's core memories
+#   and retired, private or restricted ones never reach this session.
 #
 # Fail-silent by design — never block session start. API down → no output,
 # exit 0. The agent-side pull path (palinode_search) is unaffected either way.
+#
+# Codex runs this same script on its SessionStart; there is no Codex fork. Its
+# payload has the same session_id, cwd and source fields (plus model and
+# permission_mode, which are ignored), its output contract is the same
+# hookSpecificOutput.additionalContext, and Codex adds that text as a developer
+# message ahead of the first prompt. Two differences, both handled here as
+# they are: Codex starts the hook in the session's cwd, which may be a
+# subdirectory of the repository (the git-common-dir step below sends the
+# repository root either way), and its source can also be "fork", which the
+# default allowlist skips like "resume".
 #
 # Install:
 #   1. Copy to .claude/hooks/palinode-session-start.sh (or ~/.claude/hooks/…)
 #   2. chmod +x .claude/hooks/palinode-session-start.sh
 #   3. Register in .claude/settings.json — see ./settings.json in this dir.
+#   Codex: copy to .codex/hooks/ instead and register it in .codex/hooks.json
+#   (see ./codex-hooks.json); Codex runs it once you trust it with /hooks.
 #
-# Or just run: `palinode init` — it installs all of this for you.
+# Or just run: `palinode init` (`--codex-hook` for Codex) — it installs all of
+# this for you.
 
 set -euo pipefail
 
@@ -446,44 +530,46 @@ esac
 
 # Dry-run: print what would happen, touch nothing.
 if [ "${PALINODE_HOOK_DRYRUN:-0}" = "1" ]; then
-  echo "[palinode-session-start DRYRUN] would POST ${PALINODE_API}/context/prime (cwd=${CWD}, session=${SESSION_ID}) and GET ${PALINODE_API}/list?core_only=true"
+  echo "[palinode-session-start DRYRUN] would POST ${PALINODE_API}/context/prime (cwd=${CWD}, session=${SESSION_ID}) and inject its core memories"
   exit 0
 fi
 
-# 1. Warm server-side session context (/context/prime — ADR-012 Layer 4 +
-#    ADR-009 Layer 1). No -f: an older server (pre-0.9.3) without the
-#    endpoint 404s harmlessly; only connection errors fail, and those are
-#    swallowed.
+# Prime the session and read its scoped digest (/context/prime — ADR-012
+# Layer 4 + ADR-009 Layer 1). The core memories injected below come from this
+# response and nowhere else: the server built it for this session's scope, so
+# a core memory tagged to another project is withheld there, not here. No
+# usable response (API down, recall refused, an older server without the
+# endpoint) injects nothing.
 PRIME_PAYLOAD=$(jq -n --argjson scope "$CLIENT_SCOPE" --arg session_id "$SESSION_ID" \\
   '$scope + {session_id: $session_id}')
-curl -s -o /dev/null \\
+PRIME_JSON=$(curl -s -f \\
   -X POST "${PALINODE_API}/context/prime" \\
   ${AUTH[@]+"${AUTH[@]}"} \\
   -H "Content-Type: application/json" \\
   -d "$PRIME_PAYLOAD" \\
   --connect-timeout 2 \\
-  --max-time "${HOOK_TIMEOUT}" 2>/dev/null || true
+  --max-time "${HOOK_TIMEOUT}" 2>/dev/null) || exit 0
 
-# 2. Inject a bounded core-memory digest as session context.
+# Inject a bounded core-memory digest as session context.
 if [ "$MAX_FILES" -le 0 ]; then
   exit 0
 fi
 
-CORE_JSON=$(curl -s -f \\
-  ${AUTH[@]+"${AUTH[@]}"} \\
-  "${PALINODE_API}/list?core_only=true" \\
-  --connect-timeout 2 \\
-  --max-time "${HOOK_TIMEOUT}" 2>/dev/null) || exit 0
-
-# Build "- [file] name — summary" lines inside jq (string concatenation, no
-# shell loop). /list sorts newest-first, so [:$max] keeps the freshest files.
-DIGEST=$(echo "$CORE_JSON" | jq -r --argjson max "$MAX_FILES" '
-  if type == "array" and length > 0 then
-    .[:$max]
-    | map("- [" + .file + "] " + (.name // "untitled")
-          + (if (.summary // "") != "" then " — " + .summary else "" end))
-    | join("\\n")
-  else empty end' 2>/dev/null) || exit 0
+# Build "- [file] summary [qualifiers]" lines inside jq (string concatenation,
+# no shell loop), the same line /context/prime's own text renderer writes. The
+# digest lists core memories newest first, so [:$max] keeps the freshest.
+DIGEST=$(echo "$PRIME_JSON" | jq -r --argjson max "$MAX_FILES" '
+  def qualifiers:
+    [ (if (.contradicts // []) | length > 0 then "⚠ contradicts: " + (.contradicts | join(", ")) else empty end),
+      (if (.stale_backing // []) | length > 0 then "⚠ stale backing: " + (.stale_backing | join(", ")) else empty end),
+      (if (.epistemic // "") != "" then "epistemic: " + .epistemic else empty end) ]
+    | if length > 0 then " [" + join(" | ") + "]" else "" end;
+  (.core_memories // []) as $core
+  | if ($core | type) == "array" and ($core | length) > 0 then
+      $core[:$max]
+      | map("- [" + .file + "] " + (.summary // "untitled") + qualifiers)
+      | join("\\n")
+    else empty end' 2>/dev/null) || exit 0
 
 if [ -z "$DIGEST" ]; then
   exit 0
@@ -523,7 +609,7 @@ exit 0
 
 USER_PROMPT_SUBMIT_HOOK_SCRIPT = """\
 #!/usr/bin/env bash
-# palinode-hook-version: 0.23.0
+# palinode-hook-version: 0.24.0
 # palinode-user-prompt-submit.sh — per-turn implicit recall.
 #
 # Fires on every UserPromptSubmit, BEFORE the model sees the prompt. Two
@@ -569,6 +655,16 @@ USER_PROMPT_SUBMIT_HOOK_SCRIPT = """\
 # the system prompt would invalidate the cached prefix every turn. This
 # hook is cache-safe by construction (ADR-019).
 #
+# Codex runs this same script on its UserPromptSubmit; there is no Codex fork.
+# Its payload has the same session_id, cwd and prompt fields (plus turn_id,
+# model and permission_mode, which are ignored), and its output contract is the
+# same hookSpecificOutput.additionalContext. Codex adds that text as a developer
+# message after the user's prompt, so it too lands in the conversation and
+# leaves the cached prefix alone. Codex ignores a matcher on this event, starts
+# the hook in the session's cwd (possibly a subdirectory: the git-common-dir
+# step below sends the repository root either way), and treats exit code 2 as
+# "block this prompt", the same as Claude Code.
+#
 # Fail-silent by design — never block a prompt. API down, jq missing,
 # short prompt → no output, exit 0. Explicit recall (palinode_search) is
 # unaffected either way.
@@ -601,8 +697,11 @@ USER_PROMPT_SUBMIT_HOOK_SCRIPT = """\
 #   1. Copy to .claude/hooks/palinode-user-prompt-submit.sh
 #   2. chmod +x .claude/hooks/palinode-user-prompt-submit.sh
 #   3. Register in .claude/settings.json — see ./settings.json in this dir.
+#   Codex: copy to .codex/hooks/ instead and register it in .codex/hooks.json
+#   (see ./codex-hooks.json); Codex runs it once you trust it with /hooks.
 #
-# Or just run: `palinode init` — it installs all of this for you.
+# Or just run: `palinode init` (`--codex-hook` for Codex) — it installs all of
+# this for you.
 
 set -euo pipefail
 
@@ -1019,6 +1118,133 @@ exit 0
 """
 
 
+# Saves Claude Code's compaction summary as one ProjectSnapshot per session.
+# Byte-for-byte identical to examples/hooks/palinode-post-compact.sh.
+POST_COMPACT_HOOK_SCRIPT = """\
+#!/bin/bash
+# palinode-hook-version: 0.24.0
+# palinode-post-compact.sh — save Claude Code's compaction summary as a checkpoint.
+#
+# Fires on Claude Code PostCompact (manual /compact and auto-compaction). The
+# hook input carries `compact_summary`, the summary Claude Code wrote of the
+# conversation so far. This saves it as one ProjectSnapshot per session, slug
+# compaction-checkpoint-<session_id>, so a long session has a recent
+# checkpoint long before it reaches SessionEnd. A later compaction in the same
+# session replaces it in place; git keeps the earlier versions.
+#
+# It writes no daily note, status line or session-end entry, and the record is
+# not core memory. The summary is a model's account of the session, so it is
+# saved as epistemic: inference, under a header saying that approvals and
+# instructions recorded in it applied to that session only.
+#
+# Fail-silent by design. Gated by the same persisted capture controls as the
+# SessionEnd hook: a denial or unavailable service exits before anything is
+# sent, and the API rechecks a capture pause at write time.
+#
+# Install: `palinode init --hook` copies this to .claude/hooks/ and registers
+# it on PostCompact (async, so the next turn does not wait for it).
+
+set -euo pipefail
+
+# No jq → no way to parse the hook payload or build JSON. Bail silently.
+command -v jq >/dev/null 2>&1 || exit 0
+
+PALINODE_API="${PALINODE_API_URL:-http://localhost:6340}"
+# Max time (seconds) each curl call may run. The hook's settings.json timeout
+# must be greater than this value.
+HOOK_TIMEOUT="${PALINODE_HOOK_TIMEOUT:-30}"
+# Longest summary body saved, in characters. A longer one is cut with a marker.
+MAX_CHARS="${PALINODE_HOOK_COMPACT_MAX_CHARS:-32000}"
+case "$MAX_CHARS" in
+  ''|*[!0-9]*) MAX_CHARS=32000 ;;
+esac
+
+# Optional bearer auth for token-protected deployments (PALINODE_API_TOKEN).
+# The ${AUTH[@]+…} expansion is the bash-3.2-safe empty-array idiom (set -u).
+AUTH=()
+if [ -n "${PALINODE_API_TOKEN:-}" ]; then
+  AUTH=(-H "Authorization: Bearer ${PALINODE_API_TOKEN}")
+fi
+
+INPUT=$(cat)
+TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null) || exit 0
+CWD=$(echo "$INPUT" | jq -r '.cwd // empty' 2>/dev/null) || exit 0
+SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null) || exit 0
+SUMMARY_LEN=$(echo "$INPUT" | jq -r '.compact_summary // "" | length' 2>/dev/null) || exit 0
+
+# The session id names the checkpoint, and an empty summary has nothing to keep.
+[ -n "$SESSION_ID" ] || exit 0
+[ "${SUMMARY_LEN:-0}" -gt 0 ] || exit 0
+
+# This preflight intentionally precedes sending any summary text. A malformed
+# or unavailable response fails closed without emitting user content.
+CONTROL_PAYLOAD=$(jq -n \\
+  --arg cwd "$CWD" --arg source_path "$TRANSCRIPT_PATH" \\
+  '{action: "capture", cwd: $cwd, source_path: $source_path, automatic: true}')
+CONTROL=$(curl -sS -f \\
+  -X POST "${PALINODE_API}/controls/check" \\
+  ${AUTH[@]+"${AUTH[@]}"} \\
+  -H "Content-Type: application/json" \\
+  -d "$CONTROL_PAYLOAD" \\
+  --connect-timeout 2 \\
+  --max-time "${HOOK_TIMEOUT}" 2>/dev/null) || exit 0
+[ "$(echo "$CONTROL" | jq -r 'if .allowed == true then "yes" else "no" end' 2>/dev/null)" = "yes" ] || exit 0
+PROJECT=$(echo "$CONTROL" | jq -r '.project // empty' 2>/dev/null) || exit 0
+
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+# The whole payload is built inside jq from the hook input, so the summary
+# never passes through shell word-splitting or quoting.
+PAYLOAD=$(echo "$INPUT" | jq -c \\
+  --arg project "$PROJECT" --arg now "$NOW" --argjson max "$MAX_CHARS" '
+  .compact_summary as $summary
+  | .session_id as $sid
+  | (.trigger // "unknown") as $trigger
+  | (if ($summary | length) > $max
+     then $summary[0:$max] + "\\n\\n[Truncated: kept \\($max) of \\($summary | length) characters.]"
+     else $summary end) as $body
+  | {
+      type: "ProjectSnapshot",
+      slug: ("compaction-checkpoint-" + $sid),
+      title: ("Compaction checkpoint, Claude Code session " + $sid[0:8]),
+      content: ("Automatic checkpoint from Claude Code. When session `\\($sid)` compacted"
+        + " (\\($trigger), \\($now)), Claude Code wrote the summary below of the"
+        + " conversation up to that point. Nobody reviewed it. Approvals,"
+        + " instructions and plans recorded in it applied to that session only;"
+        + " they are not standing permission.\\n\\n---\\n\\n" + $body),
+      epistemic: "inference",
+      source: "claude-code-compaction",
+      metadata: {
+        session_id: $sid,
+        compaction_trigger: $trigger,
+        compacted_at: $now,
+        harness: "claude-code"
+      }
+    }
+  + (if $project != "" then {project: $project} else {} end)' 2>/dev/null) || exit 0
+
+# Dry-run: print what would be POSTed and write nothing.
+# PALINODE_HOOK_DRYRUN=1 to enable.
+if [ "${PALINODE_HOOK_DRYRUN:-0}" = "1" ]; then
+  echo "[palinode-post-compact DRYRUN] would POST ${PALINODE_API}/save"
+  echo "$PAYLOAD"
+  exit 0
+fi
+
+# No fallback file on failure: a 403 may mean capture was paused after the
+# preflight, and a summary written to disk would outlive that decision.
+printf '%s' "$PAYLOAD" | curl -sS -o /dev/null -f \\
+    -X POST "${PALINODE_API}/save" \\
+    ${AUTH[@]+"${AUTH[@]}"} \\
+    -H "Content-Type: application/json" \\
+    --data-binary @- \\
+    --connect-timeout 5 \\
+    --max-time "${HOOK_TIMEOUT}" 2>/dev/null || true
+
+exit 0
+"""
+
+
 WRAP_COMMAND_BODY = """\
 ---
 description: Wrap up this session — offer to land any open git work, sync prior memory work, then a structured session_end that commits AND pushes the note, before /clear.
@@ -1227,6 +1453,20 @@ SETTINGS_HOOK_BLOCK = {
                 ]
             }
         ],
+        # Compaction checkpoint. PostCompact cannot change the
+        # compaction; async keeps the save off the next turn's critical path.
+        "PostCompact": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/palinode-post-compact.sh",
+                        "timeout": 35,
+                        "async": True,
+                    }
+                ]
+            }
+        ],
     }
 }
 
@@ -1236,6 +1476,406 @@ _HOOK_EVENTS = (
     ("SessionStart", "palinode-session-start.sh"),
     ("SessionEnd", "palinode-session-end.sh"),
     ("UserPromptSubmit", "palinode-user-prompt-submit.sh"),
+    ("PostCompact", "palinode-post-compact.sh"),
+)
+
+
+# Cursor. The adapter runs the same session-start and per-turn
+# recall scripts Claude Code does, translating Cursor's payload and answer, so
+# the recall logic is not forked per harness. Byte-for-byte identical to
+# examples/hooks/palinode-cursor-hook.sh.
+CURSOR_HOOK_SCRIPT = """\
+#!/bin/bash
+# palinode-hook-version: 0.24.0
+# palinode-cursor-hook.sh — run a Palinode Claude Code hook under Cursor.
+#
+# Cursor's hooks hand over a different payload and read a different answer
+# than Claude Code's, but the work is the same, so this adapter translates
+# instead of forking the recall scripts:
+#
+#   in   Cursor's stdin → the fields the Claude Code script reads:
+#        workspace_roots[0] → cwd, conversation_id → session_id, prompt
+#   run  the Palinode hook script named by $1
+#   out  hookSpecificOutput.additionalContext → Cursor's additional_context
+#
+# Registered in .cursor/hooks.json (`palinode init --cursor-hooks` does it):
+#
+#   sessionStart        palinode-cursor-hook.sh …/palinode-session-start.sh
+#                       /context/prime's scoped core memories. Documented,
+#                       and verified to reach the model in cursor-agent
+#                       (2026.10.16 and 2026.10.22), print mode included.
+#   beforeSubmitPrompt  palinode-cursor-hook.sh …/palinode-user-prompt-submit.sh
+#                       per-prompt recall. Cursor documents only continue and
+#                       user_message for this event; additional_context was
+#                       verified to reach the model as a system reminder in
+#                       the interactive cursor-agent 2026.10.22. The event
+#                       does not fire in `cursor-agent -p`.
+#
+# Fail-open by design: the answer is always {"continue": true}, with
+# additional_context only when the script produced some. A missing jq,
+# script or server never blocks a prompt or a session.
+
+set -uo pipefail
+
+ALLOW='{"continue":true}'
+command -v jq >/dev/null 2>&1 || { printf '%s\\n' "$ALLOW"; exit 0; }
+
+SCRIPT="${1:-}"
+INPUT=$(cat)
+
+# Project hooks run from the project root, so the registered relative path
+# resolves there. Fall back to this adapter's own directory, where init
+# installs the scripts it pairs with.
+if [ -n "$SCRIPT" ] && [ ! -f "$SCRIPT" ]; then
+  SCRIPT="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$SCRIPT")"
+fi
+[ -n "$SCRIPT" ] && [ -f "$SCRIPT" ] || { printf '%s\\n' "$ALLOW"; exit 0; }
+
+# Which Claude Code event the paired script answers. Named by the script
+# rather than Cursor's event, so a mis-registered pair fails silent instead
+# of answering the wrong event.
+case "$(basename "$SCRIPT")" in
+  palinode-session-start.sh) EVENT=SessionStart ;;
+  palinode-user-prompt-submit.sh) EVENT=UserPromptSubmit ;;
+  *) printf '%s\\n' "$ALLOW"; exit 0 ;;
+esac
+
+# Cursor's payload has no cwd: the project is the first workspace root.
+CWD=$(printf '%s' "$INPUT" | jq -r '(.workspace_roots // [])[0] // empty' 2>/dev/null) || CWD=""
+[ -n "$CWD" ] || CWD="${CURSOR_PROJECT_DIR:-$PWD}"
+
+# sessionStart fires once per new conversation (never on resume), which is
+# the Claude Code "startup" source the session-start script admits.
+PAYLOAD=$(printf '%s' "$INPUT" | jq -c --arg cwd "$CWD" --arg event "$EVENT" '{
+    session_id: (.conversation_id // .session_id // ""),
+    cwd: $cwd,
+    hook_event_name: $event,
+    source: "startup",
+    prompt: (.prompt // "")
+  }' 2>/dev/null) || { printf '%s\\n' "$ALLOW"; exit 0; }
+
+OUT=$(printf '%s' "$PAYLOAD" | bash "$SCRIPT" 2>/dev/null) || OUT=""
+CONTEXT=$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null) || CONTEXT=""
+
+if [ -z "$CONTEXT" ]; then
+  printf '%s\\n' "$ALLOW"
+  exit 0
+fi
+jq -cn --arg ctx "$CONTEXT" '{continue: true, additional_context: $ctx}' 2>/dev/null \\
+  || printf '%s\\n' "$ALLOW"
+exit 0
+"""
+
+#: Where `palinode init --cursor-hooks` installs the Cursor hook scripts. Cursor
+#: runs project hooks from the project root, so the registered commands are
+#: relative to it and keep working wherever the checkout lives.
+CURSOR_HOOKS_DIR = ".cursor/hooks"
+
+# (Cursor event, paired palinode script) pairs _merge_cursor_hooks registers.
+# The paired script name doubles as the already-registered probe.
+_CURSOR_HOOK_EVENTS = (
+    ("sessionStart", "palinode-session-start.sh"),
+    ("beforeSubmitPrompt", "palinode-user-prompt-submit.sh"),
+)
+
+
+def _cursor_hook_entry(script_name: str) -> dict:
+    """One .cursor/hooks.json entry: the adapter, then the script it runs."""
+    return {
+        "command": (
+            f"{CURSOR_HOOKS_DIR}/palinode-cursor-hook.sh {CURSOR_HOOKS_DIR}/{script_name}"
+        ),
+        # Same budget as the Claude Code registrations of the same scripts.
+        "timeout": 20,
+    }
+
+
+def _merge_cursor_hooks(path: Path, force: bool) -> str:
+    """Register the palinode hooks in .cursor/hooks.json, keeping every other entry."""
+    _ensure_parent(path)
+    existing: dict = {}
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            if not force:
+                return "skipped (existing hooks.json is not valid JSON — re-run with --force to overwrite)"
+            existing = {}
+        if not isinstance(existing, dict) or not isinstance(existing.get("hooks", {}), dict):
+            return "skipped (existing hooks.json has an unexpected shape — left alone)"
+    created = not path.exists()
+    existing.setdefault("version", 1)
+    hooks = existing.setdefault("hooks", {})
+    merged_any = False
+    for event, script_name in _CURSOR_HOOK_EVENTS:
+        entries = hooks.setdefault(event, [])
+        if not isinstance(entries, list):
+            return f"skipped (existing hooks.json {event} is not a list — left alone)"
+        already = any(
+            isinstance(e, dict) and script_name in str(e.get("command", ""))
+            for e in entries
+        )
+        if not already:
+            entries.append(_cursor_hook_entry(script_name))
+            merged_any = True
+    if not merged_any:
+        return "skipped (palinode hooks already registered)"
+    path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
+    return "created" if created else "merged"
+
+
+# Antigravity. Same approach as Cursor: an adapter runs the session-start and
+# per-turn recall scripts unchanged and translates Antigravity's payload and
+# injectSteps answer. Byte-for-byte identical to
+# examples/hooks/palinode-agy-hook.sh.
+ANTIGRAVITY_HOOK_SCRIPT = """\
+#!/bin/bash
+# palinode-hook-version: 0.24.0
+# palinode-agy-hook.sh — run a Palinode Claude Code hook under Antigravity.
+#
+# Antigravity's hooks hand over a different payload and read a different
+# answer than Claude Code's, but the work is the same, so this adapter
+# translates instead of forking the recall scripts:
+#
+#   in   Antigravity's stdin → the fields the Claude Code script reads:
+#        workspacePaths[0] → cwd, conversationId → session_id,
+#        lastUserInput → prompt
+#   run  the Palinode hook script named by $1
+#   out  hookSpecificOutput.additionalContext → an injectSteps step
+#
+# Registered in .agents/hooks.json (`palinode init --agy-hooks`):
+#
+#   SessionStart   palinode-agy-hook.sh …/palinode-session-start.sh
+#                  /context/prime's scoped core memories, as a systemMessage
+#                  step: it stays in the conversation for the whole session.
+#                  Fires once, when a conversation starts, never on resume.
+#   PreInvocation  palinode-agy-hook.sh …/palinode-user-prompt-submit.sh
+#                  per-prompt recall. PreInvocation fires before EVERY model
+#                  call, tool steps included, so recall runs only on the first
+#                  call of a turn (invocationNum 0), as an ephemeralMessage
+#                  step: the model still saw it after that turn's tool steps,
+#                  and it is not carried into later turns, so per-prompt
+#                  recall does not pile up.
+#
+# Verified on the agy CLI 1.4.9: both steps reach the model; hooks run with
+# the cwd set to the workspace's .agents/, which is why the project comes
+# from workspacePaths, not from the cwd.
+#
+# Fail-silent by design: no context, no jq, no script or no server → {}.
+
+set -uo pipefail
+
+EMPTY='{}'
+command -v jq >/dev/null 2>&1 || { printf '%s\\n' "$EMPTY"; exit 0; }
+
+SCRIPT="${1:-}"
+INPUT=$(cat)
+
+# init registers absolute paths; a relative one is looked up beside this
+# adapter, where init installs the scripts it pairs with.
+if [ -n "$SCRIPT" ] && [ ! -f "$SCRIPT" ]; then
+  SCRIPT="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$SCRIPT")"
+fi
+[ -n "$SCRIPT" ] && [ -f "$SCRIPT" ] || { printf '%s\\n' "$EMPTY"; exit 0; }
+
+# Which Claude Code event the paired script answers, and the step type its
+# context goes back as. Named by the script, so a mis-registered pair fails
+# silent instead of answering the wrong event.
+case "$(basename "$SCRIPT")" in
+  palinode-session-start.sh) EVENT=SessionStart ;;
+  palinode-user-prompt-submit.sh) EVENT=UserPromptSubmit ;;
+  *) printf '%s\\n' "$EMPTY"; exit 0 ;;
+esac
+
+if [ "$EVENT" = "UserPromptSubmit" ]; then
+  # Only the first model call of a turn: later calls of the same turn follow
+  # tool results, not a new prompt.
+  INVOCATION=$(printf '%s' "$INPUT" | jq -r '.invocationNum // 0' 2>/dev/null) || INVOCATION=""
+  [ "$INVOCATION" = "0" ] || { printf '%s\\n' "$EMPTY"; exit 0; }
+fi
+
+CWD=$(printf '%s' "$INPUT" | jq -r '(.workspacePaths // [])[0] // empty' 2>/dev/null) || CWD=""
+if [ -z "$CWD" ]; then
+  CWD="$PWD"
+  [ "$(basename "$CWD")" = ".agents" ] && CWD="$(dirname "$CWD")"
+fi
+
+PAYLOAD=$(printf '%s' "$INPUT" | jq -c --arg cwd "$CWD" --arg event "$EVENT" '{
+    session_id: (.conversationId // ""),
+    cwd: $cwd,
+    hook_event_name: $event,
+    source: "startup",
+    prompt: (.lastUserInput // "")
+  }' 2>/dev/null) || { printf '%s\\n' "$EMPTY"; exit 0; }
+
+OUT=$(printf '%s' "$PAYLOAD" | bash "$SCRIPT" 2>/dev/null) || OUT=""
+CONTEXT=$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null) || CONTEXT=""
+
+if [ -z "$CONTEXT" ]; then
+  printf '%s\\n' "$EMPTY"
+  exit 0
+fi
+if [ "$EVENT" = "SessionStart" ]; then
+  jq -cn --arg ctx "$CONTEXT" '{injectSteps: [{systemMessage: {systemMessage: $ctx}}]}' 2>/dev/null \\
+    || printf '%s\\n' "$EMPTY"
+else
+  jq -cn --arg ctx "$CONTEXT" '{injectSteps: [{ephemeralMessage: $ctx}]}' 2>/dev/null \\
+    || printf '%s\\n' "$EMPTY"
+fi
+exit 0
+"""
+
+#: Where `palinode init --agy-hooks` installs the Antigravity scripts.
+ANTIGRAVITY_HOOKS_DIR = ".agents/hooks"
+
+#: The hook name palinode's entries live under in .agents/hooks.json, which
+#: maps hook names to their events.
+ANTIGRAVITY_HOOK_NAME = "palinode"
+
+# (Antigravity event, paired palinode script) pairs _merge_agy_hooks
+# registers. The paired script name doubles as the already-registered probe.
+_ANTIGRAVITY_HOOK_EVENTS = (
+    ("SessionStart", "palinode-session-start.sh"),
+    ("PreInvocation", "palinode-user-prompt-submit.sh"),
+)
+
+
+def _agy_hook_entry(hooks_dir: Path, script_name: str) -> dict:
+    """One handler: the adapter, then the script it runs, by absolute path.
+
+    Absolute because Antigravity runs workspace hooks with the cwd set to
+    ``.agents/`` and does not document that, so a relative path would depend
+    on an unpromised detail.
+    """
+    adapter = shlex.quote(str(hooks_dir / "palinode-agy-hook.sh"))
+    script = shlex.quote(str(hooks_dir / script_name))
+    # Same budget as the Claude Code registrations of the same scripts.
+    return {"type": "command", "command": f"{adapter} {script}", "timeout": 20}
+
+
+def _agy_commands(config: dict) -> list[str]:
+    """Every handler command in an Antigravity hooks.json, any hook name, any event."""
+    commands: list[str] = []
+    for definition in config.values():
+        if not isinstance(definition, dict):
+            continue
+        for handlers in definition.values():
+            if not isinstance(handlers, list):
+                continue
+            for handler in handlers:
+                if not isinstance(handler, dict):
+                    continue
+                for h in [handler, *(handler.get("hooks") or [])]:
+                    if isinstance(h, dict) and isinstance(h.get("command"), str):
+                        commands.append(h["command"])
+    return commands
+
+
+def _merge_agy_hooks(path: Path, hooks_dir: Path, force: bool) -> str:
+    """Register the palinode hooks in .agents/hooks.json, keeping every other hook."""
+    _ensure_parent(path)
+    existing: dict = {}
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            if not force:
+                return "skipped (existing hooks.json is not valid JSON — re-run with --force to overwrite)"
+            existing = {}
+        if not isinstance(existing, dict):
+            return "skipped (existing hooks.json has an unexpected shape — left alone)"
+    created = not path.exists()
+    ours = existing.setdefault(ANTIGRAVITY_HOOK_NAME, {})
+    if not isinstance(ours, dict):
+        return f"skipped (existing hooks.json {ANTIGRAVITY_HOOK_NAME!r} is not a hook definition — left alone)"
+    registered = _agy_commands(existing)
+    merged_any = False
+    for event, script_name in _ANTIGRAVITY_HOOK_EVENTS:
+        if any("palinode-agy-hook.sh" in c and script_name in c for c in registered):
+            continue
+        handlers = ours.setdefault(event, [])
+        if not isinstance(handlers, list):
+            return f"skipped (existing hooks.json {ANTIGRAVITY_HOOK_NAME}.{event} is not a list — left alone)"
+        handlers.append(_agy_hook_entry(hooks_dir, script_name))
+        merged_any = True
+    if not merged_any:
+        return "skipped (palinode hooks already registered)"
+    path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
+    return "created" if created else "merged"
+
+
+#: Where a Codex hook command finds the project. Codex has no counterpart of
+#: ``${CLAUDE_PROJECT_DIR}``: it runs each command through ``$SHELL -lc`` in the
+#: session's cwd, which can be a subdirectory, so the command asks git for the
+#: checkout root and falls back to the cwd outside a repository.
+CODEX_PROJECT_ROOT = "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+
+def _codex_command(script_name: str) -> str:
+    return f'"{CODEX_PROJECT_ROOT}/.codex/hooks/{script_name}"'
+
+
+#: The Codex hook registration ``palinode init --codex-hook`` merges into
+#: ``.codex/hooks.json``. The scripts are the Claude Code ones, byte for byte:
+#: Codex's SessionStart and UserPromptSubmit payloads carry the same fields and
+#: take the same ``hookSpecificOutput.additionalContext`` back. No matcher: on
+#: SessionStart the script filters the source itself (so the
+#: PALINODE_HOOK_START_SOURCES knob keeps working), and Codex ignores a matcher
+#: on UserPromptSubmit. SessionEnd runs the session-end floor, which reads a
+#: Codex rollout itself; Codex caps a SessionEnd hook at 3 seconds.
+CODEX_HOOKS_BLOCK = {
+    "hooks": {
+        "SessionStart": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": _codex_command("palinode-session-start.sh"),
+                        "timeout": 20,
+                    }
+                ]
+            }
+        ],
+        "UserPromptSubmit": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": _codex_command("palinode-user-prompt-submit.sh"),
+                        "timeout": 20,
+                    }
+                ]
+            }
+        ],
+        "SessionEnd": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": _codex_command("palinode-session-end.sh"),
+                        "timeout": 3,
+                    }
+                ]
+            }
+        ],
+    }
+}
+
+#: (event, script filename) pairs _merge_codex_hooks registers; the filename is
+#: the already-registered probe, as in _HOOK_EVENTS.
+_CODEX_HOOK_EVENTS = (
+    ("SessionStart", "palinode-session-start.sh"),
+    ("UserPromptSubmit", "palinode-user-prompt-submit.sh"),
+    ("SessionEnd", "palinode-session-end.sh"),
+)
+
+#: Printed whenever Codex hooks are scaffolded. Codex skips a hook nobody has
+#: reviewed, so without this the install looks done and silently does nothing.
+CODEX_TRUST_NOTE = (
+    "Codex runs project hooks only in a trusted project, and only after each hook "
+    "is reviewed: open Codex in this project and run /hooks to trust the palinode "
+    "entries. Trust covers the hooks.json entry, not the script, so a later "
+    "`palinode hooks update` keeps it."
 )
 
 
@@ -1460,6 +2100,51 @@ def _merge_settings(path: Path, force: bool) -> str:
             merged_any = True
     path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
     return "merged" if merged_any else "skipped (palinode hooks already registered)"
+
+
+def _merge_codex_hooks(path: Path, force: bool) -> str:
+    """Add palinode's Codex hooks to ``.codex/hooks.json`` without disturbing others.
+
+    The file commonly carries another tool's hooks. Codex keys each hook's trust
+    record on its position (``<file>:<event>:<group>:<handler>``), so palinode's
+    groups go after every existing group: nothing already there moves, and no
+    hook the user has trusted becomes untrusted. A file whose shape cannot be
+    merged safely is left as it is.
+    """
+    _ensure_parent(path)
+    if not path.exists():
+        path.write_text(json.dumps(CODEX_HOOKS_BLOCK, indent=2) + "\n", encoding="utf-8")
+        return "created"
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        if not force:
+            return "skipped (existing hooks.json is not valid JSON — re-run with --force to overwrite)"
+        existing = {}
+    if not isinstance(existing, dict):
+        return "skipped (existing hooks.json is not a JSON object — left untouched)"
+    hooks = existing.setdefault("hooks", {})
+    if not isinstance(hooks, dict) or any(
+        not isinstance(hooks.get(event, []), list) for event, _ in _CODEX_HOOK_EVENTS
+    ):
+        return "skipped (existing hooks.json has an unexpected hooks shape — left untouched)"
+
+    merged_any = False
+    for event, script_name in _CODEX_HOOK_EVENTS:
+        groups = hooks.setdefault(event, [])
+        already = any(
+            isinstance(handler, dict) and script_name in str(handler.get("command", ""))
+            for group in groups
+            if isinstance(group, dict) and isinstance(group.get("hooks"), list)
+            for handler in group["hooks"]
+        )
+        if not already:
+            groups.append(json.loads(json.dumps(CODEX_HOOKS_BLOCK["hooks"][event][0])))
+            merged_any = True
+    if not merged_any:
+        return "skipped (palinode hooks already registered)"
+    path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
+    return "merged"
 
 
 def _write_slash_command(path: Path, body: str, force: bool) -> str:
@@ -1978,11 +2663,20 @@ class InitOptions:
     #: every recall call from it resolves that project. Off by default: the
     #: emitted block is unchanged unless the pin is asked for.
     pin_project: bool = False
+    #: Install the Codex recall hooks (SessionStart, UserPromptSubmit) into
+    #: ``.codex/``. Off unless asked for, like ``hook``.
+    codex_hook: bool = False
     #: Where to provision ``specs/prompts/`` — the memory store, not the
     #: project. ``None`` skips it (``--no-prompts``). Passed in rather than
     #: read from config inside `build_plan()` so the plan stays a pure
     #: function of its inputs and tests can point it at a tmp_path.
     prompts_dir: Path | None = None
+    #: Install the Cursor hooks (``.cursor/hooks.json`` + ``.cursor/hooks/``).
+    #: Opt-in: off unless ``--cursor-hooks`` is passed.
+    cursor_hooks: bool = False
+    #: Install the Antigravity hooks (``.agents/hooks.json`` + ``.agents/hooks/``).
+    #: Opt-in: off unless ``--agy-hooks`` is passed.
+    agy_hooks: bool = False
 
 
 def build_plan(target: Path, opts: InitOptions) -> list[PlannedWrite]:
@@ -2007,6 +2701,11 @@ def build_plan(target: Path, opts: InitOptions) -> list[PlannedWrite]:
     hook_script = target / ".claude" / "hooks" / "palinode-session-end.sh"
     start_hook_script = target / ".claude" / "hooks" / "palinode-session-start.sh"
     recall_hook_script = target / ".claude" / "hooks" / "palinode-user-prompt-submit.sh"
+    compact_hook_script = target / ".claude" / "hooks" / "palinode-post-compact.sh"
+    codex_hooks_json = target / ".codex" / "hooks.json"
+    codex_start_hook = target / ".codex" / "hooks" / "palinode-session-start.sh"
+    codex_recall_hook = target / ".codex" / "hooks" / "palinode-user-prompt-submit.sh"
+    codex_end_hook = target / ".codex" / "hooks" / "palinode-session-end.sh"
     mcp_json = target / ".mcp.json"
     wrap_cmd = target / ".claude" / "commands" / "wrap.md"
 
@@ -2042,8 +2741,70 @@ def build_plan(target: Path, opts: InitOptions) -> list[PlannedWrite]:
             lambda: _write_hook_script(recall_hook_script, opts.force, USER_PROMPT_SUBMIT_HOOK_SCRIPT),
         ))
         plan.append(PlannedWrite(
+            "compaction hook", compact_hook_script, "PostCompact checkpoint hook script",
+            lambda: _write_hook_script(compact_hook_script, opts.force, POST_COMPACT_HOOK_SCRIPT),
+        ))
+        plan.append(PlannedWrite(
             "settings.json", settings, "hook registration",
             lambda: _merge_settings(settings, opts.force),
+        ))
+    if opts.codex_hook:
+        # The same scripts Claude Code runs, copied under .codex/ so a Codex-only
+        # project does not depend on a .claude/ install.
+        plan.append(PlannedWrite(
+            "Codex session-start hook", codex_start_hook, "Codex SessionStart hook script",
+            lambda: _write_hook_script(codex_start_hook, opts.force, SESSION_START_HOOK_SCRIPT),
+        ))
+        plan.append(PlannedWrite(
+            "Codex recall hook", codex_recall_hook, "Codex UserPromptSubmit per-turn recall hook script",
+            lambda: _write_hook_script(codex_recall_hook, opts.force, USER_PROMPT_SUBMIT_HOOK_SCRIPT),
+        ))
+        plan.append(PlannedWrite(
+            "Codex session-end hook", codex_end_hook, "Codex SessionEnd capture floor (topic + last reply)",
+            lambda: _write_hook_script(codex_end_hook, opts.force, HOOK_SCRIPT),
+        ))
+        plan.append(PlannedWrite(
+            ".codex/hooks.json", codex_hooks_json,
+            "Codex hook registration, merged after any existing hooks",
+            lambda: _merge_codex_hooks(codex_hooks_json, opts.force),
+        ))
+    if opts.cursor_hooks:
+        cursor_hooks_dir = target / CURSOR_HOOKS_DIR
+        for name, content, what in (
+            ("palinode-cursor-hook.sh", CURSOR_HOOK_SCRIPT, "Cursor hook adapter"),
+            ("palinode-session-start.sh", SESSION_START_HOOK_SCRIPT, "sessionStart recall script"),
+            ("palinode-user-prompt-submit.sh", USER_PROMPT_SUBMIT_HOOK_SCRIPT, "beforeSubmitPrompt recall script"),
+        ):
+            script_path = cursor_hooks_dir / name
+            plan.append(PlannedWrite(
+                f"Cursor hook {name}", script_path, what,
+                lambda script_path=script_path, content=content: _write_hook_script(
+                    script_path, opts.force, content),
+            ))
+        cursor_hooks_json = target / ".cursor" / "hooks.json"
+        plan.append(PlannedWrite(
+            ".cursor/hooks.json", cursor_hooks_json,
+            "Cursor hook registration (sessionStart + beforeSubmitPrompt; existing entries kept)",
+            lambda: _merge_cursor_hooks(cursor_hooks_json, opts.force),
+        ))
+    if opts.agy_hooks:
+        agy_hooks_dir = target / ANTIGRAVITY_HOOKS_DIR
+        for name, content, what in (
+            ("palinode-agy-hook.sh", ANTIGRAVITY_HOOK_SCRIPT, "Antigravity hook adapter"),
+            ("palinode-session-start.sh", SESSION_START_HOOK_SCRIPT, "SessionStart recall script"),
+            ("palinode-user-prompt-submit.sh", USER_PROMPT_SUBMIT_HOOK_SCRIPT, "PreInvocation recall script"),
+        ):
+            script_path = agy_hooks_dir / name
+            plan.append(PlannedWrite(
+                f"Antigravity hook {name}", script_path, what,
+                lambda script_path=script_path, content=content: _write_hook_script(
+                    script_path, opts.force, content),
+            ))
+        agy_hooks_json = target / ".agents" / "hooks.json"
+        plan.append(PlannedWrite(
+            ".agents/hooks.json", agy_hooks_json,
+            "Antigravity hook registration (SessionStart + PreInvocation; existing hooks kept)",
+            lambda: _merge_agy_hooks(agy_hooks_json, agy_hooks_dir, opts.force),
         ))
     if opts.slash:
         wrap_body = WRAP_HEAVY_COMMAND_BODY if opts.wrap_policy == "heavy" else WRAP_COMMAND_BODY
@@ -2183,6 +2944,40 @@ def _display_path(path: Path, target: Path) -> str:
     ),
 )
 @click.option(
+    "--codex-hook/--no-codex-hook",
+    default=None,
+    help=(
+        "Opt in to the Codex hooks: SessionStart (scoped core-memory "
+        "digest), UserPromptSubmit (per-prompt recall) and SessionEnd (the "
+        "session-end capture floor, which reads the Codex rollout), written to "
+        ".codex/hooks/ and merged into .codex/hooks.json without touching "
+        "other tools' entries. Default: off for a new project; preserve the "
+        "existing choice when they are already installed."
+    ),
+)
+@click.option(
+    "--cursor-hooks/--no-cursor-hooks",
+    "cursor_hooks",
+    default=False,
+    help=(
+        "Opt in to Cursor hooks: .cursor/hooks.json registers sessionStart "
+        "(the project's core memories) and beforeSubmitPrompt (per-prompt "
+        "recall), merged into any existing hooks.json, with the scripts in "
+        ".cursor/hooks/. Default: off."
+    ),
+)
+@click.option(
+    "--agy-hooks/--no-agy-hooks",
+    "agy_hooks",
+    default=False,
+    help=(
+        "Opt in to Antigravity hooks (agy CLI and IDE): .agents/hooks.json registers SessionStart "
+        "(the project's core memories) and PreInvocation (per-prompt recall, "
+        "first model call of each turn), merged into any existing hooks.json, "
+        "with the scripts in .agents/hooks/. Default: off."
+    ),
+)
+@click.option(
     "--slash/--no-slash",
     default=True,
     help="Install the /wrap slash command for the save-before-clear reflex (/save and /ps are deprecated and no longer scaffolded)",
@@ -2291,6 +3086,9 @@ def init(
     agents,
     cursor,
     hook,
+    codex_hook,
+    cursor_hooks,
+    agy_hooks,
     slash,
     wrap_policy,
     skills,
@@ -2307,15 +3105,24 @@ def init(
 
     Creates (or appends to):
       .claude/CLAUDE.md                       — memory instructions for the agent
-      .claude/settings.json                   — SessionStart + SessionEnd + UserPromptSubmit hook registration
+      .claude/settings.json                   — SessionStart + SessionEnd + UserPromptSubmit + PostCompact hook registration
       .claude/hooks/palinode-session-start.sh — hook script (core-memory inject + context prime)
       .claude/hooks/palinode-session-end.sh   — hook script (fires on /clear, exit)
       .claude/hooks/palinode-user-prompt-submit.sh — hook script (per-turn implicit recall)
+      .claude/hooks/palinode-post-compact.sh  — hook script (saves the compaction summary as a checkpoint)
       .mcp.json                               — palinode MCP server block
+      .codex/hooks.json + .codex/hooks/       — Codex SessionStart + UserPromptSubmit
+                                                recall hooks and the SessionEnd capture
+                                                floor (with --codex-hook; merged
+                                                after existing entries, never replacing them)
       AGENTS.md                               — harness-neutral memory block (when AGENTS.md
                                                 or .agent/ is detected, or --agents)
       .cursor/rules/palinode.md               — harness-neutral memory block (when .cursor/
                                                 is detected, or --cursor)
+      .cursor/hooks.json, .cursor/hooks/      — Cursor sessionStart + beforeSubmitPrompt
+                                                recall (only with --cursor-hooks)
+      .agents/hooks.json, .agents/hooks/      — Antigravity SessionStart + PreInvocation
+                                                recall (only with --agy-hooks)
       .claude/skills/palinode-session/SKILL.md — ambient memory skill (plus
                                                 .cursor/skills/ and .agent/skills/ when
                                                 detected; --user for ~/.claude/skills/)
@@ -2374,6 +3181,10 @@ def init(
     # chosen mode on re-run; --force remains required to replace their scripts.
     if hook is None:
         hook = (target / ".claude" / "hooks" / "palinode-session-end.sh").is_file()
+    if codex_hook is None:
+        codex_hook = any(
+            (target / ".codex" / "hooks" / script).is_file() for _, script in _CODEX_HOOK_EVENTS
+        )
 
     # 'personal' scope makes /wrap typeable in every project, not just this
     # one. /wrap is the sole lifecycle command — /save and /ps are
@@ -2428,6 +3239,9 @@ def init(
         force_obsidian=force_obsidian,
         prompts_dir=prompts_dir,
         pin_project=pin_project,
+        codex_hook=codex_hook,
+        cursor_hooks=cursor_hooks,
+        agy_hooks=agy_hooks,
     )
     plan = build_plan(target, opts)
 
@@ -2442,9 +3256,16 @@ def init(
     click.echo(f"Palinode init → {target}")
     click.echo(f"  project slug: {slug}")
     if hook:
-        click.echo("  automatic Claude hooks: enabled by --hook (SessionEnd reads the Claude transcript; controls can pause/exclude it)")
+        click.echo("  automatic Claude hooks: enabled by --hook (SessionEnd reads the Claude transcript, PostCompact saves Claude Code's compaction summary; controls can pause/exclude both)")
     else:
-        click.echo("  automatic Claude hooks: not installed (use --hook to opt in to SessionStart, prompt recall, and transcript-derived SessionEnd capture)")
+        click.echo("  automatic Claude hooks: not installed (use --hook to opt in to SessionStart, prompt recall, transcript-derived SessionEnd capture, and compaction checkpoints)")
+    if codex_hook:
+        click.echo("  automatic Codex hooks: enabled by --codex-hook (SessionStart core-memory digest, per-prompt recall, and SessionEnd capture that reads the Codex rollout; controls can pause/exclude them)")
+        click.echo(f"    {CODEX_TRUST_NOTE}")
+    if cursor_hooks:
+        click.echo("  Cursor hooks: enabled by --cursor-hooks (sessionStart injects this project's core memories; beforeSubmitPrompt recalls per prompt; controls can pause both)")
+    if agy_hooks:
+        click.echo("  Antigravity hooks: enabled by --agy-hooks (SessionStart injects this project's core memories; PreInvocation recalls per prompt; controls can pause both)")
     if session_skill:
         click.echo("  instruction-driven session capture: palinode-session skill selected; it can guide conditional explicit MCP writes even without --hook")
     else:
@@ -2476,3 +3297,5 @@ def init(
     else:
         click.echo("  2. Open the project in Claude Code — the MCP server will connect on start")
         click.echo("  3. Try it:  \"search palinode for recent decisions on this project\"")
+    if codex_hook:
+        click.echo("  Codex: open Codex in this project and run /hooks to trust the palinode hooks.")

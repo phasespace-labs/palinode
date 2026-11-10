@@ -84,6 +84,11 @@ if [[ "$(uname -s)" != "Linux" ]]; then
     die "This installer requires Linux (systemd). For macOS, use launchd or another platform-native service manager."
 fi
 
+if [[ "$SCOPE" == "system" ]]; then
+    [[ "${EUID:-$(id -u)}" -eq 0 ]] || \
+        die "--system writes to /etc/systemd/system and needs root. Re-run with: sudo -E bash $0 --system ..."
+fi
+
 if ! command -v systemctl &>/dev/null; then
     die "systemctl not found. Is this a systemd system?"
 fi
@@ -126,8 +131,6 @@ if [[ "$SCOPE" == "system" ]]; then
     UNIT_DIR="/etc/systemd/system"
     SYSTEMCTL=( systemctl )
     export SYSTEMD_WANTED_BY="multi-user.target"
-    [[ "${EUID:-$(id -u)}" -eq 0 ]] || \
-        die "--system writes to $UNIT_DIR and needs root. Re-run with: sudo -E bash $0 --system ..."
 else
     UNIT_DIR="$HOME/.config/systemd/user"
     SYSTEMCTL=( systemctl --user )

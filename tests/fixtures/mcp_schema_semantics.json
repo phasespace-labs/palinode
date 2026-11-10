@@ -23,7 +23,8 @@
     "params": {
       "claims": {},
       "file_path": {},
-      "search": {}
+      "search": {},
+      "sessions": {}
     },
     "required": [
       "file_path"
@@ -226,7 +227,7 @@
     "required": []
   },
   "palinode_list": {
-    "description": "List memory files, optionally filtered by category, core status or frontmatter. Use to browse what memories exist before reading or searching.",
+    "description": "List memory files, optionally filtered by category, core status or frontmatter. Use to browse what memories exist before reading or searching. Scoped like palinode_search: this project's records and ones naming no project.",
     "params": {
       "category": {
         "enum": [
@@ -239,6 +240,7 @@
       },
       "core_only": {},
       "include_inbox": {},
+      "include_other_projects": {},
       "where": {}
     },
     "required": []
@@ -515,6 +517,7 @@
       "description": {},
       "expires_at": {},
       "memory_file": {},
+      "phrasings": {},
       "threshold": {},
       "trigger_id": {}
     },

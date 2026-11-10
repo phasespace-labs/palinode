@@ -770,13 +770,16 @@ scenarios:
       - *fill_ledger
     expect:
       answer_abstains: []
+      # Saying "I couldn't find it" while setting an ID anyway is not an
+      # abstention: the config must be left alone.
+      diff_empty: []
       answer_avoids: [filler_a]
-    acted: [answer_abstains]
+    acted: [answer_abstains, diff_empty]
     irrelevant: [filler_a]
     require_tests: false
     needs_memory: false
     metrics:
-      abstained: {abstains: true}
+      abstained: {abstains: true, diff_empty: true}
 
   # ── Row 6 — continue in the other client ─────────────────────────────────
   - id: r06-pos

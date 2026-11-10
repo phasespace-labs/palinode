@@ -219,20 +219,33 @@ def _hits(names: Iterable[str], tokens: dict[str, str], text: str) -> list[str]:
 
 
 #: An answer that stops to ask, or says it cannot tell. Pinned phrases; a
-#: judge model reviews the rows that lean on it (row 11).
+#: judge model reviews the rows that lean on it (row 11). Matched after
+#: :func:`_straight_quotes`, so ``'`` here also stands for a curly apostrophe.
 _ABSTAIN = re.compile(
-    r"\b(don'?t know|do not know|not sure|unsure|unclear|couldn'?t (?:find|determine|tell)|"
-    r"could not (?:find|determine|tell)|can'?t (?:find|determine|tell)|cannot (?:find|determine|tell)|"
+    r"\b(don'?t know|do not know|not sure|unsure|unclear|"
+    r"(?:couldn'?t|could not|can'?t|cannot) (?:find|determine|tell|recover|verify|safely)|"
+    r"don'?t (?:have|see) (?:any |the )?(?:prior |previous |agreed |saved )*(?:context|record|decision|batch)|"
     r"no record|not recorded|isn'?t recorded|no (?:agreed|recorded|settled)|"
-    r"which (?:one|transport|batch|backend) (?:do|should|would)|please (?:confirm|tell me|let me know)|"
+    r"(?:which|what) (?:one|transport|batch|backend)(?: id)? (?:do|should|would)|"
+    r"what(?: is|'?s) the (?:agreed |correct )?(?:batch|id|value)|"
+    r"please (?:confirm|tell me|let me know|provide|share|send)|"
+    r"(?:could|can|would) you (?:please )?(?:provide|share|tell me|confirm|send|give me)|send me (?:the|that)|"
     r"(?:need|needs) (?:you|your) (?:to )?(?:confirm|decide|clarify|input)|conflict(?:ing|s)?|"
     r"contradict(?:ory|s|ion)?|disagree(?:s|ment)?)\b",
     re.IGNORECASE,
 )
 
+#: Apostrophe look-alikes clients write in place of U+0027: Codex answers
+#: use U+2019 throughout (``couldn’t``).
+_APOSTROPHES = str.maketrans({"\u2019": "'", "\u2018": "'", "\u02bc": "'", "\uff07": "'"})
+
+
+def _straight_quotes(text: str) -> str:
+    return text.translate(_APOSTROPHES)
+
 
 def abstains(answer: str) -> bool:
-    return bool(_ABSTAIN.search(answer))
+    return bool(_ABSTAIN.search(_straight_quotes(answer)))
 
 
 def _side_text(delivery: dict[str, Any] | None, raw_patch: str) -> str | None:
@@ -276,6 +289,8 @@ def _check(key: str, refs: list[str], ctx: dict[str, Any]) -> bool | None:
         return len(_hits(refs, tokens, answer)) == len(refs) or abstains(answer)
     if key == "answer_abstains":
         return abstains(answer)
+    if key == "diff_empty":
+        return not diff.strip()
     if key == "side_effects_avoid":
         side = ctx["side_text"]
         return None if side is None else not _hits(refs, tokens, side)
@@ -327,6 +342,8 @@ def declared_metric(conds: dict[str, Any], ctx: dict[str, Any]) -> bool | None:
             results.append(len(_hits(arg, tokens, answer)) == 1)
         elif cond == "abstains":
             results.append(abstains(answer) == bool(arg))
+        elif cond == "diff_empty":
+            results.append((not diff.strip()) == bool(arg))
         elif cond == "side_effects_has_any":
             side = ctx["side_text"]
             results.append(None if side is None else bool(_hits(arg, tokens, side)))
@@ -613,7 +630,10 @@ def grade_cell(cell: dict[str, Any], cell_dir: str, *, foreign: dict[str, str],
     ]
     stage = None
     if passed is False:
-        if cell["arm"] == "palinode" and isinstance(seeded, dict) and seeded.get("ok") is False:
+        # A cell with no grading key (a negative) has nothing to seed-recall:
+        # its probe reports ok=false by construction, which is not a failure.
+        if (cell["arm"] == "palinode" and grading["key"]
+                and isinstance(seeded, dict) and seeded.get("ok") is False):
             stage = "seeded_recall"
         elif cell["arm"] == "palinode" and captured_failed:
             stage = "capture"

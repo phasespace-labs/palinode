@@ -1,7 +1,8 @@
 """A retired core memory must not be injected as a current assertion.
 
-The shipped SessionStart hook builds its digest from ``GET /list?core_only=true``.
-That listing dropped ``archive/``, non-visible records and *expired* cores, and
+The SessionStart hook used to build its digest from ``GET /list?core_only=true``
+(it now injects ``/context/prime``'s core memories; the OpenClaw plugin's
+per-turn core injection still reads the listing). That listing dropped ``archive/``, non-visible records and *expired* cores, and
 consulted nothing else — so a ``core: true`` decision superseded **in place**
 (``archive_memory(..., superseded_by=…)`` leaves the file at its path carrying
 ``status: archived`` + ``superseded_by``) was injected at session start beside
@@ -306,6 +307,9 @@ async def test_mcp_list_core_only_shows_the_retired_record_tagged(superseded_pai
     from palinode import mcp
 
     client, _memory_dir, a, b, _c = superseded_pair
+    # The MCP list is scoped to its session's project; pin the records' own,
+    # so the checkout this runs from is not taken as the session's project.
+    monkeypatch.setenv("PALINODE_PROJECT", "demo")
     monkeypatch.setattr(mcp, "_http_transport", httpx.ASGITransport(app=client.app))
     monkeypatch.setattr(mcp, "_http_client", None)
     monkeypatch.setattr(mcp, "_http_client_loop", None)
@@ -324,22 +328,25 @@ async def test_mcp_list_core_only_shows_the_retired_record_tagged(superseded_pai
 
 _LIST_REQUEST_RE = re.compile(r"""["'/]?(/list\?[a-z_=&]+)["']""")
 
-#: The shipped consumers that inject what ``/list?core_only=true`` returns.
-INJECTION_CONSUMERS = (
+#: The shipped consumer that still injects what ``/list?core_only=true`` returns.
+LIST_INJECTION_CONSUMERS = ("plugin/index.ts",)
+
+#: The session-start consumers: they inject ``/context/prime``'s core memories
+#: and request no listing at all, so the withholding below is the one that
+#: applies to them.
+PRIME_INJECTION_CONSUMERS = (
     "examples/hooks/palinode-session-start.sh",
     "palinode/cli/init.py",  # the embedded copy `palinode init` writes
-    "plugin/index.ts",
     "plugins/core/src/index.ts",
 )
 
 
-@pytest.mark.parametrize("source", INJECTION_CONSUMERS)
+@pytest.mark.parametrize("source", LIST_INJECTION_CONSUMERS)
 def test_injection_consumers_request_the_withholding_selection(superseded_pair, source):
     """Each consumer's own request string, replayed against the API.
 
-    They are unchanged by this fix and must stay that way: the default is the
-    injection-safe one, so a consumer that knows nothing about
-    ``include_retired_core`` cannot inject a retired core memory.
+    The default is the injection-safe one, so a consumer that knows nothing
+    about ``include_retired_core`` cannot inject a retired core memory.
     """
     client, _memory_dir, a, b, _c = superseded_pair
 
@@ -350,6 +357,15 @@ def test_injection_consumers_request_the_withholding_selection(superseded_pair, 
     rows = {row["file"] for row in client.get(requests.pop()).json()}
     assert b in rows
     assert a not in rows
+
+
+@pytest.mark.parametrize("source", PRIME_INJECTION_CONSUMERS)
+def test_session_start_consumers_inject_the_prime_digest_only(source):
+    text = (REPO_ROOT / source).read_text(encoding="utf-8")
+    if source == "palinode/cli/init.py":
+        from palinode.cli.init import SESSION_START_HOOK_SCRIPT as text
+    assert not _LIST_REQUEST_RE.findall(text), f"{source} requests a core listing"
+    assert "/context/prime" in text and "core_memories" in text
 
 
 def test_context_prime_core_section_withholds_the_superseded_record(superseded_pair):

@@ -95,6 +95,50 @@ def test_unmatched_closing_tag_is_rejected_even_with_arrays(tmp_path, monkeypatc
     assert "no matching opener" in exc.value.detail
 
 
+#: An absorbed-tail retry payload: the closer, then a well-formed opener of the same
+#: name, then the absorbed array. It ends in the array, not a tag, so the
+#: positional signal can't see it.
+_CLOSER_BEFORE_OPENER = (
+    "Shipped the ranker fix and the smoke rerun.</parameter>\n"
+    '<parameter name="decisions">["keep RRF", "drop the reranker"]'
+)
+
+
+def test_closer_before_its_opener_is_rejected_when_only_decisions_was_absorbed(
+    tmp_path, monkeypatch
+):
+    """`blockers` survived the malformed call and only `decisions` was
+    absorbed, so co-occurrence is off. Signal 2 has to catch it alone."""
+    with pytest.raises(HTTPException) as exc:
+        _call(tmp_path, monkeypatch, summary=_CLOSER_BEFORE_OPENER,
+              blockers=["smoke the rig"])
+
+    assert exc.value.status_code == 400
+    assert "no matching opener" in exc.value.detail
+    assert "`</parameter>`" in exc.value.detail
+
+
+@pytest.mark.parametrize("text", [
+    _CLOSER_BEFORE_OPENER,
+    "Saw </invoke> and later <invoke> in the transcript",
+    "One <summary>pair</summary> and a stray </summary> after it, then more prose",
+    "A self-closing <parameter/> opens nothing, so </parameter> is unmatched here",
+])
+def test_closer_without_a_preceding_open_opener_is_unmatched(text):
+    complaint = envelope_complaint(text, "summary", missing_params=())
+    assert complaint is not None
+    assert "no matching opener" in complaint
+
+
+@pytest.mark.parametrize("text", [
+    "<details><summary>Ranker notes</summary>RRF stays.</details> More prose.",
+    "Explained how <invoke> and </invoke> bracket a tool call, then moved on",
+    "Nested <invoke><invoke>inner</invoke></invoke> calls, described in prose",
+])
+def test_in_order_markup_is_still_matched(text):
+    assert envelope_complaint(text, "summary", missing_params=()) is None
+
+
 def test_trailing_envelope_is_rejected_even_with_arrays(tmp_path, monkeypatch):
     """Positional: absorption lands the envelope at the very tail."""
     with pytest.raises(HTTPException) as exc:

@@ -1,8 +1,10 @@
 """Tests for session-end semantic dedup.
 
 Option (a): when ``palinode_session_end`` is called and a recently indexed
-save has near-identical content, skip the individual file write but still
-append to daily/ and the project-status file.
+save from the same session has near-identical content, skip the individual
+file write but still append to daily/ and the project-status file. "Same
+session" means the candidate's frontmatter carries the entry's ``session_id``
+and names the entry's project; with no ``session_id`` nothing is suppressed.
 
 These tests exercise the real DB + helper path (no mocks for the store) and
 patch only the embedder to keep the suite Ollama-free.
@@ -11,6 +13,7 @@ from __future__ import annotations
 
 import math
 import os
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from unittest import mock
 
@@ -101,6 +104,40 @@ def _isolated_env(tmp_path, monkeypatch):
     yield memory_dir
 
 
+SESSION_A = "11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+SESSION_B = "22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+
+@contextmanager
+def _embeds(vec: list[float]):
+    """Every embedding is ``vec``: the dedup probe and the save's inline indexer.
+
+    Patching ``embed_many`` too lets a real write index itself (as ``/save``
+    does inline) instead of reaching for Ollama, so the prior record in these
+    tests is exactly what production writes and indexes.
+    """
+    with (
+        mock.patch("palinode.core.embedder.embed", return_value=vec),
+        mock.patch("palinode.core.embedder.embed_many", side_effect=lambda texts: [vec] * len(texts)),
+    ):
+        yield
+
+
+def _chunk_ids(file_path: str) -> set[str]:
+    db = store.get_db()
+    try:
+        rows = db.execute("SELECT id FROM chunks WHERE file_path = ?", (file_path,)).fetchall()
+    finally:
+        db.close()
+    return {row[0] for row in rows}
+
+
+def _session_end(**kwargs):
+    from palinode.api.server import session_end_api, SessionEndRequest
+
+    return session_end_api(SessionEndRequest(**kwargs))
+
+
 def _count_individual_session_files(memory_dir: str) -> int:
     projects_dir = os.path.join(memory_dir, "projects")
     if not os.path.isdir(projects_dir):
@@ -155,7 +192,10 @@ def test_above_threshold_skips_individual_file(_isolated_env):
     _index_prior_save(
         file_path=os.path.join(memory_dir, "projects", "earlier-snapshot.md"),
         slug_id="projects-earlier-snapshot",
-        content="Earlier snapshot of the same work",
+        content=(
+            f"---\nentities: [project/palinode]\nsession_id: {SESSION_A}\n---\n"
+            "Earlier snapshot of the same work"
+        ),
         embedding=matching,
     )
 
@@ -174,6 +214,7 @@ def test_above_threshold_skips_individual_file(_isolated_env):
             summary="Same content, reformatted by session-end",
             project="palinode",
             source="test",
+            session_id=SESSION_A,
         )
         result = session_end_api(req)
 
@@ -191,6 +232,238 @@ def test_above_threshold_skips_individual_file(_isolated_env):
     assert "Same content, reformatted" in status_text
 
 
+def test_near_identical_save_in_another_project_does_not_dedup(_isolated_env):
+    """Another project's near-identical recent save must not suppress this one.
+
+    Floor captures share boilerplate ("Auto-captured (other, N messages).
+    Topic: ..."), so two projects' entries score >= 0.85. Matching across
+    projects dropped a project's only searchable record of its decision.
+    """
+    memory_dir = _isolated_env
+    matching = _matching_embedding()
+    _index_prior_save(
+        file_path=os.path.join(memory_dir, "projects", "session-end-other.md"),
+        slug_id="projects-session-end-other",
+        content=(
+            f"---\nentities: [project/quenby]\nsession_id: {SESSION_A}\n---\n"
+            "Auto-captured. Batch avocet-1111aaaa."
+        ),
+        embedding=matching,
+    )
+
+    with (
+        mock.patch("palinode.core.embedder.embed", return_value=matching),
+        mock.patch("palinode.api.server._generate_description", return_value="Floor"),
+    ):
+        from palinode.api.server import session_end_api, SessionEndRequest
+
+        result = session_end_api(SessionEndRequest(
+            summary="Auto-captured. Batch avocet-2222bbbb.",
+            project="halyard",
+            source="claude-code-hook",
+            session_id=SESSION_A,
+        ))
+
+    assert result.get("individual_file") is not None
+    assert os.path.exists(result["individual_file"])
+    assert "deduplicated_against" not in result
+    assert "avocet-2222bbbb" in open(result["individual_file"], encoding="utf-8").read()
+
+
+def test_projectless_entry_dedups_only_against_projectless_saves(_isolated_env):
+    """An entry naming no project ignores project-tagged saves, matches global ones."""
+    memory_dir = _isolated_env
+    matching = _matching_embedding()
+    _index_prior_save(
+        file_path=os.path.join(memory_dir, "projects", "tagged.md"),
+        slug_id="projects-tagged",
+        content=f"---\nentities: [project/quenby]\nsession_id: {SESSION_A}\n---\nSame work",
+        embedding=matching,
+    )
+    from palinode.api.search_helpers import _check_session_end_dedup
+
+    with mock.patch("palinode.core.embedder.embed", return_value=matching):
+        assert _check_session_end_dedup("Same work", project=None, session_id=SESSION_A)[0] is None
+
+    _index_prior_save(
+        file_path=os.path.join(memory_dir, "insights", "global.md"),
+        slug_id="insights-global",
+        content=f"---\nsession_id: {SESSION_A}\n---\nSame work, no project",
+        embedding=matching,
+    )
+    with mock.patch("palinode.core.embedder.embed", return_value=matching):
+        assert _check_session_end_dedup(
+            "Same work", project=None, session_id=SESSION_A,
+        )[0] == "insights-global"
+        assert _check_session_end_dedup(
+            "Same work", project="quenby", session_id=SESSION_A,
+        )[0] == "projects-tagged"
+
+
+def test_different_session_same_project_changed_value_is_written(_isolated_env):
+    """A later session's changed decision must get its own searchable file.
+
+    Session A decides "batch X"; session B in the same project, within the
+    window, changes it to "batch Y". The two summaries differ only in the value
+    and embed above the threshold. Suppressing B's file left search serving A's
+    stale value, with B's decision only in the daily note.
+    """
+    memory_dir = _isolated_env
+    matching = _matching_embedding()
+
+    with (
+        _embeds(matching),
+        mock.patch("palinode.api.server._generate_description", return_value="Batch"),
+    ):
+        first = _session_end(
+            summary="Decided the ingest batch: use batch heron-1111aaaa.",
+            project="palinode", source="claude-code-hook",
+            trigger="session-end-hook", session_id=SESSION_A,
+        )
+        assert first.get("individual_file") is not None
+        assert _chunk_ids(first["individual_file"]), "prior record must be indexed"
+
+        second = _session_end(
+            summary="Decided the ingest batch: use batch heron-2222bbbb.",
+            project="palinode", source="claude-code-hook",
+            trigger="session-end-hook", session_id=SESSION_B,
+        )
+
+    assert "deduplicated_against" not in second
+    assert second.get("individual_file") is not None
+    assert second["individual_file"] != first["individual_file"]
+    assert "heron-2222bbbb" in open(second["individual_file"], encoding="utf-8").read()
+    assert _count_individual_session_files(memory_dir) == 2
+
+
+def test_same_session_reformulation_still_dedups(_isolated_env):
+    """One session restating its own capture is still suppressed (end to end).
+
+    The prior record is a real session-end write, so this also proves the
+    ``session_id`` the request carries lands in frontmatter where the dedup
+    reads it back.
+    """
+    memory_dir = _isolated_env
+    matching = _matching_embedding()
+
+    with (
+        _embeds(matching),
+        mock.patch("palinode.api.server._generate_description", return_value="Batch"),
+    ):
+        first = _session_end(
+            summary="Decided the ingest batch: use batch heron-1111aaaa.",
+            project="palinode", source="cli", session_id=SESSION_A,
+        )
+        first_ids = _chunk_ids(first["individual_file"])
+        assert first_ids, "prior record must be indexed"
+
+        second = _session_end(
+            summary="Ingest batch settled on heron-1111aaaa.",
+            project="palinode", source="cli", session_id=SESSION_A,
+        )
+
+    assert second.get("deduplicated_against") in first_ids
+    assert second.get("individual_file") is None
+    assert _count_individual_session_files(memory_dir) == 1
+    daily = open(os.path.join(memory_dir, second["daily_file"]), encoding="utf-8").read()
+    assert "Ingest batch settled on heron-1111aaaa." in daily
+
+
+def test_save_with_session_id_metadata_is_a_same_session_candidate(_isolated_env):
+    """A ``/save`` carrying ``metadata.session_id`` (as the post-compact hook's does) dedups.
+
+    Only for the session it names: another session's entry ignores it.
+    """
+    matching = _matching_embedding()
+    from palinode.api.server import save_api, SaveRequest
+
+    with (
+        _embeds(matching),
+        mock.patch("palinode.api.server._generate_description", return_value="Snap"),
+    ):
+        saved = save_api(SaveRequest(
+            content="Snapshot: use batch heron-1111aaaa.",
+            type="ProjectSnapshot", project="palinode",
+            metadata={"session_id": SESSION_A},
+        ))
+    saved_ids = _chunk_ids(saved["file_path"])
+    assert saved_ids, "the save must be indexed"
+
+    from palinode.api.search_helpers import _check_session_end_dedup
+
+    with _embeds(matching):
+        assert _check_session_end_dedup(
+            "Wrap: use batch heron-1111aaaa.", project="palinode", session_id=SESSION_A,
+        )[0] in saved_ids
+        assert _check_session_end_dedup(
+            "Wrap: use batch heron-1111aaaa.", project="palinode", session_id=SESSION_B,
+        )[0] is None
+
+
+def test_entry_without_session_id_is_never_suppressed(_isolated_env):
+    """No identity on the new entry: write the file, and skip the embed call."""
+    memory_dir = _isolated_env
+    matching = _matching_embedding()
+    _index_prior_save(
+        file_path=os.path.join(memory_dir, "projects", "snapshot-a.md"),
+        slug_id="projects-snapshot-a",
+        content=(
+            f"---\nentities: [project/palinode]\nsession_id: {SESSION_A}\n---\n"
+            "Snapshot: use batch heron-1111aaaa."
+        ),
+        embedding=matching,
+    )
+    from palinode.api.search_helpers import _check_session_end_dedup
+
+    with mock.patch("palinode.core.embedder.embed", return_value=matching) as embed:
+        assert _check_session_end_dedup(
+            "Wrap: use batch heron-1111aaaa.", project="palinode",
+        ) == (None, 0.0)
+        assert _check_session_end_dedup(
+            "Wrap: use batch heron-1111aaaa.", project="palinode", session_id="  ",
+        ) == (None, 0.0)
+        embed.assert_not_called()
+
+    with (
+        _embeds(matching),
+        mock.patch("palinode.api.server._generate_description", return_value="Wrap"),
+    ):
+        result = _session_end(
+            summary="Wrap: use batch heron-1111aaaa.",
+            project="palinode", source="claude-code",
+        )
+
+    assert "deduplicated_against" not in result
+    assert result.get("individual_file") is not None
+    assert os.path.exists(result["individual_file"])
+
+
+def test_candidate_without_session_id_is_never_a_match(_isolated_env):
+    """No identity on the candidate: it cannot suppress, even at similarity 1.0."""
+    memory_dir = _isolated_env
+    matching = _matching_embedding()
+    _index_prior_save(
+        file_path=os.path.join(memory_dir, "projects", "snapshot-anon.md"),
+        slug_id="projects-snapshot-anon",
+        content="---\nentities: [project/palinode]\n---\nSnapshot: use batch heron-1111aaaa.",
+        embedding=matching,
+    )
+
+    with (
+        _embeds(matching),
+        mock.patch("palinode.api.server._generate_description", return_value="Floor"),
+    ):
+        result = _session_end(
+            summary="Auto-captured. Use batch heron-1111aaaa.",
+            project="palinode", source="claude-code-hook",
+            trigger="session-end-hook", session_id=SESSION_A,
+        )
+
+    assert "deduplicated_against" not in result
+    assert result.get("individual_file") is not None
+    assert os.path.exists(result["individual_file"])
+
+
 def test_above_threshold_outside_window_does_not_dedup(_isolated_env):
     """An old save (outside the lookback window) must not trigger dedup."""
     memory_dir = _isolated_env
@@ -202,7 +475,10 @@ def test_above_threshold_outside_window_does_not_dedup(_isolated_env):
     _index_prior_save(
         file_path=os.path.join(memory_dir, "projects", "old-snapshot.md"),
         slug_id="projects-old-snapshot",
-        content="Old snapshot from earlier today",
+        content=(
+            f"---\nentities: [project/palinode]\nsession_id: {SESSION_A}\n---\n"
+            "Old snapshot from earlier today"
+        ),
         embedding=matching,
         mtime=long_ago,
     )
@@ -217,6 +493,7 @@ def test_above_threshold_outside_window_does_not_dedup(_isolated_env):
             summary="A fresh session-end after a long break",
             project="palinode",
             source="test",
+            session_id=SESSION_A,
         )
         result = session_end_api(req)
 
@@ -235,7 +512,7 @@ def test_embedder_failure_writes_both_files(_isolated_env):
     _index_prior_save(
         file_path=os.path.join(memory_dir, "projects", "perfect-match.md"),
         slug_id="projects-perfect-match",
-        content="Same as new",
+        content=f"---\nentities: [project/palinode]\nsession_id: {SESSION_A}\n---\nSame as new",
         embedding=_matching_embedding(),
     )
 
@@ -249,6 +526,7 @@ def test_embedder_failure_writes_both_files(_isolated_env):
             summary="Should still write because dedup degraded gracefully",
             project="palinode",
             source="test",
+            session_id=SESSION_A,
         )
         result = session_end_api(req)
 

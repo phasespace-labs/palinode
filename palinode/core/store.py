@@ -22,6 +22,12 @@ from contextlib import contextmanager
 from typing import Any, Callable, Collection, Iterator, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from palinode.core.config import config
+from palinode.core.defaults import (
+    TRIGGER_FLOOR,
+    TRIGGER_LEAD_MARGIN,
+    TRIGGER_MIN_SHARED_TERMS,
+    TRIGGER_THRESHOLD_DEFAULT,
+)
 from palinode.core import aliases
 from palinode.core import expiry as _expiry
 from palinode.core import parser as _parser
@@ -605,7 +611,8 @@ def init_db() -> None:
             id TEXT PRIMARY KEY,
             description TEXT NOT NULL,
             memory_file TEXT NOT NULL,
-            threshold FLOAT DEFAULT 0.75,
+            threshold FLOAT DEFAULT 0.65,
+            threshold_origin TEXT,
             cooldown_hours INT DEFAULT 24,
             last_fired TEXT,
             fire_count INT DEFAULT 0,
@@ -623,6 +630,27 @@ def init_db() -> None:
             db.execute(f"ALTER TABLE triggers ADD COLUMN {_col}")
         except sqlite3.OperationalError:
             pass  # Column already exists
+    _migrate_trigger_thresholds(db)
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS trigger_phrasings (
+            trigger_id TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            phrasing TEXT NOT NULL,
+            embedding TEXT NOT NULL,
+            PRIMARY KEY (trigger_id, position)
+        )
+    """)
+    # Each trigger's own words (description + phrasings), one row per text,
+    # porter-stemmed so "merged" meets "merge". The shared-term gate in
+    # check_triggers reads it; see _trigger_shared_terms.
+    db.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS triggers_fts USING fts5(
+            trigger_id UNINDEXED,
+            body,
+            tokenize='porter unicode61'
+        )
+    """)
+    _backfill_trigger_terms(db)
     db.execute(f"""
         CREATE VIRTUAL TABLE IF NOT EXISTS triggers_vec USING vec0(
             id TEXT PRIMARY KEY,
@@ -1464,6 +1492,40 @@ def bm25_query_scale(
     return total
 
 
+def keyword_unit_hits(
+    db: sqlite3.Connection,
+    units: Sequence[str],
+    rowids: Sequence[int],
+    *,
+    table: str = "chunks_fts",
+) -> dict[int, frozenset[str]]:
+    """Which of the query's units each candidate row holds, lowercased.
+
+    A row of a one-unit query holds that unit (the row came from matching it),
+    so no query is run; otherwise one query per distinct unit, restricted to
+    the candidate rows — the queries :func:`keyword_chance` needs anyway, so a
+    caller that wants both passes these hits on to it.
+    """
+    distinct = list(dict.fromkeys(units))
+    ids = list(dict.fromkeys(int(r) for r in rowids))
+    if not ids or not distinct:
+        return {rowid: frozenset() for rowid in ids}
+    if len(distinct) == 1:
+        return dict.fromkeys(ids, frozenset({distinct[0].lower()}))
+    if not table.isidentifier():
+        raise ValueError(f"not an FTS5 table name: {table!r}")
+    hits: dict[int, set[str]] = {rowid: set() for rowid in ids}
+    marks = ",".join("?" * len(ids))
+    for unit in distinct:
+        for (rowid,) in db.execute(
+            f"SELECT rowid FROM {table} WHERE {table} MATCH ? "  # nosec B608
+            f"AND rowid IN ({marks})",
+            (unit, *ids),
+        ):
+            hits[rowid].add(unit.lower())
+    return {rowid: frozenset(found) for rowid, found in hits.items()}
+
+
 def keyword_chance(
     db: sqlite3.Connection,
     units: Sequence[str],
@@ -1471,6 +1533,7 @@ def keyword_chance(
     *,
     table: str = "chunks_fts",
     counts: Mapping[str, int] | None = None,
+    hits: Mapping[int, frozenset[str]] | None = None,
 ) -> dict[int, float | None]:
     """How many documents of this index chance alone would give each row's
     combination of the query's terms.
@@ -1521,16 +1584,15 @@ def keyword_chance(
     if n_docs <= 0.0:
         return dict(figures)
     discriminating: set[int] = set()
-    marks = ",".join("?" * len(ids))
+    if hits is None:
+        hits = keyword_unit_hits(db, distinct, ids, table=table)
     for unit in distinct:
         share = counts.get(unit, 0) / n_docs
         if share <= 0.0:
             continue
-        for (rowid,) in db.execute(
-            f"SELECT rowid FROM {table} WHERE {table} MATCH ? "  # nosec B608
-            f"AND rowid IN ({marks})",
-            (unit, *ids),
-        ):
+        for rowid in ids:
+            if unit.lower() not in hits.get(rowid, frozenset()):
+                continue
             figures[rowid] *= share
             # FTS5's IDF is positive below half the index (see _BM25_IDF_FLOOR).
             if share < 0.5:
@@ -1604,10 +1666,12 @@ def search_fts(query: str, category: str | None = None, top_k: int = 10,
         # which the keyword arm's verdict reads beside the score.
         counts = fts_unit_counts(db, units) if rows else {}
         scale = bm25_query_scale(db, units, counts=counts) if rows else 0.0
-        chance = (
-            keyword_chance(db, units, [row["fts_rowid"] for row in rows], counts=counts)
-            if rows else {}
-        )
+        rowids = [row["fts_rowid"] for row in rows]
+        # Which query units each row holds: the confidence verdict asks
+        # whether a keyword match covers the prompt's subject. The same
+        # per-unit queries give the chance figure, so they run once.
+        hits = keyword_unit_hits(db, units, rowids) if rows else {}
+        chance = keyword_chance(db, units, rowids, counts=counts, hits=hits) if rows else {}
     finally:
         db.close()
 
@@ -1639,6 +1703,7 @@ def search_fts(query: str, category: str | None = None, top_k: int = 10,
             "last_recalled": row["last_recalled"],
             "score": normalized,
             "keyword_chance": chance.get(row["fts_rowid"]),
+            "keyword_units": sorted(hits.get(row["fts_rowid"], frozenset())),
         })
 
     return results
@@ -1915,11 +1980,42 @@ def list_chunks_matching(conditions: list[tuple[str, str]]) -> list[dict[str, An
     return matches
 
 
+def list_chunks_with_key(key: str) -> list[dict[str, Any]]:
+    """The chunks whose indexed frontmatter has ``key`` at all, whatever its value.
+
+    Each is its ``id``, ``file_path``, ``content`` and parsed ``metadata``: the
+    row shape the visibility gate judges. The same metadata
+    :func:`list_chunks_matching` reads, so "no chunk has the key" is exactly why
+    a ``where`` entry on it can never match.
+    """
+    db = get_db()
+    try:
+        # Only a prefilter: the serialised metadata holds the key as a quoted
+        # string, and the parse below decides. LIKE's wildcards and case-folding
+        # can only widen it.
+        rows = db.execute(
+            "SELECT id, file_path, content, metadata FROM chunks WHERE metadata LIKE ?",
+            (f'%"{key}"%',),
+        ).fetchall()
+    finally:
+        db.close()
+    found = []
+    for row in rows:
+        metadata = json.loads(row["metadata"]) if row["metadata"] else {}
+        if isinstance(metadata, dict) and key in metadata:
+            found.append({
+                "id": row["id"], "file_path": row["file_path"],
+                "content": row["content"], "metadata": metadata,
+            })
+    return found
+
+
 def recent_save_embeddings(
     window_minutes: int,
     now: datetime | None = None,
     fetch_limit: int = 200,
-) -> list[tuple[str, list[float]]]:
+    with_paths: bool = False,
+) -> list[tuple[str, list[float]]] | list[tuple[str, str, list[float]]]:
     """Return embeddings of chunks indexed within the last ``window_minutes``.
 
     Backs the session-end semantic-dedup check.  Joins ``chunks_vec``
@@ -1948,10 +2044,13 @@ def recent_save_embeddings(
         now: Override for the current time, primarily for tests.  Defaults
             to wall-clock UTC.
         fetch_limit: Max number of rows to inspect (rowid-ordered).
+        with_paths: Return ``(slug, file_path, embedding)`` triples, so a
+            caller can read each candidate's live frontmatter (session-end
+            dedup scopes candidates to the entry's project).
 
     Returns:
-        List of ``(slug, embedding)`` tuples for chunks whose source file
-        mtime is within the window.  Order is most-recent-first.  Empty
+        List of ``(slug, embedding)`` tuples (triples with ``with_paths``)
+        for chunks whose source file mtime is within the window.  Order is most-recent-first.  Empty
         list on any DB error or when the window is non-positive.
     """
     if window_minutes <= 0:
@@ -2010,7 +2109,7 @@ def recent_save_embeddings(
         except (ValueError, struct.error, TypeError):
             continue
         if vec:
-            out.append((row["id"], vec))
+            out.append((row["id"], file_path, vec) if with_paths else (row["id"], vec))
     return out
 
 
@@ -2718,15 +2817,111 @@ def search_associative(
     return sorted(results, key=lambda r: r["score"], reverse=True)[:top_k]
 
 
+def _migrate_trigger_thresholds(db: sqlite3.Connection) -> None:
+    """Preserve untraceable legacy settings; a defaulted threshold follows the default."""
+    columns = {row[1] for row in db.execute("PRAGMA table_info(triggers)")}
+    if "threshold_origin" not in columns:
+        db.execute("ALTER TABLE triggers ADD COLUMN threshold_origin TEXT")
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS trigger_threshold_migrations (
+            trigger_id TEXT PRIMARY KEY,
+            old_threshold FLOAT,
+            new_threshold FLOAT,
+            outcome TEXT NOT NULL
+        )
+    """)
+    rows = db.execute("""
+        SELECT id, threshold, threshold_origin FROM triggers
+        WHERE threshold_origin IS NULL
+           OR (threshold_origin = 'default' AND abs(threshold - ?) > 1e-9)
+        ORDER BY id
+    """, (TRIGGER_THRESHOLD_DEFAULT,)).fetchall()
+    for row in rows:
+        known_default = row["threshold_origin"] == "default"
+        new_threshold = TRIGGER_THRESHOLD_DEFAULT if known_default else row["threshold"]
+        outcome = "migrated_default" if known_default else "preserved_unknown_origin"
+        # A defaulted threshold is re-migrated whenever the default moves, so
+        # its audit row records the latest move; an unknown origin is logged once.
+        verb = "INSERT OR REPLACE" if known_default else "INSERT OR IGNORE"
+        cursor = db.execute(f"""
+            {verb} INTO trigger_threshold_migrations
+                (trigger_id, old_threshold, new_threshold, outcome) VALUES (?, ?, ?, ?)
+        """, (row["id"], row["threshold"], new_threshold, outcome))
+        if known_default:
+            db.execute("UPDATE triggers SET threshold = ? WHERE id = ?",
+                       (new_threshold, row["id"]))
+        if cursor.rowcount:
+            log = _store_logger.info if known_default else _store_logger.warning
+            log("Trigger threshold migration id=%s old=%s new=%s outcome=%s",
+                row["id"], row["threshold"], new_threshold, outcome)
+
+
+def _index_trigger_terms(
+    db: sqlite3.Connection, trigger_id: str, description: str, phrasings: Sequence[str]
+) -> None:
+    """Replace *trigger_id*'s rows in ``triggers_fts`` with its current texts."""
+    db.execute("DELETE FROM triggers_fts WHERE trigger_id = ?", (trigger_id,))
+    db.executemany(
+        "INSERT INTO triggers_fts (trigger_id, body) VALUES (?, ?)",
+        [(trigger_id, text) for text in (description, *phrasings)],
+    )
+
+
+def _backfill_trigger_terms(db: sqlite3.Connection) -> None:
+    """Index the words of every trigger registered before ``triggers_fts`` existed.
+
+    Every indexed trigger has at least its description row, so a trigger with
+    no rows is exactly one that predates the table. Ordered by id, and a second
+    run finds nothing to do.
+    """
+    missing = db.execute("""
+        SELECT id, description FROM triggers
+        WHERE id NOT IN (SELECT trigger_id FROM triggers_fts)
+        ORDER BY id
+    """).fetchall()
+    for trigger_id, description in missing:
+        phrasings = [row[0] for row in db.execute(
+            "SELECT phrasing FROM trigger_phrasings WHERE trigger_id = ? ORDER BY position",
+            (trigger_id,),
+        )]
+        _index_trigger_terms(db, trigger_id, description, phrasings)
+    if missing:
+        _store_logger.info("Indexed trigger terms for %d existing trigger(s)", len(missing))
+
+
+def _trigger_shared_terms(
+    db: sqlite3.Connection, trigger_id: str, query: str, enough: int | None = None
+) -> int:
+    """How many of the prompt's content units occur in the trigger's own words.
+
+    Units are :func:`fts_match_units` of the prompt (stopwords dropped, a
+    multi-word token kept as a phrase), counted once each regardless of case;
+    a unit counts when any of the trigger's texts matches it under the porter
+    tokenizer. One small query per unit, so counting stops at *enough* when
+    given: a pasted log as the prompt should not cost a query per word.
+    """
+    shared = 0
+    for unit in dict.fromkeys(unit.lower() for unit in fts_match_units(query)):
+        if enough is not None and shared >= enough:
+            break
+        shared += db.execute(
+            "SELECT 1 FROM triggers_fts WHERE triggers_fts MATCH ? AND trigger_id = ? LIMIT 1",
+            (unit, trigger_id),
+        ).fetchone() is not None
+    return shared
+
+
 def add_trigger(
     trigger_id: str,
     description: str, 
     memory_file: str,
     embedding: list[float],
-    threshold: float = 0.75,
+    threshold: float | None = None,
     cooldown_hours: int = 24,
     expires_at: str | None = None,
     authority: str | None = None,
+    phrasings: Sequence[str] = (),
+    phrasing_embeddings: Sequence[list[float]] = (),
 ) -> None:
     """Register a prospective trigger.
 
@@ -2740,13 +2935,19 @@ def add_trigger(
         expires_at: ISO-8601 timestamp after which the trigger no longer
             fires (``None`` = never expires). See ``palinode.core.expiry``.
         authority: Free text naming who/what licensed this trigger to act.
+        phrasings: Alternative example user prompts, scored on their maximum.
+        phrasing_embeddings: One pre-computed embedding per phrasing.
     """
+    if len(phrasings) != len(phrasing_embeddings):
+        raise ValueError("Each phrasing needs an embedding")
+    threshold_origin = "default" if threshold is None else "explicit"
+    threshold = TRIGGER_THRESHOLD_DEFAULT if threshold is None else threshold
     db = get_db()
     now = _utc_now().isoformat().replace("+00:00", "Z")
     db.execute("""
-        INSERT OR REPLACE INTO triggers (id, description, memory_file, threshold, cooldown_hours, created_at, enabled, fire_count, expires_at, authority)
-        VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?)
-    """, (trigger_id, description, memory_file, threshold, cooldown_hours, now, expires_at, authority))
+        INSERT OR REPLACE INTO triggers (id, description, memory_file, threshold, cooldown_hours, created_at, enabled, fire_count, expires_at, authority, threshold_origin)
+        VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?)
+    """, (trigger_id, description, memory_file, threshold, cooldown_hours, now, expires_at, authority, threshold_origin))
     
     # ADR-002: vec0 does not reliably honor `INSERT OR REPLACE` (can raise a
     # UNIQUE constraint error on an existing primary key instead of replacing
@@ -2761,18 +2962,31 @@ def add_trigger(
         VALUES (?, ?)
     """, (trigger_id, emb_json))
 
+    db.execute("DELETE FROM trigger_phrasings WHERE trigger_id = ?", (trigger_id,))
+    db.executemany(
+        "INSERT INTO trigger_phrasings VALUES (?, ?, ?, ?)",
+        [(trigger_id, index, text, json.dumps(vector))
+         for index, (text, vector) in enumerate(zip(phrasings, phrasing_embeddings, strict=True))],
+    )
+    _index_trigger_terms(db, trigger_id, description, phrasings)
     db.commit()
     db.close()
 
 def check_triggers(
     query_embedding: list[float],
+    query: str,
     cooldown_bypass: bool = False,
     deliverable: Callable[[str], bool] | None = None,
 ) -> list[dict[str, Any]]:
-    """Check if any triggers match the current context.
+    """Fire the best eligible trigger if it clears its threshold, leads by 0.06,
+    and shares at least ``TRIGGER_MIN_SHARED_TERMS`` words with the prompt.
+
+    The shared-term gate applies to the winner only. A winner that fails it
+    fires nothing: the runner-up never inherits the prompt.
 
     Args:
         query_embedding: Embedding of the current user message.
+        query: The user message itself, for the shared-term gate.
         cooldown_bypass: If True, ignore cooldown (useful for testing).
         deliverable: Optional predicate on ``memory_file``. A trigger whose
             target fails it is dropped *before* the fire is recorded, so an
@@ -2784,29 +2998,7 @@ def check_triggers(
         List of fired trigger dicts with memory_file and trigger info.
     """
     db = get_db()
-    query_vec_json = json.dumps(query_embedding)
-
-    # vec0 KNN cannot pre-filter on a joined column, so every filter below —
-    # enabled, expiry, threshold, cooldown, deliverability — runs on whatever
-    # the KNN window returned. A fixed window (it was 10) is therefore a
-    # silent eligibility cap: ten disabled, expired, cooling-down or
-    # undeliverable near-neighbours fill it and a trigger that would have
-    # fired is never even scored. Asking for the whole table makes every
-    # registered trigger a candidate. Trigger tables are operator-sized
-    # (registered by hand or one per consolidation layer), so this is a
-    # bounded scan of a small vec0 index, not a corpus-wide one.
-    candidate_count = db.execute("SELECT COUNT(*) FROM triggers_vec").fetchone()[0]
-    if not candidate_count:
-        db.close()
-        return []
-
-    rows = db.execute("""
-        SELECT t.*, v.distance
-        FROM triggers_vec v
-        JOIN triggers t ON v.id = t.id
-        WHERE v.embedding MATCH ? AND k = ?
-    """, (query_vec_json, candidate_count)).fetchall()
-
+    rows = _score_triggers(db, query_embedding)
     results = []
     now = _utc_now()
     
@@ -2820,44 +3012,70 @@ def check_triggers(
             _expiry.report_expired_once("trigger", row["id"], row["expires_at"])
             continue
 
-        dist = row["distance"] or 0
-        score = 1.0 - ((dist ** 2) / 2.0)
-        
-        if score >= row["threshold"]:
-            if not cooldown_bypass and row["last_fired"]:
-                # ``now`` is aware, so ``last_fired`` must be too — the same
-                # parse as ``expires_at``: ``Z`` or offset as written by
-                # ``update_trigger_fired``, a legacy naive string as UTC.
-                # An unparseable value cannot gate; the trigger fires and
-                # the firing rewrites the column in the current format.
-                last_fired_date = _expiry.parse_expires_at(row["last_fired"])
-                if last_fired_date is not None:
-                    hours_since = (now - last_fired_date).total_seconds() / 3600
-                    if hours_since < row["cooldown_hours"]:
-                        continue  # In cooldown
+        if row["threshold"] is None or not math.isfinite(row["threshold"]):
+            continue
+        if not cooldown_bypass and row["last_fired"]:
+            last_fired_date = _expiry.parse_expires_at(row["last_fired"])
+            if last_fired_date is not None:
+                hours_since = (now - last_fired_date).total_seconds() / 3600
+                if hours_since < row["cooldown_hours"]:
+                    continue
+        if deliverable is not None and not deliverable(row["memory_file"]):
+            continue
+        results.append(row)
 
-            if deliverable is not None and not deliverable(row["memory_file"]):
-                continue  # Nothing to deliver — do not record a fire
-
-            results.append({
-                "id": row["id"],
-                "description": row["description"],
-                "memory_file": row["memory_file"],
-                "score": score,
-            })
-            
-            # Since it fired, record it
-            update_trigger_fired(row["id"])
-            
+    if not results:
+        db.close()
+        return []
+    best = results[0]
+    runner_up = results[1]["score"] if len(results) > 1 else 0.0
+    # Float32 distance calculations can put exact boundaries a few ulps below.
+    epsilon = 1e-6
+    if (best["score"] + epsilon < max(TRIGGER_FLOOR, best["threshold"])
+            or best["score"] - runner_up + epsilon < TRIGGER_LEAD_MARGIN):
+        db.close()
+        return []
+    shared = _trigger_shared_terms(db, best["id"], query, enough=TRIGGER_MIN_SHARED_TERMS)
     db.close()
-    return results
+    if shared < TRIGGER_MIN_SHARED_TERMS:
+        return []
+    update_trigger_fired(best["id"])
+    return [{key: best[key] for key in ("id", "description", "memory_file", "score")}]
+
+
+def _score_triggers(db: sqlite3.Connection, query_embedding: list[float]) -> list[dict[str, Any]]:
+    """Exhaustive, max-over-phrasings scores before eligibility or firing.
+
+    Scalar distances avoid vec0's KNN cap, including its hard maximum k.
+    Trigger registries are small; filtering must never lose a candidate.
+    """
+    query = json.dumps(query_embedding)
+    rows = db.execute("""
+        SELECT t.*, MIN(v.distance) AS distance FROM triggers t JOIN (
+            SELECT id, vec_distance_L2(embedding, ?) AS distance FROM triggers_vec
+            UNION ALL
+            SELECT trigger_id AS id, vec_distance_L2(embedding, ?) AS distance
+            FROM trigger_phrasings
+        ) v ON v.id = t.id GROUP BY t.id
+    """, (query, query)).fetchall()
+    scored = [dict(row, score=1.0 - row["distance"] ** 2 / 2.0) for row in rows]
+    return sorted(scored, key=lambda row: (-row["score"], row["id"]))
+
 
 def list_triggers() -> list[dict]:
     """Return all registered triggers with their stats."""
     db = get_db()
-    rows = db.execute("SELECT id, description, memory_file, threshold, cooldown_hours, last_fired, fire_count, created_at, enabled, expires_at, authority FROM triggers ORDER BY created_at DESC").fetchall()
+    rows = db.execute("SELECT id, description, memory_file, threshold, cooldown_hours, last_fired, fire_count, created_at, enabled, expires_at, authority, threshold_origin FROM triggers ORDER BY created_at DESC").fetchall()
+    results = []
+    for row in rows:
+        result = dict(row)
+        result["phrasings"] = [r[0] for r in db.execute(
+            "SELECT phrasing FROM trigger_phrasings WHERE trigger_id = ? ORDER BY position",
+            (row["id"],),
+        )]
+        results.append(result)
     db.close()
-    return [dict(r) for r in rows]
+    return results
 
 def expire_triggers(now: datetime | None = None, dry_run: bool = False) -> list[str]:
     """Disable every enabled trigger whose ``expires_at`` has passed.
@@ -2883,8 +3101,10 @@ def expire_triggers(now: datetime | None = None, dry_run: bool = False) -> list[
 def delete_trigger(trigger_id: str) -> None:
     """Remove a trigger."""
     db = get_db()
+    db.execute("DELETE FROM trigger_phrasings WHERE trigger_id = ?", (trigger_id,))
     db.execute("DELETE FROM triggers WHERE id = ?", (trigger_id,))
     db.execute("DELETE FROM triggers_vec WHERE id = ?", (trigger_id,))
+    db.execute("DELETE FROM triggers_fts WHERE trigger_id = ?", (trigger_id,))
     db.commit()
     db.close()
 

@@ -60,6 +60,45 @@ def test_rrf_fusion_rewards_agreement_across_both_lists():
     assert _order(out)[0] == "both.md", "a hit in both lists should fuse to the top"
 
 
+def test_rrf_normalizes_against_best_visible_candidate():
+    out = _run(
+        [_res("hidden.md"), _res("visible.md")], [],
+        visible=lambda row: row["file_path"] == "visible.md", priority_weight=0.0,
+    )
+
+    assert set(_order(out)) == {"hidden.md", "visible.md"}
+    assert next(row["score"] for row in out if row["file_path"] == "visible.md") == 1.0
+
+
+def test_rrf_all_visible_callback_preserves_exact_scores():
+    def run(**kwargs):
+        return _run(
+            [_res("both.md"), _res("vector.md")],
+            [_res("both.md"), _res("keyword.md")],
+            priority_weight=0.0, **kwargs,
+        )
+
+    absent = run()
+    assert absent[0]["score"] == 1.0
+    assert run(visible=None) == absent
+    assert run(visible=lambda row: True) == absent
+
+
+@pytest.mark.parametrize("visible", [None, lambda row: True, lambda row: False])
+def test_rrf_empty_candidates(visible):
+    assert _run([], [], visible=visible, priority_weight=0.0) == []
+
+
+def test_rrf_no_visible_candidates_retains_hidden_candidates():
+    out = _run(
+        [_res("hidden.md"), _res("also-hidden.md")], [],
+        visible=lambda row: False, priority_weight=0.0,
+    )
+
+    assert set(_order(out)) == {"hidden.md", "also-hidden.md"}
+    assert all(0.0 < row["score"] <= 1.0 for row in out)
+
+
 def test_threshold_is_a_per_arm_relevance_floor():
     """`threshold` filters each candidate's OWN (real) score before fusion —
     it is no longer a cutoff on the fused/RRF score. A low-own-score
@@ -270,6 +309,17 @@ def test_parse_iso_utc_shapes():
     assert ranker.parse_iso_utc("") is None
     assert ranker.parse_iso_utc(None) is None
     assert ranker.parse_iso_utc("last tuesday") is None
+
+
+def test_parse_iso_utc_returns_none_for_conversion_failures():
+    class Unstringable:
+        def __str__(self) -> str:
+            raise TypeError("cannot convert to string")
+
+    assert ranker.parse_iso_utc("not-an-iso-timestamp") is None
+    assert ranker.parse_iso_utc("0001-01-01T00:00:00+14:00") is None
+    assert ranker.parse_iso_utc("9999-12-31T23:59:59-14:00") is None
+    assert ranker.parse_iso_utc(Unstringable()) is None
 
 
 def test_threshold_exempts_vectorless_fts_candidates():

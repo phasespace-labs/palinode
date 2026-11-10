@@ -155,6 +155,8 @@ def test_at_k_three_one_pass_reports_the_summed_coverage(store, clock, monkeypat
     assert result["prompts_sent"] == {"control": 1, "overflow": 3}
     assert result["projects_resolved"] == ["control", "overflow"]
     assert result["projects_failed"] == 0
+    assert result["projects_compacted_ids"] == []
+    assert result["projects_compacted"] == len(result["projects_compacted_ids"])
     # Each later prompt starts exactly where the previous one stopped.
     first, second, third = (_presented(p) for p in prompts["overflow"])
     assert (second[0][0], second[0][1]) == (first[-1][0], first[-1][2])
@@ -258,6 +260,29 @@ def test_a_failure_on_prompt_j_holds_the_mark_at_the_end_of_prompt_j_minus_1(
     assert _hashes(store) == before
 
 
+def test_later_prompt_failure_excludes_earlier_compaction(store, clock, monkeypatch) -> None:
+    _k(monkeypatch, 4)
+    _reproduction(store)
+    calls = 0
+
+    def _fn(system_prompt: str, user_prompt: str):
+        nonlocal calls
+        project = user_prompt.split("facts from ", 1)[1].split(".md", 1)[0]
+        if project != "overflow":
+            return "[]", "synthetic-noop"
+        calls += 1
+        if calls == 2:
+            return "I could not find any operations.", "fake"
+        return '[{"op": "UPDATE", "id": "overflow1", "new_text": "Updated."}]', "fake"
+
+    result = runner.run_nightly(llm_fn=_fn)
+
+    assert result["status"] == "partial"
+    assert result["failed_projects"] == ["overflow"]
+    assert result["projects_compacted"] == 0
+    assert result["projects_compacted_ids"] == []
+
+
 # ---------------------------------------------------------------------------
 # K=1 is the single-prompt pass
 # ---------------------------------------------------------------------------
@@ -305,6 +330,7 @@ def test_a_dry_run_sends_every_prompt_and_records_nothing(store, clock, monkeypa
     result = runner.run_nightly(dry_run=True, llm_fn=_model(prompts))
     assert result["prompts_sent"] == {"control": 1, "overflow": 3}
     assert result["notes_pending"] == 0
+    assert result["projects_compacted_ids"] == []
     assert _marks(store) == {}
     assert _gate_clock(store) is None
 
@@ -332,6 +358,7 @@ def test_the_api_and_cli_report_prompts_per_project(store, clock, monkeypatch) -
     assert response.status_code == 200
     body = response.json()
     assert body["prompts_sent"] == {"control": 1, "overflow": 2}
+    assert body["projects_compacted_ids"] == []
     assert (body["notes_selected"], body["notes_presented"], body["notes_pending"]) == (10, 8, 3)
     assert body["coverage"]["overflow"] == {"selected": 8, "presented": 6, "pending": 3}
 
@@ -339,6 +366,7 @@ def test_the_api_and_cli_report_prompts_per_project(store, clock, monkeypatch) -
     as_json = CliRunner().invoke(cli, ["consolidate", "--nightly", "--format", "json"])
     assert as_json.exit_code == 0, as_json.output
     assert '"prompts_sent"' in as_json.output
+    assert '"projects_compacted_ids": []' in as_json.output
     text = CliRunner().invoke(cli, ["consolidate", "--nightly", "--format", "text"])
     assert text.exit_code == 0, text.output
     flat = " ".join(text.output.split())
@@ -355,18 +383,21 @@ def test_each_prompt_sees_what_the_previous_one_applied(store, clock, monkeypatc
 
     def _fn(system_prompt: str, user_prompt: str):
         project = user_prompt.split("facts from ", 1)[1].split(".md", 1)[0]
-        if project != "overflow":
-            return "[]", "synthetic-noop"
-        seen.append(user_prompt)
-        text = f"Updated by prompt {len(seen)}."
-        return f'[{{"op": "UPDATE", "id": "overflow1", "new_text": "{text}"}}]', "fake"
+        if project == "overflow":
+            seen.append(user_prompt)
+            text = f"Updated by prompt {len(seen)}."
+        else:
+            text = "Updated control."
+        return f'[{{"op": "UPDATE", "id": "{project}1", "new_text": "{text}"}}]', "fake"
 
     result = runner.run_nightly(llm_fn=_fn)
 
     assert len(seen) == PROMPTS_NEEDED
     assert "Updated by prompt 1." in seen[1] and "Updated by prompt 2." in seen[2]
     assert "Updated by prompt 3." in (store / "projects" / "overflow.md").read_text(encoding="utf-8")
-    assert result["updated"] == PROMPTS_NEEDED
-    assert result["projects_compacted"] == 1
+    assert result["updated"] == PROMPTS_NEEDED + 1
+    assert result["projects_compacted"] == 2
+    assert result["projects_compacted_ids"] == ["control", "overflow"]
+    assert result["projects_compacted"] == len(result["projects_compacted_ids"])
     assert result["prompts_sent"] == {"control": 1, "overflow": 3}
     assert _marks(store)["overflow"] == PASS_START

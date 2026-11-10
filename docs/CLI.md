@@ -62,8 +62,10 @@ palinode controls status [OPTIONS]
 ```
 
 Shows API control state and a first-use disclosure: effective store/project,
-observed project setup (not running-client proof), destinations with credentials
-and query values redacted, and the stated policy limits.
+the palinode hooks registered in Claude Code's user, project and local settings
+(observed setup, not running-client proof), what each automatic capture path
+sends, destinations with credentials and query values redacted, and the stated
+policy limits.
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -125,7 +127,9 @@ palinode controls exclude-project [OPTIONS] PROJECT
 ```
 
 Add one project to automatic capture/recall exclusions, or remove that one exclusion.
-Explicit user/API writes remain allowed.
+It also stops automatic enrichment and consolidation of that project’s stored
+notes, which remain stored, indexed and explicitly searchable. Explicit user/API
+writes remain allowed.
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -145,7 +149,9 @@ palinode controls exclude-path [OPTIONS] PATH
 ```
 
 Add one source path to automatic capture/recall exclusions, or remove that one
-exclusion. This is not a general secret detector.
+exclusion. Paths name capture sources (transcripts and cwd), not stored memory
+files; they do not stop stored-note enrichment or consolidation. This is not a
+general secret detector.
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -946,8 +952,9 @@ Output: **auto** (no `--format` option; JSON when piped, text on a TTY).
 palinode hooks COMMAND
 ```
 
-Manage the palinode hook scripts Claude Code runs on this machine. `palinode
-init --hook` copies them once and never revisits them, so a release that fixes
+Manage the palinode hook scripts Claude Code, Codex, Cursor and Antigravity run
+on this machine. `palinode init --hook` (and `--codex-hook`, `--cursor-hooks`,
+`--agy-hooks`) copies them once and never revisits them, so a release that fixes
 a hook reaches an existing install only through `palinode hooks update`.
 `palinode doctor`'s `hooks_current` check reports when one has fallen behind.
 
@@ -959,13 +966,18 @@ palinode hooks update [OPTIONS]
 
 Find every palinode hook registered in the Claude Code settings cascade
 (`~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`)
-and replace each copy that differs from the one this release ships. The old copy
+and in Codex's hook layers (`hooks.json` and `config.toml` under `$CODEX_HOME`,
+default `~/.codex`, and under the project's `.codex/`), or in the project's Cursor `.cursor/hooks.json` or Antigravity
+`.agents/hooks.json`, and replace each copy that differs from the one this release ships. The old copy
 is kept beside it as `<name>.bak-<YYYYMMDD-HHMMSS>`. A hook that is registered
 but missing gets installed. When everything is current, a re-run writes nothing.
 
 A hook counts as palinode's only when its script is named like one `init`
 writes (`palinode-session-start.sh`, `palinode-session-end.sh`,
-`palinode-user-prompt-submit.sh`) and reads like palinode's. Other hooks, and the
+`palinode-user-prompt-submit.sh`, `palinode-cursor-hook.sh`,
+`palinode-agy-hook.sh`) and reads like palinode's. A Cursor or
+Antigravity command names both the adapter and the script it runs, and both are
+checked. Other hooks, and the
 settings files, are never written. A symlinked hook is reported but not
 rewritten: refresh the file it points to.
 
@@ -977,7 +989,7 @@ installed → packaged versions. Copies from before the stamp existed show as
 | Option | Default | Meaning |
 |---|---|---|
 | `--dry-run` | off | Show what would change, with a unified diff, and write nothing |
-| `--project-dir PATH` | current directory | Project whose `.claude/settings*.json` to read |
+| `--project-dir PATH` | current directory | Project whose `.claude/settings*.json`, `.codex/` hooks, `.cursor/hooks.json` and `.agents/hooks.json` to read |
 | `--format [text\|json]` | auto | Output format |
 
 ```bash
@@ -1075,8 +1087,8 @@ palinode init [OPTIONS]
 ```
 
 Scaffold Palinode into a project: `.claude/CLAUDE.md` memory instructions,
-`.claude/settings.json` hook registration, the SessionStart / SessionEnd /
-UserPromptSubmit hook scripts, `.mcp.json`, the `palinode-session` skill, and
+`.mcp.json`, the `palinode-session` skill, with `--hook` the Claude Code hook
+scripts and their `.claude/settings.json` registration, and
 — when the harness footprint is detected — an `AGENTS.md` block and
 `.cursor/rules/palinode.md`. Works without the API. Idempotent: existing files
 are preserved or appended to unless `--force`, which replaces the Palinode
@@ -1102,7 +1114,10 @@ current.
 | `--claudemd / --no-claudemd` | on | Write the memory block to `.claude/CLAUDE.md` |
 | `--agents / --no-agents` | auto | `AGENTS.md` block; auto-on when `AGENTS.md` or `.agent/` exists |
 | `--cursor / --no-cursor` | auto | `.cursor/rules/palinode.md`; auto-on when `.cursor/` exists |
-| `--hook / --no-hook` | on | Install the hook scripts and `.claude/settings.json` |
+| `--hook / --no-hook` | off (kept on once installed) | Install the Claude Code hook scripts (SessionStart, UserPromptSubmit, SessionEnd capture, PostCompact checkpoint) and register them in `.claude/settings.json` |
+| `--codex-hook / --no-codex-hook` | off (kept on once installed) | Install the Codex session-start, per-prompt recall and session-end capture hooks in `.codex/hooks/` and merge them into `.codex/hooks.json` after any existing entries. Codex runs them once you trust them with `/hooks` |
+| `--cursor-hooks / --no-cursor-hooks` | off | Install Cursor's `sessionStart` and `beforeSubmitPrompt` hooks: scripts in `.cursor/hooks/`, merged into `.cursor/hooks.json` (existing entries kept). See [HARNESSES.md](HARNESSES.md#cursor-hooks) |
+| `--agy-hooks / --no-agy-hooks` | off | Install Antigravity's `SessionStart` and `PreInvocation` hooks: scripts in `.agents/hooks/`, merged into `.agents/hooks.json` under the hook name `palinode` (other hooks kept). See "Antigravity hooks" in [HARNESSES.md](HARNESSES.md) |
 | `--slash / --no-slash` | on | Install the `/wrap` slash command |
 | `--wrap-policy [light\|heavy]` | `light` | `heavy` also merges, pushes, and triages before archiving |
 | `--skills [none\|project\|personal\|both]` | `none` | Also install `/wrap` as a Claude Code skill |
@@ -1202,13 +1217,25 @@ injection surfaces).
 | `--core` | off | Only core memory files |
 | `--where KEY=VALUE` | none | Only files whose frontmatter has `KEY` equal to `VALUE`; repeatable, all must match (see below) |
 | `--include-inbox` | off | Also list `inbox/`, where ActionItems are saved |
+| `--project PROJECT` | none | List what a search scoped to `PROJECT` selects: its records and records naming no project |
+| `--include-other-projects` | off | With `--project`, also list records tagged to other projects, labelled with their project |
 | `--format [text\|json]` | auto | Output format |
 
 ```bash
 palinode list --category decisions
 palinode list --core --format json
 palinode list --include-inbox --where type=ActionItem --where status=open
+palinode list --project my-app --category decisions
 ```
+
+`palinode list` is a browse surface: without `--project` it lists every
+project's records, whatever project the shell resolves to. With `--project` it
+applies the scope `palinode search` applies. Records tagged to another project
+are left out. When that leaves the listing empty or down to one file, it says
+`N records from other projects withheld (scope: project/<p>);
+--include-other-projects to see them`. In JSON mode stdout stays the array, a
+labelled row carries `other_project`, and that line goes to stderr. The MCP
+`palinode_list` tool always scopes to its session's project.
 
 A `--where` value matches a scalar by its text and a boolean as `true` or
 `false` (`core=true`, not `core=True`). A dashed ISO date, optionally with a
@@ -1600,6 +1627,12 @@ palinode read projects/checkout-status.md --meta --format json
 
 Output: **auto**. In JSON mode without `--meta`, the `frontmatter` key is
 omitted to match the API's no-meta shape.
+
+A record tagged to a project other than the one the shell resolves to is still
+read in full. In text mode, stderr carries
+`[other project: project/<theirs> — not project/<yours>] Context only, not this
+project's decision.` before it. In JSON mode the response carries
+`other_project`, the record's project refs.
 
 ### `palinode rebuild-fts`
 
@@ -2188,8 +2221,9 @@ palinode trigger COMMAND
 ```
 
 Manage prospective-recall triggers: a memory file plus a description, and when
-a conversation turn resembles the description closely enough the file is
-surfaced automatically. How triggers fire is in
+a conversation turn resembles the description closely enough, and shares at
+least three words with the description or phrasings, the file is surfaced
+automatically. How triggers fire is in
 [HOW-MEMORY-WORKS.md — phase 4](HOW-MEMORY-WORKS.md#phase-4-prospective-triggers).
 
 #### `palinode trigger add`
@@ -2205,7 +2239,8 @@ licensed it to act — stored and shown, not enforced.
 | Option | Default | Meaning |
 |---|---|---|
 | `--file TEXT` | required | Memory file to surface |
-| `--threshold FLOAT` | 0.75 | Similarity threshold 0.0–1.0 |
+| `--threshold FLOAT` | 0.62 | Similarity threshold 0.0–1.0; effective floor is always at least 0.40 |
+| `--phrasing TEXT` | none | Example user prompt, in the user's own words; repeat to supply several |
 | `--cooldown-hours INTEGER` | 24 | Hours between firings of the same trigger |
 | `--trigger-id TEXT` | generated | Stable trigger ID (UUID or slug) for re-creation / dedup |
 | `--expires-at TEXT` | never | ISO-8601 timestamp after which the trigger no longer fires |

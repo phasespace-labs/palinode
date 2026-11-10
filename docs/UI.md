@@ -131,13 +131,15 @@ silently alter the original decision:
   --reason 'The shared hosted service needs concurrent-write coordination.'
 ```
 
-![The fictional Harbor Notes inspector after the initial SQLite decision has been archived, with its source path and Saved commit in the provenance panel.](images/inspector-harbor-notes.png)
+![The fictional Harbor Notes inspector after the initial SQLite decision has been archived, with its source path and Saved commit in the provenance panel and the start of its Correct or retire this section.](images/inspector-harbor-notes.png)
 
 The screenshot is taken **after** the retirement above: it shows the archived
 initial SQLite decision and its Saved commit, not a state before the save steps.
 `archive` retires the old memory from default recall and records the reason in
 its audit history, but it is not permanent erasure: the original and its Git
-history remain recoverable. Start a fresh session and search for the PostgreSQL
+history remain recoverable with `palinode restore`. Permanent removal is the
+separate manual [erasure procedure](DATA-LIFECYCLE.md#the-erasure-procedure).
+Start a fresh session and search for the PostgreSQL
 decision, then inspect its source and the UTC neighbor:
 
 ```bash

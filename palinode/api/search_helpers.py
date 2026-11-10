@@ -337,18 +337,71 @@ def _rerank_with_preprocessing(
     return ranked[:top_k]
 
 
+def _dedup_session_id(value: Any) -> str | None:
+    """Normalise a session id: a non-blank string, else ``None`` (no identity)."""
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _dedup_candidate_matches(
+    file_path: str, project: str | None, session_id: str,
+) -> bool:
+    """Is the candidate at ``file_path`` a save from the entry's own session?
+
+    It must name the same ``session_id`` in its frontmatter and belong to the
+    entry's project. Both are decided on live frontmatter (the visibility
+    module's rule: the file, not the DB cache). ``project=None`` matches only
+    candidates that name no project. A candidate that is unreadable or carries
+    no session id never matches, so it can never suppress.
+    """
+    from palinode.core import parser
+    from palinode.core.scope import project_entities
+
+    try:
+        with open(file_path, encoding="utf-8") as fh:
+            meta, _ = parser.parse_frontmatter(fh.read())
+    except (OSError, ValueError, UnicodeDecodeError):
+        return False
+    if not isinstance(meta, dict):
+        meta = {}
+    if _dedup_session_id(meta.get("session_id")) != session_id:
+        return False
+    keys = {e[len("project/"):].lower() for e in project_entities(meta)}
+    if project is None:
+        return not keys
+    return project.removeprefix("project/").lower() in keys
+
+
 def _check_session_end_dedup(
     content: str,
     window_minutes: int = SESSION_END_DEDUP_WINDOW_MINUTES,
     threshold: float = SESSION_END_DEDUP_THRESHOLD,
+    *,
+    project: str | None = None,
+    session_id: str | None = None,
 ) -> tuple[str | None, float]:
-    """Look for a recent indexed save whose embedding is near-identical to ``content``.
+    """Look for a recent save from the same session that is near-identical to ``content``.
 
     Returns ``(matched_slug, similarity)`` when a recent save scores at or
     above ``threshold``; ``(None, 0.0)`` otherwise.  Failure modes — empty
     embedding from the embedder, no recent saves, or DB error inside the
     helper — return ``(None, 0.0)`` so the caller writes both files.
+
+    Only saves from the entry's own session are candidates: the candidate's
+    frontmatter must carry the same ``session_id``, and it must be in the
+    entry's ``project`` (``None``: only saves naming no project). The dedup
+    exists for one session restating itself (a snapshot, then the wrap-up).
+    Two different sessions in one project that differ only in a decided value
+    ("use batch X", then "use batch Y") embed above the threshold, and matching
+    them dropped the newer decision's searchable record, so search served the
+    stale value. With no ``session_id`` on the entry nothing is suppressed and
+    the embedder is not called: a duplicate file is the cheaper failure.
     """
+    session_id = _dedup_session_id(session_id)
+    if session_id is None:
+        return None, 0.0
+
     try:
         new_emb = embedder.embed(content)
     except Exception as e:  # noqa: BLE001
@@ -359,14 +412,19 @@ def _check_session_end_dedup(
         return None, 0.0
 
     try:
-        recent = store.recent_save_embeddings(window_minutes)
+        recent = store.recent_save_embeddings(window_minutes, with_paths=True)
     except Exception as e:  # noqa: BLE001
         logger.warning(f"session_end dedup: recent_save_embeddings failed ({e}); writing without dedup")
         return None, 0.0
 
     best_slug: str | None = None
     best_sim = 0.0
-    for slug, emb in recent:
+    eligible: dict[str, bool] = {}
+    for slug, file_path, emb in recent:
+        if file_path not in eligible:
+            eligible[file_path] = _dedup_candidate_matches(file_path, project, session_id)
+        if not eligible[file_path]:
+            continue
         sim = _cosine(new_emb, emb)
         if sim > best_sim:
             best_sim = sim

@@ -18,9 +18,10 @@ def trigger():
 @click.option(
     "--threshold",
     type=float,
-    default=TRIGGER_THRESHOLD_DEFAULT,
+    default=None,
     help=f"Similarity threshold (0.0 to 1.0; default {TRIGGER_THRESHOLD_DEFAULT})",
 )
+@click.option("--phrasing", "phrasings", multiple=True, help="Example user prompt; repeat for alternatives.")
 @click.option(
     "--cooldown-hours",
     type=int,
@@ -43,13 +44,14 @@ def trigger():
     help="Who or what licensed this trigger to act (user grant, session id, policy name).",
 )
 @click.option("--format", "fmt", type=click.Choice(["json", "text"]), help="Output format")
-def trigger_add(description, memory_file, threshold, cooldown_hours, trigger_id, expires_at, authority, fmt):
+def trigger_add(description, memory_file, threshold, cooldown_hours, trigger_id, expires_at, authority, phrasings, fmt):
     """Register a new auto-surface trigger."""
     try:
         result = api_client.trigger_add(
             description,
             memory_file,
             threshold=threshold,
+            phrasings=list(phrasings),
             cooldown_hours=cooldown_hours,
             trigger_id=trigger_id,
             expires_at=expires_at,

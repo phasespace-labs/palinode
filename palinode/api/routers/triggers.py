@@ -3,9 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from palinode.api._util import _safe_500
+from palinode.api._util import _safe_500, effective_project_scope
 from palinode.api.path_safety import _open_memory_file_text, _resolve_memory_path
 from palinode.core import embedder, expiry, parser, store
 from palinode.core.lifecycle import eligibility
@@ -19,7 +19,8 @@ class TriggerRequest(BaseModel):
     description: str
     memory_file: str
     trigger_id: str | None = None
-    threshold: float | None = 0.75
+    threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    phrasings: list[str] = Field(default_factory=list)
     cooldown_hours: int | None = 24
     #: ISO-8601; after this the trigger no longer fires (``None`` = never).
     expires_at: str | None = None
@@ -89,12 +90,18 @@ def create_trigger_api(req: TriggerRequest) -> dict[str, Any]:
         if not emb:
             raise ValueError("Failed to embed trigger description")
 
+        phrasing_embeddings = [embedder.embed(text) for text in req.phrasings]
+        if any(not vector for vector in phrasing_embeddings):
+            raise ValueError("Failed to embed trigger phrasing")
+
         store.add_trigger(
             trigger_id=trigger_id,
             description=req.description,
             memory_file=req.memory_file,
             embedding=emb,
-            threshold=req.threshold or 0.75,
+            threshold=req.threshold,
+            phrasings=req.phrasings,
+            phrasing_embeddings=phrasing_embeddings,
             cooldown_hours=req.cooldown_hours or 24,
             expires_at=req.expires_at,
             authority=req.authority,
@@ -124,10 +131,9 @@ def delete_trigger_api(trigger_id: str) -> dict[str, str]:
 @router.post("/check-triggers")
 def check_triggers_api(req: CheckTriggersRequest) -> list[dict[str, Any]]:
     """Check context against prospective triggers in the client's scope."""
-    from palinode.core.context_prime import resolve_context
     from palinode.api.routers.search import _resolve_scope_chain
 
-    scope = resolve_context(cwd=req.cwd, project=req.project)
+    scope = effective_project_scope(None, cwd=req.cwd, project=req.project)
     chain = _resolve_scope_chain(context=scope.context, session_id=req.session_id)
     try:
         emb = embedder.embed(req.query)
@@ -138,11 +144,20 @@ def check_triggers_api(req: CheckTriggersRequest) -> list[dict[str, Any]]:
         # the fire is recorded, so a trigger that delivers nothing keeps its
         # cooldown and its fire_count. Registry inspection remains a
         # maintenance view over every trigger.
-        return store.check_triggers(
+        fires = store.check_triggers(
             query_embedding=emb,
+            query=req.query,
             cooldown_bypass=req.cooldown_bypass or False,
             deliverable=lambda target: _trigger_target_deliverable(target, chain),
         )
+        from palinode.core.config import config
+        from palinode.core.retrieval_log import RetrievalLogger
+
+        RetrievalLogger(config.memory_dir).record_trigger_fires(
+            fires, session_id=req.session_id, cwd=req.cwd,
+            project=scope.project.removeprefix("project/") if scope.project else None,
+        )
+        return fires
     except embedder.EmbeddingInputError:
         raise  # typed 422 via the app-level handler in server.py
     except embedder.EmbeddingUnavailable:

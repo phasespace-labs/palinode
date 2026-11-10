@@ -35,8 +35,34 @@ SEARCH_THRESHOLD_MCP: float = config.search.mcp_threshold
 
 # ── Triggers ─────────────────────────────────────────────────────────────────
 
-#: Default similarity threshold for prospective-recall triggers.
-TRIGGER_THRESHOLD_DEFAULT: float = 0.75
+#: Lowest score any trigger fires at, whatever threshold it was given.
+TRIGGER_FLOOR: float = 0.40
+
+#: Threshold a trigger gets when it is registered without one. Chosen together
+#: with TRIGGER_MIN_SHARED_TERMS on the dogfood store's triggers (2026-10-31,
+#: bge-m3, the shipped check_triggers on a throwaway copy): with the gate,
+#: 0.62 had the best F1 and F0.5 of 0.55-0.70 over 38 held-out on-target and
+#: 78 off-target prompts (30/38 fired, 3/78 false fires), against 25/38 and
+#: 8/78 for 0.65 without the gate. 0.58 fired 32/38 with 7/78 false fires;
+#: 0.65 with the gate fired 24/38 with 1/78. Without the gate no threshold
+#: worked: ordinary maintainer prompts reach 0.60-0.71.
+TRIGGER_THRESHOLD_DEFAULT: float = 0.62
+
+#: Required lead over the next eligible trigger, after max-over-phrasings scoring.
+TRIGGER_LEAD_MARGIN: float = 0.06
+
+#: Content words the prompt must share with the winning trigger's own text
+#: (description + phrasings, porter-stemmed) before it fires. Whole-prompt
+#: cosine cannot separate a trigger's intent from everyday prompts in the
+#: same vocabulary ("reply in the thread" scored 0.709 against the
+#: contributor-reply trigger). On the dogfood store at 0.62, 3 cut everyday
+#: false fires from 13/58 to 1/58 for one on-target miss (31/38 -> 30/38);
+#: 2 left 7/58 and 4 dropped on-target to 23/38. Store-wide term rarity did not
+#: separate: the everyday words ("respond", "assign") are rarer there than the
+#: trigger's own. On the synthetic trigger benchmark, whose terse prompts share
+#: fewer words with their triggers, 3 costs recall (35/56 -> 21/56 at 0.62)
+#: with no false-fire change (1/28), so phrasings should use the user's words.
+TRIGGER_MIN_SHARED_TERMS: int = 3
 
 #: Default cooldown (in hours) between consecutive firings of the same trigger.
 TRIGGER_COOLDOWN_HOURS_DEFAULT: int = 24
@@ -65,6 +91,15 @@ SAVE_SOURCE_HEADER: str = "X-Palinode-Source"
 #: ``source`` is supplied.  ``"api"`` matches the FastAPI server's prior
 #: behavior, so this default does not change observable attribution.
 SAVE_SOURCE_API_DEFAULT: str = "api"
+
+
+# ── List ─────────────────────────────────────────────────────────────────────
+
+#: HTTP response header on a project-scoped ``GET /list``: how many records
+#: tagged to another project the listing left out. The body stays the bare
+#: array every existing consumer parses, so the count travels beside it —
+#: the job ``retrieval.other_projects_withheld`` does in a search receipt.
+LIST_OTHER_PROJECTS_WITHHELD_HEADER: str = "X-Palinode-Other-Projects-Withheld"
 
 
 # ── Session-end timeouts ──────────────────────────────────────────────
@@ -124,8 +159,10 @@ SAVE_TIMEOUT_SECONDS: float = _save_timeout_seconds()
 #: Lookback window (in minutes) over which ``session_end`` checks recently
 #: indexed saves for semantic overlap.  60 minutes covers a typical Claude
 #: Code session: long enough to catch /ps → /wrap reformulations of the same
-#: decision, short enough that two genuinely separate sessions on the same
-#: topic don't get conflated.
+#: decision.  Separate sessions are kept apart by identity, not by this
+#: window: only saves whose frontmatter carries the entry's own
+#: ``session_id`` are candidates, and an entry with no ``session_id`` is
+#: never suppressed.
 SESSION_END_DEDUP_WINDOW_MINUTES: int = 60
 
 #: Cosine-similarity threshold above which a recent save is considered a
@@ -171,12 +208,15 @@ __all__ = [
     "SEARCH_LIMIT_DEFAULT",
     "SEARCH_THRESHOLD_DEFAULT",
     "SEARCH_THRESHOLD_MCP",
+    "TRIGGER_FLOOR",
     "TRIGGER_THRESHOLD_DEFAULT",
+    "TRIGGER_MIN_SHARED_TERMS",
     "TRIGGER_COOLDOWN_HOURS_DEFAULT",
     "DIFF_DAYS_DEFAULT",
     "HISTORY_LIMIT_DEFAULT",
     "SAVE_SOURCE_HEADER",
     "SAVE_SOURCE_API_DEFAULT",
+    "LIST_OTHER_PROJECTS_WITHHELD_HEADER",
     "SESSION_END_TIMEOUT_SECONDS",
     "_SESSION_END_TIMEOUT_SENTINEL",
     "SESSION_END_DEDUP_WINDOW_MINUTES",

@@ -1,0 +1,23 @@
+# Working-state vocabulary for automatic recall (palinode.core.prompt_query).
+#
+# Words that name the user's working copy and session rather than anything a
+# stored memory is about: the objects every repository command can take, and
+# the deictic words that point back into the conversation. A prompt whose
+# subject is made only of these ("bump the version and tag it", "commit this
+# and push") gives the keyword arm nothing it could vouch for.
+#
+# One or more words per line, lowercase; "#" starts a comment.
+
+# repository and tracker objects
+branch branches commit commits change changes diff diffs patch pr prs issue issues ticket tickets
+version versions tag tags release releases main master remote origin upstream conflict conflicts
+merge label labels review reviews ci build builds test tests suite lint linter code file files
+script output log logs plan step steps work task tasks thing things stuff fix fixes notes changelog
+readme docs import imports
+
+# deictic and quantity words that point back into the conversation
+it this that these those them same other old new last previous next latest stale all both each
+every rest everything one two three four five few couple whole
+
+# verb particles
+up down out over back off away

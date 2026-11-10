@@ -108,6 +108,7 @@ def test_every_unreleased_bullet_sits_under_a_heading() -> None:
 # freezes it here) updates this constant as part of the release roll.
 
 _FROZEN_RELEASED = {
+    "0.24.0": "ca75cb333e31c4a215c847d9ae33a62f7e0ee442f12cacb9ecbc5451bd57a446",
     "0.23.0": "be623ef3fd6e416fa12500ba37f4d12d7dd886b94b31162891b36130a9169df6",
     "0.22.0": "03fb66d137d2f9701e174f26e6e2c0299bfe6920c0683f3e68c75e45e0c8ba03",
     "0.21.0": "faf155d0e862fcd3c66d1747d4464b66868c573685c5bdc98cbdea62c5b2ded2",
@@ -115,7 +116,7 @@ _FROZEN_RELEASED = {
     "0.20.0": "12a76967ff957556217cb9e2cff7eb00cdb5f790a0a81b4226d5b7225d8f7719",
     "0.19.1": "451e97cd35b7fe3a33644097fe63229d07f73fbdfc9afdec7f6c1cc9f05efd8a",
     "0.19.0": "df5581e1c7a99c6d7a1c48938e068a917241f12f74c18d551e88c6b5eeaddcaf",
-    # Re-frozen once after publication (dev issue 1282): the 0.18.0 relative-FTS-floor
+    # Re-frozen once after publication: the 0.18.0 relative-FTS-floor
     # note credited the wrong person with filing the public issue for it, and called
     # the discovery independent. The maintainer filed that issue. The corrected text
     # separates the four contributions the original clause conflated: the mis-scaling
@@ -128,7 +129,7 @@ _FROZEN_RELEASED = {
     # to an attribution error.
     "0.18.0": "9fea40886aaafe23b7f5a21689ad9167a5da8c8799d63f2e5b86e38884f6afaa",
     "0.17.0": "27bb1e53b25c2fdfcb74e679134fd78cb3c64ca9b007a09d8fc020f4f507b44d",
-    # Frozen after publication (dev issue 1240): the scrub-durability sync fix reconciled the 0.16.0 wording
+    # Frozen after publication: the scrub-durability sync fix reconciled the 0.16.0 wording
     # toward the public release body, same precedent as the 0.10.0 re-freeze below.
     "0.16.0": "e9022e3c0cc2df2fed3583047de03be7a154f04d155349eec7ab6ac96880d274",
     "0.15.0": "d55d3207c1b139720afd9a59bab463cc63ae21a9fec54c5d13d04051d4fec0a9",
@@ -137,7 +138,7 @@ _FROZEN_RELEASED = {
     "0.12.0": "e9ccd8d718a12d5966ac5c6c180d1539568b0055f39181ff9b953f97f45a0d59",
     "0.11.0": "351e7fb515ef0e475bb799774627c8878df89f742a7df6b05e77a3b9cd5595e0",
     "0.10.1": "8378af087cdf738d0ff1e15afc325e36531e06f1e97bba695aa630d45b9bd50b",
-    # Re-frozen once after publication (dev issue 823): the private section lacked the
+    # Re-frozen once after publication: the private section lacked the
     # `**Compatibility:**` paragraph the public release body shipped with, so
     # this is a reconciliation *toward* the published notes, not a divergence.
     "0.10.0": "aeff282e906646ecd99578eee3350f4b1fada01dc107e9b7131e80241f35f5e2",

@@ -312,6 +312,31 @@ class PalinodeAPI:
         archived, expired …) in a ``core_only`` listing — the browse view's
         opt-in, off by default so the injection semantics are the fallback.
         """
+        return self.list_files_scoped(
+            category=category, core_only=core_only,
+            include_retired_core=include_retired_core, where=where,
+            include_inbox=include_inbox,
+        )[0]
+
+    def list_files_scoped(
+        self,
+        category: str | None = None,
+        core_only: bool | None = None,
+        include_retired_core: bool | None = None,
+        where: list[str] | None = None,
+        include_inbox: bool | None = None,
+        project: str | None = None,
+        include_other_projects: bool | None = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """:meth:`list_files`, optionally scoped to ``project`` as search is.
+
+        Returns ``(rows, withheld)``: ``withheld`` is how many records tagged
+        to another project the scoped listing left out, which the API sends
+        in a response header so the body stays the bare array. Zero when
+        unscoped. ``include_other_projects`` keeps them, labelled.
+        """
+        from palinode.core.defaults import LIST_OTHER_PROJECTS_WITHHELD_HEADER
+
         params: dict = {}
         if category:
             params["category"] = category
@@ -323,9 +348,17 @@ class PalinodeAPI:
             params["where"] = list(where)
         if include_inbox:
             params["include_inbox"] = "true"
+        if project:
+            params["project"] = project
+        if include_other_projects:
+            params["include_other_projects"] = "true"
         response = self.client.get("/list", params=params)
         response.raise_for_status()
-        return response.json()
+        try:
+            withheld = int(response.headers.get(LIST_OTHER_PROJECTS_WITHHELD_HEADER) or 0)
+        except ValueError:
+            withheld = 0
+        return response.json(), withheld
 
     def lint(
         self,
@@ -720,6 +753,7 @@ fields, the session-end hook audit push)."""
         trigger_id: str | None = None,
         expires_at: str | None = None,
         authority: str | None = None,
+        phrasings: list[str] | None = None,
     ) -> dict[str, Any]:
         # ADR-010: forward all four canonical params. Defaults live
         # in palinode.core.defaults so the CLI can show them in --help.  We
@@ -729,6 +763,8 @@ fields, the session-end hook audit push)."""
             "description": description,
             "memory_file": memory_file,
         }
+        if phrasings is not None:
+            payload["phrasings"] = phrasings
         if threshold is not None:
             payload["threshold"] = threshold
         if cooldown_hours is not None:
@@ -807,12 +843,14 @@ fields, the session-end hook audit push)."""
         response.raise_for_status()
         return response.json()
 
-    def blame(self, file_path: str, search: str = None, claims: bool = False) -> dict[str, Any]:
+    def blame(self, file_path: str, search: str = None, claims: bool = False, sessions: bool = False) -> dict[str, Any]:
         params: dict = {}
         if search:
             params["search"] = search
         if claims:
             params["claims"] = "true"
+        if sessions:
+            params["sessions"] = "true"
         response = self.client.get(f"/blame/{file_path}", params=params, timeout=10.0)
         response.raise_for_status()
         return response.json()

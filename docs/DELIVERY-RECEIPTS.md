@@ -136,8 +136,8 @@ its `file_sha256` revision, its disposition, the known lineage, the resolved sco
 policy, the evaluation time and the next known transition. A contested row is a
 `conflict_side`, not a quiet `selected`.
 
-No retrieval-log rows are written for a prime — a session-start injection ledger is a
-separate contract, and this endpoint has never written to that log.
+The public receipt is persisted as a receipt-only envelope with the caller session
+identity, separately from recall events.
 
 ### REST / MCP / CLI — `resolve` (the bounded-resolution bundle)
 
@@ -158,9 +158,8 @@ Revisions come from the index (`index_section_sha256`) when the record is indexe
 from the whole file the evidence layer read (`file_sha256`) when it is not — the two
 domains are named, never compared.
 
-**No retrieval-log rows are written for a resolve.** The operation runs on every
-prompt; it records no recall and no retrieval event, and having a receipt does not
-change that. A receipt describes a delivery; it is not an event in one.
+Resolve persists a receipt-only envelope with the caller session identity. It records
+no recall or file-retrieval event.
 
 ### CLI
 
@@ -293,17 +292,18 @@ Per surface:
 | `POST /search` with a query (MCP, CLI, REST, plugin) | **Yes** — one row per delivered record, or one call-level row with `disposition: none_delivered` when the search delivered nothing |
 | `GET /read`, `/blame`, `/history`, `/trace` | Yes — a file-read row, with no receipt fields |
 | `POST /search` with an empty query (the recency branch) | No |
-| `POST /context/prime` | No |
+| `POST /context/prime` | Receipt-only envelope; no file-retrieval events |
+| `POST /check-triggers` | Receipt-only envelope for delivered fires; trigger IDs and normalized target refs |
 | `POST /resolve` (hook, MCP, CLI, REST, plugin) | Receipt-only envelope; no file-retrieval events |
 
-A receipt from one of the two "No" rows is available **only in the response that
+A receipt from the "No" row is available **only in the response that
 carried it**. Nothing recovers it later, and `explain` says so rather than implying the
 delivery never happened.
 
 Resolve stores the **already-built public receipt**, its record qualifiers and roles,
 selection steps (query/ref/context → evidence → resolution → packing), and output
 budget. The same `explain` API, CLI, MCP and plugin render these fields. No memory
-text, titles, excerpts, query prose or session id are persisted for resolve; supplied
+text, titles, excerpts or query prose are persisted for resolve or prime; supplied
 wording remains unavailable. Records and ref-bearing qualifiers are visibility-filtered
 again on lookup. Receipt entries do not increment retrieval statistics or recall metadata.
 
@@ -313,8 +313,13 @@ project/path exclusions, malformed controls, `instrumentation.capture_retrievals
 and `PALINODE_INSTRUMENTATION_DISABLED=1` suppress it. The capture pause does not: the
 receipt records a delivery that already happened and carries no memory content, like a
 search row, so a delivered receipt id stays explainable while capture is paused. An I/O failure or oversized
-receipt leaves delivery unchanged and makes later lookup unavailable. Historical resolve
-ids from before persistence was enabled cannot be reconstructed.
+receipt leaves delivery unchanged and makes later lookup unavailable. Historical resolve and prime
+ids from before persistence was enabled cannot be reconstructed. Earlier resolve rows
+may lack session identity. Past trigger deliveries were not audited and cannot be
+reconstructed. Trigger receipts exclude query prose and descriptions.
+All three surfaces persist the caller session ID when supplied; an explicit prime
+scope override changes selection scope, never audit identity. Session disclosure in
+explanations remains subject to the diagnostics gate above.
 
 ### Availability, retention and restart
 
@@ -337,9 +342,10 @@ ids from before persistence was enabled cannot be reconstructed.
 Recorded here as evidence for a later decision about a fuller ledger, not as a plan to
 build one:
 
-- *Which sessions ever received this memory via `/context/prime`?* Prime writes no rows.
-- *Which sessions received it through a per-turn `resolve` injection?* Receipt lookup
-  explains a known delivery id; it does not record session identity or provide reverse session search.
+- *Which sessions received this memory via prime, resolve or triggers?* `palinode blame
+  --sessions` answers this for recorded deliveries (below), but only where the
+  delivery carried a session ID and recording was on, and only within the retained,
+  bounded scan. Earlier deliveries without a session ID cannot be reconstructed.
 - *What did a search delivery supply as evidence around its hits?* Only the search
   hit set is logged. Resolve receipt envelopes include every supplied evidence ref.
 - *What was the lifecycle clock a search delivery evaluated against?* Search logs
@@ -417,3 +423,26 @@ authored on a record and records that its author checked a named source at a nam
 revision — the explicit form of the convention that re-saving a dependent meant it had
 been re-verified. They share the `file_sha256` revision basis, and nothing else: see
 [EXECUTOR-SPEC](EXECUTOR-SPEC.md#revalidated).
+
+## Finding sessions that received a file
+
+`palinode blame --sessions decisions/example.md` adds a compact recorded-session
+summary to ordinary blame. Combine it with `--search` and `--claims`; those options
+keep their existing meaning. Piped CLI output is structured JSON.
+
+Use `GET /blame/decisions/example.md?sessions=true`, or pass `sessions: true` to
+`palinode_blame` through MCP or the plugin (`file_path` names the file).
+The additive `sessions` object contains distinct recorded session IDs with
+`delivery_count`, first/last recorded timestamps and sources. It separately counts
+`deliveries_without_session_id`; no historical identities are invented.
+
+Matches include ordinary file deliveries, resolve and prime `receipt.supplied`
+references, and trigger `fires` references. A repeated reference within one receipt
+counts once; lineage origins that were only named do not count as deliveries.
+Only the requested file's currently visible deliveries contribute to the summary;
+other receipt contents are never returned. Missing or unreadable files disclose no
+session history. The bounded audit scan reports `scan_truncated` when incomplete.
+
+This records delivery, not use or causal influence. Disabled recording, retention,
+missing session IDs and older surfaces that did not record deliveries limit
+historical coverage. Empty results do not establish that a file was never delivered.

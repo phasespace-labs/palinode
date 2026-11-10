@@ -45,6 +45,10 @@ _DURATION_RE = re.compile(r"^(\d+)\s*([smhdw])$")
 _DURATION_MULT = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
 
 
+class TTLRangeError(ValueError):
+    """A valid TTL duration cannot be represented as a datetime."""
+
+
 def _utc_now() -> datetime:
     return datetime.now(UTC)
 
@@ -76,7 +80,12 @@ def compute_expires_at(ttl: object, base: datetime | None = None) -> str | None:
     if secs is None:
         return None
     base = base or _utc_now()
-    return (base + timedelta(seconds=secs)).isoformat()
+    try:
+        return (base + timedelta(seconds=secs)).isoformat()
+    except OverflowError as exc:
+        raise TTLRangeError(
+            f"TTL {ttl!r} is out of range; choose a shorter duration"
+        ) from exc
 
 
 def normalize_expiry(fm: dict, now_iso: str | None = None) -> str | None:

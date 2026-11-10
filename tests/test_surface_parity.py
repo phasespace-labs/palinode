@@ -692,3 +692,11 @@ def test_inventory_alias_does_not_add_a_capability_row(
     assert inventory_backlog_capabilities("mcp") == frozenset(
         {"palinode_canonical", "palinode_alias"}
     )
+
+
+def test_blame_sessions_is_canonical_on_all_surfaces():
+    from palinode.core.parity import REGISTRY
+
+    blame = next(op for op in REGISTRY if op.name == "blame")
+    assert blame.plugin_tool == "palinode_blame"
+    assert any(p.name == "sessions" and p.type == "boolean" for p in blame.canonical_params)

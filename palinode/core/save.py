@@ -80,6 +80,10 @@ class SaveValidationError(ValueError):
     """
 
 
+class SaveUnprocessableError(SaveValidationError):
+    """A syntactically valid save value cannot be represented."""
+
+
 def default_source() -> str:
     """The source attribution used when a caller supplies none.
 
@@ -930,8 +934,14 @@ def save_memory(
     # validated. Both arrive via the free-form `metadata` dict (merged above),
     # so this single normalization is inherited by every interface. The
     # `archive-expired` sweep later flips an expired memory to status: archived.
-    from palinode.consolidation.ttl import normalize_expiry as _normalize_expiry
-    _expiry_err = _normalize_expiry(frontmatter_dict, now_iso=_now_iso)
+    from palinode.consolidation.ttl import (
+        TTLRangeError,
+        normalize_expiry as _normalize_expiry,
+    )
+    try:
+        _expiry_err = _normalize_expiry(frontmatter_dict, now_iso=_now_iso)
+    except TTLRangeError as exc:
+        raise SaveUnprocessableError(str(exc)) from exc
     if _expiry_err:
         raise SaveValidationError(_expiry_err)
     # After the expiry so a new ttl beats the carried expires_at, and before the
@@ -1280,6 +1290,7 @@ def save_memory(
 
 
 __all__ = [
+    "SaveUnprocessableError",
     "SaveValidationError",
     "default_source",
     "save_memory",

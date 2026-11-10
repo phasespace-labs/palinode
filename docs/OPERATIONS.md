@@ -16,7 +16,7 @@ Database (.palinode.db)              ← rebuild anytime with `palinode reindex`
 
 **Two things in the database are not derived from files, and deleting it loses them:**
 
-- **Registered triggers** (`palinode trigger`) — the description, target file, threshold, cooldown, expiry and authority are stored only in the database. Capture them with `palinode trigger list` before deleting, and re-register afterwards.
+- **Registered triggers** (`palinode trigger`) — the description, example phrasings and their embeddings, target file, threshold and its provenance, cooldown, expiry and authority are stored only in the database. Capture them with `palinode trigger list` before deleting, and re-register afterwards.
 - **Recall reinforcement** — how often a memory has been retrieved and how recently (`importance`, `last_recalled`, `recall_count`). This only affects result ordering, it decays back to neutral on its own, and losing it costs you nothing but a few weeks of tuning.
 
 Neither holds memory content. Your memories are still safe.
@@ -293,6 +293,31 @@ What to know about it operationally:
 - **The model can do the same thing in one operation.** `ARCHIVE_BEFORE`
   (weekly `allowed_ops` only) retires every dated log line older than a date it
   names, subject to the same guards.
+
+### Project-less daily notes
+
+The weekly pass moves a daily note to `archive/` once every project group that
+read it has reached a decision. A note that names no project — no `project/`
+ref in its body or `entities:`, and no `keyword_map` match — forms no group, so
+no pass ever reads it, and without a separate rule it would stay in `daily/`
+for good, ranking in recall as current. The weekly pass therefore retires such
+notes on age alone, before anything else runs:
+
+| Config key | Default | Meaning |
+|---|---|---|
+| `consolidation.daily_note_retention_days` | 30 | A `daily/` note naming no project and older than this moves to `archive/<year>/`. `0` disables the sweep. |
+
+- **Nothing is deleted.** `archive/` stays indexed; the move is one commit per
+  note (`palinode age-retention: archive daily note with no project reference,
+  older than 30d [<file>]`).
+- **`daily/` only.** A typed memory under `insights/` with no project ref is
+  never retired by this rule; neither is a note declaring
+  `retirement_policy: superseded-only` (ADR-020) nor one whose frontmatter
+  does not parse.
+- **To keep a note in the consolidation stream,** add a `project/<slug>` ref
+  or a `keyword_map` entry within the window.
+- **The run summary reports `notes_no_project_retired`** (weekly only).
+  `palinode consolidate --dry-run` counts what would move and moves nothing.
 
 ---
 

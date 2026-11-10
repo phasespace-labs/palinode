@@ -1,4 +1,4 @@
-"""palinode hooks — keep installed Claude Code hook scripts current.
+"""palinode hooks — keep installed Claude Code and Codex hook scripts current.
 
 ``palinode init`` copies the hook scripts into ``.claude/hooks/`` once and
 skips them on every later run, and a manual install copies them once by hand.
@@ -13,12 +13,15 @@ never disagree about what is installed.
 
 Discovery follows the Claude Code settings cascade (user
 ``~/.claude/settings.json``, project ``.claude/settings.json`` and
-``.claude/settings.local.json``) and reads each hook's command path. A hook is
+``.claude/settings.local.json``), then Codex's hook layers (user
+``$CODEX_HOME/hooks.json`` and ``config.toml``, default ``~/.codex``; project
+``.codex/hooks.json`` and ``.codex/config.toml``), then the project's Cursor
+``.cursor/hooks.json`` and Antigravity ``.agents/hooks.json``, and reads each
+hook's command path. Codex loads every layer and adds them together, so all of
+them are walked. Cursor's and Antigravity's entries register the adapter and
+the script it runs on one command line, so both are checked. A hook is
 palinode's when its script file name is one ``palinode init`` writes; every
 other hook is ignored, never read past its command string and never written.
-``init`` installs hooks for Claude Code only (Codex and other harnesses get an
-``AGENTS.md`` memory block, not hook scripts), so there is no other harness's
-hook config to walk.
 
 CLI-only by design: the hooks live on the machine running the agent harness,
 which is often not the machine running the palinode server. An MCP or REST
@@ -32,6 +35,7 @@ import json
 import os
 import re
 import shlex
+import tomllib
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -64,7 +68,10 @@ _REFRESHABLE = (STATE_STALE, STATE_MISSING)
 def packaged_hooks() -> dict[str, str]:
     """Map each hook file name ``palinode init`` installs to its packaged content."""
     from palinode.cli.init import (
+        ANTIGRAVITY_HOOK_SCRIPT,
+        CURSOR_HOOK_SCRIPT,
         HOOK_SCRIPT,
+        POST_COMPACT_HOOK_SCRIPT,
         SESSION_START_HOOK_SCRIPT,
         USER_PROMPT_SUBMIT_HOOK_SCRIPT,
     )
@@ -73,6 +80,9 @@ def packaged_hooks() -> dict[str, str]:
         "palinode-session-start.sh": SESSION_START_HOOK_SCRIPT,
         "palinode-session-end.sh": HOOK_SCRIPT,
         "palinode-user-prompt-submit.sh": USER_PROMPT_SUBMIT_HOOK_SCRIPT,
+        "palinode-post-compact.sh": POST_COMPACT_HOOK_SCRIPT,
+        "palinode-cursor-hook.sh": CURSOR_HOOK_SCRIPT,
+        "palinode-agy-hook.sh": ANTIGRAVITY_HOOK_SCRIPT,
     }
 
 
@@ -87,25 +97,57 @@ def content_sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def codex_home(home: Path) -> Path:
+    """Codex's user config directory: ``$CODEX_HOME``, else ``~/.codex``."""
+    configured = os.environ.get("CODEX_HOME")
+    return Path(configured).expanduser() if configured else home / ".codex"
+
+
 def settings_files(home: Path, project_dir: Path) -> list[Path]:
-    """The Claude Code settings files that can register hooks, in cascade order."""
+    """Every file that can register a palinode hook, in cascade order.
+
+    Claude Code's settings cascade, then Codex's user and project layers
+    (``hooks.json`` and the ``[hooks]`` tables of ``config.toml``), then the
+    project's Cursor ``hooks.json`` and Antigravity ``.agents/hooks.json``.
+    Cursor's user-level ``~/.cursor/hooks.json`` is not walked: init never
+    writes there, and its relative commands resolve from ``~/.cursor/``, not
+    from the project. Nor is Antigravity's global ``~/.gemini/config/hooks.json``,
+    which init never writes either.
+    """
+    codex = codex_home(home)
     return [
         home / ".claude" / "settings.json",
         project_dir / ".claude" / "settings.json",
         project_dir / ".claude" / "settings.local.json",
+        codex / "hooks.json",
+        codex / "config.toml",
+        project_dir / ".codex" / "hooks.json",
+        project_dir / ".codex" / "config.toml",
+        project_dir / ".cursor" / "hooks.json",
+        project_dir / ".agents" / "hooks.json",
     ]
 
 
 def _hook_commands(settings_path: Path) -> list[str]:
     """Every hook ``command`` string registered in one settings file.
 
-    An absent or unparseable file registers nothing: Claude Code would not run
-    hooks from it either, and doctor has other checks for broken config.
+    JSON for the Claude Code settings and Codex ``hooks.json``; TOML for a
+    Codex ``config.toml``, whose ``[[hooks.<Event>]]`` tables parse to the same
+    event → groups → handlers shape (its ``[hooks.state]`` trust records are
+    not a list and are skipped). An absent or unparseable file registers
+    nothing: the harness would not run hooks from it either, and doctor has
+    other checks for broken config.
     """
     try:
-        data = json.loads(settings_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        text = settings_path.read_text(encoding="utf-8")
+        data = tomllib.loads(text) if settings_path.suffix == ".toml" else json.loads(text)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, tomllib.TOMLDecodeError):
         return []
+    if settings_path.parent.name == ".agents" and isinstance(data, dict):
+        # Antigravity maps hook names to event maps, with no "hooks" key.
+        from palinode.cli.init import _agy_commands
+
+        return _agy_commands(data)
     hooks = data.get("hooks") if isinstance(data, dict) else None
     if not isinstance(hooks, dict):
         return []
@@ -114,6 +156,10 @@ def _hook_commands(settings_path: Path) -> list[str]:
         if not isinstance(entries, list):
             continue
         for entry in entries:
+            # Cursor's hooks.json puts the command on the entry itself.
+            direct = entry.get("command") if isinstance(entry, dict) else None
+            if isinstance(direct, str):
+                commands.append(direct)
             inner = entry.get("hooks") if isinstance(entry, dict) else None
             if not isinstance(inner, list):
                 continue
@@ -122,6 +168,13 @@ def _hook_commands(settings_path: Path) -> list[str]:
                 if isinstance(command, str):
                     commands.append(command)
     return commands
+
+
+#: The command substitution a Codex hook uses to find its checkout
+#: (``palinode.cli.init.CODEX_PROJECT_ROOT`` and hand-written variants of it).
+#: Codex has no project-directory variable, so this is how its commands name a
+#: script; it stands for the project being inspected.
+_GIT_TOPLEVEL_RE = re.compile(r"\$\(\s*git\b[^)]*--show-toplevel[^)]*\)")
 
 
 def _expand(token: str, home: Path, project_dir: Path) -> str:
@@ -137,6 +190,8 @@ def _expand(token: str, home: Path, project_dir: Path) -> str:
 
 def _command_scripts(command: str, home: Path, project_dir: Path, names: set[str]) -> list[Path]:
     """Paths of palinode hook scripts a command runs; non-palinode tokens are ignored."""
+    # Before tokenising: an unquoted substitution contains spaces.
+    command = _GIT_TOPLEVEL_RE.sub(lambda _m: str(project_dir), command)
     try:
         tokens = shlex.split(command)
     except ValueError:
@@ -286,7 +341,7 @@ _SKIP_REASONS = {
 
 @click.group()
 def hooks() -> None:
-    """Manage the palinode hook scripts Claude Code runs on this machine."""
+    """Manage the palinode hook scripts Claude Code, Codex, Cursor and Antigravity run on this machine."""
 
 
 @hooks.command(name="update")
@@ -295,16 +350,18 @@ def hooks() -> None:
     "--project-dir",
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
-    help="Project whose .claude/settings*.json to read (default: current directory).",
+    help="Project whose .claude/settings*.json, .codex/ hooks, .cursor/hooks.json and .agents/hooks.json to read (default: current directory).",
 )
 @click.option("--format", "fmt", type=click.Choice(["text", "json"]), default=None)
 def hooks_update(dry_run: bool, project_dir: Path | None, fmt: str | None) -> None:
     """Refresh installed palinode hooks to the packaged copies.
 
     Finds every palinode hook registered in ~/.claude/settings.json,
-    .claude/settings.json and .claude/settings.local.json, and replaces each
-    stale copy with the one this palinode release ships, keeping the old one
-    as <name>.bak-<timestamp> beside it. A hook registered but absent is
+    .claude/settings.json and .claude/settings.local.json, in Codex's
+    hooks.json and config.toml (user $CODEX_HOME or ~/.codex, and the
+    project's .codex/), and in the project's .cursor/hooks.json and
+    .agents/hooks.json, and replaces each stale copy with the one this palinode
+    release ships, keeping the old one as <name>.bak-<timestamp> beside it. A hook registered but absent is
     installed. Hooks that are not palinode's are never touched; symlinked
     hooks are reported, not rewritten. Re-running when everything is current
     changes nothing.

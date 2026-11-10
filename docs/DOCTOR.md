@@ -157,7 +157,7 @@ Config-vs-runtime consistency checks. No network. All `fast` except `consolidati
 | `mcp_config_homes` | warn | Multiple MCP client config files have divergent `palinode` entries |
 | `process_env_drift` | warn / info | A running palinode-{api,mcp,watcher} has stale `PALINODE_DIR` |
 | `prompts_current` | warn / info | The store's consolidation prompts lag the ones shipped with this release |
-| `hooks_current` | warn / info | An installed palinode Claude Code hook differs from the copy shipped with this release |
+| `hooks_current` | warn / info | An installed palinode Claude Code or Codex hook differs from the copy shipped with this release |
 | `consolidation_targets_tagged` | warn / info | A consolidation target document carries body bullets but no `<!-- fact:id -->` markers, so every pass over it proposes nothing |
 | `consolidation_schedule_effective` | warn / info | The cron line runs a `--days N` lookback that differs from the configured one, so the config states a scope no pass actually uses; or the nightly's catch-up bound is tighter than the activity gate's ceiling, which drops notes |
 | `consolidation_last_run` | error / warn / info | Consecutive consolidation passes have failed — error at a streak as long as the nightly's catch-up bound (the streak that pushes a watermark past it), warn at two |
@@ -207,7 +207,7 @@ Tagged `fast`: a bounded read of a handful of small files, no network.
 
 `palinode init --hook` copies the Claude Code hook scripts once, and later runs skip them. An install keeps the hook it started with while the server and the packaged hooks move on. Release smokes install the current hook fresh, so they never see the stale copy. It shows up only as recall or capture behaviour that a release was supposed to have fixed.
 
-The check walks the Claude Code settings cascade relative to the current directory (`~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`). It reads each registered hook command and compares every palinode hook script byte-for-byte with the packaged copy. Hooks that are not palinode's are ignored.
+The check walks the Claude Code settings cascade relative to the current directory (`~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`) and Codex's hook layers (`hooks.json` and `config.toml` under `$CODEX_HOME`, default `~/.codex`, and under `.codex/`). It reads each registered hook command and compares every palinode hook script byte-for-byte with the packaged copy. Hooks that are not palinode's are ignored.
 
 - Warn: a palinode hook differs from the packaged copy, or is registered but missing. The message names each path with its installed and packaged `palinode-hook-version` stamps; copies from before the stamp existed show as `unstamped`. The remediation is [`palinode hooks update`](CLI.md#palinode-hooks-update), run from the same directory (`--dry-run` first to see the diff).
 - Warn, not fixable by the command: a symlinked hook whose target differs. Refresh the file the link points to.

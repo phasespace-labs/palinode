@@ -39,6 +39,10 @@ from palinode.core.config import config
 EMBED_DIM = 1024
 _VEC = [0.05] * EMBED_DIM
 
+#: Shares three content words with the trigger descriptions below, so these
+#: cases clear the shared-term gate and test what they are about.
+PROMPT = "deploying the release to prod"
+
 PAST = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
 FUTURE = (datetime.now(UTC) + timedelta(days=30)).isoformat()
 
@@ -106,12 +110,12 @@ class TestExpiryGate:
 
 class TestTriggerExpiry:
     def test_expired_trigger_does_not_fire_and_logs_once(self, isolated_store, caplog):
-        store.add_trigger("t-expired", "deploying to prod", "projects/deploy.md", _VEC,
+        store.add_trigger("t-expired", "deploying the release to prod", "projects/deploy.md", _VEC,
                           expires_at=PAST, authority="paul: one-off grant")
         with caplog.at_level(logging.WARNING, logger="palinode.expiry"):
-            first = store.check_triggers(_VEC, cooldown_bypass=True)
-            second = store.check_triggers(_VEC, cooldown_bypass=True)
-            third = store.check_triggers(_VEC, cooldown_bypass=True)
+            first = store.check_triggers(_VEC, PROMPT, cooldown_bypass=True)
+            second = store.check_triggers(_VEC, PROMPT, cooldown_bypass=True)
+            third = store.check_triggers(_VEC, PROMPT, cooldown_bypass=True)
         assert first == [] and second == [] and third == []
         hits = [r for r in caplog.records if "trigger t-expired expired" in r.getMessage()]
         assert len(hits) == 1, "expired trigger must be reported once per process, not per check"
@@ -122,18 +126,18 @@ class TestTriggerExpiry:
         assert row["authority"] == "paul: one-off grant"
 
     def test_unexpired_trigger_fires(self, isolated_store):
-        store.add_trigger("t-live", "deploying to prod", "projects/deploy.md", _VEC,
+        store.add_trigger("t-live", "deploying the release to prod", "projects/deploy.md", _VEC,
                           expires_at=FUTURE, authority="paul: standing")
-        fired = store.check_triggers(_VEC, cooldown_bypass=True)
+        fired = store.check_triggers(_VEC, PROMPT, cooldown_bypass=True)
         assert [f["id"] for f in fired] == ["t-live"]
         row = next(t for t in store.list_triggers() if t["id"] == "t-live")
         assert row["fire_count"] == 1
         assert row["enabled"] == 1
 
     def test_trigger_without_expiry_behaves_as_before(self, isolated_store, caplog):
-        store.add_trigger("t-eternal", "deploying to prod", "projects/deploy.md", _VEC)
+        store.add_trigger("t-eternal", "deploying the release to prod", "projects/deploy.md", _VEC)
         with caplog.at_level(logging.WARNING, logger="palinode.expiry"):
-            fired = store.check_triggers(_VEC, cooldown_bypass=True)
+            fired = store.check_triggers(_VEC, PROMPT, cooldown_bypass=True)
         assert [f["id"] for f in fired] == ["t-eternal"]
         assert not [r for r in caplog.records if "expired" in r.getMessage()]
         row = next(t for t in store.list_triggers() if t["id"] == "t-eternal")
@@ -180,8 +184,8 @@ class TestTriggerExpiry:
         assert rows["t-legacy"]["expires_at"] is None
         assert rows["t-legacy"]["authority"] is None
         # Legacy row had no vec entry; a fresh add on the migrated table works end to end.
-        store.add_trigger("t-new", "new trigger", "projects/new.md", _VEC, expires_at=FUTURE)
-        assert [f["id"] for f in store.check_triggers(_VEC, cooldown_bypass=True)] == ["t-new"]
+        store.add_trigger("t-new", "deploying the release to prod", "projects/new.md", _VEC, expires_at=FUTURE)
+        assert [f["id"] for f in store.check_triggers(_VEC, PROMPT, cooldown_bypass=True)] == ["t-new"]
 
     def test_ttl_sweep_disables_expired_triggers_on_the_same_clock(self, isolated_store):
         from palinode.consolidation import ttl

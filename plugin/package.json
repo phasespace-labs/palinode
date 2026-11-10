@@ -1,6 +1,6 @@
 {
   "name": "openclaw-palinode",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "type": "module",
   "description": "Palinode memory system for OpenClaw",
   "main": "./dist/index.js",

@@ -656,15 +656,28 @@ export async function buildRecallContext(
   return `${PREAMBLE}${frame}${kept}${memory}`;
 }
 
-interface CoreListEntry {
+/** One core-memory row of the `/context/prime` digest. */
+interface CoreDigestRow {
   file?: string;
-  name?: string;
   summary?: string;
+  contradicts?: string[];
+  stale_backing?: string[];
+  epistemic?: string;
+}
+
+/** The row's qualifiers, as `/context/prime`'s own text renderer writes them. */
+function coreQualifiers(row: CoreDigestRow): string {
+  const bits: string[] = [];
+  if (row.contradicts?.length) bits.push(`⚠ contradicts: ${row.contradicts.join(", ")}`);
+  if (row.stale_backing?.length) bits.push(`⚠ stale backing: ${row.stale_backing.join(", ")}`);
+  if (row.epistemic) bits.push(`epistemic: ${row.epistemic}`);
+  return bits.length ? ` [${bits.join(" | ")}]` : "";
 }
 
 /**
- * Session-start priming: warm server-side session context, then return a
- * bounded digest of `core: true` memories — or null when there are none.
+ * Session-start priming: prime the server-side session and return a bounded
+ * digest of the `core: true` memories in this session's scope — or null when
+ * there are none.
  *
  * Deliberately NOT routed through bounded resolution (see the routing contract
  * on `buildRecallContext`): a startup digest is orientation — "here is what
@@ -679,23 +692,23 @@ export async function buildCoreDigest(
   cwd: string = process.cwd(),
   sessionId = "",
 ): Promise<string | null> {
-  // Warm /context/prime; result deliberately ignored (older servers 404).
-  await apiJson(cfg, fetchFn, "/context/prime", {
+  // One request: /context/prime is the session's scoped digest. Its core
+  // memories were selected at the server's visibility choke point, so a core
+  // memory tagged to another project (or retired, private, restricted) is
+  // already withheld. No usable response injects nothing.
+  const primed = await apiJson(cfg, fetchFn, "/context/prime", {
     body: { cwd: clientCwd(cwd), session_id: sessionId },
   });
 
   if (cfg.coreMaxFiles <= 0) return null;
 
-  const listing = await apiJson(cfg, fetchFn, "/list?core_only=true");
-  if (!Array.isArray(listing) || listing.length === 0) return null;
+  const rows = primed && typeof primed === "object"
+    ? (primed as { core_memories?: unknown }).core_memories : undefined;
+  if (!Array.isArray(rows) || rows.length === 0) return null;
 
-  const lines = (listing as CoreListEntry[])
+  const lines = (rows as CoreDigestRow[])
     .slice(0, cfg.coreMaxFiles)
-    .map((e) => {
-      const name = e.name ?? "untitled";
-      const summary = e.summary ? ` — ${e.summary}` : "";
-      return `- [${e.file ?? "?"}] ${name}${summary}`;
-    })
+    .map((r) => `- [${r.file ?? "?"}] ${r.summary ?? "untitled"}${coreQualifiers(r)}`)
     .join("\n");
 
   const context = `## Palinode memory (session start)

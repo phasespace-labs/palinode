@@ -10,7 +10,7 @@ persisted as audit metadata, separately from retrieval events.
 
 ``session_id`` is accepted beyond the canonical parameter set for the same
 reason ``/context/prime`` accepts it — harness hooks send it on every call —
-and it is used only to resolve the requester's scope chain.
+and it links audit receipts as well as resolving the requester's scope chain.
 
 ``cwd`` and ``project`` are the requester's project scope, accepted beyond the
 canonical set on the same terms: they only resolve the project level of the
@@ -29,7 +29,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from palinode.api._util import _safe_500
+from palinode.api._util import _safe_500, effective_project_scope
 from palinode.api.rate_limit import _RATE_LIMIT_SEARCH, _check_rate_limit
 from palinode.api.routers.search import _resolve_scope_chain
 from palinode.core.bundle import (
@@ -113,9 +113,7 @@ def resolve_api(req: ResolveRequest, request: Request = None) -> dict[str, Any]:
     # project value is a 400 from the shared handler, never a server error.
     # `context` is memory refs, not the ambient entity refs `/search` boosts
     # on, so it is never a source of project scope.
-    from palinode.core.context_prime import resolve_context
-
-    scope = resolve_context(cwd=req.cwd, project=req.project)
+    scope = effective_project_scope(None, cwd=req.cwd, project=req.project)
     try:
         # ADR-009 Layer 2: the requester's project and session identity.
         chain = _resolve_scope_chain(context=scope.context, session_id=req.session_id)
@@ -127,7 +125,7 @@ def resolve_api(req: ResolveRequest, request: Request = None) -> dict[str, Any]:
         RetrievalLogger(
             config.memory_dir, enabled=config.instrumentation.capture_retrievals,
         ).record_bundle_receipt(
-            bundle, bundle_request, cwd=req.cwd,
+            bundle, bundle_request, cwd=req.cwd, session_id=req.session_id,
             project=scope.project.removeprefix("project/") if scope.project else None,
         )
         return body

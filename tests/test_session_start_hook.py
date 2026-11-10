@@ -2,15 +2,17 @@
 
 The hook does two fail-silent actions on Claude Code SessionStart:
 
-  1. POST /context/prime — forward-compatible server-side context warming
-     (a harmless 404 until the endpoint ships).
-  2. GET /list?core_only=true — inject a bounded core-memory digest into the
-     session via ``additionalContext`` (the escalation: deterministic
-     recall grounding that doesn't depend on the agent remembering to search).
+  1. POST /context/prime — the scope-aware session-start digest.
+  2. Inject that digest's core memories into the session via
+     ``additionalContext`` (deterministic recall grounding that doesn't depend
+     on the agent remembering to search). Nothing else is requested: the
+     server selected the core memories for this session's scope, so the hook
+     never reads the unscoped ``GET /list``.
 
 These tests run the canonical script (examples/hooks/) through bash with a
-stub ``curl`` on PATH that records invocations and serves a canned /list
-response. A sync test pins the embedded ``palinode init`` copy to the
+stub ``curl`` on PATH that records invocations and serves a canned
+/context/prime response. ``tests/test_session_start_hook_live.py`` runs it
+against the real server. A sync test pins the embedded ``palinode init`` copy to the
 canonical file so the two can't drift.
 
 Requires `jq` + `bash` (present on CI ubuntu runners and macOS).
@@ -32,21 +34,18 @@ pytestmark = pytest.mark.skipif(
     reason="hook script absent or jq/bash unavailable",
 )
 
+#: ``core_memories`` rows as /context/prime returns them: ``summary`` is the
+#: rendered "title — description" line, qualifiers ride alongside.
 _CORE_LIST = [
-    {"file": "decisions/adopt-rrf.md", "name": "adopt-rrf",
-     "category": "decisions", "core": True,
-     "summary": "Hybrid search fuses BM25 + vector with RRF.",
-     "last_updated": "2026-07-01", "entities": [], "size_bytes": 512},
-    {"file": "projects/palinode-status.md", "name": "palinode-status",
-     "category": "projects", "core": True, "summary": "",
-     "last_updated": "2026-06-20", "entities": [], "size_bytes": 256},
-    {"file": "insights/embed-timeouts.md", "name": "embed-timeouts",
-     "category": "insights", "core": True,
-     "summary": "Cold Ollama needs 90s embed timeouts.",
-     "last_updated": "2026-06-01", "entities": [], "size_bytes": 300},
+    {"file": "decisions/adopt-rrf.md",
+     "summary": "adopt-rrf — Hybrid search fuses BM25 + vector with RRF."},
+    {"file": "projects/palinode-status.md", "summary": "palinode-status"},
+    {"file": "insights/embed-timeouts.md",
+     "summary": "embed-timeouts — Cold Ollama needs 90s embed timeouts.",
+     "contradicts": ["insights/embed-fast.md"], "epistemic": "observation"},
 ]
 
-# Stub curl: log every invocation, serve the canned /list body on GET /list,
+# Stub curl: log every invocation, serve the canned digest on /context/prime,
 # fail with exit 22 (curl -f style) when CURL_FAIL=1.
 _STUB_CURL = """\
 #!/bin/bash
@@ -63,7 +62,8 @@ case "$@" in
     else
       echo '{"allowed":true}'
     fi ;;
-  *"/list"*) cat "$STUB_DIR/list-response.json" ;;
+  *"/context/prime"*) cat "$STUB_DIR/prime-response.json" ;;
+  *"/list"*) echo '[{"file":"decisions/other-project.md","name":"other","core":true}]' ;;
 esac
 exit 0
 """
@@ -75,7 +75,8 @@ def _run_hook(tmp_path, *, env=None, source="startup", session_id="s1",
     stub_dir.mkdir()
     (stub_dir / "curl").write_text(_STUB_CURL)
     (stub_dir / "curl").chmod(0o755)
-    (stub_dir / "list-response.json").write_text(json.dumps(core_list))
+    prime = {} if core_list is None else {"core_memories": core_list}
+    (stub_dir / "prime-response.json").write_text(json.dumps(prime))
 
     payload = json.dumps({
         "session_id": session_id,
@@ -126,10 +127,26 @@ def test_injects_core_digest(tmp_path):
     assert "Palinode memory" in ctx
     # Deterministic recall reminder — the doc-only recall guard, made structural.
     assert "palinode_search" in ctx
-    # One line per core file: [file] name — summary (summary optional).
+    # One line per core memory: [file] summary [qualifiers], as the server
+    # renders the digest itself.
     assert "- [decisions/adopt-rrf.md] adopt-rrf — Hybrid search" in ctx
-    assert "- [projects/palinode-status.md] palinode-status" in ctx
-    assert "- [insights/embed-timeouts.md] embed-timeouts" in ctx
+    assert "- [projects/palinode-status.md] palinode-status\n" in ctx
+    assert ("- [insights/embed-timeouts.md] embed-timeouts — Cold Ollama needs 90s embed"
+            " timeouts. [⚠ contradicts: insights/embed-fast.md | epistemic: observation]") in ctx
+
+
+def test_injects_only_the_scoped_digest_never_the_unscoped_list(tmp_path):
+    """The stub would still answer /list with another project's core memory."""
+    proc, curl_called = _run_hook(tmp_path)
+    assert "/list" not in curl_called.read_text()
+    assert "other-project" not in _context_of(proc)
+
+
+def test_no_digest_in_the_prime_response_injects_nothing(tmp_path):
+    """An older server, or one that answers without a digest, injects nothing."""
+    proc, _ = _run_hook(tmp_path, core_list=None)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == ""
 
 
 # ---- Fail-silent + gates ------------------------------------------------
@@ -142,7 +159,7 @@ def test_api_down_is_fail_silent(tmp_path):
     assert curl_called.exists(), "curl should have been attempted"
 
 
-def test_recall_denial_prevents_prime_and_core_list(tmp_path):
+def test_recall_denial_prevents_prime(tmp_path):
     proc, curl_called = _run_hook(tmp_path, env={"CONTROL_DENY": "1"})
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout == ""
@@ -158,7 +175,7 @@ def test_late_recall_denial_suppresses_additional_context(tmp_path):
     assert proc.stdout == ""
     calls = curl_called.read_text()
     assert calls.count("/controls/check") == 2
-    assert "/context/prime" in calls and "/list" in calls
+    assert "/context/prime" in calls and "/list" not in calls
 
 
 def test_non_allowlisted_source_skips(tmp_path):
@@ -186,7 +203,7 @@ def test_inject_disabled_is_prime_only(tmp_path):
     assert proc.stdout.strip() == "", "MAX_FILES=0 must not inject"
     calls = curl_called.read_text()
     assert "/context/prime" in calls, "prime still fires in prime-only mode"
-    assert "/list" not in calls, "core-list GET skipped when injection disabled"
+    assert "/list" not in calls
 
 
 def test_empty_core_list_injects_nothing(tmp_path):

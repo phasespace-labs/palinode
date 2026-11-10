@@ -218,18 +218,24 @@ def resolve(expression: str, anchor: date | None) -> tuple[date | None, str]:
         if anchor is None:
             return None, _REASON_NO_ANCHOR
         target = _WEEKDAYS[unit]
-        if qualifier == "last":
-            delta = (anchor.weekday() - target) % 7 or 7
-            return anchor - timedelta(days=delta), _REASON_RESOLVED
-        delta = (target - anchor.weekday()) % 7 or 7
-        return anchor + timedelta(days=delta), _REASON_RESOLVED
+        try:
+            if qualifier == "last":
+                delta = (anchor.weekday() - target) % 7 or 7
+                return anchor - timedelta(days=delta), _REASON_RESOLVED
+            delta = (target - anchor.weekday()) % 7 or 7
+            return anchor + timedelta(days=delta), _REASON_RESOLVED
+        except OverflowError:
+            return None, _REASON_OUT_OF_RANGE
 
     offsets = {"yesterday": -1, "today": 0, "tomorrow": 1}
     if phrase not in offsets:
         return None, _REASON_UNKNOWN
     if anchor is None:
         return None, _REASON_NO_ANCHOR
-    return anchor + timedelta(days=offsets[phrase]), _REASON_RESOLVED
+    try:
+        return anchor + timedelta(days=offsets[phrase]), _REASON_RESOLVED
+    except OverflowError:
+        return None, _REASON_OUT_OF_RANGE
 
 
 def _protected_spans(line: str, *, quotes: bool) -> list[tuple[int, int]]:

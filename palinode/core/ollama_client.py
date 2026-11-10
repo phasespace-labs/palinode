@@ -368,6 +368,14 @@ def _finish_reason(data: Any) -> str | None:
     return reason if isinstance(reason, str) and reason else None
 
 
+def _completion_tokens(data: Any) -> int | None:
+    """A valid reported completion-token count, or ``None``."""
+    if not isinstance(data, dict) or not isinstance(data.get("usage"), dict):
+        return None
+    value = data["usage"].get("completion_tokens")
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
 class ChatCompletionText(str):
     """The assistant message content, carrying why generation stopped.
 
@@ -386,11 +394,16 @@ class ChatCompletionText(str):
     """
 
     finish_reason: str | None
+    completion_tokens: int | None
     truncated: bool
 
-    def __new__(cls, content: str, *, finish_reason: str | None = None) -> ChatCompletionText:
+    def __new__(
+        cls, content: str, *, finish_reason: str | None = None,
+        completion_tokens: int | None = None,
+    ) -> ChatCompletionText:
         obj = super().__new__(cls, content)
         obj.finish_reason = finish_reason
+        obj.completion_tokens = completion_tokens
         obj.truncated = (finish_reason or "").lower() in _TRUNCATION_STOP_REASONS
         return obj
 
@@ -789,10 +802,21 @@ class OllamaClient:
                     ) from je
                 latency_ms = (self._monotonic() - t0) * 1000.0
                 self._on_success(role, latency_ms, cb=cb)
+                extra = None
+                if op == "chat_completions" and isinstance(data, dict):
+                    try:
+                        content = data["choices"][0]["message"]["content"]
+                    except (KeyError, IndexError, TypeError):
+                        content = None
+                    if isinstance(content, str):
+                        extra = {"response_chars": len(content)}
+                        completion_tokens = _completion_tokens(data)
+                        if completion_tokens is not None:
+                            extra["completion_tokens"] = completion_tokens
                 self._emit(
                     "request", role, path, model, latency_ms=latency_ms,
                     retry_count=attempt, circuit_state=cb.state.value,
-                    outcome="ok", op=op, level=logging.INFO,
+                    outcome="ok", op=op, level=logging.INFO, extra=extra,
                 )
                 return data
             except httpx.HTTPStatusError as e:
@@ -918,10 +942,10 @@ class OllamaClient:
     def _emit(
         self, event: str, role: OllamaRole, endpoint: str, model: str | None,
         *, latency_ms: float, retry_count: int, circuit_state: str, outcome: str,
-        op: str, level: int,
+        op: str, level: int, extra: dict[str, Any] | None = None,
     ) -> None:
         """Emit one structured JSON-line log event (the logging audit field convention)."""
-        event_logger.log(level, json.dumps({
+        fields = {
             "event": event,
             "op": op,
             "role": role.value,
@@ -931,7 +955,10 @@ class OllamaClient:
             "retry_count": retry_count,
             "circuit_state": circuit_state,
             "outcome": outcome,
-        }, sort_keys=True))
+        }
+        if extra:
+            fields.update(extra)
+        event_logger.log(level, json.dumps(fields, sort_keys=True))
 
     # -- typed public methods (per-role binding) --------------------------------
 
@@ -1298,7 +1325,11 @@ class OllamaClient:
             # caller-visible bug; wrapping it would only turn it into the string
             # "None". Pass it through exactly as before.
             return content
-        return ChatCompletionText(content, finish_reason=_finish_reason(data))
+        return ChatCompletionText(
+            content,
+            finish_reason=_finish_reason(data),
+            completion_tokens=_completion_tokens(data),
+        )
 
     def ping(self, role: OllamaRole = OllamaRole.EMBED, *, timeout: float = 2.0) -> bool:
         """Liveness probe — a raw GET to the role's base URL.

@@ -22,7 +22,7 @@ Arms, all scored against the same prompts:
 
 Nothing is simulated. Descriptions and prompts are embedded through the
 product's own ``embedder.embed``; the vector scores come from real
-``store.add_trigger`` / ``store.check_triggers`` calls against a throwaway
+``store.add_trigger`` / ``store._score_triggers`` calls against a throwaway
 SQLite store, so the vec0 distance and the product's own L2-to-cosine
 conversion are the ones under test. The lexical arm is a real FTS5 index
 scored with the product's ``fts_match_expression`` and its BM25 normalization.
@@ -545,7 +545,7 @@ def _vector_scores(
     """Score every prompt against every trigger through the real store.
 
     Each description variant is registered as its own trigger row with a zero
-    threshold, so ``check_triggers`` returns all of them with their scores and
+    threshold. ``_score_triggers`` returns all of them before the firing rule and
     the arm's score for a trigger is the best of its variants. This is the
     production match path, the production vec0 index and the production
     distance-to-score conversion — not a reimplementation of them.
@@ -569,9 +569,12 @@ def _vector_scores(
                 )
         for prompt in corpus.prompts:
             best: dict[str, float] = {trigger_id: 0.0 for trigger_id in corpus.trigger_ids}
-            for fired in store.check_triggers(
-                prompt_vectors[prompt.prompt_id], cooldown_bypass=True
-            ):
+            db = store.get_db()
+            try:
+                scored = store._score_triggers(db, prompt_vectors[prompt.prompt_id])
+            finally:
+                db.close()
+            for fired in scored:
                 trigger_id = fired["id"].split("::", 1)[0]
                 best[trigger_id] = max(best[trigger_id], float(fired["score"]))
             scores[prompt.prompt_id] = best

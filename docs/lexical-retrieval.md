@@ -131,6 +131,35 @@ corpus size, so a store of a handful of records could not produce a
 removed it: an exact identifier hit reaches the confident mark on a
 three-record store, so it can corroborate there too.
 
+**Automatic recall asks what the prompt is about.** The per-prompt hook
+delivers only `confident` bundles, and on a large store of one project's work
+notes ordinary commands used to reach it: "bump the version and tag it" and
+"commit this and push" found chunks holding those everyday words together and
+scored them as a match. Two rules close that, both for prompt-mode recall
+(`/resolve` with `prompt: true`, the hook's path) only; explicit search is
+unchanged and retrieval and ranking are untouched.
+
+- *Subject coverage.* The prompt is parsed, deterministically, into subject
+  terms and working-state terms: words for the working copy and the session
+  (branch, commit, version, tag, tests, "it", "this", "the same"…, shipped as
+  `palinode/core/working_state.txt`), and, in a command, the verb that opens
+  each clause. The keyword arm may vouch for a prompt only through a row that
+  matched at least one subject term. A prompt with no subject ("bump the
+  version and tag it") reports `retrieval.subject_coverage: "no_subject"`; one
+  whose keyword match landed only on working-state words ("revert the last
+  commit, it broke the dashboard") reports `"working_state_only"`. Identifiers
+  (`sync.batch_window_ms`, `ADR-012`) are always subject.
+- *The vector mark over the store's background.* A contentless prompt
+  ("continue") scores 0.60 cosine against a large homogeneous store and 0.47
+  against the relevance fixture the 0.60 mark was calibrated on. The vector
+  arm's confident mark is therefore `max(0.60, background + 0.129)`: the
+  calibrated mark's height above the fixture's background, carried to the
+  store at hand. The background costs one embedding and one search. It is
+  re-measured once the store has grown or shrunk by 200 chunks or 2%, or
+  after a day, not after every save. On a store where any prompt finds a chunk
+  at 0.60, this leaves the vector arm almost never vouching on its own — the
+  keyword arm, through the prompt's subject, carries automatic recall there.
+
 **Results are not withheld for a `none` verdict.** The MCP rendering leads with
 `No confident match.` and the weak results follow underneath, because an empty
 slate cannot be told apart from an empty store by the reader. Operators who

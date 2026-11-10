@@ -124,17 +124,28 @@ included, rather than leaving the field absent, and then show the scope the
 server reports it applied.
 
 `context.enabled: false` disables all ambient project inference, including the
-environment and mappings. An explicit project still works. In the API server's
-config it also leaves every search unscoped, whatever `context` the caller
-sent, and the response reports `disabled`: a client resolves its project under
-its own config, which may not be the server's. `auto_detect: false`
+environment and mappings. The local resolver still accepts an explicit project.
+In the API server's config it leaves search, session priming, resolve and read
+without project scope (trigger delivery too), including when the caller sends a project or a prime
+scope override. Other identity levels on the scope chain still apply. Scope
+receipts and prime's `project_resolved_by: disabled` describe the server's
+decision: a client resolves its project under its own config, which may not be
+the server's. MCP status labels its locally resolved setting as a client project
+hint; the API decides recall scope. `auto_detect: false`
 disables inferred candidates while retaining configured mappings and overrides.
 Search context boosts the project's records and also isolates them. A search
 with a project leaves out records tagged to a *different* project: their
 `entities` name a `project/*` and none of them is this one. Records that name no
-project are global and stay. `include_other_projects` (CLI
-`--include-other-projects`) returns the rest too, each labelled with its
-project. The receipt's `retrieval.other_projects_withheld` counts what was left
+project are global and stay, except in the shared daily note: every project
+appends its session-end summaries to `daily/<date>.md`, so each entry carries a
+`**Project:** project/<slug>` line, and a scoped search sees a daily entry only
+when it names this project. An untagged entry, such as one written before
+entries were tagged, is left out of a scoped search and counted, because it
+could belong to any project. Its project-tagged session record is still found
+as usual. `include_other_projects` (CLI
+`--include-other-projects`) returns the rest too, after this project's results
+and labelled with both projects, as context rather than this project's
+decisions. The receipt's `retrieval.other_projects_withheld` counts what was left
 out. The same rule applies to the per-turn resolve and the session-start prime.
 Project names compare case-insensitively, and a `project/` group in the store's
 curated `entity-aliases.yaml` makes each member count as the group's canonical
@@ -174,7 +185,7 @@ Core memory persists in the model's context window from turn 1 until OpenClaw co
 - `projects/palinode.md` — memory system status
 - `projects/infrastructure.md` — infrastructure notes and service status
 
-**Core memory can expire.** A `core: true` memory is *acting* state — it is injected without anyone asking — so it may carry the same `expires_at` (ISO-8601) that ephemeral memories use for the TTL sweep, plus an optional free-text `authority` naming who or what licensed it to act (`"paul: standing"`, a session id, a policy name). Set both through `metadata` at save time (`metadata: {expires_at: ..., authority: ...}`, or `metadata.ttl` for a duration). Past its `expires_at` a core memory stays on disk, in git, and searchable — it just stops being injected: `GET /list?core_only=true` (the session-start hook and the harness plugins) and `/context/prime` (`palinode_session_init`, `palinode prime`) both withhold it, and the lapse is logged once. `authority` is stored and displayed, not enforced. `palinode lint` lists core memories with no `expires_at`.
+**Core memory can expire.** A `core: true` memory is *acting* state — it is injected without anyone asking — so it may carry the same `expires_at` (ISO-8601) that ephemeral memories use for the TTL sweep, plus an optional free-text `authority` naming who or what licensed it to act (`"paul: standing"`, a session id, a policy name). Set both through `metadata` at save time (`metadata: {expires_at: ..., authority: ...}`, or `metadata.ttl` for a duration). Past its `expires_at` a core memory stays on disk, in git, and searchable — it just stops being injected: `/context/prime` (the session-start hook, the Pi and Cline plugins, `palinode_session_init`, `palinode prime`) and `GET /list?core_only=true` (the OpenClaw plugin's per-turn core injection) both withhold it, and the lapse is logged once. `authority` is stored and displayed, not enforced. `palinode lint` lists core memories with no `expires_at`.
 
 **Retiring a core memory withholds it the same way.** Expiry is one of several ways a memory stops standing; the injection path asks the lifecycle classifier below about all of them, so a `core: true` decision you supersede in place (`palinode archive <ref> --superseded-by <ref>`) is no longer injected beside the decision that replaced it. Its `/list` row reports `core: false` and names the signal in `core_retired_reason` (`superseded_by: decisions/…`, `status:archived`, `expired`). It is withheld from injection only: the record stays listed, readable and searchable, and the browse surfaces keep showing it with that reason — `palinode list --core` and the `palinode_list` MCP tool ask for it explicitly (`include_retired_core=true` on `GET /list`, off by default so injection is the fail-safe).
 
@@ -404,7 +415,73 @@ If your message discusses known entities (people, projects), Palinode searches t
 
 ### Phase 4: Prospective Triggers
 
-Palinode maintains a background index of "triggers" (specific situational contexts). Every message is checked against this list. If the semantic meaning of your message matches a trigger description, the associated memory file is forcibly injected into the context. This allows the agent to essentially leave a "note to self" to remember a specific file the next time a specific situation arises.
+Palinode maintains an index of triggers: a description, optional example user
+prompts (`phrasings`), and a target memory file. Registration embeds the
+description and each example; matching uses their maximum cosine score per
+trigger. Only the best enabled, unexpired, deliverable trigger outside cooldown
+can fire. It must score at least 0.40 (the floor), clear its stored threshold, and lead the
+next eligible distinct trigger by at least 0.06. With one eligible trigger, the
+runner-up score is zero. The runner-up participates even below the floor or
+its stored threshold: a close competing intent causes abstention. Ties fire
+nothing. Matching considers every stored embedding before filtering.
+
+**The winner must also share words with the prompt.** At least three of the
+prompt's content words (stopwords dropped, matched case-insensitively and
+porter-stemmed, so "merged" meets "merge") must appear in the winning trigger's
+description or phrasings. If they don't, nothing fires; the runner-up does not
+inherit the prompt, so at most one trigger fires per prompt. The reason is
+that cosine alone cannot separate a trigger's intent from everyday prompts in
+the same vocabulary: on a maintainer's store, "reply in the thread" scored
+0.709 against a contributor-reply trigger and "merge and deploy" 0.660 against
+a PR-backflow trigger, as high as the prompts those triggers were written for.
+Measured on that store's triggers with 38 held-out on-target and 78
+off-target prompts, the gate at the 0.62 default fired 30 on-target and 3
+off-target, against 25 and 8 for 0.65 without it. Each trigger's words are
+indexed at registration (`triggers_fts`); triggers registered before the gate
+existed are indexed once at startup.
+
+**Write phrasings in the user's own words.** Write examples as a user would
+type them, short and long, such as "215 merged, port it" or "someone wants to
+take issue 250, what do we say", not in the third person ("User is asking
+how to…"). The gate counts words shared with the trigger's text, so a
+phrasing in the user's vocabulary is what lets a real prompt through: on the
+measurement above, scoring the reply-template trigger's held-out prompts
+against its description alone dropped them from 3/3 to 1/3. A terse prompt
+with fewer than three content words never fires a trigger.
+
+**Use triggers for topical recall, not runbooks.** A trigger surfaces a
+memory when a conversation is *about* something. An operational procedure
+("port a merged public PR", "answer a contributor") is better served by a
+skill or an explicit command: the prompts that need it look like everyday
+maintainer chatter, and even with the gate the measurement above missed
+roughly one on-target prompt in five.
+
+CLI registration accepts repeated `--phrasing` options; REST `POST /triggers`
+and MCP `palinode_trigger create` accept a `phrasings` string array. The OpenClaw
+plugin consumes the same `/check-triggers` decision, so it inherits this rule.
+Existing triggers keep their description embedding until re-registered; no
+examples are generated automatically.
+
+New registrations default to 0.62 and record whether the threshold was explicit.
+0.62 is the best-F1 threshold with the shared-term gate on the measurement
+above; 0.65 was the best-F1 threshold for phrasings on the trigger benchmark
+(`bench/results/trigger-phrasing-2026-09-20`) before the gate. At the 0.40
+floor, a registry of
+a few triggers false-fires on most unrelated prompts, because ordinary
+developer prompts score 0.42–0.59 and the lead margin rarely has a runner-up to
+beat. Pass a lower `threshold` explicitly only for a trigger you have measured.
+The deterministic startup migration moves a threshold that was defaulted
+(origin `default`) to the current default and records the old value, new value
+and outcome in `trigger_threshold_migrations`,
+with a log message once per recorded trigger. Legacy rows have no threshold
+provenance: even a value of 0.75 might have been chosen explicitly, so it is
+preserved and logged for review. Re-register after reviewing `palinode trigger
+list`, omitting the threshold to accept the new default. `palinode doctor`'s fast
+`trigger_health` check reports these unknown values separately from triggers
+blocked by disabled state, expiry, missing embeddings, or unreachable thresholds.
+It makes no embedding calls. A reachable high threshold alone cannot prove a
+trigger will never fire; the rule is a starting calibration, not a guarantee
+against false positives.
 
 A trigger acts under whatever authority existed when it was written, so it can carry an expiry: `palinode_trigger create` (MCP), `palinode trigger add --expires-at ... --authority ...` (CLI) and `POST /triggers` all accept `expires_at` (ISO-8601) and a free-text `authority`. An expired trigger is skipped at check time and logged once — not once per prompt — and the `archive-expired` sweep that ages out ephemeral memories also flips it to `enabled: 0`, so `palinode trigger list` shows the lapse. A trigger without `expires_at` never expires, exactly as before.
 
@@ -538,7 +615,7 @@ graph LR
    - Superseded or Archived facts are moved to the History layer (`{name}-history.md`) with a rationale and timestamp ensuring data is never lost.
 7. **Assign IDs** — any newly generated facts get a deterministic `<!-- fact:slug -->` ID block for tracking.
 8. **Insights** — runs all notes (not per-project) through the insight extraction prompt, looking for cross-project patterns
-9. **Archive** — moves to `archive/YYYY/` the daily notes whose every project group reached a decision (compacted, or saw the notes and proposed nothing). Notes stay in `daily/` — and the run summary says why — when a group failed or was skipped, when the note names no `project/` at all (it formed no group, so no pass read it), or when it is today's `daily/<date>.md`, which session-end is still appending to
+9. **Archive** — moves to `archive/YYYY/` the daily notes whose every project group reached a decision (compacted, or saw the notes and proposed nothing). Notes stay in `daily/` — and the run summary says why — when a group failed or was skipped, when the note names no `project/` at all (it formed no group, so no pass read it), or when it is today's `daily/<date>.md`, which session-end is still appending to. A daily note that names no project can never be read by a group, so once it is older than `consolidation.daily_note_retention_days` (default 30; `0` disables) the pass moves it to `archive/` on age alone, before any group runs — reported as `notes_no_project_retired`
 10. **Commit** — `git commit -m "palinode: weekly consolidation {date}"`
 
 ### Token Budget
@@ -644,9 +721,9 @@ is re-derived. `palinode doctor` reports how many chunks are still behind.
 | `venv/`, `node_modules/`, `__pycache__/`, `*.egg-info/` | ❌ | Build artifacts |
 
 **What counts as memory:** one predicate, `palinode.core.skip_dirs.is_skipped_path`,
-decides it for every walker of the store: the watcher, `palinode reindex`, search, `/list`
-(and so the SessionStart injection), the provenance UI, the advisory review, the
-session-start digest, `backed_by` propagation, lint, the TTL sweep, cross-refs, forget,
+decides it for every walker of the store: the watcher, `palinode reindex`, search, `/list`,
+the provenance UI, the advisory review, the session-start digest (and so the
+SessionStart injection), `backed_by` propagation, lint, the TTL sweep, cross-refs, forget,
 the handoff export and import, corrections, and the file counts in `doctor`, the config
 banner and `palinode retrieval-stats`. A path is never memory when any directory segment
 of its path *inside the store* is in the table above. A folder above the store root never

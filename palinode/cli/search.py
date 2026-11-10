@@ -145,9 +145,6 @@ def _status_labels(res: dict) -> str:
         bits.append("[red]" + escape(f"[⚠ retired{': ' + reason if reason else ''}]") + "[/red]")
     elif currency == "contested":
         bits.append("[yellow]" + escape("[⚠ contested]") + "[/yellow]")
-    other = res.get("other_project")
-    if other:
-        bits.append("[yellow]" + escape(f"[other project: {', '.join(other)}]") + "[/yellow]")
     return " ".join(bits)
 
 
@@ -318,6 +315,15 @@ def search(
                 if diagnostics else results
             )
             print_result(payload, fmt=output_fmt)
+            # With --diagnostics the receipt carries `filter_exclusion` itself.
+            # Without it the array cannot, so a filter that emptied the result
+            # says so on stderr and stdout stays the array.
+            if not diagnostics and not results and receipt and receipt.get("retrieval"):
+                from palinode.core.scoring import describe_filter_exclusion
+
+                excluded = describe_filter_exclusion(receipt["retrieval"])
+                if excluded:
+                    click.echo(excluded, err=True)
         else:
             # Which project this search was scoped to, and why. First line:
             # a search that found nothing in the wrong project is exactly when
@@ -336,10 +342,31 @@ def search(
                 if other:
                     console.print("[yellow]" + escape(other) + "[/yellow]")
             if not results:
+                if receipt and receipt.get("retrieval"):
+                    from palinode.core.scoring import describe_filter_exclusion
+
+                    excluded = describe_filter_exclusion(receipt["retrieval"])
+                    if excluded:
+                        console.print("[yellow]" + escape(excluded) + "[/yellow]")
                 console.print("[yellow]No results found.[/yellow]")
                 return
             
-            for res in results:
+            from palinode.core.scoring import (
+                other_project_label,
+                other_projects_heading,
+                split_other_projects,
+            )
+
+            # Opted-in records from other projects print after this project's
+            # own, under their own heading, each opening with whose it is and
+            # whose it is not. Same rule as the MCP renderer (ADR-010).
+            own_rows, other_rows = split_other_projects(results)
+            for index, res in enumerate(own_rows + other_rows):
+                if other_rows and index == len(own_rows):
+                    console.print(
+                        "[bold yellow]" + escape(other_projects_heading(scope.project)) + "[/bold yellow]"
+                    )
+                    console.print()
                 score_str = f"[{describe_match(res)}] " if score else ""
                 title = res.get("file", "Untitled")
                 # prefer the API-provided snippet — already match-windowed
@@ -353,7 +380,12 @@ def search(
                     body = raw.strip()[:200] + "..." if len(raw) > 200 else raw
 
                 labels = _status_labels(res)
-                console.print(f"[bold blue]{score_str}{title}[/bold blue]" + (f" {labels}" if labels else ""))
+                other = res.get("other_project")
+                lead = (
+                    "[yellow]" + escape(other_project_label(other, scope.project)) + "[/yellow] "
+                    if other else ""
+                )
+                console.print(lead + f"[bold blue]{score_str}{title}[/bold blue]" + (f" {labels}" if labels else ""))
                 console.print(f"  {body}")
                 for line in _evidence_lines(res.get("evidence")):
                     console.print(line)

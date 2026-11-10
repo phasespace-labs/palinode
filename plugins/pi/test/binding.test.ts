@@ -141,10 +141,8 @@ describe("session_start", () => {
       vi.fn(async (url: unknown) => {
         const u = String(url);
       if (u.includes("/controls/check")) return Response.json({ allowed: true });
-        if (u.includes("/list"))
-          return new Response(
-            JSON.stringify([{ file: "projects/p.md", name: "P", summary: "s" }]),
-          );
+        if (u.includes("/context/prime"))
+          return Response.json({ core_memories: [{ file: "projects/p.md", summary: "P — s" }] });
         return new Response("{}");
       }),
     );

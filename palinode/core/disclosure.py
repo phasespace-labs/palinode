@@ -16,8 +16,27 @@ PAUSE_SCOPE = (
     "requests, remove already delivered context, or provide access control"
 )
 EXCLUSION_SCOPE = (
-    "project/path exclusions apply automatic capture and recall, not explicit "
-    "user/API writes or recall"
+    "project exclusions apply to automatic capture and recall, and stop automatic "
+    "enrichment and consolidation of that project’s stored notes; path exclusions "
+    "apply to capture sources only (transcript paths and cwd), not stored notes; "
+    "exclusions do not block explicit user/API writes or recall"
+)
+# What the server does with a hook's cwd or transcript path that it cannot
+# inspect (another host, or a directory its user cannot read, such as /root).
+# capture_policy.evaluate_capture_policy is the behaviour; this is its
+# disclosure, served by /status so every surface states the server's rule.
+UNVERIFIABLE_PATH_POLICY = (
+    "when the server cannot inspect an automatic request's cwd or transcript "
+    "path (another host, a directory its user cannot read, or a symlinked "
+    "path), and no project or path exclusion is configured, the path is "
+    "dropped and the capture or recall goes ahead without it; with any "
+    "exclusion configured, the request is refused (invalid_scope) so an "
+    "exclusion cannot be bypassed. A path is never resolved through a symlink"
+)
+#: Shown when /status predates the disclosure; such servers refuse instead.
+UNVERIFIABLE_PATH_POLICY_UNREPORTED = (
+    "not reported by this API; servers that do not report it refuse automatic "
+    "requests whose path they cannot inspect"
 )
 PAUSED_READ_AVAILABILITY = (
     "This status tool and history reads remain available while capture and "
@@ -211,6 +230,7 @@ def runtime_disclosure() -> dict[str, Any]:
         # TranscriptorConfig has a configured endpoint but no enabled flag.
         "transcriptor_url": redact_destination(config.ingestion.transcriptor.url),
         "transcript_correction_capture": _transcript_correction_capture(),
+        "unverifiable_path_policy": UNVERIFIABLE_PATH_POLICY,
         "git_remotes": _configured_git_remotes(),
         "git_push_policy": (
             "automatic after committed writes (git.auto_push=true)"

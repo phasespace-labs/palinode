@@ -104,11 +104,11 @@ def test_wrap_light_step0_scaffolds_into_command(tmp_path: Path):
 
 
 def test_hook_script_uses_slurp_extraction():
-    """Both MSG_COUNT and FIRST_PROMPT must use `jq -s` (slurp) extraction.
+    """MSG_COUNT, FIRST_PROMPT and ENDING must use `jq -s` (slurp) extraction.
     The earlier piped patterns (`jq | grep -c '.'` and `jq | head -1 | cut`)
     were fragile under `set -o pipefail`: downstream early-exit triggers
     SIGPIPE on jq. The SessionEnd minimum-message fix patched MSG_COUNT with `|| true`; the hook-robustness fix + the transcript-extraction fix moved
-    both to slurp, which has no early-exit downstream consumer and thus
+    all to slurp, which has no early-exit downstream consumer and thus
     no SIGPIPE class to swallow. Guard against regression.
 
     Asserted on the *slurp + selector* shape rather than one literal string:
@@ -121,7 +121,7 @@ def test_hook_script_uses_slurp_extraction():
     assert "head -1 | cut -c1-200 || true" not in HOOK_SCRIPT
     # New slurp patterns must be present
     assert "jq -r -s 'map(select(.type == \"user\") | .message.content // empty) | length'" in HOOK_SCRIPT
-    assert HOOK_SCRIPT.count("jq -r -s") == 2, "both extractions must slurp"
+    assert HOOK_SCRIPT.count("jq -r -s") == 3, "all extractions must slurp"
     assert 'select(.type == "user" and .isMeta != true) | .message.content // empty' in HOOK_SCRIPT
     assert '| select(length > 0) ] | .[0] // ""' in HOOK_SCRIPT
     # Safe default for MSG_COUNT must remain
@@ -302,6 +302,38 @@ def test_hook_skips_when_wrap_already_ran(tmp_path):
     assert "/session-end" not in calls, "floor POST fired despite /wrap having run"
 
 
+@pytest.mark.parametrize("name", [
+    "mcp__palinode__palinode_session_end",
+    "mcp__my-memory__palinode_session_end",
+])
+def test_hook_skips_when_wrap_ran_under_an_mcp_prefixed_name(tmp_path, name):
+    """Claude Code records MCP calls as ``mcp__<server>__<tool>``, and the
+    server name is whatever the user's MCP config calls it. The bare-name
+    check never matched a real transcript, so /wrap sessions double-captured."""
+    transcript = _NONTRIVIAL + (
+        '{"type":"assistant","message":{"content":'
+        f'[{{"type":"tool_use","name":"{name}","input":{{}}}}]}}}}\n'
+    )
+    proc, _fallback, curl_called = _run_hook(tmp_path, transcript)
+    assert proc.returncode == 0, proc.stderr
+    assert "/session-end" not in curl_called.read_text(), name
+
+
+@pytest.mark.parametrize("name", [
+    "mcp__palinode__palinode_save",
+    "mcp__palinode__palinode_session_end_preview",
+])
+def test_hook_still_captures_after_other_palinode_tools(tmp_path, name):
+    """Only a session_end call counts as /wrap having run."""
+    transcript = _NONTRIVIAL + (
+        '{"type":"assistant","message":{"content":'
+        f'[{{"type":"tool_use","name":"{name}","input":{{}}}}]}}}}\n'
+    )
+    proc, _fallback, curl_called = _run_hook(tmp_path, transcript)
+    assert proc.returncode == 0, proc.stderr
+    assert "/session-end" in curl_called.read_text(), name
+
+
 def test_hook_force_overrides_wrap_dedup(tmp_path):
     """PALINODE_HOOK_FORCE=1 captures even when /wrap ran."""
     transcript = _NONTRIVIAL + (
@@ -400,7 +432,7 @@ def _dryrun_topic(tmp_path, transcript):
     assert proc.returncode == 0, proc.stderr
     body = proc.stdout.split("\n", 1)[1]
     summary = json.loads(body)["summary"]
-    return summary.split("Topic: ", 1)[1]
+    return summary.split("Topic: ", 1)[1].split("\nEnding: ", 1)[0]
 
 
 def test_hook_topic_after_clear_is_the_real_first_ask(tmp_path):
@@ -813,6 +845,25 @@ def test_memory_block_core_byte_identical_to_golden():
 
     core = MEMORY_BLOCK_CORE.format(project_slug="sample-project")
     assert core == (_FIXTURES / "claude_md_memory_block_core.txt").read_text()
+
+
+def test_init_saves_settled_decisions_immediately_in_every_instruction_file(tmp_path: Path):
+    result = CliRunner().invoke(
+        main, ["init", "--dir", str(tmp_path), "--agents", "--cursor"]
+    )
+    assert result.exit_code == 0, result.output
+    instruction = (
+        "When a value, ID, name, decision or plan is settled (for example a batch ID "
+        "fixed or an approach agreed), save it right away with `palinode_save` as "
+        '`type="Decision"`, with the value and why. Don\'t wait for the end of the session.'
+    )
+    for relative_path in (
+        ".claude/CLAUDE.md", "AGENTS.md", ".cursor/rules/palinode.md"
+    ):
+        text = (tmp_path / relative_path).read_text()
+        assert instruction in text
+        assert "recall-only or no-new-information session" in text
+        assert "honor an explicit request not to save" in text
 
 
 def test_init_default_skips_agents_and_cursor(tmp_path: Path):

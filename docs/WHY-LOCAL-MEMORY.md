@@ -24,10 +24,13 @@ separation is needed. See the [privacy contract](PRIVACY.md).
 ## How a session uses it
 
 An agent can explicitly save a decision, search for it in a later session, and
-inspect its source and history. Configured integrations may automate selected
-capture or recall steps, but their behavior depends on the client and its setup.
-The [Quickstart](QUICKSTART.md) documents the supported first-use path and its
-controls; it is the source for what is automatic in a particular setup.
+inspect its source and history. You can open the same records in the read-only
+local inspector ([UI.md](UI.md)) and correct or retire one from the agent or the
+CLI. Automatic capture and recall are opt-in per client (for example
+`palinode init --hook` for Claude Code); installing the MCP server alone does not
+enable them. The [Quickstart](QUICKSTART.md) documents the supported first-use
+path and its controls; it is the source for what is automatic in a particular
+setup.
 
 Consolidation proposes structured changes that Palinode validates and applies.
 Review the resulting Git changes before treating them as a correction, and use the

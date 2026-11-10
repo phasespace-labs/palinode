@@ -628,10 +628,9 @@ def test_widened_fetch_counts_recall_once(recall_widen_db):
     increment recall_count exactly once for a row present in both passes.
 
     Non-vacuous: the closure records each run() call and the test asserts a
-    second, wider fetch actually fired — the pass that pre-fix re-recorded
-    recall for already-counted rows is genuinely exercised. The closure defaults
-    record_access=True, so a regression that stopped threading the count-once
-    flag would double-count rank0/rank1 and fail this test.
+    second, wider fetch actually fired. The closure defaults record_access=True,
+    so failing to suppress either store write would record hidden rank0 and
+    double-count visible rank1.
     """
     query_emb = _graded_embedding(0)
     calls: list[int] = []
@@ -658,7 +657,105 @@ def test_widened_fetch_counts_recall_once(recall_widen_db):
 
     # rank1 sits in BOTH passes (top-2 initial + top-10 widened): counted once.
     assert _recall_count("rank1") == 1
-    # rank0 (hidden, top of window, also in both passes) counted once too.
-    assert _recall_count("rank0") == 1
+    # Hidden rows never acquire recall metadata.
+    assert _recall_count("rank0") == 0
     # a row surfaced only by the widened pass is likewise counted exactly once.
     assert _recall_count("rank3") == 1
+
+
+def _recall_metadata() -> dict[str, tuple]:
+    db = store.get_db()
+    try:
+        return {row["id"]: (row["recall_count"], row["last_recalled"], row["importance"])
+                for row in db.execute(
+                    "SELECT id, recall_count, last_recalled, importance FROM chunks"
+                )}
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("hybrid", [False, True])
+@pytest.mark.parametrize("limit", [2, 10], ids=["widened", "single-window"])
+@pytest.mark.parametrize("front", [
+    "scope: agent/other\nvisibility: private\n",
+    "visibility: restricted\naccess: [member/other]\n",
+    "entities: [project/other]\n",
+], ids=["private", "restricted", "isolated-project"])
+def test_search_records_only_visible_recall(recall_widen_db, monkeypatch, hybrid, limit, front):
+    from pathlib import Path
+    from palinode.core import embedder
+
+    # Change only live frontmatter; the indexed metadata remains unchanged.
+    Path(recall_widen_db, "insights/rank0.md").write_text(
+        f"---\nname: Hidden\n{front}---\nbody 0\n"
+    )
+    monkeypatch.setattr(embedder, "embed", lambda _: _graded_embedding(0))
+    monkeypatch.setattr(config.search, "retrieval_mode", "hybrid")
+    before = _recall_metadata()
+    previous = before
+    for count, (mode, session) in enumerate([
+        ("explicit", "first"), ("explicit", "first"),
+        ("explicit", "second"), ("passive", "third"),
+    ], 1):
+        response = client.post("/search", json={
+            "query": "body", "hybrid": hybrid, "limit": limit, "threshold": 0.0,
+            "context": ["project/palinode"], "mode": mode, "session_id": session,
+        })
+        assert response.status_code == 200, response.text
+        after = _recall_metadata()
+        assert after["rank0"] == before["rank0"]
+        # All five visible rows belong to the selected window, even when the
+        # response is subsequently trimmed to two results.
+        for rank in range(1, 6):
+            key = f"rank{rank}"
+            frequency, recency, importance = after[key]
+            assert frequency == before[key][0] + count
+            assert recency is not None and recency != previous[key][1]
+            if count in (1, 3):
+                assert importance > previous[key][2]
+            else:
+                assert importance == previous[key][2]
+        previous = after
+
+
+def test_fetch_visible_gates_widened_only_and_retired_rows(recall_widen_db):
+    from pathlib import Path
+
+    Path(recall_widen_db, "insights/rank3.md").write_text(
+        "---\nvisibility: private\nscope: agent/other\n---\nbody 3\n"
+    )
+    Path(recall_widen_db, "insights/rank4.md").write_text(
+        "---\nstatus: archived\n---\nbody 4\n"
+    )
+    before = _recall_metadata()
+    calls = []
+
+    def run(n, record_access=True):
+        calls.append((n, record_access))
+        return store.search(query_embedding=_graded_embedding(0), top_k=n,
+                            threshold=0.0, record_access=record_access)
+
+    rows = _fetch_visible(CHAIN, run, 2, automatic=True,
+                          record_recall=store.record_recall)
+    assert calls == [(2, False), (10, False)]
+    assert {r["id"] for r in rows} == {"rank1", "rank2", "rank5"}
+    after = _recall_metadata()
+    for key in ("rank0", "rank3", "rank4"):
+        assert after[key] == before[key]
+    for key in ("rank1", "rank2", "rank5"):
+        assert after[key][0] == before[key][0] + 1
+
+
+def test_fetch_visible_records_distinct_valid_ids(visibility_memory_dir):
+    calls = []
+    recorded = []
+    rows = [{"id": "one"}, {"id": "one"}, {"id": "two"},
+            {}, {"id": None}, {"id": ""}, {"id": 7}]
+
+    def run(n, record_access=True):
+        calls.append((n, record_access))
+        return rows
+
+    assert _fetch_visible(None, run, 10, record_recall=recorded.append) == rows
+    assert calls == [(10, False)]
+    assert recorded == [["one", "two"]]

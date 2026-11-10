@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "palinode"
-version = "0.23.0"
+version = "0.24.0"
 description = "Inspectable, correctable project memory in git-versioned Markdown for AI agents."
 authors = [
   {name = "Paul Kyle", email = "paul@phasespace.co"}
@@ -160,3 +160,5 @@ packages = [
 # per-release hash record `palinode prompt sync` uses to tell a stale store
 # copy from an operator-edited one.
 "palinode.prompts" = ["*.md", "shipped-hashes.json"]
+# The working-state vocabulary prompt_query reads for automatic recall.
+"palinode.core" = ["working_state.txt"]

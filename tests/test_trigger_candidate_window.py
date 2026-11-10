@@ -1,12 +1,9 @@
 """Every registered trigger is a candidate, however many non-candidates are nearer.
 
-``check_triggers`` asks vec0 for the nearest trigger embeddings and only then
-filters on ``enabled``, expiry, threshold, cooldown and deliverability. vec0
-cannot pre-filter on a joined column, so a fixed KNN window (it was ``k = 10``)
-is really an eligibility cap: ten disabled, expired, cooling-down or
-undeliverable near-neighbours fill the window and a trigger that would have
-cleared its threshold is never scored at all. That is a second, silent way for
-the trigger channel to be dead in a store holding more than ten triggers.
+Matching scores all registered embeddings before enabled, expiry, threshold,
+cooldown and deliverability can discard rows. The former fixed KNN window let
+ineligible near-neighbours starve a visible trigger. Once candidates have been
+scored, only the best eligible trigger may fire under the lead-margin rule.
 
 Real SQLite under ``tmp_path``; no embedder. Vectors are hand-made unit
 vectors, so the store's own ``1 - d^2 / 2`` L2-to-cosine conversion makes the
@@ -35,6 +32,9 @@ def _unit_vector_at(cosine: float, axis: int) -> list[float]:
 
 
 QUERY = [1.0] + [0.0] * (EMBED_DIM - 1)
+#: The prompt shares three words with the "real" trigger, so it clears the
+#: shared-term gate.
+PROMPT = "the trigger the prompt is actually about"
 
 
 @pytest.fixture()
@@ -73,7 +73,7 @@ def test_enabled_trigger_fires_behind_twelve_disabled_near_neighbours(trigger_st
         threshold=0.75,
     )
 
-    fired = store.check_triggers(QUERY, cooldown_bypass=True)
+    fired = store.check_triggers(QUERY, PROMPT, cooldown_bypass=True)
 
     assert [row["id"] for row in fired] == ["real"], (
         "a trigger that clears its threshold must fire even when more than "
@@ -100,7 +100,7 @@ def test_expired_near_neighbours_do_not_crowd_out_a_live_trigger(trigger_store):
         threshold=0.75,
     )
 
-    fired = store.check_triggers(QUERY, cooldown_bypass=True)
+    fired = store.check_triggers(QUERY, PROMPT, cooldown_bypass=True)
 
     assert [row["id"] for row in fired] == ["real"]
 
@@ -117,6 +117,7 @@ def test_undeliverable_near_neighbours_do_not_crowd_out_a_live_trigger(trigger_s
 
     fired = store.check_triggers(
         QUERY,
+        PROMPT,
         cooldown_bypass=True,
         deliverable=lambda path: path == "decisions/real.md",
     )
@@ -124,7 +125,7 @@ def test_undeliverable_near_neighbours_do_not_crowd_out_a_live_trigger(trigger_s
     assert [row["id"] for row in fired] == ["real"]
 
 
-def test_every_qualifying_trigger_is_returned_nearest_first(trigger_store):
+def test_best_qualifying_trigger_wins_behind_filtered_neighbours(trigger_store):
     for index, cosine in enumerate((0.95, 0.85, 0.78), start=1):
         store.add_trigger(
             f"match-{index}",
@@ -135,10 +136,10 @@ def test_every_qualifying_trigger_is_returned_nearest_first(trigger_store):
         )
     _register_crowd(12, enabled=False)
 
-    fired = store.check_triggers(QUERY, cooldown_bypass=True)
+    fired = store.check_triggers(QUERY, "match description 1", cooldown_bypass=True)
 
-    assert [row["id"] for row in fired] == ["match-1", "match-2", "match-3"]
+    assert [row["id"] for row in fired] == ["match-1"]
 
 
 def test_empty_trigger_table_returns_no_matches(trigger_store):
-    assert store.check_triggers(QUERY, cooldown_bypass=True) == []
+    assert store.check_triggers(QUERY, PROMPT, cooldown_bypass=True) == []

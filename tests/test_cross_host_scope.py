@@ -217,9 +217,11 @@ def _call_over_http(tool: str, arguments: dict, headers: dict[str, str] | None =
         return _sse_payload(called)
 
 
+@pytest.mark.parametrize("enabled", [True, False])
 def test_http_mcp_search_never_scopes_to_the_servers_own_checkout(
-    server_in_its_own_repo, monkeypatch,
+    server_in_its_own_repo, monkeypatch, enabled,
 ):
+    monkeypatch.setattr(config.context, "enabled", enabled)
     api = _RecordingAPI()
     monkeypatch.setattr(mcp, "_post", api.post)
     reply = _call_over_http("palinode_search", {"query": "Which cache?"})
@@ -244,7 +246,29 @@ def test_http_mcp_carries_the_client_project_header(server_in_its_own_repo, monk
                                           "project": f"project/{CLIENT_PROJECT}"})
 
 
-def test_http_mcp_rejects_an_unusable_project_header(server_in_its_own_repo, monkeypatch):
+@pytest.mark.parametrize("header", [CLIENT_PROJECT, f"project/{CLIENT_PROJECT}"])
+@pytest.mark.parametrize("project,basis", [("project/api-project", "explicit"), (None, "disabled")])
+def test_http_mcp_forwards_project_with_local_context_disabled(
+    server_in_its_own_repo, monkeypatch, header, project, basis,
+):
+    api = _RecordingAPI()
+    monkeypatch.setattr(config.context, "enabled", False)
+    monkeypatch.setattr(mcp, "_post", api.post)
+    monkeypatch.setattr(api, "json", lambda: {
+        "results": [], "receipt": {"bundle_id": "b1", "evaluated_at": "t1"},
+        "project": project, "project_resolved_by": basis,
+    })
+    reply = _call_over_http("palinode_search", {"query": "Which cache?"},
+                            headers={"X-Palinode-Project": header})
+    assert api.calls[0][0] == "/search"
+    assert api.calls[0][1]["context"] == [f"project/{CLIENT_PROJECT}"]
+    assert reply["result"]["content"][0]["text"].startswith(
+        f"Scope: {project or 'none'} ({basis})")
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_http_mcp_rejects_an_unusable_project_header(server_in_its_own_repo, monkeypatch, enabled):
+    monkeypatch.setattr(config.context, "enabled", enabled)
     api = _RecordingAPI()
     monkeypatch.setattr(mcp, "_post", api.post)
     reply = _call_over_http("palinode_search", {"query": "q"},

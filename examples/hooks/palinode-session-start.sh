@@ -1,31 +1,41 @@
 #!/bin/bash
-# palinode-hook-version: 0.23.0
+# palinode-hook-version: 0.24.0
 # palinode-session-start.sh — warm + inject Palinode context on session start.
 #
-# Fires on Claude Code SessionStart (startup and /clear by default). Two
-# actions, both fail-silent:
+# Fires on Claude Code or Codex SessionStart (startup and /clear by default).
+# One request, fail-silent:
 #
-#   1. POST /context/prime — warms server-side session context for this CWD
-#      (or for PALINODE_PROJECT when it is set: the server may be on another
-#      machine and cannot see this session's environment)
-#      (ADR-012 Layer 4 + ADR-009 Layer 1). The endpoint returns the
-#      scope-aware context digest; this hook discards the body and injects
-#      via the /list digest below. An older server (pre-0.9.3) 404s
-#      harmlessly.
-#   2. GET /list?core_only=true — injects a bounded digest of core memories
-#      into the session as additionalContext, with a deterministic recall
-#      reminder. This is the "sessions start smart" half: grounding that does
-#      not depend on the agent remembering to search.
+#   POST /context/prime — the scope-aware session-start digest for this CWD
+#   (or for PALINODE_PROJECT when it is set: the server may be on another
+#   machine and cannot see this session's environment) (ADR-012 Layer 4 +
+#   ADR-009 Layer 1). The hook injects the digest's core memories as
+#   additionalContext, with a deterministic recall reminder: grounding that
+#   does not depend on the agent remembering to search. The server selects
+#   them at the visibility choke point, so another project's core memories
+#   and retired, private or restricted ones never reach this session.
 #
 # Fail-silent by design — never block session start. API down → no output,
 # exit 0. The agent-side pull path (palinode_search) is unaffected either way.
+#
+# Codex runs this same script on its SessionStart; there is no Codex fork. Its
+# payload has the same session_id, cwd and source fields (plus model and
+# permission_mode, which are ignored), its output contract is the same
+# hookSpecificOutput.additionalContext, and Codex adds that text as a developer
+# message ahead of the first prompt. Two differences, both handled here as
+# they are: Codex starts the hook in the session's cwd, which may be a
+# subdirectory of the repository (the git-common-dir step below sends the
+# repository root either way), and its source can also be "fork", which the
+# default allowlist skips like "resume".
 #
 # Install:
 #   1. Copy to .claude/hooks/palinode-session-start.sh (or ~/.claude/hooks/…)
 #   2. chmod +x .claude/hooks/palinode-session-start.sh
 #   3. Register in .claude/settings.json — see ./settings.json in this dir.
+#   Codex: copy to .codex/hooks/ instead and register it in .codex/hooks.json
+#   (see ./codex-hooks.json); Codex runs it once you trust it with /hooks.
 #
-# Or just run: `palinode init` — it installs all of this for you.
+# Or just run: `palinode init` (`--codex-hook` for Codex) — it installs all of
+# this for you.
 
 set -euo pipefail
 
@@ -95,44 +105,46 @@ esac
 
 # Dry-run: print what would happen, touch nothing.
 if [ "${PALINODE_HOOK_DRYRUN:-0}" = "1" ]; then
-  echo "[palinode-session-start DRYRUN] would POST ${PALINODE_API}/context/prime (cwd=${CWD}, session=${SESSION_ID}) and GET ${PALINODE_API}/list?core_only=true"
+  echo "[palinode-session-start DRYRUN] would POST ${PALINODE_API}/context/prime (cwd=${CWD}, session=${SESSION_ID}) and inject its core memories"
   exit 0
 fi
 
-# 1. Warm server-side session context (/context/prime — ADR-012 Layer 4 +
-#    ADR-009 Layer 1). No -f: an older server (pre-0.9.3) without the
-#    endpoint 404s harmlessly; only connection errors fail, and those are
-#    swallowed.
+# Prime the session and read its scoped digest (/context/prime — ADR-012
+# Layer 4 + ADR-009 Layer 1). The core memories injected below come from this
+# response and nowhere else: the server built it for this session's scope, so
+# a core memory tagged to another project is withheld there, not here. No
+# usable response (API down, recall refused, an older server without the
+# endpoint) injects nothing.
 PRIME_PAYLOAD=$(jq -n --argjson scope "$CLIENT_SCOPE" --arg session_id "$SESSION_ID" \
   '$scope + {session_id: $session_id}')
-curl -s -o /dev/null \
+PRIME_JSON=$(curl -s -f \
   -X POST "${PALINODE_API}/context/prime" \
   ${AUTH[@]+"${AUTH[@]}"} \
   -H "Content-Type: application/json" \
   -d "$PRIME_PAYLOAD" \
   --connect-timeout 2 \
-  --max-time "${HOOK_TIMEOUT}" 2>/dev/null || true
+  --max-time "${HOOK_TIMEOUT}" 2>/dev/null) || exit 0
 
-# 2. Inject a bounded core-memory digest as session context.
+# Inject a bounded core-memory digest as session context.
 if [ "$MAX_FILES" -le 0 ]; then
   exit 0
 fi
 
-CORE_JSON=$(curl -s -f \
-  ${AUTH[@]+"${AUTH[@]}"} \
-  "${PALINODE_API}/list?core_only=true" \
-  --connect-timeout 2 \
-  --max-time "${HOOK_TIMEOUT}" 2>/dev/null) || exit 0
-
-# Build "- [file] name — summary" lines inside jq (string concatenation, no
-# shell loop). /list sorts newest-first, so [:$max] keeps the freshest files.
-DIGEST=$(echo "$CORE_JSON" | jq -r --argjson max "$MAX_FILES" '
-  if type == "array" and length > 0 then
-    .[:$max]
-    | map("- [" + .file + "] " + (.name // "untitled")
-          + (if (.summary // "") != "" then " — " + .summary else "" end))
-    | join("\n")
-  else empty end' 2>/dev/null) || exit 0
+# Build "- [file] summary [qualifiers]" lines inside jq (string concatenation,
+# no shell loop), the same line /context/prime's own text renderer writes. The
+# digest lists core memories newest first, so [:$max] keeps the freshest.
+DIGEST=$(echo "$PRIME_JSON" | jq -r --argjson max "$MAX_FILES" '
+  def qualifiers:
+    [ (if (.contradicts // []) | length > 0 then "⚠ contradicts: " + (.contradicts | join(", ")) else empty end),
+      (if (.stale_backing // []) | length > 0 then "⚠ stale backing: " + (.stale_backing | join(", ")) else empty end),
+      (if (.epistemic // "") != "" then "epistemic: " + .epistemic else empty end) ]
+    | if length > 0 then " [" + join(" | ") + "]" else "" end;
+  (.core_memories // []) as $core
+  | if ($core | type) == "array" and ($core | length) > 0 then
+      $core[:$max]
+      | map("- [" + .file + "] " + (.summary // "untitled") + qualifiers)
+      | join("\n")
+    else empty end' 2>/dev/null) || exit 0
 
 if [ -z "$DIGEST" ]; then
   exit 0

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from click.testing import CliRunner
@@ -74,6 +74,24 @@ def test_check_relative_dates_is_case_insensitive_and_flags_quoted_text():
 )
 def test_check_relative_dates_ignores_out_of_scope_text(body):
     assert check_relative_dates(body) == []
+
+
+@pytest.mark.parametrize(
+    ("expression", "anchor"),
+    [
+        ("tomorrow", date(9999, 12, 31)),
+        ("yesterday", date(1, 1, 1)),
+        ("next monday", date(9999, 12, 27)),
+    ],
+)
+def test_check_relative_dates_preserves_out_of_range_finding(expression, anchor):
+    assert check_relative_dates(f"We ship {expression}.", anchor) == [{
+        "line": "1",
+        "expression": expression,
+        "resolved": "unresolvable",
+        "anchor": anchor.isoformat(),
+        "reason": "the arithmetic lands outside the representable calendar",
+    }]
 
 
 def test_lint_relative_dates_exempts_daily_logs(tmp_path, monkeypatch):
@@ -466,6 +484,7 @@ def test_lint_text_represents_every_lint_result_key(tmp_path, monkeypatch):
         "source_anchor_issues": "No source-anchor issues",
         "claim_anchor_issues": "No claim-anchor issues",
         "stale_open_questions": "No stale open questions",
+        "malformed_timestamps": "No malformed record timestamps",
         "open_contradictions": "No open contradictions",
         "stale_backing": "No stale backing",
         "oversized_core": "All core memories are gist-sized",
@@ -486,8 +505,8 @@ def test_lint_text_represents_every_lint_result_key(tmp_path, monkeypatch):
 # in `except Exception: pass`. That skipped files with an unparseable date, as
 # intended, but it also swallowed genuine bugs in the block (an AttributeError
 # from a typo, say) and dropped the file from the report with no signal. The
-# guarded step is now only the `fromisoformat` parse: a bad date string or a
-# non-date value is skipped, anything else propagates.
+# malformed timestamp is reported without preventing later records from being
+# checked.
 # ---------------------------------------------------------------------------
 
 _STALE_AGE_DAYS = 200
@@ -533,20 +552,23 @@ def test_stale_check_reports_a_well_formed_old_date(tmp_path, monkeypatch, marke
         ("epistemic: open_question", "stale_open_questions"),
     ],
 )
-def test_stale_check_skips_unparseable_and_non_date_values(tmp_path, monkeypatch, marker, bucket):
+@pytest.mark.parametrize("last_updated", ["last_updated:", "last_updated: null"])
+def test_stale_check_falls_back_to_created_at_when_last_updated_is_empty(
+    tmp_path, monkeypatch, marker, bucket, last_updated
+):
     monkeypatch.setattr(config, "memory_dir", str(tmp_path))
     people = tmp_path / "people"
     people.mkdir()
-    _write_dated(people, "old.md", marker=marker, last_updated=_old_date())
-    _write_dated(people, "malformed.md", marker=marker, last_updated="not-a-date")
-    _write_dated(people, "numeric.md", marker=marker, last_updated="12345")
+    (people / "old.md").write_text(
+        f"---\nid: people-old\ncategory: people\ntype: Person\n{marker}\n"
+        f"created_at: {_old_date()}\n{last_updated}\n---\nBody",
+        encoding="utf-8",
+    )
 
     result = run_lint_pass()
 
-    flagged = [entry["file"] for entry in result[bucket]]
-    assert any(f.endswith("old.md") for f in flagged)
-    assert not any(f.endswith("malformed.md") for f in flagged)
-    assert not any(f.endswith("numeric.md") for f in flagged)
+    assert any(entry["file"].endswith("old.md") for entry in result[bucket])
+    assert result["malformed_timestamps"] == []
 
 
 @pytest.mark.parametrize(
@@ -556,21 +578,62 @@ def test_stale_check_skips_unparseable_and_non_date_values(tmp_path, monkeypatch
         ("epistemic: open_question", "stale_open_questions"),
     ],
 )
-def test_stale_check_does_not_swallow_unexpected_errors(tmp_path, monkeypatch, marker, bucket):
+def test_stale_check_reports_bad_timestamp_and_continues(tmp_path, monkeypatch, marker, bucket):
     monkeypatch.setattr(config, "memory_dir", str(tmp_path))
     people = tmp_path / "people"
     people.mkdir()
-    # Quoted so the value stays a string and reaches the fromisoformat call.
-    _write_dated(people, "old.md", marker=marker, last_updated=_old_date(), quote=True)
+    _write_dated(people, "malformed.md", marker=marker, last_updated="not-a-date")
+    _write_dated(people, "old.md", marker=marker, last_updated=_old_date())
 
-    import palinode.core.lint as lint_module
+    result = run_lint_pass()
 
-    class _ExplodingDatetime(lint_module.datetime):
-        @classmethod
-        def fromisoformat(cls, value):
-            raise AttributeError("simulated bug in the staleness block")
+    flagged = [entry["file"] for entry in result[bucket]]
+    assert any(f.endswith("old.md") for f in flagged)
+    assert not any(f.endswith("malformed.md") for f in flagged)
+    assert result["malformed_timestamps"] == [{
+        "file": "people/malformed.md",
+        "field": "last_updated",
+        "value": "not-a-date",
+    }]
 
-    monkeypatch.setattr(lint_module, "datetime", _ExplodingDatetime)
 
-    with pytest.raises(AttributeError):
-        run_lint_pass()
+@pytest.mark.parametrize(
+    ("marker", "bucket"),
+    [
+        ("status: active", "stale_files"),
+        ("epistemic: open_question", "stale_open_questions"),
+    ],
+)
+def test_stale_check_accepts_naive_timestamps(tmp_path, monkeypatch, marker, bucket):
+    monkeypatch.setattr(config, "memory_dir", str(tmp_path))
+    people = tmp_path / "people"
+    people.mkdir()
+    naive_old = (datetime.now(timezone.utc) - timedelta(days=_STALE_AGE_DAYS)).strftime(
+        "%Y-%m-%dT%H:%M:%S"
+    )
+    _write_dated(people, "old.md", marker=marker, last_updated=naive_old, quote=True)
+
+    result = run_lint_pass()
+
+    assert any(entry["file"].endswith("old.md") for entry in result[bucket])
+    assert result["malformed_timestamps"] == []
+
+
+def test_lint_text_and_json_render_malformed_timestamp(monkeypatch):
+    data = {
+        "missing_fields": [], "orphaned_files": [], "stale_files": [],
+        "contradictions": [], "malformed_timestamps": [{
+            "file": "people/broken.md", "field": "last_updated", "value": "not-a-date",
+        }],
+    }
+    monkeypatch.setattr(api_client, "lint", lambda **_kwargs: data)
+
+    text_result = CliRunner().invoke(lint_command, ["--format", "text"])
+    json_result = CliRunner().invoke(lint_command, ["--format", "json"])
+
+    assert text_result.exit_code == 0
+    assert "Malformed Record Timestamps (1)" in text_result.output
+    assert "people/broken.md: last_updated=not-a-date" in text_result.output
+    assert json_result.exit_code == 0
+    assert '"malformed_timestamps"' in json_result.output
+    assert '"value": "not-a-date"' in json_result.output

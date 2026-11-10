@@ -8,43 +8,79 @@
 └────────────┘
 ```
 
-**Inspectable, correctable project memory for repeated work across sessions, agents, and worktrees.**
+**Inspectable, correctable project memory for coding agents.**
 
-Last week, your team chose SQLite for a cache because it avoided operating a
+Save a project decision and its reason once. A later session, in the same coding
+agent or a different one, can find it. You can see what was remembered, trace
+where it came from, and correct it when it is wrong.
+
+Last week, you chose SQLite for a cache because it avoided operating a
 database. This week, a changed requirement makes PostgreSQL the better choice.
 Without the decision and its reason, a fresh agent can repeat the old approach.
-With Palinode, you can save the replacement, inspect the original and its history,
-and correct the record for the next session.
+With Palinode, you save the replacement, retire the original without losing its
+history, and the next session searches and finds the current decision.
 
-Palinode keeps project memory in Markdown files and Git history under your local
-control. An agent can use its tools to save, search, and inspect that memory.
-Some supported client integrations can also perform configured capture or recall;
-their automatic behavior, scope, and controls vary by client and configuration.
-Nothing is silently promoted from an unmarked note to a fact.
+Palinode runs as a local service on your machine, and your coding agent connects
+to it as an MCP server. By default the agent saves and searches only by calling
+Palinode's tools: when you ask, or when the instructions `palinode init` adds to
+your project tell it to (search at the start of a session, save a decision once
+it is settled). Automatic capture and recall are opt-in per client:
+`palinode init --hook` for Claude Code, `palinode init --codex-hook` for Codex.
+With them on, a session that did real work leaves a short summary when it ends, and memories you
+mark to always load (`--core`), plus memories that closely match each prompt, are
+added to the agent's context. Memory stays in Markdown files in its own Git
+repository, separate from your code, on a machine you control.
 
-*A palinode is a poem that retracts what was said before and says it better. That's what memory compaction does.*
+**Start here: the [Quickstart](docs/QUICKSTART.md)** walks you through installing,
+starting the service, saving a decision, opening a fresh session, inspecting
+the decision, and correcting it.
+
+*A palinode is a poem that retracts what was said before and says it better. Palinode does that for decisions: the replacement becomes current, and the original stays in the history.*
 
 Built by [Paul Kyle](https://github.com/Paul-Kyle) at [phasespace-labs](https://github.com/phasespace-labs). See [AUTHORS](AUTHORS.md).
 
 ---
 
-## Start here
+## Open your memory
 
-Follow the [canonical Quickstart](docs/QUICKSTART.md) for one complete journey:
-install → start → connect an MCP client → save a decision → open a fresh session
-→ inspect its markdown/provenance → correct it. It keeps the private memory
-store separate from the code checkout and distinguishes the current release
-from source-checkout capabilities.
+While Palinode is running, open the local inspector at
+<http://127.0.0.1:6340/ui/> (the default address; the port follows
+`PALINODE_API_PORT`). Browse and search what was saved, then open a memory to
+see its source file, the Git commit that saved it, and what it replaced.
 
-### Inspect the retired decision
+![The fictional Harbor Notes inspector after the initial SQLite decision has been archived; the provenance panel includes the Saved commit, and the page's Correct or retire this section starts below the decision.](docs/images/inspector-harbor-notes.png)
 
-![The fictional Harbor Notes inspector after the initial SQLite decision has been archived; the provenance panel includes the Saved commit.](docs/images/inspector-harbor-notes.png)
+The screenshot uses fictional sample data. It shows the initial SQLite decision
+**after** it was archived in favour of a separately saved PostgreSQL decision.
 
-The screenshot shows the **archived** initial SQLite decision after the separate
-PostgreSQL replacement was saved and the original was retired. See the
-[local provenance UI guide](docs/UI.md) for the full read-only inspector and
-the correction lifecycle; the guide explains that the image is taken after
-retirement, not before the save steps.
+The inspector is **read-only**: it has no edit, save or archive buttons. Each
+memory page lists the commands to run instead. To correct or retire a memory, ask
+your connected agent (for example, *"archive decisions/harbor-notes-storage.md,
+superseded by decisions/harbor-notes-storage-shared.md, because the shared
+service needs concurrent writes"*). The agent does this with the
+`palinode_archive` tool. Or use the CLI:
+
+```bash
+# Preview first; nothing is written
+palinode archive decisions/harbor-notes-storage.md --reason "..." --dry-run
+# Retire it, naming the replacement (omit --superseded-by for a plain retirement)
+palinode archive decisions/harbor-notes-storage.md \
+  --superseded-by decisions/harbor-notes-storage-shared.md --reason "..."
+# Changed your mind? Bring it back into recall
+palinode restore decisions/harbor-notes-storage.md
+```
+
+**Archiving is not erasure.** An archived memory leaves default recall, but the
+file, its audit history and its Git history all remain, so you can restore it.
+Removing data permanently, Git history included, is a separate manual procedure
+with no single command; see the [data lifecycle](docs/DATA-LIFECYCLE.md#the-erasure-procedure).
+For a reviewed replace-in-one-step flow, see [CORRECTIONS.md](docs/CORRECTIONS.md).
+
+The inspector only serves on loopback; reach a store on another machine through
+an SSH tunnel to that machine's loopback port. When the API has a bearer token
+configured, the inspector has no sign-in form: every browser request must
+already carry the token header. The [inspector guide](docs/UI.md) covers views,
+access limits and troubleshooting.
 
 ---
 
@@ -122,7 +158,7 @@ That's the entire client config. Works with Claude Code, Claude Desktop, Cursor,
 
 **Dream** — If you've met "dreaming" as the name for this, `palinode dream` is an alias for `palinode consolidate`. Use `--dry-run` to inspect the proposed operations; each completed pass lands as a git commit, so a bad consolidation is a diff to review and a commit to revert.
 
-**Audit** — `git blame` any fact. `git diff` any change. `rollback` any mistake. These aren't just git-compatible files — `palinode_diff`, `palinode_blame`, and `palinode_rollback` are first-class tools your agent can call.
+**Audit** — `git blame` any fact. `git diff` any change. `rollback` any mistake. These aren't just git-compatible files — `palinode_diff`, `palinode_blame`, and `palinode_rollback` are first-class tools your agent can call. A memory with no explicit claim type is shown as *unmarked*; nothing is silently promoted from an unmarked note to a fact.
 
 ---
 
@@ -199,7 +235,9 @@ cd your-project
 palinode init
 ```
 
-That scaffolds `.claude/CLAUDE.md` (memory instructions, appended if one exists), `.claude/settings.json` (`SessionStart` + `SessionEnd` + `UserPromptSubmit` hook registration), all three hook scripts, and `.mcp.json` (points Claude Code at the `palinode` MCP server). Sessions then start smart, recall as they go, and end captured: the `SessionStart` hook injects your `core: true` memories into every fresh session (startup and `/clear`) so standing context is there before the first prompt; the `UserPromptSubmit` hook recalls relevant memory before each prompt — prospective triggers plus a strict-threshold search, injected as compact snippets, silent when nothing matches; and the `SessionEnd` hook auto-captures on `/clear`, logout, and exit. Re-run with `--dry-run` to preview, `--force` to overwrite, or `--no-mcp` / `--no-hook` to scope it. See [`examples/hooks/`](examples/hooks/) for tuning knobs.
+By default that scaffolds `.claude/CLAUDE.md` (memory instructions, appended if one exists), the `palinode-session` skill, the `/wrap` command, and `.mcp.json` (points Claude Code at the `palinode` MCP server). The agent then saves and recalls through explicit tool calls. It installs **no automatic hooks** unless you opt in.
+
+`palinode init --hook` opts in to the Claude Code hooks (`.claude/settings.json` registration plus the scripts). The `SessionStart` hook injects your `core: true` memories into each fresh session (startup and `/clear`). The `UserPromptSubmit` hook recalls relevant memory before each prompt: prospective triggers plus a strict-threshold search, injected as compact snippets and silent when nothing matches. The `SessionEnd` hook captures a transcript-derived summary on `/clear`, logout, and exit, and `PostCompact` saves a compaction checkpoint. Run `palinode controls status` before enabling them; the [Quickstart](docs/QUICKSTART.md#switch-the-hooks-off) shows how to pause or remove them. Re-run with `--dry-run` to preview, `--force` to overwrite, or `--no-mcp` to scope it. See [`examples/hooks/`](examples/hooks/) for tuning knobs.
 
 Projects that use other harnesses get the same memory instructions automatically: when `AGENTS.md` (or a `.agent/` directory) exists, `init` appends a harness-neutral memory block to `AGENTS.md` (read by Codex, Antigravity, and other `AGENTS.md`-aware agents), and when a `.cursor/` directory exists it writes `.cursor/rules/palinode.md` for Cursor. Force or skip with `--agents`/`--no-agents` and `--cursor`/`--no-cursor` — same recall/save/session-end contract, minus the Claude-Code-only machinery (`/clear`, `/wrap`, hooks).
 
@@ -331,7 +369,7 @@ canonical_question: "What is Palinode and what does it do?"
 # Palinode
 
 Your content here. As detailed or brief as you want.
-Files marked `core: true` are always in context.
+Files marked `core: true` are included in the session-start digest.
 Everything else is retrieved on demand via hybrid search.
 The `canonical_question` field anchors the file to the question it answers, improving search relevance.
 ```
@@ -473,7 +511,7 @@ When exposing the API beyond loopback (`PALINODE_API_HOST` other than `127.0.0.1
 
 3. **Consolidation, not accumulation.** 100 sessions should produce 20 well-maintained files, not 100 unread dumps.
 
-4. **Invisible when working.** The human talks to their agent. Palinode works behind the scenes.
+4. **Out of the way when working.** The human talks to their agent; the agent calls Palinode's tools, and opt-in client hooks can do the routine capture and recall.
 
 5. **Graceful degradation.** Vector index down? Read files directly. Embedding service down? Grep. Machine off? It's a git repo, clone it anywhere.
 
@@ -481,14 +519,14 @@ When exposing the API beyond loopback (`PALINODE_API_HOST` other than `127.0.0.1
 
 ---
 
-## What's Unique
+## Design choices
 
 - **Your data, your files** — No accounts, no cloud dependency, no vendor lock-in. Your memory is markdown files in a directory you control. Export is `cp`. Backup is `git push`. Whatever happens to any tool in this ecosystem, your data is plain text on your filesystem.
 - **Cross-IDE memory** — Your memory lives in one place. Connect from Claude Code, Cursor, Windsurf, Zed, or any MCP-compatible editor. Switch IDEs without losing context.
-- **Git operations as agent tools** — `diff`, `blame`, `rollback`, `push` exposed via MCP. No other system makes git ops callable by the agent.
+- **Git operations as agent tools** — `diff`, `blame`, `rollback`, `push` exposed via MCP, so the agent can audit and revert memory itself.
 - **Operation-based compaction** — Structured operations are schema-checked and applied as reviewable git commits.
 - **Per-fact addressability** — `<!-- fact:slug -->` IDs inline in markdown, invisible in rendering, preserved by git, targetable by compaction.
-- **4-phase injection** — Core (always) + Topic (per-turn search) + Associative (entity graph) + Triggered (prospective recall).
+- **Four recall paths** — Core (session-start digest) + Topic (search) + Associative (entity graph) + Triggered (prospective recall). Delivery without an explicit tool call needs an opt-in client hook or plugin.
 - **Multi-transport MCP** — stdio for local, Streamable HTTP for remote. One server, any IDE on any machine.
 - **If everything crashes, `cat` still works.**
 

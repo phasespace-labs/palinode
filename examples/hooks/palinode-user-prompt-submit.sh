@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# palinode-hook-version: 0.23.0
+# palinode-hook-version: 0.24.0
 # palinode-user-prompt-submit.sh — per-turn implicit recall.
 #
 # Fires on every UserPromptSubmit, BEFORE the model sees the prompt. Two
@@ -45,6 +45,16 @@
 # the system prompt would invalidate the cached prefix every turn. This
 # hook is cache-safe by construction (ADR-019).
 #
+# Codex runs this same script on its UserPromptSubmit; there is no Codex fork.
+# Its payload has the same session_id, cwd and prompt fields (plus turn_id,
+# model and permission_mode, which are ignored), and its output contract is the
+# same hookSpecificOutput.additionalContext. Codex adds that text as a developer
+# message after the user's prompt, so it too lands in the conversation and
+# leaves the cached prefix alone. Codex ignores a matcher on this event, starts
+# the hook in the session's cwd (possibly a subdirectory: the git-common-dir
+# step below sends the repository root either way), and treats exit code 2 as
+# "block this prompt", the same as Claude Code.
+#
 # Fail-silent by design — never block a prompt. API down, jq missing,
 # short prompt → no output, exit 0. Explicit recall (palinode_search) is
 # unaffected either way.
@@ -77,8 +87,11 @@
 #   1. Copy to .claude/hooks/palinode-user-prompt-submit.sh
 #   2. chmod +x .claude/hooks/palinode-user-prompt-submit.sh
 #   3. Register in .claude/settings.json — see ./settings.json in this dir.
+#   Codex: copy to .codex/hooks/ instead and register it in .codex/hooks.json
+#   (see ./codex-hooks.json); Codex runs it once you trust it with /hooks.
 #
-# Or just run: `palinode init` — it installs all of this for you.
+# Or just run: `palinode init` (`--codex-hook` for Codex) — it installs all of
+# this for you.
 
 set -euo pipefail
 

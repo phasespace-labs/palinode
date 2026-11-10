@@ -1,14 +1,17 @@
 """Check: hooks_current
 
-``palinode init`` copies the Claude Code hook scripts once and never revisits
-them, so an install keeps running the hook it started with while the server
-and the packaged hooks move on. Release smokes install the current hook fresh,
-so they cannot see this; the stale copy surfaces only as recall or capture
-behaviour that a release was supposed to have fixed.
+``palinode init`` copies the Claude Code and Codex hook scripts once and never
+revisits them, so an install keeps running the hook it started with while the
+server and the packaged hooks move on. Release smokes install the current hook
+fresh, so they cannot see this; the stale copy surfaces only as recall or
+capture behaviour that a release was supposed to have fixed.
 
 This check walks the Claude Code settings cascade (user, project, project
-local — relative to the current directory), compares every registered palinode
-hook script byte-for-byte with the packaged copy, and warns on drift with the
+local — relative to the current directory), Codex's hook layers (user
+``$CODEX_HOME`` or ``~/.codex``, and the project's ``.codex/``; ``hooks.json``
+and ``config.toml`` in each), the project's Cursor ``.cursor/hooks.json`` and
+Antigravity ``.agents/hooks.json``, compares every registered palinode hook
+script byte-for-byte with the packaged copy, and warns on drift with the
 command that refreshes it. Discovery and comparison are shared with
 ``palinode hooks update`` (:mod:`palinode.cli.hooks`), so the diagnosis and
 the fix agree on what is installed. Non-palinode hooks are never read.

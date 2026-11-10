@@ -410,3 +410,22 @@ class TestRetrievalStatsCLI:
             assert "error" in data
         finally:
             cfg_mod.config.memory_dir = original_dir
+
+
+@pytest.mark.parametrize("failure", ["serialization", "oversized", "io"])
+def test_receipt_only_append_failure_is_best_effort(memory_dir, monkeypatch, failure):
+    from palinode.core.config import config
+    from palinode.core import retrieval_log
+
+    monkeypatch.setattr(config, "memory_dir", str(memory_dir))
+    monkeypatch.setattr(config.instrumentation, "capture_retrievals", True)
+    logger = RetrievalLogger(str(memory_dir))
+    receipt = {"bundle_id": "abc", "evaluated_at": "2026-10-31T00:00:00Z"}
+    if failure == "serialization":
+        receipt["supplied"] = {object()}
+    elif failure == "oversized":
+        monkeypatch.setattr(retrieval_log, "MAX_RECEIPT_BYTES", 0)
+    else:
+        logger.log_path.mkdir()
+    logger.record_public_receipt(receipt, source="context_prime")
+    assert not logger.log_path.is_file()

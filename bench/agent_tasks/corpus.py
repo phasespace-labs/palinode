@@ -98,6 +98,8 @@ EXPECT_KEYS = (
     "answer_mentions_all_or_abstains",
     # An abstention phrase in the answer; takes an empty list.
     "answer_abstains",
+    # The task repo is left as it was: an empty diff; takes an empty list.
+    "diff_empty",
     # No listed token in a created file, a command run, or a diff path.
     "side_effects_avoid",
     # The native memory dir is byte-identical before and after; empty list.
@@ -109,6 +111,8 @@ EXPECT_KEYS = (
 METRIC_CONDITIONS = (
     "diff_has", "diff_lacks", "answer_has", "answer_lacks", "answer_has_any",
     "answer_has_exactly_one", "abstains", "side_effects_has_any", "native_changed",
+    # True: the task repo is left as it was (an empty diff).
+    "diff_empty",
     # Evaluated only when the palinode arm's evidence shows these delivered
     # (file/native: by construction); otherwise the metric is None.
     "when_delivered",

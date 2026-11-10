@@ -27,6 +27,9 @@ LlmFn = Callable[[str, str], tuple[str, str]]
 import yaml
 
 from palinode.core.config import config
+from palinode.core.capture_policy import (
+    ResolvedProcessingPolicy, automatic_note_processing_allowed, resolve_processing_policy,
+)
 from palinode.core import store, embedder, git_tools
 from palinode.core.lifecycle import eligibility, is_retired_fact_text, parse_moment
 from palinode.core.ollama_client import OllamaError, OllamaRole, get_ollama_client
@@ -94,7 +97,7 @@ def _touched_files(target: str) -> list[str]:
         touched.append(history_path)
     return touched
 
-def _get_decisions_for_project(project_id: str) -> list[dict]:
+def _get_decisions_for_project(project_id: str, resolved: ResolvedProcessingPolicy | None = None) -> list[dict]:
     """Fetch the decisions still governing a specific project.
 
     Governing means usable under :func:`palinode.core.lifecycle.eligibility`
@@ -117,6 +120,8 @@ def _get_decisions_for_project(project_id: str) -> list[dict]:
                 try:
                     meta = yaml.safe_load(parts[1]) or {}
                     if not isinstance(meta, dict):
+                        continue
+                    if not automatic_note_processing_allowed(meta, resolved=resolved):
                         continue
                     entities = meta.get("entities", [])
                     if f"project/{project_id}" not in entities:
@@ -163,7 +168,7 @@ MAX_DECISIONS_CHARS = 2000
 _MAX_DECISION_CHARS = 500
 
 
-def _format_active_decisions(project_id: str) -> str:
+def _format_active_decisions(project_id: str, resolved: ResolvedProcessingPolicy | None = None) -> str:
     """Render this project's active decisions for the compaction prompt.
 
     Returns an empty string when there are none, so the caller can omit the
@@ -174,10 +179,10 @@ def _format_active_decisions(project_id: str) -> str:
     or expired — which are exactly the things the compactor must NOT treat as
     binding.
     """
-    return _render_active_decisions(project_id)[0]
+    return _render_active_decisions(project_id, resolved=resolved)[0]
 
 
-def _render_active_decisions(project_id: str) -> tuple[str, list[str]]:
+def _render_active_decisions(project_id: str, resolved: ResolvedProcessingPolicy | None = None) -> tuple[str, list[str]]:
     """``(rendered text, refs of the decisions actually rendered)``.
 
     The refs come from the same loop that writes the text, budget cut-off
@@ -185,7 +190,7 @@ def _render_active_decisions(project_id: str) -> tuple[str, list[str]]:
     drift from what the model was shown.
     """
     try:
-        decisions = _get_decisions_for_project(project_id)
+        decisions = _get_decisions_for_project(project_id, resolved=resolved)
     except Exception as exc:  # pragma: no cover — defensive
         # Context is an improvement to the proposal, never a precondition for
         # it. A malformed decisions/ directory must not stop a compaction pass.
@@ -308,10 +313,80 @@ def _modified_at(filepath: str) -> datetime:
     return datetime.fromtimestamp(os.path.getmtime(filepath), UTC)
 
 
+def _read_note(filepath: str) -> tuple[dict, str, bool]:
+    """``(frontmatter, body, frontmatter_failed_to_parse)`` for one note.
+
+    A note whose frontmatter does not parse keeps its body — better to collect
+    partial content than silently drop the note — and the failure is logged so
+    an operator can find the file.
+    """
+    meta: dict = {}
+    failed = False
+    with open(filepath, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    if content.startswith("---"):
+        parts = content.split("---", 2)
+        if len(parts) >= 3:
+            try:
+                meta = yaml.safe_load(parts[1]) or {}
+                if not isinstance(meta, dict):
+                    meta = {}
+                content = parts[2].strip()
+            except Exception as _parse_exc:
+                # Silent pass was hiding corrupt frontmatter — log so
+                # operators can find and fix bad files.
+                # Recovery: run `palinode lint` to surface all parse errors.
+                logger.warning(
+                    "palinode.consolidation: YAML parse failed in %r — "
+                    "frontmatter ignored, body text still collected "
+                    "(run `palinode lint` to find all bad files): %s",
+                    filepath, _parse_exc,
+                )
+                failed = True
+                content = parts[2].strip()
+    return meta, content, failed
+
+
+def _note_mentions(meta: dict, content: str) -> list[str]:
+    """The ``project/`` and ``person/`` refs a note carries.
+
+    The one definition of "this note names a project": grouping keys on it, and
+    the age rule for project-less daily notes asks the same question, so the
+    two cannot disagree about which notes no group will ever read.
+    """
+    # Frontmatter `entities:` is the reliable signal for a typed memory —
+    # it is what `palinode_save` records, whereas the regex below only sees
+    # refs a human happened to write into the body. Daily notes rarely carry
+    # it, so the two are unioned rather than one replacing the other.
+    declared = meta.get("entities") or []
+    if isinstance(declared, str):
+        declared = [declared]
+    found = {
+        str(e)
+        for e in declared
+        if isinstance(e, (str, int)) and str(e).startswith(("project/", "person/"))
+    }
+    found.update(re.findall(r"(project/[\w-]+|person/[\w-]+)", content))
+    mentions = list(found)
+
+    # Fallback: detect projects by keyword if no entity refs found
+    if not any(m.startswith("project/") for m in mentions):
+        keyword_map = config.consolidation.keyword_map or {
+            "project/palinode": ["Palinode", "palinode", "memory system", "SQLite-vec", "BGE-M3", "palinode_search"],
+        }
+        content_lower = content.lower()
+        for project_ref, keywords in keyword_map.items():
+            if any(kw.lower() in content_lower for kw in keywords):
+                mentions.append(project_ref)
+    return mentions
+
+
 def _collect_daily_notes(
     lookback_days: int | None = None,
     sources: Sequence[str] | None = None,
     since: datetime | None = None,
+    resolved: ResolvedProcessingPolicy | None = None,
 ) -> tuple[list[dict], int]:
     """Collect recent notes from the selected corpora.
 
@@ -361,7 +436,6 @@ def _collect_daily_notes(
         return [], 0
 
     for filepath in candidates:
-        meta: dict = {}
         modified_at = _modified_at(filepath)
 
         if since is not None:
@@ -378,60 +452,19 @@ def _collect_daily_notes(
             if named and named.group(1) < cutoff_date:
                 continue
 
-        with open(filepath, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        if content.startswith("---"):
-            parts = content.split("---", 2)
-            if len(parts) >= 3:
-                try:
-                    meta = yaml.safe_load(parts[1]) or {}
-                    if not isinstance(meta, dict):
-                        meta = {}
-                    content = parts[2].strip()
-                except Exception as _parse_exc:
-                    # Silent pass was hiding corrupt frontmatter — log so
-                    # operators can find and fix bad files.
-                    # Recovery: run `palinode lint` to surface all parse errors.
-                    logger.warning(
-                        "palinode.consolidation: YAML parse failed in %r — "
-                        "frontmatter ignored, body text still collected "
-                        "(run `palinode lint` to find all bad files): %s",
-                        filepath, _parse_exc,
-                    )
-                    skipped += 1
-                    # body text is kept — better to collect partial content
-                    # than silently drop the note.
-                    content = parts[2].strip() if len(parts) >= 3 else content
+        meta, content, parse_failed = _read_note(filepath)
+        skipped += parse_failed
 
         date_str = _note_date(filepath, meta)
         if since is None and date_str < cutoff_date:
             continue
 
-        # Frontmatter `entities:` is the reliable signal for a typed memory —
-        # it is what `palinode_save` records, whereas the regex below only sees
-        # refs a human happened to write into the body. Daily notes rarely carry
-        # it, so the two are unioned rather than one replacing the other.
-        declared = meta.get("entities") or []
-        if isinstance(declared, str):
-            declared = [declared]
-        mentions = {
-            str(e)
-            for e in declared
-            if isinstance(e, (str, int)) and str(e).startswith(("project/", "person/"))
-        }
-        mentions.update(re.findall(r"(project/[\w-]+|person/[\w-]+)", content))
-        mentions = list(mentions)
-
-        # Fallback: detect projects by keyword if no entity refs found
-        if not any(m.startswith("project/") for m in mentions):
-            keyword_map = config.consolidation.keyword_map or {
-                "project/palinode": ["Palinode", "palinode", "memory system", "SQLite-vec", "BGE-M3", "palinode_search"],
-            }
-            content_lower = content.lower()
-            for project_ref, keywords in keyword_map.items():
-                if any(kw.lower() in content_lower for kw in keywords):
-                    mentions.append(project_ref)
+        mentions = _note_mentions(meta, content)
+        if not automatic_note_processing_allowed(
+            meta, project_refs=[ref for ref in mentions if ref.startswith("project/")],
+            resolved=resolved,
+        ):
+            continue
 
         notes.append({
             "filepath": filepath,
@@ -554,7 +587,7 @@ def _select_by_watermark(
     return kept, sorted(clamped), applied
 
 
-def _target_file_for(project_id: str) -> str | None:
+def _target_file_for(project_id: str, resolved: ResolvedProcessingPolicy | None = None) -> str | None:
     """The file this project's compaction writes into, or ``None`` if it has none.
 
     Prefers the status layer, which is the fast-changing one, and falls back to
@@ -565,18 +598,23 @@ def _target_file_for(project_id: str) -> str | None:
     imply the store wants a ``projects/searxng.md``, and consolidation is not
     in the business of creating documents — it compacts into existing ones.
     """
+    if not automatic_note_processing_allowed({}, project_refs=[f"project/{project_id}"], resolved=resolved):
+        return None
     projects_dir = os.path.join(config.memory_dir, "projects")
     status_file = os.path.join(projects_dir, f"{project_id}-status.md")
     if os.path.exists(status_file):
-        return status_file
+        meta, _, _ = _read_note(status_file)
+        return status_file if automatic_note_processing_allowed(meta, resolved=resolved) else None
     project_file = os.path.join(projects_dir, f"{project_id}.md")
     if os.path.exists(project_file):
-        return project_file
+        meta, _, _ = _read_note(project_file)
+        return project_file if automatic_note_processing_allowed(meta, resolved=resolved) else None
     return None
 
 
 def _partition_by_target(
     grouped: dict[str, list[dict]],
+    resolved: ResolvedProcessingPolicy | None = None,
 ) -> tuple[dict[str, list[dict]], list[str]]:
     """Split groups into those with a target document and those without.
 
@@ -589,7 +627,7 @@ def _partition_by_target(
     keep: dict[str, list[dict]] = {}
     skipped: list[str] = []
     for project_id, notes in grouped.items():
-        if _target_file_for(project_id) is None:
+        if _target_file_for(project_id, resolved=resolved) is None:
             skipped.append(project_id)
         else:
             keep[project_id] = notes
@@ -615,6 +653,7 @@ def _tagged_fact_count(target_file: str) -> int:
 
 def _partition_by_tagged_facts(
     grouped: dict[str, list[dict]],
+    resolved: ResolvedProcessingPolicy | None = None,
 ) -> tuple[dict[str, list[dict]], list[str]]:
     """Split groups whose target carries no ``<!-- fact:… -->`` marker out of the pass.
 
@@ -633,7 +672,7 @@ def _partition_by_tagged_facts(
     keep: dict[str, list[dict]] = {}
     skipped: list[str] = []
     for project_id, notes in grouped.items():
-        target = _target_file_for(project_id)
+        target = _target_file_for(project_id, resolved=resolved)
         if target is not None and _tagged_fact_count(target) == 0:
             skipped.append(project_id)
         else:
@@ -641,7 +680,7 @@ def _partition_by_tagged_facts(
     return keep, sorted(skipped)
 
 
-def _log_untagged_skips(skipped: list[str]) -> None:
+def _log_untagged_skips(skipped: list[str], resolved: ResolvedProcessingPolicy | None = None) -> None:
     """WARNING, not INFO: an inert consolidation target is a defect in the store.
 
     The old line was INFO from inside ``_consolidate_project`` and read as
@@ -651,7 +690,7 @@ def _log_untagged_skips(skipped: list[str]) -> None:
     if not skipped:
         return
     targets = ", ".join(
-        f"{project_id} ({_target_file_for(project_id) or 'no target'})"
+        f"{project_id} ({_target_file_for(project_id, resolved=resolved) or 'no target'})"
         for project_id in skipped
     )
     logger.warning(
@@ -740,6 +779,15 @@ def _call_llm_with_fallback(system_prompt: str, user_prompt: str) -> tuple[str, 
             )
             if i > 0:
                 logger.info(f"Fallback model succeeded: {endpoint['model']} @ {endpoint['url']} (primary failed)")
+            completion_tokens = getattr(result, "completion_tokens", None)
+            max_tokens = config.consolidation.llm_max_tokens
+            if completion_tokens is not None and completion_tokens > 0.75 * max_tokens:
+                logger.warning(
+                    "Consolidation model %s used %d completion tokens of configured "
+                    "maximum %d (%.1f%% utilization)",
+                    endpoint["model"], completion_tokens, max_tokens,
+                    completion_tokens / max_tokens * 100,
+                )
             return result, endpoint["model"]
 
         except OllamaError as e:
@@ -974,7 +1022,9 @@ def _partition_notes_for_archive(
       keyword fallback in ``_collect_daily_notes``, so it formed no group and
       no model ever saw it. The old rule retired it because an empty set of
       projects intersects nothing — which is how one weekly pass moved 49
-      never-read insights to ``archive/`` as though consolidated.
+      never-read insights to ``archive/`` as though consolidated. A *daily*
+      note in this class is retired later on age alone, by
+      :func:`_retire_project_less_daily_notes`, since no pass will ever read it.
     - ``today``: it is ``daily/<today>.md``, which ``POST /session-end`` keeps
       appending to until midnight UTC. Moving it mid-day splits the day across
       two files, and the activity gate — which counts sessions in ``daily/*.md``
@@ -1254,7 +1304,7 @@ class AssembledPrompt(NamedTuple):
     context: PromptContext
 
 
-def _assemble_prompt(project_id: str, notes: list[dict]) -> AssembledPrompt | None:
+def _assemble_prompt(project_id: str, notes: list[dict], resolved: ResolvedProcessingPolicy | None = None) -> AssembledPrompt | None:
     """Build the compaction user prompt for one project group.
 
     Returns ``None`` — after logging why — when there is nothing to build it
@@ -1266,7 +1316,7 @@ def _assemble_prompt(project_id: str, notes: list[dict]) -> AssembledPrompt | No
     text, budget cut-offs included, so the propose-side guard's notion of "in
     the prompt" is exactly what the model was shown.
     """
-    target_file = _target_file_for(project_id)
+    target_file = _target_file_for(project_id, resolved=resolved)
     if target_file is None:
         logger.info(
             "No project document for %r — nothing to compact into, skipping",
@@ -1342,7 +1392,7 @@ def _assemble_prompt(project_id: str, notes: list[dict]) -> AssembledPrompt | No
     # proposed — not as material to compact. Supplied without a lookback:
     # a decision does not stop governing because nobody touched its file this
     # week, which is the opposite of how a note ages.
-    decisions_text, decision_refs = _render_active_decisions(project_id)
+    decisions_text, decision_refs = _render_active_decisions(project_id, resolved=resolved)
     decisions_section = (
         f"\n## ACTIVE_DECISIONS (governing this project)\n\n{decisions_text}\n"
         if decisions_text
@@ -1368,7 +1418,7 @@ Return the operations JSON array."""
     return AssembledPrompt(user_prompt, context)
 
 
-def _prompt_context_for(project_id: str, notes: list[dict]) -> PromptContext | None:
+def _prompt_context_for(project_id: str, notes: list[dict], resolved: ResolvedProcessingPolicy | None = None) -> PromptContext | None:
     """What the prompt for this group contained, for the propose-side guard.
 
     Rebuilt through :func:`_assemble_prompt` rather than threaded out of
@@ -1377,7 +1427,7 @@ def _prompt_context_for(project_id: str, notes: list[dict]) -> PromptContext | N
     deterministic on the same store state, and one extra read of the target
     document is nothing next to the model call it follows.
     """
-    assembled = _assemble_prompt(project_id, notes)
+    assembled = _assemble_prompt(project_id, notes, resolved=resolved)
     return assembled.context if assembled else None
 
 
@@ -1386,6 +1436,7 @@ def _consolidate_project(
     notes: list[dict],
     is_nightly: bool = False,
     llm_fn: LlmFn | None = None,
+    resolved: ResolvedProcessingPolicy | None = None,
 ) -> tuple[list[dict], str]:
     """Consolidate a project by generating compaction operations.
 
@@ -1419,7 +1470,7 @@ def _consolidate_project(
         "nightly-consolidation.md" if is_nightly else "compaction.md"
     )
 
-    assembled = _assemble_prompt(project_id, notes)
+    assembled = _assemble_prompt(project_id, notes, resolved=resolved)
     if assembled is None:
         return [], "primary"
     user_prompt = assembled.user_prompt
@@ -1489,7 +1540,8 @@ def _empty_stats() -> dict[str, int]:
     return stats
 
 def _check_contradictions(
-    new_items: list[dict], project_id: str, llm_fn: LlmFn | None = None
+    new_items: list[dict], project_id: str, llm_fn: LlmFn | None = None,
+    resolved: ResolvedProcessingPolicy | None = None,
 ) -> list[dict]:
     """Check new items for contradictions against existing knowledge base.
 
@@ -1497,6 +1549,8 @@ def _check_contradictions(
     tests inject a fake returning a canned contradiction op so the embed/search
     + parse + translate path runs deterministically.
     """
+    if resolved is None:
+        resolved = resolve_processing_policy()
     try:
         update_prompt_path, from_store = resolve_prompt("update.md", config.memory_dir)
     except PromptUnavailable as exc:
@@ -1519,6 +1573,8 @@ def _check_contradictions(
 
     operations = []
     for item in new_items:
+        if not automatic_note_processing_allowed(item, resolved=resolved):
+            continue
         try:
             emb = embedder.embed(item.get("content", ""))
         except embedder.EmbeddingUnavailable as e:
@@ -1544,6 +1600,8 @@ def _check_contradictions(
             emb, category=item.get("category"), top_k=5, threshold=0.7,
         )
 
+        existing = [row for row in existing
+                    if automatic_note_processing_allowed(row.get("metadata") or {}, resolved=resolved)]
         if not existing:
             operations.append({"operation": "ADD", "item": item})
             continue
@@ -1582,7 +1640,7 @@ Return the operation as JSON."""
 
     return operations
 
-def _archive_daily_notes(notes: list[dict]) -> None:
+def _archive_daily_notes(notes: list[dict], subject: str = "archive daily note") -> int:
     """Move processed daily notes to the archive directory.
 
     Through git_tools.move_memory_file (the choke point's move primitive)
@@ -1591,10 +1649,14 @@ def _archive_daily_notes(notes: list[dict]) -> None:
     _git_commit (used for the compaction pass itself) filters out paths that
     no longer exist on disk, which would silently drop the deletion half of
     a move, so the archived pair cannot ride along with mutated_files there.
+
+    ``subject`` is the commit subject before the note's name, so each caller's
+    reason for the move is its provenance. Returns how many notes moved.
     """
     archive_dir = os.path.join(config.memory_dir, "archive")
     os.makedirs(archive_dir, exist_ok=True)
 
+    moved = 0
     for note in notes:
         try:
             date_prefix = note["date"][:4] # YYYY
@@ -1603,13 +1665,15 @@ def _archive_daily_notes(notes: list[dict]) -> None:
             old_path = note["filepath"]
             new_path = os.path.join(year_dir, os.path.basename(old_path))
             git_tools.move_memory_file(old_path, new_path)
+            moved += 1
             if config.git.auto_commit:
                 git_tools.commit_memory_files(
                     [old_path, new_path],
-                    f"{config.git.commit_prefix} archive daily note [{os.path.basename(old_path)}]",
+                    f"{config.git.commit_prefix} {subject} [{os.path.basename(old_path)}]",
                 )
         except Exception as e:
             logger.error(f"Failed to archive note {note['filepath']}: {e}")
+    return moved
 
 def _fact_ids_before_apply(file_path: str) -> set[str]:
     """Fact ids present in ``file_path`` before the executor runs.
@@ -1791,6 +1855,99 @@ def _retire_aged_log_lines(
         "palinode.consolidation: age retirement retired %d status log line(s) "
         "older than %d days (dated before %s) from %s",
         retired, days, cutoff_date, target,
+    )
+    return retired
+
+
+def _daily_note_retention_days() -> int:
+    """The configured project-less daily-note window in days; ``0`` disables it."""
+    raw = getattr(config.consolidation, "daily_note_retention_days", 0)
+    try:
+        return int(raw or 0)
+    except (TypeError, ValueError):
+        logger.warning(
+            "palinode.consolidation: consolidation.daily_note_retention_days is "
+            "not an integer (%r) — project-less daily notes are not retired this pass",
+            raw,
+        )
+        return 0
+
+
+def _retire_project_less_daily_notes(
+    *, dry_run: bool = False, now: datetime | None = None
+) -> int:
+    """Move ``daily/`` notes that name no project, and are past the window, to ``archive/``.
+
+    The weekly pass retires a note only once every project group it belongs to
+    has reached a decision, so that a note no model has read is never archived
+    as though consolidated. A daily note that names no project belongs to no
+    group: no pass will ever read it, so "not yet read" is permanent and that
+    protection kept it in ``daily/`` — current, as far as recall can tell —
+    indefinitely. Once such a note is older than
+    ``consolidation.daily_note_retention_days`` it is retired here, on age
+    alone and with no model involved, the same way stale status log lines are.
+
+    Scans all of ``daily/`` rather than the pass's lookback window, because the
+    backlog lies outside it: the window is how these notes stopped being seen.
+    Whether a note names a project is decided by :func:`_note_mentions`, the
+    rule grouping uses, so a note this retires is one no group could have
+    formed around. ``daily/`` only — a typed memory under ``insights/`` with no
+    project ref is durable and never retires here. Skipped: a note whose
+    frontmatter will not parse (what it declares cannot be read), and one the
+    ADR-020 classifier says age may not retire.
+
+    Returns the number of notes retired (previewed, under ``dry_run``).
+    """
+    days = _daily_note_retention_days()
+    daily_dir = os.path.join(config.memory_dir, "daily")
+    if days <= 0 or not os.path.isdir(daily_dir):
+        return 0
+    cutoff = ((now or _utc_now()) - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    aged: list[dict] = []
+    for filepath in sorted(glob.glob(os.path.join(daily_dir, "*.md"))):
+        named = _DATED_FILENAME.match(os.path.basename(filepath))
+        if named and named.group(1) >= cutoff:
+            continue
+        meta, content, parse_failed = _read_note(filepath)
+        if parse_failed:
+            continue
+        date = _note_date(filepath, meta)
+        if date >= cutoff:
+            continue
+        if any(m.startswith("project/") for m in _note_mentions(meta, content)):
+            continue
+        policy, signal = retirement.classify(filepath, meta)
+        if policy != retirement.AGE_ELIGIBLE:
+            logger.debug(
+                "palinode.consolidation: %s is %s (%s) — not retired by age",
+                filepath, policy, signal,
+            )
+            continue
+        aged.append({"filepath": filepath, "date": date})
+
+    if not aged:
+        return 0
+    names = ", ".join(os.path.basename(n["filepath"]) for n in aged)
+    if dry_run:
+        logger.info(
+            "palinode.consolidation: would retire %d daily note(s) with no project/ "
+            "reference older than %d days (dated before %s): %s",
+            len(aged), days, cutoff, names,
+        )
+        return len(aged)
+
+    retired = _archive_daily_notes(
+        aged,
+        subject=(
+            f"{AGE_RETENTION_SOURCE}: archive daily note with no project "
+            f"reference, older than {days}d"
+        ),
+    )
+    logger.info(
+        "palinode.consolidation: age retirement retired %d daily note(s) with no "
+        "project/ reference older than %d days (dated before %s) to archive/: %s",
+        retired, days, cutoff, names,
     )
     return retired
 
@@ -2005,11 +2162,27 @@ def _run_consolidation_unlocked(
     what the model is shown is the recent window rather than the whole
     backlog. The sweep is deterministic and runs on age-eligible documents
     only; the nightly pass does not do it at all.
+
+    Before any of that, ``daily/`` notes that name no project and are older
+    than ``consolidation.daily_note_retention_days`` move to ``archive/``
+    (:func:`_retire_project_less_daily_notes`, reported as
+    ``notes_no_project_retired``) — no group can ever read them, so waiting
+    for one to decide on them would keep them in ``daily/`` forever.
     """
     from palinode.consolidation.executor import apply_operations
 
+    resolved = resolve_processing_policy()
     lookback = lookback_days or config.consolidation.lookback_days
-    notes, yaml_skipped = _collect_daily_notes(lookback, sources=sources)
+    # Before collection, and whatever the groups below do: these notes belong
+    # to no group, so no group's outcome bears on them, and a note moved here
+    # is not then collected and reported as left in place.
+    # A caller that narrowed the corpus away from daily/ gets no daily sweep.
+    no_project_retired = (
+        _retire_project_less_daily_notes(dry_run=dry_run)
+        if "daily" in (tuple(sources) if sources else DEFAULT_CONSOLIDATION_SOURCES)
+        else 0
+    )
+    notes, yaml_skipped = _collect_daily_notes(lookback, sources=sources, resolved=resolved)
     if not notes:
         if dry_run:
             return {
@@ -2017,10 +2190,18 @@ def _run_consolidation_unlocked(
                 "processed": 0,
                 "processed_notes": 0,
                 "projects_compacted": 0,
+                "projects_compacted_ids": [],
+                "notes_no_project_retired": no_project_retired,
                 "dry_run": True,
                 "proposed_changes": [],
             }
-        return {"status": "no notes found", "processed": 0}
+        return {
+            "status": "no notes found",
+            "processed": 0,
+            "projects_compacted": 0,
+            "projects_compacted_ids": [],
+            "notes_no_project_retired": no_project_retired,
+        }
 
     if yaml_skipped:
         logger.warning(
@@ -2030,7 +2211,7 @@ def _run_consolidation_unlocked(
         )
 
     grouped = _group_by_project(notes)
-    grouped, skipped_no_target = _partition_by_target(grouped)
+    grouped, skipped_no_target = _partition_by_target(grouped, resolved=resolved)
     if skipped_no_target:
         logger.info(
             "palinode.consolidation: %d group(s) skipped — no project document to "
@@ -2038,8 +2219,8 @@ def _run_consolidation_unlocked(
             len(skipped_no_target),
             ", ".join(skipped_no_target),
         )
-    grouped, skipped_untagged = _partition_by_tagged_facts(grouped)
-    _log_untagged_skips(skipped_untagged)
+    grouped, skipped_untagged = _partition_by_tagged_facts(grouped, resolved=resolved)
+    _log_untagged_skips(skipped_untagged, resolved=resolved)
 
     total_stats = _empty_stats()
     # Weekly-only: the deterministic age sweep below is a weekly concern, the
@@ -2047,7 +2228,7 @@ def _run_consolidation_unlocked(
     # nightly summary does not grow a key for something the nightly pass never
     # does.
     total_stats["age_retired"] = 0
-    projects_processed = 0
+    projects_compacted: list[str] = []
     failed_projects: list[str] = []
     projects_no_ops: list[str] = []
     projects_all_ops_filtered: list[str] = []
@@ -2067,7 +2248,7 @@ def _run_consolidation_unlocked(
 
             # Groups without a target were filtered before this loop, so the
             # helper cannot return None here.
-            target = _target_file_for(project_id)
+            target = _target_file_for(project_id, resolved=resolved)
 
             # Deterministic first, model second. Stale dated log lines are
             # retired on age alone — no LLM, its own commit — so the prompt
@@ -2077,7 +2258,7 @@ def _run_consolidation_unlocked(
                 target, dry_run=dry_run
             )
 
-            operations, model_used_current = _consolidate_project(project_id, pnotes, llm_fn=llm_fn)
+            operations, model_used_current = _consolidate_project(project_id, pnotes, llm_fn=llm_fn, resolved=resolved)
             if model_used_current == LLM_FAILED:
                 failed_projects.append(project_id)
                 continue
@@ -2092,7 +2273,7 @@ def _run_consolidation_unlocked(
             # rejected. Before the allowed_ops filter, so the downgraded op is
             # filtered like any other.
             operations = _guarded(
-                operations, _prompt_context_for(project_id, pnotes), target, total_stats
+                operations, _prompt_context_for(project_id, pnotes, resolved=resolved), target, total_stats
             )
 
             # Enforce allowed-ops restriction (mirrors run_nightly's filter,
@@ -2109,7 +2290,7 @@ def _run_consolidation_unlocked(
 
             if dry_run:
                 proposed_changes.extend(_proposed_changes(target, operations))
-                projects_processed += 1
+                projects_compacted.append(project_id)
                 logger.info(f"Previewed compaction for {project_id}: {len(operations)} operation(s)")
                 continue
 
@@ -2134,7 +2315,7 @@ def _run_consolidation_unlocked(
             # commit stages only them (one-mutation-one-commit).
             mutated_files.extend(_touched_files(target))
 
-            projects_processed += 1
+            projects_compacted.append(project_id)
             logger.info(f"Compacted {project_id}: {stats}")
 
         except Exception as e:
@@ -2154,16 +2335,19 @@ def _run_consolidation_unlocked(
         notes,
         unresolved=set(failed_projects) | set(skipped_no_target) | set(skipped_untagged),
     )
-    decided = projects_processed + len(projects_no_ops) + len(projects_all_ops_filtered)
+    projects_compacted_ids = sorted(projects_compacted)
+    decided = len(projects_compacted_ids) + len(projects_no_ops) + len(projects_all_ops_filtered)
 
     if dry_run:
         result = {
             "status": _run_status(failed_projects),
             "processed_notes": len(notes),
-            "projects_compacted": projects_processed,
+            "projects_compacted": len(projects_compacted_ids),
+            "projects_compacted_ids": projects_compacted_ids,
             "projects_failed": len(failed_projects),
             "projects_skipped": len(skipped_no_target) + len(skipped_untagged),
             "notes_no_project": len(partition.no_project),
+            "notes_no_project_retired": no_project_retired,
             "notes_today_kept": len(partition.today),
             "dry_run": True,
             "proposed_changes": proposed_changes,
@@ -2215,12 +2399,14 @@ def _run_consolidation_unlocked(
     result: dict[str, Any] = {
         "status": _run_status(failed_projects),
         "processed_notes": len(notes),
-        "projects_compacted": projects_processed,
+        "projects_compacted": len(projects_compacted_ids),
+        "projects_compacted_ids": projects_compacted_ids,
         "projects_failed": len(failed_projects),
         "projects_skipped": len(skipped_no_target) + len(skipped_untagged),
         "notes_archived": len(retire),
         "notes_left_in_place": len(left_in_place),
         "notes_no_project": len(partition.no_project),
+        "notes_no_project_retired": no_project_retired,
         "notes_today_kept": len(partition.today),
         **total_stats,
     }
@@ -2302,6 +2488,7 @@ def _run_nightly_unlocked(
     """
     from palinode.consolidation.executor import apply_operations
 
+    resolved = resolve_processing_policy()
     started_at = started_at or _utc_now()
     catchup_days = max(int(lookback_days or config.consolidation.nightly.lookback_days), 1)
     floor = watermark.floor_at(started_at, catchup_days)
@@ -2323,7 +2510,8 @@ def _run_nightly_unlocked(
     # One microsecond under the floor: a resume position sitting exactly on it
     # selects its own note inclusively. The per-project filter below decides.
     notes, yaml_skipped = _collect_daily_notes(
-        sources=NIGHTLY_CONSOLIDATION_SOURCES, since=floor - timedelta(microseconds=1)
+        sources=NIGHTLY_CONSOLIDATION_SOURCES, since=floor - timedelta(microseconds=1),
+        resolved=resolved,
     )
     if yaml_skipped:
         logger.warning(
@@ -2354,12 +2542,18 @@ def _run_nightly_unlocked(
                 "status": "no_new_notes",
                 "processed_notes": 0,
                 "projects_compacted": 0,
+                "projects_compacted_ids": [],
                 "dry_run": True,
                 "proposed_changes": [],
             }
-        return {"status": "no_new_notes", "processed_notes": 0, "projects_compacted": 0}
+        return {
+            "status": "no_new_notes",
+            "processed_notes": 0,
+            "projects_compacted": 0,
+            "projects_compacted_ids": [],
+        }
 
-    grouped, skipped_no_target = _partition_by_target(grouped)
+    grouped, skipped_no_target = _partition_by_target(grouped, resolved=resolved)
     if skipped_no_target:
         logger.info(
             "palinode.consolidation: %d group(s) skipped — no project document to "
@@ -2367,16 +2561,15 @@ def _run_nightly_unlocked(
             len(skipped_no_target),
             ", ".join(skipped_no_target),
         )
-    grouped, skipped_untagged = _partition_by_tagged_facts(grouped)
-    _log_untagged_skips(skipped_untagged)
+    grouped, skipped_untagged = _partition_by_tagged_facts(grouped, resolved=resolved)
+    _log_untagged_skips(skipped_untagged, resolved=resolved)
     
     total_stats = _empty_stats()
-    projects_processed = 0
     failed_projects: list[str] = []
     projects_no_ops: list[str] = []
     projects_all_ops_filtered: list[str] = []
-    # The ids behind ``projects_processed``, kept because the watermark moves
-    # per project and a count cannot say which.
+    # The ids behind the compacted count, kept because the watermark moves per
+    # project and a count cannot say which.
     projects_compacted: list[str] = []
     model_used = "primary"
     proposed_changes: list[dict[str, str]] = []
@@ -2396,7 +2589,7 @@ def _run_nightly_unlocked(
         """
         nonlocal model_used
         try:
-            operations, model_used_current = _consolidate_project(project_id, pnotes, is_nightly=True, llm_fn=llm_fn)
+            operations, model_used_current = _consolidate_project(project_id, pnotes, is_nightly=True, llm_fn=llm_fn, resolved=resolved)
             if model_used_current == LLM_FAILED:
                 return "failed"
             if not operations:
@@ -2406,14 +2599,14 @@ def _run_nightly_unlocked(
 
             # Groups without a target were filtered before this loop, so the
             # helper cannot return None here.
-            target = _target_file_for(project_id)
+            target = _target_file_for(project_id, resolved=resolved)
 
             # Same propose-side guard as the weekly pass, and for the same
             # reason it runs before the filter: nightly's allowed_ops excludes
             # RETRACT, so the guard is what turns an uncited one into the
             # PROPOSE_CONTRADICTS the filter admits.
             operations = _guarded(
-                operations, _prompt_context_for(project_id, pnotes), target, total_stats
+                operations, _prompt_context_for(project_id, pnotes, resolved=resolved), target, total_stats
             )
 
             # Enforce allowed-ops restriction. Resolves a missing op-kind the
@@ -2482,13 +2675,13 @@ def _run_nightly_unlocked(
 
         # One entry per project in the lists below, however many prompts it
         # took: compacted if any prompt applied something.
-        if "compacted" in outcomes:
-            projects_processed += 1
-            projects_compacted.append(project_id)
-        elif "all_filtered" in outcomes:
-            projects_all_ops_filtered.append(project_id)
-        elif "no_ops" in outcomes:
-            projects_no_ops.append(project_id)
+        if project_id not in failed_projects:
+            if "compacted" in outcomes:
+                projects_compacted.append(project_id)
+            elif "all_filtered" in outcomes:
+                projects_all_ops_filtered.append(project_id)
+            elif "no_ops" in outcomes:
+                projects_no_ops.append(project_id)
 
         chosen, shown, finished = _project_files(sent)
         if chosen - finished:
@@ -2512,15 +2705,15 @@ def _run_nightly_unlocked(
     # nothing, or had every op filtered. All three saw their notes, which is
     # the condition for advancing a mark; a failed or skipped group is absent
     # by construction and keeps the mark it had.
-    projects_resolved = sorted(
-        set(projects_compacted) | set(projects_no_ops) | set(projects_all_ops_filtered)
-    )
+    projects_resolved = sorted(last_resolved)
+    projects_compacted_ids = sorted(projects_compacted)
 
     if dry_run:
         nightly_result = {
             "status": _run_status(failed_projects),
             "processed_notes": len(selected),
-            "projects_compacted": projects_processed,
+            "projects_compacted": len(projects_compacted_ids),
+            "projects_compacted_ids": projects_compacted_ids,
             "projects_failed": len(failed_projects),
             "projects_skipped": len(skipped_no_target) + len(skipped_untagged),
             "projects_resolved": projects_resolved,
@@ -2543,7 +2736,7 @@ def _run_nightly_unlocked(
         _record_coverage(nightly_result, plans, last_resolved)
         return nightly_result
 
-    if projects_processed > 0:
+    if projects_compacted_ids:
         _git_commit(
             f"palinode: nightly {_utc_now().strftime('%Y-%m-%d')} — "
             f"{total_stats['updated']}u {total_stats['superseded']}s"
@@ -2554,7 +2747,8 @@ def _run_nightly_unlocked(
     nightly_result: dict[str, Any] = {
         "status": _run_status(failed_projects),
         "processed_notes": len(selected),
-        "projects_compacted": projects_processed,
+        "projects_compacted": len(projects_compacted_ids),
+        "projects_compacted_ids": projects_compacted_ids,
         "projects_failed": len(failed_projects),
         "projects_skipped": len(skipped_no_target) + len(skipped_untagged),
         "projects_resolved": projects_resolved,

@@ -54,9 +54,16 @@ from palinode.core.defaults import (
     SAVE_SOURCE_HEADER as _SOURCE_HEADER,
     SAVE_TIMEOUT_SECONDS as _SAVE_TIMEOUT,
     SESSION_END_TIMEOUT_SECONDS as _SESSION_END_TIMEOUT,
+    TRIGGER_MIN_SHARED_TERMS as _TRIGGER_MIN_SHARED_TERMS,
+    TRIGGER_THRESHOLD_DEFAULT as _TRIGGER_THRESHOLD_DEFAULT,
     _SESSION_END_TIMEOUT_SENTINEL as _SENTINEL,
 )
-from palinode.core.disclosure import PAUSED_READ_AVAILABILITY, PAUSE_SCOPE
+from palinode.core.disclosure import (
+    EXCLUSION_SCOPE,
+    PAUSED_READ_AVAILABILITY,
+    PAUSE_SCOPE,
+    UNVERIFIABLE_PATH_POLICY_UNREPORTED,
+)
 from palinode.core.explain import (
     DEFAULT_MAX_RECORDS as _EXPLAIN_LIMIT_DEFAULT,
     MAX_RECORDS_CEILING as _EXPLAIN_LIMIT_MAX,
@@ -106,7 +113,16 @@ _INSTRUCTIONS_SEARCH_SENTENCE = (
 _INSTRUCTIONS_CLOSING = (
     "Call palinode_search before answering questions about prior decisions or "
     "project state. Save decisions and insights with palinode_save (include "
-    "the rationale). Explicit palinode_save and palinode_session_end calls are "
+    "the rationale). "
+    "When a value, ID, name, decision or plan is settled (for example a batch ID "
+    "fixed or an approach agreed), save it right away with `palinode_save` as "
+    '`type="Decision"`, with the value and why. '
+    "Don't wait for the end of the session. "
+    "Records from other projects come back only when you pass "
+    "`include_other_projects`, and they are context only, never this project's "
+    "decisions. Don't opt in to find a value this project's memory lacks; ask "
+    "the user instead. "
+    "Explicit palinode_save and palinode_session_end calls are "
     "content-bearing writes, separate from opt-in client hooks and background "
     "auto-summary enrichment. At a user-requested wrap-up, or when new durable "
     "information warrants it, call palinode_session_end. Do not create a recap "
@@ -390,8 +406,6 @@ def _resolve_scope():
     if not pinned:
         return resolve_context()
     validate_project_setting(pinned, source=f"The {PROJECT_HEADER} header")
-    if not config.context.enabled:
-        return ProjectResolution(None, "disabled")
     return ProjectResolution(f"project/{pinned.removeprefix('project/')}", "environment")
 
 
@@ -401,7 +415,7 @@ def _resolve_context() -> list[str] | None:
 
 
 def _status_project() -> str | None:
-    """Resolve the MCP client's project exactly as session-init does."""
+    """The client's project hint; the API decides whether to apply it."""
     try:
         return _resolve_scope().project
     except Exception:
@@ -893,6 +907,16 @@ def _format_results(
     if not results:
         return head + "No results found." + ("\n".join(_format_receipt(receipt)) if receipt else "")
     head += MEMORY_IS_DATA + "\n"
+    from palinode.core.scoring import (
+        other_project_label,
+        other_projects_heading,
+        split_other_projects,
+    )
+
+    # Opted-in records from other projects come after this project's own,
+    # under their own heading: interleaved, one read as this project's answer.
+    own_rows, other_rows = split_other_projects(results)
+    results = own_rows + other_rows
     parts = []
     any_truncated = False
     for r in results:
@@ -1005,9 +1029,10 @@ def _format_results(
             _link_bits.append("⚠ stale backing: " + ", ".join(_stale))
         links_label = " [" + " | ".join(_link_bits) + "]" if _link_bits else ""
         # Only on a hit the caller asked for across projects
-        # (include_other_projects): whose record this is, before its text.
+        # (include_other_projects): whose record this is, and that it is not
+        # this project's, before anything else on the row.
         _other = r.get("other_project")
-        other_label = f" [other project: {', '.join(_other)}]" if _other else ""
+        other_label = f"{other_project_label(_other, project)} " if _other else ""
 
         # pick body — snippet (default) or capped content (full=True).
         if full:
@@ -1028,7 +1053,7 @@ def _format_results(
         body = withhold_agent_directed(body or "")[0]
 
         entry = (
-            f"[{rel}] ({match_label}){other_label}{fresh_label}{span_label}{epi_label}{conf_label}{links_label}{refs_label}\n{(body or '').strip()}"
+            f"{other_label}[{rel}] ({match_label}){fresh_label}{span_label}{epi_label}{conf_label}{links_label}{refs_label}\n{(body or '').strip()}"
         )
         evidence = r.get("evidence")
         if isinstance(evidence, dict):
@@ -1038,7 +1063,12 @@ def _format_results(
             entry += "".join("\n" + line for line in _format_resolution(resolution))
         parts.append(entry)
 
-    rendered = head + "\n\n---\n\n".join(parts)
+    own_text = "\n\n---\n\n".join(parts[:len(own_rows)])
+    other_text = "\n\n---\n\n".join(parts[len(own_rows):])
+    if other_text:
+        heading = other_projects_heading(project)
+        other_text = f"{heading}\n\n{other_text}"
+    rendered = head + "\n\n".join(t for t in (own_text, other_text) if t)
     blocks = [r.get("evidence") for r in results if isinstance(r.get("evidence"), dict)]
     if blocks:
         from palinode.core.evidence import fold_coverage
@@ -1138,7 +1168,8 @@ def _all_tools() -> list[types.Tool]:
             name="palinode_list",
             description=(
                 "List memory files, optionally filtered by category, core status or frontmatter. "
-                "Use to browse what memories exist before reading or searching."
+                "Use to browse what memories exist before reading or searching. "
+                "Scoped like palinode_search: this project's records and ones naming no project."
             ),
             inputSchema={
                 "type": "object",
@@ -1161,6 +1192,16 @@ def _all_tools() -> list[types.Tool]:
                     "include_inbox": {
                         "type": "boolean",
                         "description": "Also list inbox/, where ActionItems are saved.",
+                        "default": False,
+                    },
+                    "include_other_projects": {
+                        "type": "boolean",
+                        "description": (
+                            "Also list records tagged to other projects, after this "
+                            "project's under their own heading, each labelled: context "
+                            "only, never this project's decisions. Don't turn this on "
+                            "to find a value this project's memory lacks; ask the user."
+                        ),
                         "default": False,
                     },
                 },
@@ -1269,9 +1310,13 @@ def _all_tools() -> list[types.Tool]:
                     "include_other_projects": {
                         "type": "boolean",
                         "description": (
-                            "Also return memories tagged to other projects, each "
-                            "labelled with its project. Off by default: a "
-                            "project-scoped search leaves them out."
+                            "Also return memories tagged to other projects. They "
+                            "come after this project's results, under their own "
+                            "heading, each labelled with its project and this "
+                            "one's: context only, never this project's decisions. "
+                            "Off by default: a project-scoped search leaves them "
+                            "out. Don't turn this on to find a value this "
+                            "project's memory lacks; ask the user instead."
                         ),
                         "default": False,
                     },
@@ -1876,6 +1921,10 @@ def _all_tools() -> list[types.Tool]:
                         "type": "string",
                         "description": "Optional: filter to lines containing this text",
                     },
+                    "sessions": {
+                        "type": "boolean",
+                        "description": "Also list recorded session deliveries, not causal influence",
+                    },
                     "claims": {
                         "type": "boolean",
                         "description": "Also resolve the file's claim-level source anchors: which source span justifies each claim, with live integrity status.",
@@ -2012,7 +2061,12 @@ def _all_tools() -> list[types.Tool]:
                     },
                     "description": {
                         "type": "string",
-                        "description": "For 'create': What context should fire this trigger (e.g., 'User is discussing deployment')",
+                        "description": "For 'create': Context in the words a user would type (e.g., 'deploy the service')",
+                    },
+                    "phrasings": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "For create: alternative example user prompts; scored on the best match.",
                     },
                     "memory_file": {
                         "type": "string",
@@ -2027,7 +2081,10 @@ def _all_tools() -> list[types.Tool]:
                         "description": (
                             "For 'create': Similarity threshold (0.0–1.0).  "
                             "Higher = stricter match required to fire.  "
-                            "Default 0.75."
+                            f"Default {_TRIGGER_THRESHOLD_DEFAULT}; never below 0.40; best eligible "
+                            "trigger must lead by 0.06 and share at least "
+                            f"{_TRIGGER_MIN_SHARED_TERMS} words with the prompt "
+                            "(description + phrasings)."
                         ),
                     },
                     "cooldown_hours": {
@@ -2573,8 +2630,11 @@ def _all_tools() -> list[types.Tool]:
                         "type": "boolean",
                         "description": (
                             "Also return records tagged to other projects, each "
-                            "labelled with its project. Off by default: a "
-                            "project-scoped request leaves them out."
+                            "labelled with its project and this one's: context "
+                            "only, never this project's decisions. Off by "
+                            "default: a project-scoped request leaves them out. "
+                            "Don't turn this on to find a value this project's "
+                            "memory lacks; ask the user instead."
                         ),
                         "default": False,
                     },
@@ -2795,21 +2855,60 @@ async def _tool_list(arguments: dict[str, Any]) -> list[types.TextContent]:
         params["where"] = where
     if str(arguments.get("include_inbox", False)).lower() in ("true", "1"):
         params["include_inbox"] = "true"
+    # The session's project, resolved as search resolves it, so a scoped
+    # session browses its own records the way it searches them. Always
+    # stated, empty included; an empty project leaves the listing unscoped.
+    project = _resolve_scope().project
+    params["project"] = project or ""
+    if str(arguments.get("include_other_projects", False)).lower() in ("true", "1"):
+        params["include_other_projects"] = "true"
 
     resp = await _get("/list", params=params)
     if resp.status_code != 200:
         return _text(f"API Error: {resp.text}")
-    data = resp.json()
+    return _text(_format_list(resp.json(), resp.headers, project))
+
+
+def _format_list(data: list[dict[str, Any]], headers: Any, project: str | None) -> str:
+    """The text ``palinode_list`` returns, laid out as search lays out its rows.
+
+    Opted-in records from other projects come after this project's, under
+    their own heading, each opening with whose it is and whose it is not.
+    A thin scoped listing says how many other projects' records it left out,
+    in the line search uses; that line names no way to see them.
+    """
+    from palinode.core.defaults import LIST_OTHER_PROJECTS_WITHHELD_HEADER
+    from palinode.core.scoring import (
+        describe_other_projects_withheld,
+        other_project_label,
+        other_projects_heading,
+        split_other_projects,
+    )
+
+    try:
+        withheld = int(headers.get(LIST_OTHER_PROJECTS_WITHHELD_HEADER) or 0)
+    except (TypeError, ValueError):
+        withheld = 0
+    withheld_line = describe_other_projects_withheld(
+        withheld, delivered=len(data), project=project,
+    )
     if not data:
-        return _text("No files found.")
+        return "\n".join(line for line in ("No files found.", withheld_line) if line)
+    own_rows, other_rows = split_other_projects(data)
     parts = []
-    for f in data:
+    for index, f in enumerate(own_rows + other_rows):
+        if other_rows and index == len(own_rows):
+            parts += ["", other_projects_heading(project)]
         if f.get("core_retired_reason"):
             c_tag = f" [retired: {f['core_retired_reason']}]"
         else:
             c_tag = " [core]" if f.get("core") else ""
-        parts.append(f"{f['file']} — {f.get('summary', '')}{c_tag}")
-    return _text("\n".join(parts))
+        other = f.get("other_project")
+        lead = f"{other_project_label(other, project)} " if other else ""
+        parts.append(f"{lead}{f['file']} — {f.get('summary', '')}{c_tag}")
+    if withheld_line:
+        parts.append(withheld_line)
+    return "\n".join(parts)
 
 
 # ── read ──────────────────────────────────────────────────────────
@@ -2830,6 +2929,12 @@ async def _tool_read(arguments: dict[str, Any]) -> list[types.TextContent]:
     # local check covers a server that predates the notice field.
     notice = data.get("agent_directed_notice") or read_notice(content)
     lead = f"{notice}\n" if notice else ""
+    if data.get("other_project"):
+        from palinode.core.scoring import other_project_read_notice
+
+        # Whose record this is comes first, ahead of anything in it.
+        notice = other_project_read_notice(data["other_project"], params["project"] or None)
+        lead = f"{notice}\n{lead}"
     if include_meta:
         fm = data.get("frontmatter") or {}
         # Render as YAML-ish frontmatter + body so downstream consumers
@@ -3298,11 +3403,19 @@ async def _tool_status(arguments: dict[str, Any]) -> list[types.TextContent]:
         f"  Unpushed:       {s.get('unpushed_commits', '?')}",
         f"  API:            {_api_url('')}",
     ]
+    # Server-owned rule: the API's own statement, or say it wasn't reported.
+    unverifiable = s.get("unverifiable_path_policy")
+    unverifiable_line = (
+        f"Unverifiable paths: "
+        f"{unverifiable if isinstance(unverifiable, str) else UNVERIFIABLE_PATH_POLICY_UNREPORTED}."
+    )
     controls = await _get("/controls")
     if controls.status_code != 200:
         lines.extend([
             "Capture controls: unavailable (policy could not be read).",
             f"Pause scope: {PAUSE_SCOPE}.",
+            f"Exclusion scope: {EXCLUSION_SCOPE}.",
+            unverifiable_line,
             PAUSED_READ_AVAILABILITY,
         ])
         return _text("\n".join(lines))
@@ -3317,6 +3430,8 @@ async def _tool_status(arguments: dict[str, Any]) -> list[types.TextContent]:
         lines.extend([
             "Capture controls: unavailable (policy response was invalid).",
             f"Pause scope: {PAUSE_SCOPE}.",
+            f"Exclusion scope: {EXCLUSION_SCOPE}.",
+            unverifiable_line,
             PAUSED_READ_AVAILABILITY,
         ])
         return _text("\n".join(lines))
@@ -3326,8 +3441,10 @@ async def _tool_status(arguments: dict[str, Any]) -> list[types.TextContent]:
         f"  Capture:        {'paused' if policy['capture_paused'] else 'active'}",
         f"  Recall:         {'paused' if policy['recall_paused'] else 'active'}",
         f"  Policy:         v{policy['policy_version']}; provenance: {provenance}",
-        f"  Project:        {_status_project() or 'unresolved'}",
+        f"  Client project: {_status_project() or 'unresolved'} (API decides recall scope)",
         f"Pause scope: {PAUSE_SCOPE}.",
+        f"Exclusion scope: {EXCLUSION_SCOPE}.",
+        unverifiable_line,
         PAUSED_READ_AVAILABILITY,
     ])
     return _text("\n".join(lines))
@@ -3408,6 +3525,8 @@ async def _tool_blame(arguments: dict[str, Any]) -> list[types.TextContent]:
         params["search"] = arguments["search"]
     if arguments.get("claims"):
         params["claims"] = "true"
+    if arguments.get("sessions"):
+        params["sessions"] = "true"
     resp = await _get(f"/blame/{file_path}", params=params)
     if resp.status_code != 200:
         return _text(f"Error: {resp.text}")
@@ -3417,7 +3536,11 @@ async def _tool_blame(arguments: dict[str, Any]) -> list[types.TextContent]:
         from palinode.core.claims import format_claims_resolution
 
         claims_text = format_claims_resolution(file_path, data.get("claims", []))
-        return _text(f"{blame_text}\n\n{claims_text}")
+        blame_text += f"\n\n{claims_text}"
+    if arguments.get("sessions"):
+        from palinode.core.session_deliveries import format_session_deliveries
+
+        blame_text += "\n\n" + format_session_deliveries(data.get("sessions", {}))
     return _text(blame_text)
 
 
@@ -3511,6 +3634,8 @@ async def _tool_trigger(arguments: dict[str, Any]) -> list[types.TextContent]:
             "description": desc,
             "memory_file": mem,
         }
+        if arguments.get("phrasings") is not None:
+            body["phrasings"] = arguments["phrasings"]
         if arguments.get("trigger_id"):
             body["trigger_id"] = arguments["trigger_id"]
         if arguments.get("threshold") is not None:

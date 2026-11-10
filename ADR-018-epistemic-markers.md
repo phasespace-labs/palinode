@@ -2,9 +2,9 @@
 
 **Status:** Accepted
 **Date:** 2026-06-28
-**Amended:** 2026-07-18 — `unverified` added as a 4th settable value (#589; originally deferred, see §4)
+**Amended:** 2026-07-18 — `unverified` added as a 4th settable value (by amendment; originally deferred, see §4)
 **Relates to:** ADR-010 (cross-surface parity contract), ADR-015 (write-semantics axis — the model this follows)
-**Tracks:** #72 (this ADR is its spec); foundation for #533 (typed contradiction + evidence-backing links) and #366 (advisory project-memory review)
+**Tracks:** the epistemic-markers line of work (this ADR is its spec); foundation for the typed contradiction + evidence-backing links and the advisory project-memory review
 **Milestone:** v0.9.0 (Memory quality + HTTP transport)
 
 ---
@@ -25,8 +25,8 @@ For an audit-grade memory system this is a gap. Three things suffer:
 2. **Open questions decay invisibly.** "We still don't know whether X" is worth
    recording, but today it is recorded as if it were a settled fact and is never
    resurfaced for resolution.
-3. **No anchor for provenance-quality work.** #533's typed contradiction /
-   evidence-backing links and #366's advisory review both want to reason over
+3. **No anchor for provenance-quality work.** The typed contradiction /
+   evidence-backing links and the advisory review both want to reason over
    *kinds* of claims (an `inference` should carry a `backed_by`; a stale
    `open_question` wants attention). They need a marker to compose over.
 
@@ -43,14 +43,14 @@ The four **settable** values (what the save surfaces accept and validate):
 
 - **`fact`** — directly observed / verified (an explicit, *earned* claim).
 - **`inference`** — derived or extrapolated from other facts (lower trust;
-  should ideally carry a `backed_by`, shipped in #533).
+  should ideally carry a `backed_by`, since shipped).
 - **`open_question`** — unresolved; an explicit marker that this is *not yet*
   settled.
-- **`unverified`** — asserted but not checked (#589, added 2026-07-18): a
+- **`unverified`** — asserted but not checked (added 2026-07-18): a
   positive claim was made, but it was neither verified into `fact` nor derived
   as an `inference`, and it is not a question. Distinct from `unmarked` — a
   claim *was* made, honestly labelled as untested. The prime candidate to
-  acquire a `backed_by` link (#533, shipped) and graduate toward `fact`.
+  acquire a `backed_by` link (shipped) and graduate toward `fact`.
 
 **Absence is its own state — `unmarked` — and is NOT equated with `fact`.** A
 memory with no `epistemic` field made no epistemic claim. For an audit-grade
@@ -58,7 +58,7 @@ store this distinction is the whole point: "nobody declared this" must not
 silently inherit the authority of "verified" — defaulting the unmarked majority
 to the *highest*-trust category would be exactly backwards. `unmarked` is
 **trust-neutral**: neither flagged as a problem (no lint noise) nor asserted as
-verified (downstream consumers — #533 backing, #366 review — treat it as "no
+verified (downstream consumers — backing links, advisory review — treat it as "no
 claim", not as fact). It is **not a settable value** (reached only by omitting
 the field, so it is intentionally absent from `VALID_EPISTEMICS`; the surface
 rejects an explicit `unmarked`). Every memory written before this field existed
@@ -129,10 +129,10 @@ against the string.
   is simply another optional field under the current implicit schema.
 - **Foundation, not the whole story.** `epistemic` says *what kind* of claim a
   memory is; it does not say *what supports it* or *what it conflicts with* —
-  that is #533's `backed_by` / `contradicts`, since shipped. An `inference` was
-  honestly marked as lower-trust even before #533 gave it a backing link.
-- **Composable.** #366's advisory review consumes `open_question` markers (and
-  #533's `contradicts` links) as quality signals over the whole project's memory.
+  that is the typed-links `backed_by` / `contradicts`, since shipped. An `inference` was
+  honestly marked as lower-trust even before typed links gave it a backing link.
+- **Composable.** The advisory review consumes `open_question` markers (and
+  typed `contradicts` links) as quality signals over the whole project's memory.
 - **No portability claim is made here.** These four values are a vocabulary this
   store validates; nothing in this ADR asserts that another system's `inference`
   means the same thing. A memory file carries no declaration that it was written
@@ -162,7 +162,7 @@ against the string.
   shipped `fact`/`inference`/`open_question` and deferred a 4th
   "asserted-but-not-checked" value to keep the initial change scoped; such
   claims fell through to `unmarked`, conflating "claim made but untested" with
-  "no claim made at all". Superseded 2026-07-18 by #589: `unverified` is now
+  "no claim made at all". Superseded 2026-07-18 by amendment: `unverified` is now
   the 4th settable value (see §2).
 
   This is worth stating plainly rather than burying in an amendment note: the

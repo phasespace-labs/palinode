@@ -51,6 +51,12 @@ BETA = "decisions/beta-cache"
 GLOBAL = "insights/cache-ttl"
 SHARED = "decisions/shared-cache"
 
+#: How an opted-in record from beta opens, seen from a request scoped to alpha.
+BETA_LABEL = "[other project: project/beta — not project/alpha]"
+_OTHER_HEADING = (
+    "Other projects — context only, not this project's decisions (this project: project/alpha)"
+)
+
 
 @pytest.fixture()
 def store(mem, monkeypatch):
@@ -223,7 +229,7 @@ def test_resolve_include_other_projects_delivers_them_labelled(store):
     ).to_dict()
     assert BETA_VALUE in data["text"]
     line = next(line for line in data["text"].splitlines() if BETA in line)
-    assert "other project: project/beta" in line, line
+    assert line.startswith(f"- {BETA_LABEL} [{BETA}]"), line
     beta = next(s for s in data["selected"] if s["ref"] == BETA)
     assert beta["other_project"] == ["project/beta"]
     assert data["other_projects_withheld"] == 0
@@ -258,7 +264,7 @@ def test_rest_resolve_scoped_by_the_requester_project(store):
     assert BETA_VALUE not in default.text
     assert default.json()["other_projects_withheld"] == 1
     assert BETA_VALUE in wide.json()["text"]
-    assert "other project: project/beta" in wide.json()["text"]
+    assert f"- {BETA_LABEL} [{BETA}]" in wide.json()["text"]
     assert BETA_VALUE in unscoped.json()["text"]
 
 
@@ -345,9 +351,10 @@ async def test_mcp_search_and_resolve(store, monkeypatch):
     assert sent[3][1]["include_other_projects"] is True
     assert BETA_VALUE not in default[0].text
     assert BETA_VALUE in wide[0].text
-    assert "[other project: project/beta]" in wide[0].text
+    assert f"{BETA_LABEL} [{BETA}" in wide[0].text
+    assert _OTHER_HEADING in wide[0].text
     assert BETA_VALUE not in resolve_default[0].text
-    assert "other project: project/beta" in resolve_wide[0].text
+    assert f"- {BETA_LABEL} [{BETA}]" in resolve_wide[0].text
 
 
 def test_cli_search_and_resolve_flags(store, monkeypatch):
@@ -371,9 +378,11 @@ def test_cli_search_and_resolve_flags(store, monkeypatch):
         assert result.exit_code == 0, result.output
     assert BETA_VALUE not in default.output and ALPHA_VALUE in default.output
     assert BETA_VALUE in wide.output
-    assert "[other project: project/beta]" in wide.output
+    wide_words = " ".join(wide.output.split())  # the console wraps at 80 columns
+    assert BETA_LABEL in wide_words
+    assert _OTHER_HEADING in wide_words
     assert BETA_VALUE not in resolve_default.output
-    assert "other project: project/beta" in resolve_wide.output
+    assert f"- {BETA_LABEL} [{BETA}]" in resolve_wide.output
 
 
 # ── project aliases and case ─────────────────────────────────────────────────

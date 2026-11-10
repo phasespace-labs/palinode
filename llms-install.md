@@ -6,9 +6,11 @@
 > Humans should start with the canonical [Quickstart](docs/QUICKSTART.md); this
 > file adapts that contract for an autonomous installer.
 
-Palinode is local-first project memory for work an agent revisits. It keeps
-inspectable, correctable records in a private Markdown store and exposes them
-through MCP. It needs **Python ≥ 3.11** and **git**. The released hybrid path
+Palinode is inspectable, correctable project memory for coding agents. It keeps
+decisions and their reasons in a private Markdown store under Git, exposes them
+through MCP, and lets the user inspect, trace and correct them. Automatic
+capture and recall are opt-in per client (`palinode init --hook` for Claude
+Code); this recipe does not enable them. It needs **Python ≥ 3.11** and **git**. The released hybrid path
 needs a reachable embedding endpoint such as Ollama with `bge-m3`; v0.21.0 and
 later can use explicit lexical retrieval instead. Everything can run on
 `localhost`; no cloud account is required. Keep the private memory store separate
@@ -158,6 +160,12 @@ decision, and start a fresh session that calls `palinode_session_init`. A
 healthy lexical install reports indexed FTS retrieval without an embedding
 service; a healthy hybrid install reports its reachable embedder. See the
 [Quickstart](docs/QUICKSTART.md) for the shared `harbor-notes` acceptance path.
+
+Finally, tell the user where to see what was saved: the read-only inspector at
+`http://127.0.0.1:6340/ui/` (loopback only; the port follows
+`PALINODE_API_PORT`). Corrections are made through the agent's
+`palinode_archive` tool or the CLI, not in the browser; see
+[docs/UI.md](docs/UI.md).
 
 ---
 

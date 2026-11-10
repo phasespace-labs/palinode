@@ -19,6 +19,7 @@ from palinode.diagnostics.checks import reindex_state  # noqa: F401
 from palinode.diagnostics.checks import git_remote  # noqa: F401
 from palinode.diagnostics.checks import claude_md  # noqa: F401
 from palinode.diagnostics.checks import audit_log  # noqa: F401
+from palinode.diagnostics.checks import operations_log  # noqa: F401
 from palinode.diagnostics.checks import fts5_sync  # noqa: F401
 from palinode.diagnostics.checks import recall_write_health  # noqa: F401
 from palinode.diagnostics.checks import ollama_health  # noqa: F401
@@ -33,3 +34,4 @@ from palinode.diagnostics.checks import consolidation_last_run  # noqa: F401
 from palinode.diagnostics.checks import project_tags  # noqa: F401
 from palinode.diagnostics.checks import session_fallback  # noqa: F401
 from palinode.diagnostics.checks import hooks_current  # noqa: F401
+from palinode.diagnostics.checks import triggers  # noqa: F401

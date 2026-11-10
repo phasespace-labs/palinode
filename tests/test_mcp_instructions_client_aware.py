@@ -76,6 +76,11 @@ def test_only_the_digest_variant_tells_the_agent_to_call_session_init():
 def test_instructions_distinguish_explicit_capture_from_hooks_and_recap_only_sessions():
     """The handshake must not turn every connection into an unconditional write."""
     for text in (pmcp._SERVER_INSTRUCTIONS, pmcp._SERVER_INSTRUCTIONS_NO_DIGEST):
+        assert (
+            "When a value, ID, name, decision or plan is settled (for example a batch ID "
+            "fixed or an approach agreed), save it right away with `palinode_save` as "
+            '`type="Decision"`, with the value and why. Don\'t wait for the end of the session.'
+        ) in text
         assert "content-bearing writes" in text
         assert "opt-in client hooks" in text
         assert "background auto-summary enrichment" in text

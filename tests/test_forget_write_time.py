@@ -19,6 +19,7 @@ import importlib
 import math
 import os
 import subprocess
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 import frontmatter
@@ -162,6 +163,49 @@ def _search_paths(client, query: str) -> list[str]:
                                      "threshold": 0.0, "hybrid": True})
     assert r.status_code == 200, r.text
     return [os.path.basename(h["file_path"]) for h in r.json()]
+
+
+@pytest.mark.parametrize("stamp", [
+    "0001-01-01T00:00:00+14:00",
+    "9999-12-31T23:59:59-14:00",
+])
+@pytest.mark.parametrize("field", ["created_at", "restored_at"])
+def test_extreme_timestamp_keeps_undated_forget_target(tmp_path, stamp, field):
+    target = tmp_path / "pref-sneakers.md"
+    target.write_text(
+        f"---\n{field}: '{stamp}'\n---\nI collect vintage sneakers.\n",
+        encoding="utf-8",
+    )
+    hit = {"file_path": str(target), "content": "I collect vintage sneakers."}
+
+    assert forget.resolve_forget_targets(
+        "I collect vintage sneakers",
+        before=datetime(2026, 1, 1, tzinfo=UTC),
+        hits=[hit],
+    ) == [hit]
+
+
+@pytest.mark.parametrize("created_at,restored_at", [
+    ("2025-01-01T00:00:00+00:00", "2027-01-01T00:00:00+00:00"),
+    ("2027-01-01T00:00:00+00:00", "9999-12-31T23:59:59-14:00"),
+])
+def test_restored_at_precedence_and_unusable_fallback(
+        tmp_path, created_at, restored_at):
+    target = tmp_path / "pref-sneakers.md"
+    target.write_text(
+        "---\n"
+        f"created_at: '{created_at}'\n"
+        f"restored_at: '{restored_at}'\n"
+        "---\nI collect vintage sneakers.\n",
+        encoding="utf-8",
+    )
+    hit = {"file_path": str(target), "content": "I collect vintage sneakers."}
+
+    assert forget.resolve_forget_targets(
+        "I collect vintage sneakers",
+        before=datetime(2026, 1, 1, tzinfo=UTC),
+        hits=[hit],
+    ) == []
 
 
 def test_forget_hook_archives_pref_and_keeps_request(api_client, monkeypatch):

@@ -279,16 +279,23 @@ def trigger_records(contract_store, monkeypatch):
     targets.update({"escape": "escape.md", "missing": "missing.md",
                     "absolute": str(outside), "malformed": "bad\x00.md"})
     for name, path in targets.items():
-        store.add_trigger(name, f"{name}-trigger-description", path, vector)
+        cosine = {"open": 0.9, "scoped": 0.8}.get(name, 1.0)
+        trigger_vector = [cosine, (1 - cosine ** 2) ** 0.5] + [0.0] * 1022
+        store.add_trigger(name, f"{name}: recall the contract decision", path, trigger_vector)
     return targets
 
 
 def test_trigger_discovery_filters_targets_before_returning_metadata(client, trigger_records):
-    response = client.post("/check-triggers", json={"query": "contract", "cooldown_bypass": True})
+    response = client.post("/check-triggers", json={"query": "recall the contract decision", "cooldown_bypass": True})
     assert response.status_code == 200
-    assert {row["id"] for row in response.json()} == {"open", "scoped"}
+    assert {row["id"] for row in response.json()} == {"open"}
+    # Once the winner is cooling down, the other visible trigger can win.
+    second = client.post("/check-triggers", json={"query": "recall the contract decision"})
+    assert second.status_code == 200
+    assert {row["id"] for row in second.json()} == {"scoped"}
     for hidden in ("private", "restricted", "escape", "missing", "absolute", "malformed"):
         assert hidden not in response.text
+        assert hidden not in second.text
     registry = client.get("/triggers")
     assert registry.status_code == 200
     assert {row["id"] for row in registry.json()} == set(trigger_records)
@@ -304,7 +311,7 @@ def test_trigger_discovery_uses_live_frontmatter_and_requires_existing_file(
     path = contract_store / "decisions/open.md"
     path.write_text("---\nvisibility: private\nscope: agent/other\n---\nhidden now\n", encoding="utf-8")
     (contract_store / "decisions/scoped.md").unlink()
-    response = client.post("/check-triggers", json={"query": "contract", "cooldown_bypass": True})
+    response = client.post("/check-triggers", json={"query": "recall the contract decision", "cooldown_bypass": True})
     assert response.status_code == 200
     assert response.json() == []
     assert client.get("/read", params={"file_path": "decisions/open.md"}).status_code == 200
@@ -315,8 +322,8 @@ def test_trigger_discovery_preserves_read_extension_fallback(client, contract_st
 
     vector = [1.0] + [0.0] * 1023
     monkeypatch.setattr(embedder, "embed", lambda _: vector)
-    store.add_trigger("extensionless", "extensionless target", "decisions/open", vector)
-    response = client.post("/check-triggers", json={"query": "contract"})
+    store.add_trigger("extensionless", "extensionless target: recall the contract decision", "decisions/open", vector)
+    response = client.post("/check-triggers", json={"query": "recall the contract decision"})
     assert response.status_code == 200
     assert [row["memory_file"] for row in response.json()] == ["decisions/open"]
 
@@ -361,7 +368,7 @@ def test_generated_hook_cannot_inject_hidden_trigger_targets(
         assert result.returncode == 0, result.stderr
         context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
         assert "open-contract-body" in context
-        assert "scoped-contract-body" in context
+        assert "scoped-contract-body" not in context
         for hidden in ("private", "restricted", "outside-contract-secret", "escape.md"):
             assert hidden not in context
     finally:

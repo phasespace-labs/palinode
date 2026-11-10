@@ -593,3 +593,64 @@ def test_request_scope_drops_telemetry_and_unset_fields():
         {"query": "x", "limit": None, "session_id": "s", "receipt": True}
     )
     assert scope == {"query": "x"}
+
+
+@pytest.mark.parametrize("session_id", [None, "receipt-owner"])
+def test_prime_persists_public_receipt_across_clients(mem, session_id):
+    _write(mem, "core/receipt.md", "private body wording", core=True, title="private title")
+    original = (mem / "core/receipt.md").read_bytes()
+    with store.get_db() as db:
+        before = [tuple(row) for row in db.execute("SELECT * FROM chunks")]
+    with TestClient(app) as first:
+        response = first.post("/context/prime", json={
+            "session_id": session_id, "scope": {"session": "selection-session"},
+        })
+    assert response.status_code == 200
+    assert (mem / "core/receipt.md").read_bytes() == original
+    with store.get_db() as db:
+        assert [tuple(row) for row in db.execute("SELECT * FROM chunks")] == before
+    receipt = response.json()["receipt"]
+    raw = (mem / ".audit/retrievals.jsonl").read_text()
+    row = json.loads(raw)
+    assert row["receipt"] == receipt
+    assert row["session_id"] == session_id
+    assert row["source"] == "context_prime"
+    assert "file_path" not in row
+    assert "private body wording" not in raw and "private title" not in raw
+    with TestClient(app) as second:
+        explained = second.get(f"/explain/{receipt['bundle_id']}").json()
+    assert explained["status"] == "explained"
+    assert explained["selection_path"]["surface"] == "context_prime"
+    assert [r["ref"] for r in explained["supplied"]] == [r["ref"] for r in receipt["supplied"]]
+    assert explained["delivery"]["session_id"]["reason"] == "withheld_diagnostics_only"
+    from palinode.cli.retrieval_stats import _stats
+    assert _stats([row])["total_events"] == 0
+
+
+@pytest.mark.parametrize("control", ["recall", "excluded", "path", "invalid", "env", "config", "capture", "bound", "io"])
+def test_prime_receipt_safeguards(client, mem, monkeypatch, control):
+    from palinode.core.capture_policy import update_capture_policy
+    from palinode.core import retrieval_log
+
+    if control == "recall":
+        update_capture_policy(recall_paused=True)
+    elif control == "capture":
+        update_capture_policy(capture_paused=True)
+    elif control == "excluded":
+        update_capture_policy(excluded_projects=["demo"])
+    elif control == "path":
+        update_capture_policy(excluded_paths=[str(mem)])
+    elif control == "invalid":
+        (mem / ".capture-policy.yaml").write_text("invalid")
+    elif control == "env":
+        monkeypatch.setenv("PALINODE_INSTRUMENTATION_DISABLED", "1")
+    elif control == "config":
+        monkeypatch.setattr(config.instrumentation, "capture_retrievals", False)
+    elif control == "bound":
+        monkeypatch.setattr(retrieval_log, "MAX_RECEIPT_BYTES", 0)
+    elif control == "io":
+        (mem / ".audit/retrievals.jsonl").mkdir(parents=True)
+    response = client.post("/context/prime", json={"project": "demo", "cwd": str(mem)})
+    assert response.status_code == (403 if control in {"recall", "invalid"} else 200)
+    path = mem / ".audit/retrievals.jsonl"
+    assert path.is_file() == (control == "capture")

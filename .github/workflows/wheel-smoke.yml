@@ -95,6 +95,17 @@ jobs:
           print("packaged prompts:", ", ".join(names))
           PY
 
+      - name: The wheel carries the working-state vocabulary
+        working-directory: /tmp
+        run: |
+          /tmp/wheel-venv/bin/python - <<'PY'
+          from palinode.core.prompt_query import WORKING_STATE, prompt_shape
+
+          assert {"branch", "commit", "version", "tag"} <= WORKING_STATE, sorted(WORKING_STATE)
+          assert prompt_shape("bump the version and tag it").subject_terms == ()
+          print("working-state words:", len(WORKING_STATE))
+          PY
+
       - name: A fresh install can init a store and consolidate
         # The acceptance path end to end, from the wheel only: init an empty
         # store, save one memory through the CLI, run a dry consolidation.

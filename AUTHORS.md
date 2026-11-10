@@ -41,6 +41,7 @@ Contributions welcome via pull request. Names appear here once a PR is merged.
 - [Vishal Habib](https://github.com/vishalhabib99)
 - [Marcin Rogalski](https://github.com/marcin-rogalski)
 - [Isaac Emmanuel](https://github.com/1cbyc)
+- [Taha Sayın](https://github.com/Ts-Boom)
 
 ## Acknowledgements
 

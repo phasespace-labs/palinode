@@ -70,17 +70,17 @@ def parse_iso_utc(value: Any, *, end_of_day: bool = False) -> datetime | None:
     """
     if value is None:
         return None
-    text = str(value).strip()
-    if not text:
-        return None
     try:
+        text = str(value).strip()
+        if not text:
+            return None
         dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
         if end_of_day and _is_date_only(text):
             dt += timedelta(days=1, microseconds=-1)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=UTC)
         return dt.astimezone(UTC)
-    except (ValueError, OverflowError):
+    except (ValueError, OverflowError, TypeError):
         return None
 
 
@@ -309,6 +309,8 @@ def rank_hybrid(
     # (:func:`palinode.core.store.keyword_chance`), which the keyword arm's
     # verdict needs beside its score.
     keyword_chance: dict[str, float | None] = {}
+    # And which of the query's units it holds, for the subject-coverage check.
+    keyword_units: dict[str, list[str]] = {}
 
     # Score vector results
     vec_weight = 1.0 - hybrid_weight
@@ -325,12 +327,17 @@ def rank_hybrid(
         rrf_scores[key] = rrf_scores.get(key, 0) + bm25_weight * (1.0 / (K + rank + 1))
         raw_keyword[key] = r.get("score", 0.0)
         keyword_chance[key] = r.get("keyword_chance")
+        keyword_units[key] = r.get("keyword_units")
         if key not in result_map:
             result_map[key] = r
 
     # Sort by RRF score descending, normalize to 0.0-1.0
     sorted_keys = sorted(rrf_scores.keys(), key=lambda k: rrf_scores[k], reverse=True)
-    max_score = rrf_scores[sorted_keys[0]] if sorted_keys else 1.0
+    max_score = next(
+        (rrf_scores[key] for key in sorted_keys
+         if visible is None or visible(result_map[key])),
+        1.0,
+    )
 
     if config.decay.enabled:
         # ADR-007 §3.4: demand-decay enters as a *bounded re-rank term*, not the
@@ -463,6 +470,7 @@ def rank_hybrid(
         result["raw_score"] = raw_cosine.get(key)
         result["keyword_score"] = raw_keyword.get(key)
         result["keyword_chance"] = keyword_chance.get(key)
+        result["keyword_units"] = keyword_units.get(key)
         merged.append(result)
 
     return merged

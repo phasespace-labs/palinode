@@ -5,8 +5,10 @@ This project uses Palinode for persistent memory via MCP (server name: `palinode
 ### At session start
 - Call `palinode_search` with the current task or project name to pull prior context.
 - If the MCP server is down, fall back to the CLI: `palinode search "<query>"`.
+- Records from other projects come back only when you pass `include_other_projects`, and they are context only, never this project's decisions. Don't opt in to find a value this project's memory lacks; ask the user instead.
 
 ### During work
+- When a value, ID, name, decision or plan is settled (for example a batch ID fixed or an approach agreed), save it right away with `palinode_save` as `type="Decision"`, with the value and why. Don't wait for the end of the session.
 - After a milestone (tests pass, feature shipped, bug root-caused), call
   `palinode_save` with the outcome. Include *why*, not just *what*.
 - When making an architectural or design decision, save the decision AND the

@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any, Iterable
 
 from palinode.core.config import config
@@ -49,6 +50,7 @@ from palinode.core.scope import (
     other_project,
     project_entities,
     visible_on_chain,
+    with_other_projects,
 )
 
 logger = logging.getLogger("palinode.visibility")
@@ -154,18 +156,21 @@ def other_project_refs(
     chain: ScopeChain | None,
     file_path: str | None,
     *,
+    metadata: dict[str, Any] | None = None,
     fallback_metadata: dict[str, Any] | None = None,
 ) -> list[str]:
     """The record's own ``project/*`` refs when it belongs to another project.
 
     Empty when the record is global, names the chain's project, or the chain
     has no project. The label an opted-in (``include_other_projects``)
-    delivery puts beside such a record; the opt-in itself is not consulted.
+    delivery puts beside such a record, and the one an explicit read of such
+    a record carries; the opt-in itself is not consulted. ``metadata`` is
+    live frontmatter the caller already read, as for :func:`is_visible`.
     """
     if chain is None or not chain.project:
         return []
     meta = _evaluated_metadata(
-        file_path, metadata=None, fallback_metadata=fallback_metadata, cache=None,
+        file_path, metadata=metadata, fallback_metadata=fallback_metadata, cache=None,
     )
     if meta is None or not other_project(chain, meta):
         return []
@@ -235,6 +240,102 @@ def _row_fallback_metadata(row: dict[str, Any], metadata_key: str) -> dict[str, 
     return cached if isinstance(cached, dict) else {}
 
 
+# ── daily-note entries ──────────────────────────────────────────────────────
+#
+# A daily note is one file every project appends to (session-end writes each
+# summary there as well as to its own project-tagged record), so its
+# frontmatter cannot say whose an entry is, and project isolation treats a
+# record that names no project as global. Judged file by file, every
+# project's session-end summary was a global record, and a project-scoped
+# search handed one project another's decisions. So session-end writes
+# DAILY_ENTRY_PROJECT_LABEL into each entry, and a daily row is judged by the
+# entries it holds: the parser splits a note at each entry, but a row indexed
+# before that can still hold several.
+
+#: The line session-end writes into each daily entry it tags. Only this line
+#: counts: an entry's summary may mention another project in passing.
+DAILY_ENTRY_PROJECT_LABEL = "**Project:**"
+
+_DAILY_ENTRY_PROJECT = re.compile(
+    r"^" + re.escape(DAILY_ENTRY_PROJECT_LABEL) + r"\s*(project/[A-Za-z0-9._-]+)\s*$",
+    re.MULTILINE,
+)
+#: ``daily/<date>.md``, and the same note after consolidation archives it.
+_DAILY_NOTE = re.compile(r"^(?:daily|archive/\d{4})/\d{4}-\d{2}-\d{2}\.md$")
+
+
+def daily_entry_projects(row: dict[str, Any]) -> list[str | None] | None:
+    """The project each entry in a daily-note row names, ``None`` for an untagged one.
+
+    ``None`` when the row is not from a daily note, so the file's frontmatter
+    decides as for any record. An entry is the text from one session-end
+    heading to the next; text before the first heading counts as an untagged
+    entry unless it is blank.
+    """
+    from palinode.core.parser import SESSION_ENTRY_HEADING
+
+    rel = normalize_memory_path(str(row.get("file_path") or ""))
+    if not rel or not _DAILY_NOTE.match(rel.replace(os.sep, "/")):
+        return None
+    parts = SESSION_ENTRY_HEADING.split(str(row.get("content") or ""))
+    if not parts[0].strip():
+        parts = parts[1:]
+    tags: list[str | None] = []
+    for part in parts or [""]:
+        found = _DAILY_ENTRY_PROJECT.search(part)
+        tags.append(found.group(1) if found else None)
+    return tags
+
+
+def _row_verdict(
+    chain: ScopeChain | None,
+    row: dict[str, Any],
+    *,
+    metadata_key: str = "metadata",
+    cache: dict[str, dict[str, Any]] | None = None,
+) -> tuple[bool, bool, dict[str, Any] | None]:
+    """``(visible, withheld by project isolation, metadata decided on)``.
+
+    :func:`is_visible` for one search row, except that a daily-note row
+    belongs to the projects its entries name. On a project-scoped chain it is
+    seen only when every entry in it names the chain's project; otherwise it
+    is withheld and counted. An untagged entry may be any project's, and each
+    session-end entry also lives in its own project-tagged record, which
+    isolation judges as usual.
+    """
+    path = row.get("file_path")
+    meta = _evaluated_metadata(
+        path, metadata=None,
+        fallback_metadata=_row_fallback_metadata(row, metadata_key), cache=cache,
+    )
+    if meta is None:
+        return False, False, None
+    tags = daily_entry_projects(row)
+    if tags is not None:
+        named = list(dict.fromkeys(t for t in tags if t))
+        meta = {**meta, "entities": _without_projects(meta) + named}
+        if (chain is not None and chain.project and not chain.include_other_projects
+                and any(t is None or other_project(chain, {"entities": [t]}) for t in tags)):
+            return False, True, meta
+    rel = normalize_memory_path(path) if path else None
+    if chain is None:
+        return access_allows(meta, file_path=rel), False, meta
+    if visible_on_chain(chain, meta, file_path=rel):
+        return True, False, meta
+    return False, not chain.include_other_projects and other_project(chain, meta), meta
+
+
+def _without_projects(metadata: dict[str, Any]) -> list[str]:
+    """``entities`` minus its ``project/*`` refs."""
+    raw = metadata.get("entities")
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    projects = set(project_entities(metadata))
+    return [e for e in raw if e not in projects]
+
+
 def is_row_visible(
     chain: ScopeChain | None,
     row: dict[str, Any],
@@ -246,10 +347,17 @@ def is_row_visible(
     The per-row decision :func:`filter_visible` makes, for a caller that needs
     it one row at a time.
     """
-    return is_visible(
-        chain, row.get("file_path"),
-        fallback_metadata=_row_fallback_metadata(row, "metadata"), cache=cache,
-    )
+    return _row_verdict(chain, row, cache=cache)[0]
+
+
+def row_other_project_refs(chain: ScopeChain | None, row: dict[str, Any]) -> list[str]:
+    """:func:`other_project_refs` for a search row, reading a daily entry's own tag."""
+    if chain is None or not chain.project:
+        return []
+    meta = _row_verdict(with_other_projects(chain), row)[2]
+    if meta is None or not other_project(chain, meta):
+        return []
+    return project_entities(meta)
 
 
 def filter_visible(
@@ -275,6 +383,8 @@ def filter_visible(
     change. Whenever the file is readable — the normal case — its live
     frontmatter is authoritative.
 
+    A daily-note row is judged by its own entry (:func:`_row_verdict`).
+
     ``other_projects``, when given, collects the memory-dir-relative path of
     every row left out by project isolation (a record tagged to a project
     other than the chain's), so the caller can report how many it withheld.
@@ -282,12 +392,13 @@ def filter_visible(
     cache: dict[str, dict[str, Any]] = {}
     out: list[dict[str, Any]] = []
     for row in rows:
-        fallback = _row_fallback_metadata(row, metadata_key)
         path = row.get(path_key)
-        if is_visible(chain, path, fallback_metadata=fallback, cache=cache):
+        keyed = row if path_key == "file_path" else {**row, "file_path": path}
+        visible, withheld, _ = _row_verdict(
+            chain, keyed, metadata_key=metadata_key, cache=cache,
+        )
+        if visible:
             out.append(row)
-        elif other_projects is not None and withheld_as_other_project(
-            chain, path, fallback_metadata=fallback, cache=cache,
-        ):
+        elif other_projects is not None and withheld:
             other_projects.add(normalize_memory_path(path) or str(path))
     return out

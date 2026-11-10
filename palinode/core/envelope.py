@@ -22,7 +22,8 @@ Three signals, strongest first:
      near-zero-false-positive signal, but it is available *only* to a caller
      with parameters that are always expected. Callers declare it by naming
      them in ``missing_params``.
-  2. **Structural invalidity** — a closing tag with no matching opener.
+  2. **Structural invalidity** — a closing tag with no unclosed opener of the
+     same name before it.
   3. **Positional** — a fragment at the very tail of the value, where an
      absorbed envelope lands.
 
@@ -108,10 +109,21 @@ def envelope_complaint(
     if not matches:
         return None
 
-    openers = {m.group(2).lower() for m in matches if not m.group(1)}
-    unmatched = next(
-        (m for m in matches if m.group(1) and m.group(2).lower() not in openers), None
-    )
+    # A closer is matched only by an opener of the same name that comes before
+    # it and is still open. Order matters: in `…</parameter>\n<parameter
+    # name="decisions">[…]` the opener follows the closer, and a name-keyed set
+    # once counted that closer as matched. Self-closing tags open nothing.
+    open_counts: dict[str, int] = {}
+    unmatched = None
+    for m in matches:
+        name = m.group(2).lower()
+        if m.group(1):
+            if open_counts.get(name, 0) == 0:
+                unmatched = m
+                break
+            open_counts[name] -= 1
+        elif not m.group(0).endswith("/>"):
+            open_counts[name] = open_counts.get(name, 0) + 1
     # Absorption lands the envelope at the very tail of the value.
     tail_end = len(scrubbed.rstrip())
     trailing = next((m for m in matches if m.end() == tail_end), None)

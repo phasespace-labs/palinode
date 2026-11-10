@@ -189,6 +189,10 @@ async def test_mcp_and_api_prime_isolation_and_disabled_context(repository, tmp_
     assert "Alpha choice" not in result[0].text
     assert "no project resolved" in result[0].text
     result = await mcp._dispatch_tool("palinode_session_init", {"project": "beta"})
+    assert "Beta choice" not in result[0].text
+    assert "no project resolved" in result[0].text
+    monkeypatch.setattr(config.context, "enabled", True)
+    result = await mcp._dispatch_tool("palinode_session_init", {"project": "beta"})
     assert "Beta choice" in result[0].text
     assert "Alpha choice" not in result[0].text
 

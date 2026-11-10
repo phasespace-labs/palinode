@@ -46,9 +46,12 @@ The test question is whether there is anything to fix. `depends` is the worked e
 ## Context resolution and startup gates
 
 `core.context_prime.resolve_context` owns project selection. Explicit project
-arguments bypass `context.enabled`; ambient environment, mappings and directory
-inference obey it. CLI/MCP search consume its list view; prime and session-end
-consume its project view. Save tags only the project/entities explicitly supplied.
+arguments bypass the local resolver's `context.enabled`; ambient environment,
+mappings and directory inference obey it. The API's `effective_project_scope`
+additionally enforces the server's own setting on search, prime, resolve, read
+and trigger delivery: with context disabled, no caller-supplied project is applied. CLI/MCP
+present the server's recall results; session-end consumes the resolver's project
+view. Save tags only the project/entities explicitly supplied.
 [Project resolution](HOW-MEMORY-WORKS.md#choosing-the-project) documents precedence,
 git/worktree identity, remote-path limits and known/unrecognized diagnostics.
 

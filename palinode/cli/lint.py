@@ -264,6 +264,22 @@ def lint(fmt, deep_contradictions, max_llm_calls, similarity_threshold, propose,
             console.print(f"  - {oq['file']} ({oq['days_old']} days old)")
     else:
         console.print("[green]✓ No stale open questions (>90 days)[/green]")
+
+    console.print("")
+
+    malformed_timestamps = data.get("malformed_timestamps", [])
+    if malformed_timestamps:
+        console.print(
+            f"[bold yellow]Malformed Record Timestamps ({len(malformed_timestamps)})[/bold yellow]"
+        )
+        for finding in malformed_timestamps:
+            console.print(
+                f"  - {finding['file']}: {finding['field']}={finding['value']}",
+                markup=False,
+            )
+    else:
+        console.print("[green]✓ No malformed record timestamps[/green]")
+
     # (G4): unresolved typed contradiction links (neither side won yet).
     open_contradictions = data.get("open_contradictions", [])
     if open_contradictions:

@@ -1,4 +1,4 @@
-"""CLI: ``plan`` · ``judge`` · ``grade`` · ``report``. See the package docstring."""
+"""CLI: ``plan`` · ``background`` · ``judge`` · ``grade`` · ``report``. See the package docstring."""
 from __future__ import annotations
 
 import argparse
@@ -7,7 +7,7 @@ import json
 import sys
 from collections import Counter
 
-from bench.agent_tasks import grade, judge, plan, report
+from bench.agent_tasks import background, grade, judge, plan, report
 from bench.agent_tasks.corpus import load_corpus
 
 
@@ -32,6 +32,16 @@ def _parser() -> argparse.ArgumentParser:
                    help="date every fixture date is relative to (default: today, UTC); "
                         "recorded in plan.json — run the plan the same day")
     p.add_argument("--corpus", default=None, help="path to a scenarios YAML")
+
+    b = sub.add_parser("background", help="write a realistic background corpus for a run's store")
+    b.add_argument("--out", required=True, help="directory for the markdown files (must be empty or absent)")
+    b.add_argument("--as-of", default=None, metavar="YYYY-MM-DD",
+                   help="notes are dated in the 180 days before this (default: today, UTC)")
+    b.add_argument("--target-chunks", type=int, default=6000)
+    b.add_argument("--plan", help="plan.json whose stamped tokens and projects must not appear")
+    b.add_argument("--no-relevance", action="store_true", help="leave out the bench.relevance records")
+    b.add_argument("--extra-root", action="append", default=[],
+                   help="another installed open-source package tree to read docstrings from (repeatable)")
 
     g = sub.add_parser("grade", help="grade a run directory against its plan")
     g.add_argument("--plan", required=True)
@@ -76,6 +86,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"plan → {path}: {len(built['cells'])} cells "
               f"({', '.join(f'{k} {v}' for k, v in sorted(status.items()))}), "
               f"{len(built['probes'])} probe(s)", file=sys.stderr)
+        return 0
+    if args.command == "background":
+        as_of = (datetime.date.fromisoformat(args.as_of) if args.as_of
+                 else datetime.datetime.now(datetime.UTC).date())
+        excl = background.plan_tokens(args.plan) if args.plan else frozenset()
+        manifest = background.build(args.out, as_of=as_of, target_chunks=args.target_chunks,
+                                    exclude_tokens=excl, include_relevance=not args.no_relevance,
+                                    extra_roots=args.extra_root)
+        print(json.dumps(manifest, sort_keys=True))
         return 0
     if args.command == "judge":
         prior = None

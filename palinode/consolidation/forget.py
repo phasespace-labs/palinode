@@ -85,10 +85,11 @@ import glob
 import logging
 import os
 import re
-from datetime import UTC, date, datetime
+from datetime import datetime
 from typing import Any, Callable
 
 from palinode.core.config import config
+from palinode.core.ranker import parse_iso_utc
 from palinode.core.skip_dirs import is_skipped_path
 
 logger = logging.getLogger("palinode.forget")
@@ -230,18 +231,7 @@ def _coerce_ts(value: object) -> datetime | None:
     strings. Naive values are taken as UTC, which is what the save path
     stamps.
     """
-    if isinstance(value, datetime):
-        dt = value
-    elif isinstance(value, date):
-        dt = datetime(value.year, value.month, value.day)
-    elif isinstance(value, str) and value.strip():
-        try:
-            dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
-        except ValueError:
-            return None
-    else:
-        return None
-    return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
+    return parse_iso_utc(value)
 
 
 def effective_created_at(meta: dict[str, Any]) -> datetime | None:

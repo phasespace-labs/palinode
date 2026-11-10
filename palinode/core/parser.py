@@ -280,6 +280,11 @@ def _copy_metadata(value: Any) -> Any:
     return value
 
 
+#: The heading ``session_end`` opens each entry with, in the daily note and
+#: in a project's status file.
+SESSION_ENTRY_HEADING = re.compile(r"^## Session End\b.*$", re.MULTILINE)
+
+
 def parse_markdown(content: str) -> tuple[dict[str, Any], list[dict[str, str]]]:
     """Parses a complete markdown string payload containing YAML frontmatter.
 
@@ -308,8 +313,11 @@ def parse_markdown(content: str) -> tuple[dict[str, Any], list[dict[str, str]]]:
     cq_prefix = _build_canonical_question_prefix(metadata)
 
     # If document is short (~500 tokens corresponds to roughly 2000 chars), keep it safely bound
-    # to a single core chunk to prevent semantic fracturing.
-    if len(body) < 2000:
+    # to a single core chunk to prevent semantic fracturing. A log of session
+    # entries is split however short: each entry is a different session's, and
+    # in the shared daily note a different project's, so one chunk holding
+    # several would be one search row speaking for all of them.
+    if len(body) < 2000 and len(SESSION_ENTRY_HEADING.findall(body)) < 2:
         return metadata, [{"section_id": "root", "content": cq_prefix + body}]
 
     # Split by h2 or h3 natively formatted headers.

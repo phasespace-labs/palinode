@@ -60,7 +60,9 @@ async def test_status_discloses_actual_pause_flags_and_resolved_project(
 
     assert all(line in text for line in expected)
     assert "Policy:         v1; provenance: api_controls" in text
-    assert "Project:        project/fixture-project" in text
+    assert "Client project: project/fixture-project (API decides recall scope)" in text
+    assert "enrichment and consolidation" in text
+    assert "capture sources only" in text
     assert "do not delete stored history" in text
     assert "history reads remain available" in text
 
@@ -134,4 +136,26 @@ async def test_both_paused_uses_configured_mcp_project_not_preflight(
 
     text = await _status_text()
 
-    assert "Project:        project/configured-project" in text
+    assert "Client project: project/configured-project (API decides recall scope)" in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("controls_status", [200, 503])
+async def test_status_states_the_servers_unverifiable_path_rule(
+    monkeypatch: pytest.MonkeyPatch, controls_status: int,
+) -> None:
+    """The same server-owned rule the CLI prints, or "not reported"."""
+    from palinode.core.disclosure import UNVERIFIABLE_PATH_POLICY, UNVERIFIABLE_PATH_POLICY_UNREPORTED
+
+    policy = {"capture_paused": False, "recall_paused": False, "policy_version": 1, "provenance": "api_controls"}
+    for status, expected in (
+        ({**_healthy_status(), "unverifiable_path_policy": UNVERIFIABLE_PATH_POLICY}, UNVERIFIABLE_PATH_POLICY),
+        (_healthy_status(), UNVERIFIABLE_PATH_POLICY_UNREPORTED),
+    ):
+        async def fake_get(path: str, _status: dict = status, **_: Any) -> mock.MagicMock:
+            if path == "/status":
+                return _response(200, _status)
+            return _response(controls_status, policy)
+
+        monkeypatch.setattr(mcp, "_get", fake_get)
+        assert f"Unverifiable paths: {expected}." in await _status_text()

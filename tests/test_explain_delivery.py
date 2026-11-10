@@ -805,3 +805,7 @@ def test_cli_diagnostics_degrades_visibly_against_a_remote_api(
                       "--diagnostics", "--session-id", "s-owner"]
         )
         assert json.loads(owned.output)["query"] == "primary database Postgres"
+
+
+def test_prime_is_no_longer_response_only():
+    assert not any("/context/prime" in surface for surface in NON_LOGGING_SURFACES)

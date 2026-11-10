@@ -570,3 +570,39 @@ describe("ADR-015 §5 plugin parity (#480)", () => {
     }
   });
 });
+
+it("blame forwards combined options and preserves structured session output", async () => {
+  const originalFetch = global.fetch;
+  const urls: string[] = [];
+  const response = { blame: "line", claims: [], sessions: { sessions: [
+    { session_id: "recorded", delivery_count: 2 },
+  ] } };
+  global.fetch = async (url: any) => {
+    urls.push(String(url));
+    return { ok: true, json: async () => response } as any;
+  };
+  try {
+    let execute: any;
+    palinodePlugin.register({
+      pluginConfig: { autoRecall: false, autoCapture: false, midTurnMode: "none" },
+      logger: { info() {}, warn() {}, error() {} },
+      registerTool(def: any) {
+        if (typeof def === "function") def = def({});
+        if (def.name === "palinode_blame") execute = def.execute;
+      },
+      on() {}, registerCli() {}, registerService() {},
+    } as any);
+    const result = await execute("call", {
+      file_path: "note.md", search: "needle", claims: true, sessions: true,
+    });
+    const url = new URL(urls[0]);
+    expect(url.pathname).toBe("/blame/note.md");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      search: "needle", claims: "true", sessions: "true",
+    });
+    expect(result.details).toEqual(response);
+    expect(JSON.parse(result.content[0].text)).toEqual(response);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

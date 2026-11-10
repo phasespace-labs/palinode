@@ -168,14 +168,19 @@ from palinode.core.resolution import (
     Side,
     resolve,
 )
-from palinode.core.scoring import describe_other_projects_withheld
+from palinode.core.scoring import describe_other_projects_withheld, other_project_label
 from palinode.core.scope import (
     ScopeChain,
     other_project,
     project_entities,
     with_other_projects,
 )
-from palinode.core.visibility import filter_visible, normalize_memory_path
+from palinode.core.visibility import (
+    daily_entry_projects,
+    filter_visible,
+    normalize_memory_path,
+    row_other_project_refs,
+)
 from palinode.core.agent_directed import withhold_agent_directed
 from palinode.core.framing import MEMORY_IS_DATA
 
@@ -306,6 +311,9 @@ class Assertion:
     #: The record's own projects when they are not the request's — set only on
     #: a record delivered across projects (opted in, or named by the caller).
     other_project: tuple[str, ...] = ()
+    #: The project the request is scoped to, for the row label that names both
+    #: sides. Rendering only: the request's project is already in the payload.
+    this_project: str | None = field(default=None, repr=False, compare=False)
 
     def to_dict(self) -> dict[str, Any]:
         out = {
@@ -342,6 +350,7 @@ class Discovery:
     statement: str
     other_project: tuple[str, ...] = ()
     contested: bool = False
+    this_project: str | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -605,6 +614,7 @@ class _View:
     excerpt: str
     freshness: str
     other_project: tuple[str, ...] = ()
+    this_project: str | None = None
 
 
 def _assertion(side: Side, views: dict[str, _View], revisions: dict[str, str]) -> Assertion:
@@ -624,6 +634,7 @@ def _assertion(side: Side, views: dict[str, _View], revisions: dict[str, str]) -
         qualifiers=side.qualifiers,
         revision=revisions.get(rel) if rel else None,
         other_project=view.other_project if view else (),
+        this_project=view.this_project if view else None,
     )
 
 
@@ -820,7 +831,12 @@ def _views(
             title=title,
             excerpt=_statement(body, title),
             freshness=seed.seed_freshness,
-            other_project=label(seed.seed_meta),
+            other_project=(
+                tuple(row_other_project_refs(chain, row))
+                if daily_entry_projects(row) is not None
+                else label(seed.seed_meta)
+            ),
+            this_project=chain.project if chain is not None else None,
         )
     for seed in seeds:
         for rec in seed.records():
@@ -833,6 +849,7 @@ def _views(
                 excerpt=_statement(rec.excerpt, rec.title),
                 freshness=rec.freshness,
                 other_project=label(rec.meta),
+                this_project=chain.project if chain is not None else None,
             )
     return out
 
@@ -869,6 +886,7 @@ def _discoveries(
             ),
             other_project=view.other_project if view else (),
             contested=rec.currency == "contested" or bool(rec.meta.get("contradicts")),
+            this_project=view.this_project if view else None,
         ))
     return tuple(out)
 
@@ -1360,9 +1378,12 @@ def _stamp(a: Assertion) -> str:
         bits.append("index stale")
     if a.effective_at:
         bits.append(a.effective_at[:10])
-    if a.other_project:
-        bits.append(f"other project: {', '.join(a.other_project)}")
     return " · ".join(bits)
+
+
+def _other_lead(other_project: tuple[str, ...], this_project: str | None) -> str:
+    """The label a record from another project opens with, naming both sides."""
+    return f"{other_project_label(other_project, this_project)} " if other_project else ""
 
 
 def _qualifier_labels(qualifiers: Iterable[str]) -> str:
@@ -1400,7 +1421,8 @@ def _line(a: Assertion, *, qualifiers: bool = False) -> str:
     title = f" {a.title}" if a.title else ""
     statement = f" {a.statement}" if a.statement else ""
     labels = _qualifier_labels(a.qualifiers) if qualifiers else ""
-    return f"- [{a.ref}]{title} [{_stamp(a)}]{statement}{labels}"
+    lead = _other_lead(a.other_project, a.this_project)
+    return f"- {lead}[{a.ref}]{title} [{_stamp(a)}]{statement}{labels}"
 
 
 def _render_discovery(found: Discovery) -> str:
@@ -1411,12 +1433,9 @@ def _render_discovery(found: Discovery) -> str:
     say what it is not: nothing in either record claims they are related.
     """
     statement = f" — {found.statement}" if found.statement else ""
-    other = (
-        f" · other project: {', '.join(found.other_project)}"
-        if found.other_project else ""
-    )
+    lead = _other_lead(found.other_project, found.this_project)
     return (
-        f"    ⚠ also found (unlinked): [{found.ref}] [{found.currency}{other}]{statement}"
+        f"    ⚠ also found (unlinked): {lead}[{found.ref}] [{found.currency}]{statement}"
     )
 
 
@@ -1726,9 +1745,26 @@ def build_bundle(
         )
         # Confidence describes visible query seeds, never context refs or
         # unlinked evidence found while resolving their currency.
+        # Automatic recall only (the per-prompt hook): the keyword arm vouches
+        # for a prompt through its subject, and the vector arm's mark sits
+        # above what a contentless prompt scores in this store. An explicit
+        # query keeps the verdict /search gives it.
+        subject_units = None
+        vector_mark = None
+        if request.prompt:
+            from palinode.core.prompt_query import prompt_shape
+
+            subject_units = prompt_shape(request.query).subject_units
+            if active_mode in ("hybrid", "vector") and query_rows:
+                from palinode.core.vector_baseline import vector_confident_mark
+
+                vector_mark = vector_confident_mark()
         retrieval = search_diagnostics(
             active_mode, matched=bool(query_rows), chain=chain,
-            confidence=assess(query_rows, active_mode=active_mode),
+            confidence=assess(
+                query_rows, active_mode=active_mode,
+                subject_units=subject_units, vector_confident_at=vector_mark,
+            ),
         )
 
     evidence = resolve_evidence(

@@ -91,16 +91,12 @@ def _label_other_projects(results: list[dict[str, Any]], chain) -> None:
     by default such a hit was never delivered. ``other_project`` lists the
     record's own project refs, so a reader sees whose decision it is.
     """
-    from palinode.core.visibility import other_project_refs
+    from palinode.core.visibility import row_other_project_refs
 
     if chain is None or not chain.include_other_projects:
         return
     for hit in results:
-        cached = hit.get("metadata")
-        refs = other_project_refs(
-            chain, hit.get("file_path"),
-            fallback_metadata=cached if isinstance(cached, dict) else {},
-        )
+        refs = row_other_project_refs(chain, hit)
         if refs:
             hit["other_project"] = refs
 
@@ -118,6 +114,90 @@ def _has_visible_match(chain, matches: list[dict[str, Any]], other_projects: set
         return True
     filter_visible(chain, matches, other_projects=other_projects)
     return False
+
+
+def _keys_absent_in_scope(chain, keys: list[str]) -> list[str]:
+    """The ``where`` keys that no record a session on ``chain`` may see has.
+
+    Judged by the visibility rule search applies to every row, so a key that
+    only private records or other projects' records carry reads as absent:
+    the reply must not say what isolation withheld.
+    """
+    cache: dict[str, dict[str, Any]] = {}
+    return [
+        key for key in dict.fromkeys(keys)
+        if not any(is_row_visible(chain, row, cache=cache)
+                   for row in store.list_chunks_with_key(key))
+    ]
+
+
+def _filter_exclusion(
+    req: "SearchRequest",
+    *,
+    chain,
+    where_matches_nothing: bool,
+    where_chunk_ids: list[str] | None,
+    rerun: Callable[[int], list[dict[str, Any]]],
+    fetch_limit: int,
+    automatic: bool,
+) -> dict[str, Any] | None:
+    """Did ``where`` or ``types`` empty this delivery, rather than the query?
+
+    Called only for an empty delivery that had either filter. ``None`` when
+    the search finds nothing without them either: then the query, or another
+    filter, is the reason, and the reply says what it always said.
+
+    When no record the caller may see satisfies ``where``, that is the answer
+    and nothing is run: the delivery skipped the query for that reason, and
+    the reply names the keys no record in scope carries. Otherwise ``rerun``
+    repeats the search without ``where`` and ``types`` (every other filter,
+    the visibility gate included, still applies) and records no recall, and
+    ``matches`` counts what it finds. Only rows the caller may see are
+    counted, so no other project's record reaches the number.
+    """
+    if where_matches_nothing:
+        return {
+            "by": ["where"],
+            "where": list(req.where or []),
+            "matches": None,
+            "matches_at_least": False,
+            "missing_keys": _keys_absent_in_scope(
+                chain, [key for key, _ in parse_where(req.where)],
+            ),
+        }
+    window: dict[str, int] = {}
+
+    def counted(n: int) -> list[dict[str, Any]]:
+        rows = rerun(n)
+        window.update(fetched=len(rows), limit=n)
+        return rows
+
+    rows = _fetch_visible(chain, counted, fetch_limit, automatic=automatic)
+    rows = _filter_type_deny(rows, req.type_deny)
+    rows = _filter_min_priority(rows, req.min_priority)
+    if not rows:
+        return None
+    applied = (["where"] if where_chunk_ids is not None else []) + (["types"] if req.types else [])
+    allowed = set(where_chunk_ids or ())
+    alone = [
+        name for name in applied
+        if (name == "where" and not any(row.get("id") in allowed for row in rows))
+        or (name == "types" and not _filter_types(rows, req.types))
+    ]
+    value: dict[str, Any] = {
+        # A filter that empties the slate on its own is named alone; when
+        # neither does, it is the two together.
+        "by": alone or applied,
+        "matches": len(rows),
+        # The window came back full, so more matches may lie behind it.
+        "matches_at_least": window.get("fetched", 0) >= window.get("limit", 1),
+        "missing_keys": [],
+    }
+    if "where" in value["by"]:
+        value["where"] = list(req.where or [])
+    if "types" in value["by"]:
+        value["types"] = list(req.types or [])
+    return value
 
 
 def _fetch_visible(
@@ -145,16 +225,12 @@ def _fetch_visible(
     overwhelmingly common case — this is a single fetch with today's exact
     limits and today's exact ranking.
 
-    Recall metadata is de-duplicated across the two passes. The store
-    records ADR-007 recall inside each fetch, so a naive widened re-fetch would
-    increment ``recall_count`` twice for a row present in both passes. When a
-    ``record_recall`` callback is supplied (the hybrid/vector search path), the
-    wider pass is fetched with store-level recording suppressed and access is
-    recorded once here for only the rows the wider window newly surfaced. The
-    per-session importance nudge is separately deduped by ``session_id``, and
-    the retrieval log is written once, on the final set. Callers with no
-    recall write-back (recency, associative) pass ``record_recall=None`` and
-    take the plain wider re-fetch unchanged.
+    When a ``record_recall`` callback is supplied (hybrid/vector search),
+    both fetches suppress store-level recording. After selecting and gating
+    the window, record each distinct valid ID once, so hidden and automatic
+    lifecycle-excluded rows never acquire recall metadata. The callback carries
+    mode and session_id for ADR-007's per-session importance deduplication.
+    Callers without recall write-back (recency, associative) use plain fetches.
 
     ``other_projects`` collects the records project isolation withheld from
     the window that was finally used, for the delivery's withheld count.
@@ -173,21 +249,18 @@ def _fetch_visible(
                        and r.get("currency_reason") not in {"source missing", "source unreadable"}]
         return visible
 
-    rows = run(base_limit)
+    fetch_options = {"record_access": False} if record_recall is not None else {}
+    rows = run(base_limit, **fetch_options)
     visible = gate(rows)
-    if len(visible) == len(rows) or len(rows) < base_limit:
-        return visible
-    if record_recall is None:
-        # No recall write-back on this path: a plain wider re-fetch, unchanged.
-        return gate(run(base_limit * _VISIBILITY_OVERFETCH))
-    # The initial pass already recorded access for its rows. Suppress the
-    # store-level write on the wider pass and record access once here for only
-    # the rows the wider window newly surfaced, so a row present in both passes
-    # is counted a single time.
-    counted = {r.get("id") for r in rows}
-    wide = run(base_limit * _VISIBILITY_OVERFETCH, record_access=False)
-    record_recall([r.get("id") for r in wide if r.get("id") not in counted])
-    return gate(wide)
+    if len(visible) < len(rows) and len(rows) >= base_limit:
+        visible = gate(run(base_limit * _VISIBILITY_OVERFETCH, **fetch_options))
+    if record_recall is not None:
+        ids = dict.fromkeys(
+            row["id"] for row in visible
+            if isinstance(row.get("id"), str) and row["id"]
+        )
+        record_recall(list(ids))
+    return visible
 
 
 class SearchRequest(BaseModel):
@@ -339,10 +412,17 @@ def _assess_confidence(results: list[dict[str, Any]], active_mode: str):
     return assess(results, active_mode=active_mode)
 
 
+#: Row fields kept off the wire: which query units a keyword row matched is the
+#: confidence verdict's evidence (:mod:`palinode.core.confidence`), not part of
+#: the result.
+_INTERNAL_ROW_FIELDS = frozenset({"keyword_units"})
+
+
 def _delivery(results: list[dict[str, Any]], req: "SearchRequest", receipt, *,
               active_mode: str = "recency", chain=None, scope=None,
               confidence: dict[str, Any] | None = None,
-              other_projects_withheld: int = 0):
+              other_projects_withheld: int = 0,
+              filter_exclusion: dict[str, Any] | None = None):
     """Shape the response: today's bare array, or the receipt envelope.
 
     With ``resolve`` on, the envelope carries the receipt's **public** view —
@@ -365,7 +445,17 @@ def _delivery(results: list[dict[str, Any]], req: "SearchRequest", receipt, *,
     A project-scoped delivery also says how many records tagged to other
     projects it withheld (``other_projects_withheld``), so a scoped empty
     result reads as "isolated", not as "nothing in memory".
+
+    An empty delivery that ``where`` or ``types`` emptied says so under
+    ``filter_exclusion`` (:func:`_filter_exclusion`), so it does not read as
+    "nothing matched this query". Absent otherwise.
     """
+    # Fields the ranker carries for the confidence verdict and nothing else.
+    results = [
+        {key: value for key, value in row.items() if key not in _INTERNAL_ROW_FIELDS}
+        if isinstance(row, dict) else row
+        for row in results
+    ]
     if not req.receipt:
         return results
     view = receipt.public() if (req.resolve and req.resolve != "none") else receipt.reference()
@@ -375,6 +465,8 @@ def _delivery(results: list[dict[str, Any]], req: "SearchRequest", receipt, *,
         active_mode, matched=bool(results), chain=chain, confidence=confidence,
     )
     view["retrieval"]["other_projects_withheld"] = other_projects_withheld
+    if filter_exclusion is not None:
+        view["retrieval"]["filter_exclusion"] = filter_exclusion
     envelope: dict[str, Any] = {"results": results, "receipt": view}
     if scope is not None:
         envelope.update(scope.fields())
@@ -539,6 +631,9 @@ def search_api(
         where_matches_nothing = where_matches is not None and not _has_visible_match(
             scope_chain, where_matches, where_withheld,
         )
+        # Only the receipt envelope can carry the explanation; the bare array
+        # is frozen, so a caller that cannot receive it does not pay for it.
+        explain_filters = bool(req.receipt) and bool(where_conditions or req.types)
 
         # empty query → recency-only mode. Skip embedding, query chunks
         # directly ordered by created_at desc, apply types/date_after filter.
@@ -565,6 +660,19 @@ def search_api(
             recent = _filter_type_deny(recent, req.type_deny)
             recent = _filter_min_priority(recent, req.min_priority)
             recent = recent[:limit]
+            recent_exclusion = None if recent or not explain_filters else _filter_exclusion(
+                req, chain=scope_chain, where_matches_nothing=where_matches_nothing,
+                where_chunk_ids=where_chunk_ids,
+                rerun=lambda n: store.list_recent(
+                    category=req.category,
+                    date_after=effective_date_after,
+                    date_before=req.date_before,
+                    limit=n,
+                    kind_exclude_list=kind_exclude_list,
+                ),
+                fetch_limit=recent_limit,
+                automatic=req.automatic or req.mode == "passive",
+            )
             # enrich with snippet so MCP callers stay within budget.
             _enrich_with_snippets(recent, "", _resolve_snippet_max_chars(req.max_chars))
             _apply_tier(recent, req.tier)
@@ -573,7 +681,8 @@ def search_api(
             _attach_evidence(recent, req, scope_chain)
             return _delivery(recent, req, _build_receipt(recent, req, scope_chain),
                              chain=scope_chain, scope=scope,
-                             other_projects_withheld=len(where_withheld if where_matches_nothing else recent_other))
+                             other_projects_withheld=len(where_withheld if where_matches_nothing else recent_other),
+                             filter_exclusion=recent_exclusion)
 
         # ADR-008: Augment query with project context before embedding
         embed_query = req.query
@@ -627,7 +736,8 @@ def search_api(
         visible = partial(is_row_visible, scope_chain, cache={})
 
         if query_emb is None:
-            def _run(n: int, record_access: bool = True) -> list[dict[str, Any]]:
+            def _run(n: int, record_access: bool = True,
+                     chunk_ids: list[str] | None = where_chunk_ids) -> list[dict[str, Any]]:
                 hits = store.search_hybrid(
                     query_text=req.query, query_embedding=None,
                     category=req.category, top_k=n,
@@ -636,13 +746,14 @@ def search_api(
                     kind_exclude_list=kind_exclude_list, mode=recall_mode,
                     session_id=req.session_id, record_access=record_access,
                     visible=visible,
-                    chunk_ids=where_chunk_ids,
+                    chunk_ids=chunk_ids,
                 )
                 for h in hits:
                     h["mode"] = active_mode
                 return hits
         elif use_hybrid:
-            def _run(n: int, record_access: bool = True) -> list[dict[str, Any]]:
+            def _run(n: int, record_access: bool = True,
+                     chunk_ids: list[str] | None = where_chunk_ids) -> list[dict[str, Any]]:
                 return store.search_hybrid(
                     query_text=req.query,
                     query_embedding=query_emb,
@@ -659,7 +770,7 @@ def search_api(
                     session_id=req.session_id,
                     record_access=record_access,
                     visible=visible,
-                    chunk_ids=where_chunk_ids,
+                    chunk_ids=chunk_ids,
                 )
         else:
             # Vector-only search routes through search_hybrid(use_fts=False):
@@ -668,7 +779,8 @@ def search_api(
             # context boost, once-only daily penalty, per-file dedup, and
             # date-window handling as hybrid=true, instead of the second,
             # undocumented ranking policy `store.search` used to be.
-            def _run(n: int, record_access: bool = True) -> list[dict[str, Any]]:
+            def _run(n: int, record_access: bool = True,
+                     chunk_ids: list[str] | None = where_chunk_ids) -> list[dict[str, Any]]:
                 return store.search_hybrid(
                     query_text=req.query,
                     query_embedding=query_emb,
@@ -685,12 +797,11 @@ def search_api(
                     record_access=record_access,
                     use_fts=False,
                     visible=visible,
-                    chunk_ids=where_chunk_ids,
+                    chunk_ids=chunk_ids,
                 )
 
-        # The store fetch records ADR-007 recall metadata itself; when the
-        # visibility gate widens the window it re-fetches, so recall write-back
-        # is deferred to _fetch_visible to keep it counted once per retrieval.
+        # Defer ADR-007 write-back until visibility and lifecycle gating have
+        # selected the window, recording each admitted ID once per retrieval.
         other_withheld: set[str] = set()
         results = [] if where_matches_nothing else _fetch_visible(
             scope_chain,
@@ -710,6 +821,13 @@ def search_api(
         results = _filter_type_deny(results, req.type_deny)
         results = _filter_min_priority(results, req.min_priority)
         final = results[:limit]
+        exclusion = None if final or not explain_filters else _filter_exclusion(
+            req, chain=scope_chain, where_matches_nothing=where_matches_nothing,
+            where_chunk_ids=where_chunk_ids,
+            rerun=lambda n: _run(n, record_access=False, chunk_ids=None),
+            fetch_limit=store_limit,
+            automatic=req.automatic or req.mode == "passive",
+        )
         if active_mode == "hybrid" and not use_hybrid:
             active_mode = "vector"
         for hit in final:
@@ -756,7 +874,8 @@ def search_api(
         )
         return _delivery(final, req, receipt, active_mode=active_mode,
                          chain=scope_chain, scope=scope, confidence=confidence,
-                         other_projects_withheld=len(where_withheld if where_matches_nothing else other_withheld))
+                         other_projects_withheld=len(where_withheld if where_matches_nothing else other_withheld),
+                         filter_exclusion=exclusion)
     except embedder.EmbeddingInputError:
         raise  # typed 422 via the app-level handler in server.py
     except embedder.EmbeddingUnavailable:

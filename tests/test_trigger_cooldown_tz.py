@@ -27,6 +27,10 @@ from palinode.core.config import config
 EMBED_DIM = 1024
 _VEC = [0.05] * EMBED_DIM
 
+#: Shares three content words with the trigger descriptions below, so these
+#: cases clear the shared-term gate and test what they are about.
+PROMPT = "deploying the release to prod"
+
 
 @pytest.fixture()
 def isolated_store(tmp_path, monkeypatch):
@@ -51,45 +55,45 @@ def _set_last_fired(value: str) -> None:
 
 class TestFiredTriggerCooldown:
     def test_recheck_inside_cooldown_is_suppressed_without_raising(self, isolated_store):
-        store.add_trigger("t-cool", "deploying to prod", "projects/deploy.md", _VEC,
+        store.add_trigger("t-cool", "deploying the release to prod", "projects/deploy.md", _VEC,
                           cooldown_hours=24)
-        first = store.check_triggers(_VEC)
+        first = store.check_triggers(_VEC, PROMPT)
         assert [f["id"] for f in first] == ["t-cool"]
         row = _row("t-cool")
         assert row["fire_count"] == 1
         assert row["last_fired"].endswith("Z"), "precondition: writer emits the Z format"
 
         # The path that raised TypeError: aware now minus the stored timestamp.
-        second = store.check_triggers(_VEC)
+        second = store.check_triggers(_VEC, PROMPT)
         assert second == []
         assert _row("t-cool")["fire_count"] == 1, "a suppressed check must not record a firing"
 
     def test_zero_cooldown_fires_again(self, isolated_store):
-        store.add_trigger("t-hot", "deploying to prod", "projects/deploy.md", _VEC,
+        store.add_trigger("t-hot", "deploying the release to prod", "projects/deploy.md", _VEC,
                           cooldown_hours=0)
-        assert [f["id"] for f in store.check_triggers(_VEC)] == ["t-hot"]
-        assert [f["id"] for f in store.check_triggers(_VEC)] == ["t-hot"]
+        assert [f["id"] for f in store.check_triggers(_VEC, PROMPT)] == ["t-hot"]
+        assert [f["id"] for f in store.check_triggers(_VEC, PROMPT)] == ["t-hot"]
         assert _row("t-hot")["fire_count"] == 2
 
     def test_aware_last_fired_past_cooldown_fires(self, isolated_store):
-        store.add_trigger("t-old", "deploying to prod", "projects/deploy.md", _VEC,
+        store.add_trigger("t-old", "deploying the release to prod", "projects/deploy.md", _VEC,
                           cooldown_hours=24)
         _set_last_fired((datetime.now(UTC) - timedelta(hours=48)).isoformat())
-        assert [f["id"] for f in store.check_triggers(_VEC)] == ["t-old"]
+        assert [f["id"] for f in store.check_triggers(_VEC, PROMPT)] == ["t-old"]
 
     def test_legacy_naive_last_fired_inside_cooldown_is_suppressed(self, isolated_store):
-        store.add_trigger("t-naive", "deploying to prod", "projects/deploy.md", _VEC,
+        store.add_trigger("t-naive", "deploying the release to prod", "projects/deploy.md", _VEC,
                           cooldown_hours=24)
         naive_recent = (datetime.now(UTC) - timedelta(hours=1)).replace(tzinfo=None)
         _set_last_fired(naive_recent.isoformat())
-        assert store.check_triggers(_VEC) == []
+        assert store.check_triggers(_VEC, PROMPT) == []
         assert _row("t-naive")["fire_count"] == 0
 
     def test_legacy_naive_last_fired_past_cooldown_fires(self, isolated_store):
-        store.add_trigger("t-naive-old", "deploying to prod", "projects/deploy.md", _VEC,
+        store.add_trigger("t-naive-old", "deploying the release to prod", "projects/deploy.md", _VEC,
                           cooldown_hours=24)
         naive_old = (datetime.now(UTC) - timedelta(hours=48)).replace(tzinfo=None)
         _set_last_fired(naive_old.isoformat())
-        assert [f["id"] for f in store.check_triggers(_VEC)] == ["t-naive-old"]
+        assert [f["id"] for f in store.check_triggers(_VEC, PROMPT)] == ["t-naive-old"]
         # The firing rewrites the column in the current format.
         assert _row("t-naive-old")["last_fired"].endswith("Z")

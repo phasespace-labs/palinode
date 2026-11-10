@@ -122,6 +122,21 @@ def test_resolution_arithmetic(phrase, expected):
 
 
 @pytest.mark.parametrize(
+    ("phrase", "anchor"),
+    [
+        ("tomorrow", date(9999, 12, 31)),
+        ("yesterday", date(1, 1, 1)),
+        ("next monday", date(9999, 12, 27)),
+    ],
+)
+def test_resolution_outside_representable_calendar_is_unresolvable(phrase, anchor):
+    assert resolve(phrase, anchor) == (
+        None,
+        "the arithmetic lands outside the representable calendar",
+    )
+
+
+@pytest.mark.parametrize(
     ("phrase", "reason_fragment"),
     [
         ("recently", "vague"),

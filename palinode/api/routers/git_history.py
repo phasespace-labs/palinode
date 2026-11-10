@@ -73,7 +73,7 @@ def diff_api(days: int = 7, paths: str | None = None) -> dict[str, Any]:
 
 
 @router.get("/blame/{file_path:path}")
-def blame_api(file_path: str, search: str | None = None, claims: bool = False) -> dict[str, Any]:
+def blame_api(file_path: str, search: str | None = None, claims: bool = False, sessions: bool = False) -> dict[str, Any]:
     """Show when each line of a memory file was last changed.
 
     With ``claims=true``, additionally resolves each of the file's ``claims:``
@@ -85,6 +85,19 @@ def blame_api(file_path: str, search: str | None = None, claims: bool = False) -
     matches its content-addressed derivation, and whether the cited source is
     declared in the memory's ``sources:`` anchors.
     """
+    delivery_result = None
+    if sessions:
+        from palinode.api.routers.search import _resolve_scope_chain
+        from palinode.core.session_deliveries import session_deliveries
+
+        try:
+            safe_rel = git_tools._resolve_memory_path(file_path)
+        except PathTraversalError as exc:
+            raise _http_path_error(exc)
+        delivery_result = session_deliveries(
+            safe_rel, config.memory_dir, chain=_resolve_scope_chain(),
+            log_enabled=_retrieval_logger.enabled and config.instrumentation.capture_retrievals,
+        )
     # Issue blame access is an explicit retrieval.
     _retrieval_logger.record_file_read(
         file_path,
@@ -95,6 +108,8 @@ def blame_api(file_path: str, search: str | None = None, claims: bool = False) -
         result: dict[str, Any] = {"blame": git_tools.blame(file_path, search)}
     except PathTraversalError as exc:
         raise _http_path_error(exc)
+    if sessions:
+        result["sessions"] = delivery_result
     if claims:
         from palinode.core.claims import resolve_memory_claims
 

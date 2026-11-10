@@ -303,6 +303,15 @@ consolidation:
   # sweep. Identity/profile documents are never swept (ADR-020).
   status_log_retention_days: 90
 
+  # How long a daily/ note that names no project stays in daily/ before the
+  # weekly pass moves it to archive/ — again no LLM involved. Consolidation
+  # retires a daily note once the project groups that read it have decided on
+  # it; a note naming no project forms no group, so without this it would stay
+  # in daily/, ranking in recall as current, forever. 30 days leaves a month to
+  # tag it or widen keyword_map. archive/ stays indexed and git keeps the move.
+  # 0 disables the sweep.
+  daily_note_retention_days: 30
+
   # Nightly pass configuration (Tier 2)
   nightly:
     enabled: true
@@ -487,5 +496,9 @@ git:
 logging:
   # JSONL operation log (relative to memory_dir)
   operations_log: "logs/operations.jsonl"
+  # Rotate the active operation log after 64 MiB (0 disables rotation)
+  operations_max_bytes: 67108864
+  # Number of rotated operation logs to retain
+  operations_backup_count: 5
   # Log to stdout as well
   console: true

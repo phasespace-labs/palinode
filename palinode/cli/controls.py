@@ -14,25 +14,44 @@ import click
 
 from palinode.cli._api import api_client
 from palinode.cli._format import OutputFormat, console, get_default_format, print_result
-from palinode.core.disclosure import EXCLUSION_SCOPE, PAUSE_SCOPE, redact_destination
+from palinode.cli.hooks import codex_home
+from palinode.cli.init import (
+    _ANTIGRAVITY_HOOK_EVENTS,
+    _CODEX_HOOK_EVENTS,
+    _CURSOR_HOOK_EVENTS,
+    _HOOK_EVENTS,
+    ANTIGRAVITY_HOOKS_DIR,
+    CURSOR_HOOKS_DIR,
+    _agy_commands,
+)
+from palinode.core.disclosure import (
+    EXCLUSION_SCOPE,
+    PAUSE_SCOPE,
+    UNVERIFIABLE_PATH_POLICY_UNREPORTED,
+    redact_destination,
+)
 
 
-def _observed_project_setup(project_dir: Path) -> dict[str, Any]:
-    """Read generated files as evidence of setup, never of a live client."""
-    observed: dict[str, Any] = {
-        "project_dir": str(project_dir),
-        "claude_hooks": [],
-        "mcp_configured": False,
-        "codex_instructions": False,
-        "running_client_state": "unknown; Palinode cannot inspect client-managed traffic or processes",
-    }
-    settings = project_dir / ".claude" / "settings.json"
-    scripts = {
-        "SessionStart": project_dir / ".claude" / "hooks" / "palinode-session-start.sh",
-        "SessionEnd": project_dir / ".claude" / "hooks" / "palinode-session-end.sh",
-        "UserPromptSubmit": project_dir / ".claude" / "hooks" / "palinode-user-prompt-submit.sh",
-    }
-    registrations: set[str] = set()
+#: The hook scripts ``palinode init --hook`` installs, by Claude Code event.
+_HOOK_SCRIPTS = dict(_HOOK_EVENTS)
+#: The hook scripts ``palinode init --codex-hook`` installs, by Codex event.
+_CODEX_HOOK_SCRIPTS = dict(_CODEX_HOOK_EVENTS)
+
+#: What each automatic capture path sends to the API, for the disclosure.
+OBSERVED_CAPTURE_RANGE = (
+    "the SessionEnd hook sends a message count and a 200-character first-prompt topic hint, "
+    "plus the last assistant reply capped at 2000 characters by default "
+    "(PALINODE_HOOK_ENDING_MAX_CHARS; 0 disables the ending), from Claude Code and, "
+    "with palinode init --codex-hook, from Codex; "
+    "the PostCompact hook sends the summary Claude Code writes when it compacts a session, "
+    "up to 32000 characters by default (PALINODE_HOOK_COMPACT_MAX_CHARS); "
+    "neither is a full transcript import"
+)
+
+
+def _palinode_hook_events(settings: Path) -> set[str]:
+    """The Claude Code events whose registration in ``settings`` names palinode."""
+    events: set[str] = set()
     try:
         raw = json.loads(settings.read_text(encoding="utf-8"))
         hooks = raw.get("hooks", {}) if isinstance(raw, dict) else {}
@@ -49,18 +68,165 @@ def _observed_project_setup(project_dir: Path) -> dict[str, Any]:
                     else []
                 )
             ):
-                registrations.add(event)
+                events.add(event)
     except (OSError, ValueError, AttributeError):
         pass
-    for event, path in scripts.items():
-        if event in registrations or path.is_file():
-            observed["claude_hooks"].append(
-                {
-                    "event": event,
-                    "settings_registration_observed": event in registrations,
-                    "script_observed": path.is_file(),
-                }
-            )
+    return events
+
+
+def _read_json(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _cursor_hook_events(hooks_json: Path) -> set[str]:
+    """The Cursor events whose ``hooks.json`` entries name a palinode script.
+
+    Cursor's entries are flat ``{"command": ...}`` objects under each event,
+    unlike Claude Code's nested ``hooks`` lists.
+    """
+    raw = _read_json(hooks_json)
+    hooks = raw.get("hooks") if isinstance(raw, dict) else None
+    events: set[str] = set()
+    for event, entries in hooks.items() if isinstance(hooks, dict) else ():
+        if isinstance(event, str) and isinstance(entries, list) and any(
+            isinstance(entry, dict) and "palinode" in str(entry.get("command", "")).lower()
+            for entry in entries
+        ):
+            events.add(event)
+    return events
+
+
+def _agy_hook_events(hooks_json: Path) -> set[str]:
+    """The Antigravity events with a palinode handler, under any hook name."""
+    raw = _read_json(hooks_json)
+    events: set[str] = set()
+    for definition in raw.values() if isinstance(raw, dict) else ():
+        if not isinstance(definition, dict):
+            continue
+        for event, handlers in definition.items():
+            if isinstance(event, str) and isinstance(handlers, list) and any(
+                "palinode" in command.lower()
+                for command in _agy_commands({"_": {event: handlers}})
+            ):
+                events.add(event)
+    return events
+
+
+def _observed_recall_hooks(
+    scopes: list[tuple[str, Path, Path]],
+    pairs: tuple[tuple[str, str], ...],
+    read_events: Any,
+) -> list[dict[str, Any]]:
+    """Report each palinode hook found in ``(scope, hooks.json, hooks dir)``."""
+    found: list[dict[str, Any]] = []
+    seen: set[Path] = set()
+    for scope, hooks_json, hooks_dir in scopes:
+        resolved = hooks_json.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        registrations = read_events(hooks_json)
+        for event, script in pairs:
+            script_observed = (hooks_dir / script).is_file()
+            if event in registrations or script_observed:
+                found.append(
+                    {
+                        "event": event,
+                        "scope": scope,
+                        "settings_registration_observed": event in registrations,
+                        "script_observed": script_observed,
+                    }
+                )
+    return found
+
+
+def _observed_project_setup(project_dir: Path, home: Path | None = None) -> dict[str, Any]:
+    """Read generated files as evidence of setup, never of a live client.
+
+    Claude Code merges hooks from the user's settings and the project's shared
+    and local settings, so all three are read; each hook is reported with the
+    scope it was found in. Codex hooks are read from the user's and the
+    project's ``hooks.json`` the same way. Cursor (user and project
+    ``hooks.json``) and Antigravity (project ``.agents/hooks.json``) hooks are
+    recall only: ``palinode init`` registers no capture hook for either.
+    """
+    observed: dict[str, Any] = {
+        "project_dir": str(project_dir),
+        "claude_hooks": [],
+        "codex_hooks": [],
+        "cursor_hooks": [],
+        "agy_hooks": [],
+        "mcp_configured": False,
+        "codex_instructions": False,
+        "running_client_state": "unknown; Palinode cannot inspect client-managed traffic or processes",
+    }
+    user_dir = (home if home is not None else Path.home()) / ".claude"
+    project_claude = project_dir / ".claude"
+    scopes = [
+        ("user", user_dir / "settings.json", user_dir / "hooks"),
+        ("project", project_claude / "settings.json", project_claude / "hooks"),
+        ("project_local", project_claude / "settings.local.json", project_claude / "hooks"),
+    ]
+    seen_settings: set[Path] = set()
+    for scope, settings, hooks_dir in scopes:
+        # Run from the home directory, the user and project files are the same.
+        resolved = settings.resolve()
+        if resolved in seen_settings:
+            continue
+        seen_settings.add(resolved)
+        registrations = _palinode_hook_events(settings)
+        for event, script in _HOOK_SCRIPTS.items():
+            script_observed = (hooks_dir / script).is_file()
+            # Local settings share the project's hooks folder; its scripts are
+            # reported once, under the project scope.
+            if event in registrations or (script_observed and scope != "project_local"):
+                observed["claude_hooks"].append(
+                    {
+                        "event": event,
+                        "scope": scope,
+                        "settings_registration_observed": event in registrations,
+                        "script_observed": script_observed,
+                    }
+                )
+    # Codex adds every layer's hooks together rather than overriding, so the
+    # user and project hooks.json are both read the same way.
+    codex_user = codex_home(home if home is not None else Path.home())
+    codex_project = project_dir / ".codex"
+    seen_codex: set[Path] = set()
+    for scope, codex_dir in (("user", codex_user), ("project", codex_project)):
+        resolved = codex_dir.resolve()
+        if resolved in seen_codex:
+            continue
+        seen_codex.add(resolved)
+        registrations = _palinode_hook_events(codex_dir / "hooks.json")
+        for event, script in _CODEX_HOOK_SCRIPTS.items():
+            script_observed = (codex_dir / "hooks" / script).is_file()
+            if event in registrations or script_observed:
+                observed["codex_hooks"].append(
+                    {
+                        "event": event,
+                        "scope": scope,
+                        "settings_registration_observed": event in registrations,
+                        "script_observed": script_observed,
+                    }
+                )
+    user_home = home if home is not None else Path.home()
+    observed["cursor_hooks"] = _observed_recall_hooks(
+        [
+            ("user", user_home / ".cursor" / "hooks.json", user_home / ".cursor" / "hooks"),
+            ("project", project_dir / ".cursor" / "hooks.json", project_dir / CURSOR_HOOKS_DIR),
+        ],
+        _CURSOR_HOOK_EVENTS,
+        _cursor_hook_events,
+    )
+    observed["agy_hooks"] = _observed_recall_hooks(
+        [("project", project_dir / ".agents" / "hooks.json", project_dir / ANTIGRAVITY_HOOKS_DIR)],
+        _ANTIGRAVITY_HOOK_EVENTS,
+        _agy_hook_events,
+    )
     try:
         mcp = json.loads((project_dir / ".mcp.json").read_text(encoding="utf-8"))
         observed["mcp_configured"] = "palinode" in mcp.get("mcpServers", {})
@@ -106,6 +272,7 @@ def build_disclosure(
     project_dir: Path,
     *,
     remotes: list[str] | None = None,
+    home: Path | None = None,
 ) -> dict[str, Any]:
     """Produce truthful, serializable first-use disclosure data.
 
@@ -120,11 +287,15 @@ def build_disclosure(
         "effective_project": project,
         "effective_store": store or "unknown (not reported by API)",
         "policy_preflight": preflight or {"allowed": "unknown", "reason": "policy preflight unavailable"},
-        "observed_setup": _observed_project_setup(project_dir),
+        "observed_setup": _observed_project_setup(project_dir, home),
         "transcript_capture": {
             "opt_in": "not inferred from MCP installation; selected harness setup must opt in",
-            "observed_source": "Claude Code SessionEnd hook only when shown above as observed generated setup",
-            "observed_range": "eligible floor capture sends a message count and a 200-character first-prompt topic hint; it is not a full transcript import",
+            "observed_source": (
+                "Claude Code SessionEnd and PostCompact hooks and the Codex SessionEnd hook, "
+                "only when listed under observed hooks; Cursor and Antigravity hooks are "
+                "recall only and capture nothing"
+            ),
+            "observed_range": OBSERVED_CAPTURE_RANGE,
             # The correction miner is a second, separate transcript reader with
             # its own switch. Reported from API status, which is the runtime
             # authority: config on this machine is not proof of what the server
@@ -133,7 +304,7 @@ def build_disclosure(
             or {"enabled": "unknown (not reported by API)"},
         },
         "capture_and_recall": {
-            "automatic": "observed Claude hooks may attempt automatic lifecycle work; MCP/Codex tool use is explicit unless that client follows project instructions",
+            "automatic": "observed Claude Code, Codex, Cursor and Antigravity hooks may attempt automatic lifecycle work; MCP tool use is explicit unless that client follows project instructions",
             "explicit": "CLI and MCP calls routed through this API use the server policy",
             "pause_scope": PAUSE_SCOPE,
             "exclusion_scope": EXCLUSION_SCOPE,
@@ -164,6 +335,9 @@ def build_disclosure(
             "network": "Local storage is not a no-network guarantee: configured embedding, consolidation, git, and client providers may receive data.",
             "secret_detection": "No secret-scanner guarantee is made. Exclusions protect only their tested automatic paths; do not submit secrets explicitly.",
             "visibility": "Use the local inspector/history to review stored data. They are visibility tools, not an authorization boundary.",
+            # A server-owned rule, so the API's own statement is the authority.
+            "unverifiable_paths": status.get("unverifiable_path_policy")
+            or UNVERIFIABLE_PATH_POLICY_UNREPORTED,
         },
     }
 
@@ -200,7 +374,54 @@ def _emit(data: dict[str, Any], fmt: str | None) -> None:
         remotes = destinations["git_remotes"]
         console.print(f"  Git: {destinations['push_policy']}; remotes: {'; '.join(remotes) if remotes else 'none configured'}")
         transcript = data["transcript_capture"]
+        hooks = data["observed_setup"]["claude_hooks"]
+        console.print(
+            "  Claude Code hooks observed: "
+            + (
+                ", ".join(
+                    f"{hook['event']} ({hook['scope']}"
+                    + ("" if hook["script_observed"] else ", script not found")
+                    + ("" if hook["settings_registration_observed"] else ", not registered")
+                    + ")"
+                    for hook in hooks
+                )
+                or "none in user or project settings"
+            )
+        )
+        codex_hooks = data["observed_setup"]["codex_hooks"]
+        console.print(
+            "  Codex hooks observed: "
+            + (
+                ", ".join(
+                    f"{hook['event']} ({hook['scope']}"
+                    + ("" if hook["script_observed"] else ", script not found")
+                    + ("" if hook["settings_registration_observed"] else ", not registered")
+                    + ")"
+                    for hook in codex_hooks
+                )
+                or "none in user or project hooks.json"
+            )
+        )
+        for label, key, absent in (
+            ("Cursor", "cursor_hooks", "none in user or project .cursor/hooks.json"),
+            ("Antigravity", "agy_hooks", "none in project .agents/hooks.json"),
+        ):
+            recall_hooks = data["observed_setup"].get(key) or []
+            console.print(
+                f"  {label} hooks observed (recall only): "
+                + (
+                    ", ".join(
+                        f"{hook['event']} ({hook['scope']}"
+                        + ("" if hook["script_observed"] else ", script not found")
+                        + ("" if hook["settings_registration_observed"] else ", not registered")
+                        + ")"
+                        for hook in recall_hooks
+                    )
+                    or absent
+                )
+            )
         console.print(f"  Transcript capture: opt-in; {transcript['observed_source']}")
+        console.print(f"  Automatic capture sends: {transcript['observed_range']}")
         mining = transcript.get("correction_mining") or {}
         if mining.get("enabled") is True:
             console.print(
@@ -228,6 +449,7 @@ def _emit(data: dict[str, Any], fmt: str | None) -> None:
         console.print(
             f"  Scope: pauses affect {PAUSE_SCOPE}; exclusions: {EXCLUSION_SCOPE}"
         )
+        console.print(f"  Unverifiable paths: {data['limits']['unverifiable_paths']}")
         console.print("  Client runtime state: unknown unless a client reports it directly")
 
 

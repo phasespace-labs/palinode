@@ -24,6 +24,7 @@ from palinode.core.config import config
 from palinode.core.envelope import envelope_complaint
 from palinode.core.parity import PROMPT_TASKS
 from palinode.core.relative_dates import normalize_lines, normalize_text
+from palinode.core.visibility import DAILY_ENTRY_PROJECT_LABEL
 from palinode.prompts import store_prompts_dir
 
 from palinode.api._util import _utc_now
@@ -284,6 +285,12 @@ def session_end_api(req: SessionEndRequest, request: Request = None) -> dict[str
     # Build session entry
     parts = [f"## Session End — {now_iso}\n"]
     parts.append(f"**Source:** {source}\n")
+    if project:
+        # The daily note is one file shared by every project, so frontmatter
+        # cannot say whose an entry is. This line does, for each entry: recall
+        # isolates a daily entry by it (visibility.daily_entry_projects) and
+        # consolidation groups the entry under the project it names.
+        parts.append(f"{DAILY_ENTRY_PROJECT_LABEL} project/{project}\n")
     parts.append(f"**Summary:** {summary}\n")
     if decisions:
         parts.append("**Decisions:**")
@@ -365,12 +372,16 @@ def session_end_api(req: SessionEndRequest, request: Request = None) -> dict[str
             existing_daily = f.read()
     git_tools.write_memory_file(daily_path, f"{existing_daily}\n{session_entry}\n")
 
-    # Semantic dedup against recent saves. The daily note + project
-    # status file are append-only logs we always write — only the indexed
-    # individual file is suppressed when a near-duplicate already exists,
-    # because that file's value is the standalone embedding/searchable record
-    # which we'd otherwise have twice for the same content.
-    deduplicated_against, dedup_similarity = _check_session_end_dedup(session_entry)
+    # Semantic dedup against recent saves from this same session. The daily
+    # note + project status file are append-only logs we always write — only
+    # the indexed individual file is suppressed when a near-duplicate already
+    # exists, because that file's value is the standalone embedding/searchable
+    # record which we'd otherwise have twice for the same content. Without a
+    # session_id there is no way to tell a restatement from a different
+    # session's newer decision, so nothing is suppressed.
+    deduplicated_against, dedup_similarity = _check_session_end_dedup(
+        session_entry, project=project, session_id=req.session_id,
+    )
 
     # Also save as an individual indexed memory file (M0: dual-write).
     # This gives each session-end its own frontmatter, entities, description,

@@ -88,6 +88,12 @@ def _count_model_calls() -> Iterator[Counters]:
     client = get_ollama_client()
     orig_generate = client.generate
     orig_completions = client.chat_completions
+    # Remember whether the wrapped names were instance attributes before we
+    # shadowed them. Restoring by assigning the bound originals back would
+    # leave instance attributes that hide the class methods, so a later
+    # ``monkeypatch.setattr(OllamaClient, "generate", ...)`` on the shared
+    # singleton silently misses.
+    shadowed = {name: name in vars(client) for name in ("generate", "chat_completions")}
 
     def counting_generate(*args: Any, **kwargs: Any) -> Any:
         counters.chat_llm_calls += 1
@@ -104,8 +110,11 @@ def _count_model_calls() -> Iterator[Counters]:
         yield counters
     finally:
         embedder_mod.embed = orig_embed  # type: ignore[assignment]
-        client.generate = orig_generate  # type: ignore[method-assign]
-        client.chat_completions = orig_completions  # type: ignore[method-assign]
+        for name, orig in (("generate", orig_generate), ("chat_completions", orig_completions)):
+            if shadowed[name]:
+                setattr(client, name, orig)
+            else:
+                vars(client).pop(name, None)
 
 
 # --------------------------------------------------------------------------

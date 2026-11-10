@@ -559,6 +559,14 @@ def _run_check_and_apply(
     from palinode.consolidation.runner import _check_contradictions
     from palinode.consolidation.executor import apply_operations
 
+    from palinode.core.capture_policy import automatic_note_processing_allowed
+    from palinode.core.parser import parse_frontmatter
+
+    with open(file_path, encoding="utf-8") as handle:
+        metadata, _ = parse_frontmatter(handle.read())
+    if not automatic_note_processing_allowed(metadata):
+        return {"operations": [], "applied_stats": {}, "llm_latency_ms": 0}
+
     start = time.monotonic()
     operations = _check_contradictions(
         [item], item.get("category", ""), llm_fn=llm_fn

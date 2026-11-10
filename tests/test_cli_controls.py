@@ -6,12 +6,21 @@ import importlib
 from pathlib import Path
 
 import httpx
+import pytest
 from click.testing import CliRunner
 
 from palinode.cli import main
 from palinode.cli._api import PalinodeAPI
 from palinode.cli.controls import _observed_project_setup, _redact_remote_line, redact_destination
 from palinode.core import disclosure
+
+
+@pytest.fixture(autouse=True)
+def isolated_home(tmp_path_factory, monkeypatch) -> Path:
+    """``controls status`` reads user-level Claude settings; never the real ones."""
+    home = tmp_path_factory.mktemp("home")
+    monkeypatch.setenv("HOME", str(home))
+    return home
 
 
 def test_controls_api_methods_use_the_published_routes() -> None:
@@ -87,10 +96,10 @@ def test_observed_setup_does_not_claim_a_client_is_running(tmp_path: Path) -> No
     (tmp_path / ".mcp.json").write_text(json.dumps({"mcpServers": {"palinode": {}}}), encoding="utf-8")
     (tmp_path / "AGENTS.md").write_text("Use Palinode through MCP.", encoding="utf-8")
 
-    observed = _observed_project_setup(tmp_path)
+    observed = _observed_project_setup(tmp_path, home=tmp_path / "home")
 
     assert observed["claude_hooks"] == [
-        {"event": "SessionStart", "settings_registration_observed": True, "script_observed": True}
+        {"event": "SessionStart", "scope": "project", "settings_registration_observed": True, "script_observed": True}
     ]
     assert observed["mcp_configured"] is True
     assert observed["codex_instructions"] is True
@@ -105,7 +114,7 @@ def test_observed_setup_ignores_malformed_hook_settings_shape(tmp_path: Path) ->
         encoding="utf-8",
     )
 
-    observed = _observed_project_setup(tmp_path)
+    observed = _observed_project_setup(tmp_path, home=tmp_path / "home")
 
     assert observed["claude_hooks"] == []
 
@@ -208,7 +217,7 @@ def test_human_status_includes_destinations_opt_in_and_scope(monkeypatch, tmp_pa
     assert "origin https://***@example.test/store.git?*** (fetch)" in result.output
     assert "Scope: pauses affect future API-routed capture and recall requests only" in rendered
     assert "do not delete stored history" in rendered
-    assert "exclusions: project/path exclusions apply automatic capture and recall" in rendered
+    assert "exclusions: project exclusions apply to automatic capture and recall" in rendered
     assert "key@example" not in result.output
     assert "secret=x" not in result.output
 
@@ -293,3 +302,231 @@ def test_runtime_disclosure_uses_server_configured_store_and_redacts_remotes(mon
     assert "token" not in rendered
     assert "secret=x" not in rendered
     assert "private=1" not in rendered
+
+
+# ── Which Claude Code hooks the disclosure sees, and what they send ─────────
+
+
+def _register(settings: Path, commands: dict[str, str]) -> None:
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    event: [{"hooks": [{"type": "command", "command": command}]}]
+                    for event, command in commands.items()
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _install(hooks_dir: Path, *names: str) -> None:
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (hooks_dir / name).write_text("#!/bin/sh", encoding="utf-8")
+
+
+def test_user_level_hooks_are_observed(tmp_path: Path) -> None:
+    """The documented floor setup lives in ~/.claude, not the project."""
+    home, project = tmp_path / "home", tmp_path / "project"
+    project.mkdir()
+    _register(
+        home / ".claude" / "settings.json",
+        {
+            "SessionEnd": "~/.claude/hooks/palinode-session-end.sh",
+            "PostCompact": "~/.claude/hooks/palinode-post-compact.sh",
+            "Stop": "~/.claude/hooks/another-tool.sh",
+        },
+    )
+    _install(home / ".claude" / "hooks", "palinode-session-end.sh", "palinode-post-compact.sh")
+
+    observed = _observed_project_setup(project, home=home)
+
+    assert observed["claude_hooks"] == [
+        {"event": "SessionEnd", "scope": "user", "settings_registration_observed": True, "script_observed": True},
+        {"event": "PostCompact", "scope": "user", "settings_registration_observed": True, "script_observed": True},
+    ]
+
+
+def test_a_local_settings_registration_is_observed_and_its_script_reported_once(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    _register(project / ".claude" / "settings.local.json", {"SessionEnd": "palinode-session-end.sh"})
+    _install(project / ".claude" / "hooks", "palinode-session-end.sh")
+
+    observed = _observed_project_setup(project, home=tmp_path / "home")
+
+    assert observed["claude_hooks"] == [
+        {"event": "SessionEnd", "scope": "project", "settings_registration_observed": False, "script_observed": True},
+        {"event": "SessionEnd", "scope": "project_local", "settings_registration_observed": True, "script_observed": True},
+    ]
+
+
+def test_run_from_home_each_hook_is_reported_once(tmp_path: Path) -> None:
+    _register(tmp_path / ".claude" / "settings.json", {"SessionEnd": "palinode-session-end.sh"})
+    _install(tmp_path / ".claude" / "hooks", "palinode-session-end.sh")
+
+    observed = _observed_project_setup(tmp_path, home=tmp_path)
+
+    assert [(hook["event"], hook["scope"]) for hook in observed["claude_hooks"]] == [("SessionEnd", "user")]
+
+
+def test_every_hook_init_installs_is_observed(tmp_path: Path) -> None:
+    from palinode.cli.init import _HOOK_EVENTS
+
+    home = tmp_path / "home"
+    _register(home / ".claude" / "settings.json", {event: script for event, script in _HOOK_EVENTS})
+    _install(home / ".claude" / "hooks", *(script for _event, script in _HOOK_EVENTS))
+
+    observed = _observed_project_setup(tmp_path, home=home)
+
+    assert [hook["event"] for hook in observed["claude_hooks"]] == [event for event, _script in _HOOK_EVENTS]
+
+
+def test_status_discloses_what_the_compaction_checkpoint_sends(monkeypatch, tmp_path: Path) -> None:
+    """The cap quoted to the user is the one the installed hook applies."""
+    import re
+
+    from palinode.cli.init import POST_COMPACT_HOOK_SCRIPT
+
+    controls_module = importlib.import_module("palinode.cli.controls")
+    monkeypatch.setattr(controls_module, "api_client", _ControlsAPI())
+    cap = re.search(r"PALINODE_HOOK_COMPACT_MAX_CHARS:-(\d+)", POST_COMPACT_HOOK_SCRIPT).group(1)
+
+    result = CliRunner().invoke(main, ["controls", "status", "--cwd", str(tmp_path), "--format", "json"])
+
+    assert result.exit_code == 0, result.output
+    sent = json.loads(result.output)["transcript_capture"]["observed_range"]
+    assert "SessionEnd hook sends a message count and a 200-character first-prompt topic hint" in sent
+    assert f"PostCompact hook sends the summary Claude Code writes when it compacts a session, up to {cap} characters" in sent
+
+
+def test_human_status_lists_observed_hooks_and_what_capture_sends(
+    monkeypatch, tmp_path: Path, isolated_home: Path
+) -> None:
+    controls_module = importlib.import_module("palinode.cli.controls")
+    monkeypatch.setattr(controls_module, "api_client", _ControlsAPI())
+    _register(
+        isolated_home / ".claude" / "settings.json",
+        {"SessionEnd": "~/.claude/hooks/palinode-session-end.sh", "PostCompact": "~/.claude/hooks/palinode-post-compact.sh"},
+    )
+    _install(isolated_home / ".claude" / "hooks", "palinode-session-end.sh", "palinode-user-prompt-submit.sh")
+
+    result = CliRunner().invoke(main, ["controls", "status", "--cwd", str(tmp_path), "--format", "text"])
+
+    assert result.exit_code == 0, result.output
+    rendered = " ".join(result.output.split())
+    assert (
+        "Claude Code hooks observed: SessionEnd (user), UserPromptSubmit (user, not registered), "
+        "PostCompact (user, script not found)"
+    ) in rendered
+    assert "Automatic capture sends: the SessionEnd hook sends a message count" in rendered
+    assert "the PostCompact hook sends the summary Claude Code writes" in rendered
+
+
+def test_human_status_says_when_no_hooks_are_observed(monkeypatch, tmp_path: Path) -> None:
+    controls_module = importlib.import_module("palinode.cli.controls")
+    monkeypatch.setattr(controls_module, "api_client", _ControlsAPI())
+
+    result = CliRunner().invoke(main, ["controls", "status", "--cwd", str(tmp_path), "--format", "text"])
+
+    assert result.exit_code == 0, result.output
+    assert "Claude Code hooks observed: none in user or project settings" in " ".join(result.output.split())
+
+
+def _scaffold(project: Path, *flags: str) -> None:
+    from palinode.cli.init import init
+
+    result = CliRunner().invoke(init, [
+        "--dir", str(project), *flags, "--no-mcp", "--no-claudemd",
+        "--no-slash", "--no-prompts", "--no-skill",
+    ])
+    assert result.exit_code == 0, result.output
+
+
+def test_every_codex_cursor_and_agy_hook_init_installs_is_observed(tmp_path: Path) -> None:
+    """What ``palinode init`` registers is what status discloses."""
+    from palinode.cli.init import _ANTIGRAVITY_HOOK_EVENTS, _CODEX_HOOK_EVENTS, _CURSOR_HOOK_EVENTS
+
+    project = tmp_path / "project"
+    project.mkdir()
+    _scaffold(project, "--codex-hook", "--cursor-hooks", "--agy-hooks")
+
+    observed = _observed_project_setup(project, home=tmp_path / "home")
+
+    for key, pairs in (
+        ("codex_hooks", _CODEX_HOOK_EVENTS),
+        ("cursor_hooks", _CURSOR_HOOK_EVENTS),
+        ("agy_hooks", _ANTIGRAVITY_HOOK_EVENTS),
+    ):
+        assert observed[key] == [
+            {"event": event, "scope": "project", "settings_registration_observed": True, "script_observed": True}
+            for event, _script in pairs
+        ], key
+    assert "SessionEnd" in [hook["event"] for hook in observed["codex_hooks"]]
+
+
+def test_unregistered_or_absent_recall_hooks_are_reported_as_such(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    _install(project / ".cursor" / "hooks", "palinode-session-start.sh")
+    (project / ".agents").mkdir(parents=True)
+    (project / ".agents" / "hooks.json").write_text(json.dumps({"other": {"SessionStart": [
+        {"type": "command", "command": "not-ours.sh"}]}}), encoding="utf-8")
+    home = tmp_path / "home"
+    (home / ".cursor").mkdir(parents=True)
+    (home / ".cursor" / "hooks.json").write_text(json.dumps({"version": 1, "hooks": {
+        "beforeSubmitPrompt": [{"command": "~/.cursor/hooks/palinode-user-prompt-submit.sh"}]}}), encoding="utf-8")
+
+    observed = _observed_project_setup(project, home=home)
+
+    assert observed["cursor_hooks"] == [
+        {"event": "beforeSubmitPrompt", "scope": "user", "settings_registration_observed": True, "script_observed": False},
+        {"event": "sessionStart", "scope": "project", "settings_registration_observed": False, "script_observed": True},
+    ]
+    assert observed["agy_hooks"] == []
+
+
+def test_status_names_codex_capture_and_recall_only_hooks(monkeypatch, tmp_path: Path, isolated_home: Path) -> None:
+    controls_module = importlib.import_module("palinode.cli.controls")
+    monkeypatch.setattr(controls_module, "api_client", _ControlsAPI())
+    project = tmp_path / "project"
+    project.mkdir()
+    _scaffold(project, "--codex-hook", "--cursor-hooks")
+
+    text = CliRunner().invoke(main, ["controls", "status", "--cwd", str(project), "--format", "text"])
+    data = CliRunner().invoke(main, ["controls", "status", "--cwd", str(project), "--format", "json"])
+
+    assert text.exit_code == 0 and data.exit_code == 0, text.output + data.output
+    rendered = " ".join(text.output.split())
+    assert "Codex hooks observed: SessionStart (project), UserPromptSubmit (project), SessionEnd (project)" in rendered
+    assert "Cursor hooks observed (recall only): sessionStart (project), beforeSubmitPrompt (project)" in rendered
+    assert "Antigravity hooks observed (recall only): none in project .agents/hooks.json" in rendered
+    source = json.loads(data.output)["transcript_capture"]["observed_source"]
+    assert "the Codex SessionEnd hook" in source
+    assert "Cursor and Antigravity hooks are recall only" in source
+
+
+def test_status_states_the_servers_unverifiable_path_rule(monkeypatch, tmp_path: Path) -> None:
+    """The server's drop-the-path rule comes from the API, or is marked unreported."""
+    controls_module = importlib.import_module("palinode.cli.controls")
+    api = _ControlsAPI()
+    monkeypatch.setattr(controls_module, "api_client", api)
+    old = api.get_status()
+
+    unreported = CliRunner().invoke(main, ["controls", "status", "--cwd", str(tmp_path), "--format", "text"])
+    assert unreported.exit_code == 0, unreported.output
+    assert (
+        f"Unverifiable paths: {disclosure.UNVERIFIABLE_PATH_POLICY_UNREPORTED}"
+        in " ".join(unreported.output.split())
+    )
+
+    monkeypatch.setattr(api, "get_status", lambda: {**old, "unverifiable_path_policy": disclosure.UNVERIFIABLE_PATH_POLICY})
+    reported = CliRunner().invoke(main, ["controls", "status", "--cwd", str(tmp_path), "--format", "json"])
+    assert reported.exit_code == 0, reported.output
+    assert json.loads(reported.output)["limits"]["unverifiable_paths"] == disclosure.UNVERIFIABLE_PATH_POLICY
+
+
+def test_runtime_disclosure_reports_the_unverifiable_path_rule() -> None:
+    rule = disclosure.runtime_disclosure()["unverifiable_path_policy"]
+    assert "dropped" in rule and "invalid_scope" in rule and "symlink" in rule
