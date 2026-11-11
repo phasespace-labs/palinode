@@ -974,12 +974,39 @@ but missing gets installed. When everything is current, a re-run writes nothing.
 
 A hook counts as palinode's only when its script is named like one `init`
 writes (`palinode-session-start.sh`, `palinode-session-end.sh`,
-`palinode-user-prompt-submit.sh`, `palinode-cursor-hook.sh`,
-`palinode-agy-hook.sh`) and reads like palinode's. A Cursor or
-Antigravity command names both the adapter and the script it runs, and both are
-checked. Other hooks, and the
-settings files, are never written. A symlinked hook is reported but not
-rewritten: refresh the file it points to.
+`palinode-user-prompt-submit.sh`, `palinode-post-compact.sh`,
+`palinode-cursor-hook.sh`, `palinode-agy-hook.sh`) and reads like palinode's. A
+Cursor or Antigravity command names both the adapter and the script it runs, and
+both are checked. Other hooks are never written. A symlinked hook is reported but
+not rewritten: refresh the file it points to.
+
+Settings files are left alone except for two repairs to palinode's own Claude Code
+registrations, each made after copying the file to `<name>.bak-<YYYYMMDD-HHMMSS>`:
+
+- **PostCompact made synchronous.** Claude Code cancels a hook registered with
+  `"async": true`, and v0.24.0 registered `palinode-post-compact.sh` that way, so its
+  compaction checkpoint was almost never saved. `update` removes `async` from that
+  handler.
+- **`${CLAUDE_PROJECT_DIR}` quoted.** Claude Code runs a hook through `/bin/sh`, so an
+  unquoted `${CLAUDE_PROJECT_DIR}/.claude/hooks/palinode-<name>.sh`, the form `init`
+  wrote before 0.24.1, splits at a space in the project path and the hook exits 127.
+  `update` rewrites it to `"${CLAUDE_PROJECT_DIR}"/.claude/hooks/palinode-<name>.sh`
+  for palinode's four Claude Code scripts.
+
+Each repaired file is reported as `repaired registration` (`would repair` with
+`--dry-run`), naming its changes; `--format json` lists them under `registrations`.
+Nothing else in the file changes, and another tool's hook is never touched. Both
+repairs match a command only when it is just the path to a palinode script, as `init`
+and the manual install write it. For the PostCompact repair that is a literal path
+ending in `/palinode-post-compact.sh` (letters, digits and `._@+-`), optionally starting
+with `~`, `$HOME`, `${HOME}`, `$CLAUDE_PROJECT_DIR` or `${CLAUDE_PROJECT_DIR}` (a
+variable prefix may be in double quotes), or that whole path in double quotes; `~`
+counts only outside quotes. For the quoting repair it is exactly the unquoted
+`$CLAUDE_PROJECT_DIR` or `${CLAUDE_PROJECT_DIR}` path. The text is matched as written,
+trimming only spaces and tabs. Any other command (other quoting or expansion, an
+interpreter, an assignment, a redirection, a pipeline) is left as it is; fix such an
+entry by hand. Re-running `palinode init --hook` makes the same repairs in the project
+`.claude/settings.json` it writes, without a backup; `update` covers the whole cascade.
 
 Each packaged hook carries a `# palinode-hook-version: X.Y.Z` stamp on its
 second line, naming the release in which it last changed. The output shows

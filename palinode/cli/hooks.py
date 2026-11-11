@@ -35,6 +35,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import tomllib
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -331,6 +332,160 @@ def refresh_hook(status: HookStatus, now: datetime | None = None) -> str | None:
     return str(backup) if backup else None
 
 
+#: Claude Code backgrounds a hook registered with ``"async": true`` and cancels
+#: it, so the compaction checkpoint was almost never saved: 1 save from 179
+#: compactions on one machine. The PostCompact registration must be synchronous.
+POST_COMPACT_SCRIPT = "palinode-post-compact.sh"
+
+
+#: The registration text palinode writes, matched as written (nothing is unquoted
+#: or expanded first): a literal path to the script, optionally under one fixed
+#: prefix, bare or in double quotes, or the whole path in double quotes.
+_PATH_TAIL = r"(?:/[A-Za-z0-9._@+-]+)*/" + re.escape(POST_COMPACT_SCRIPT)
+_VAR_PREFIX = r"(?:\$HOME|\$\{HOME\}|\$CLAUDE_PROJECT_DIR|\$\{CLAUDE_PROJECT_DIR\})"
+_POST_COMPACT_COMMAND_RE = re.compile(
+    rf'(?:~|{_VAR_PREFIX}|"{_VAR_PREFIX}")?{_PATH_TAIL}'
+    rf'|"{_VAR_PREFIX}?{_PATH_TAIL}"'
+)
+
+
+def _runs_post_compact_script(command: str) -> bool:
+    """True when a command is just the path to palinode's post-compact script.
+
+    That is the only form palinode writes (``palinode init --hook`` and the
+    documented manual install). The command text, trimmed, must be a literal
+    path ending in ``/palinode-post-compact.sh``, made of letters, digits and
+    ``._@+-``, optionally starting with ``~``, ``$HOME``, ``${HOME}``,
+    ``$CLAUDE_PROJECT_DIR`` or ``${CLAUDE_PROJECT_DIR}`` (a variable prefix
+    may be in double quotes), or that whole path in double quotes (``~`` only
+    outside quotes, where the shell expands it). Only spaces and tabs around
+    the text are trimmed. Nothing is
+    unquoted or expanded before matching, and the prefix variables' values are
+    the user's own environment, not inspected. Anything else (another
+    expansion or quoting, an interpreter, an assignment, a redirection, a
+    pipeline, a path with spaces) is not recognised and is left as it is, so
+    another tool's hook is never matched.
+    """
+    # Only the blanks the shell itself ignores around a word are trimmed.
+    return _POST_COMPACT_COMMAND_RE.fullmatch(command.strip(" \t")) is not None
+
+
+def _async_post_compact_handlers(data: object) -> list[dict]:
+    """Palinode PostCompact handlers in one Claude Code settings object marked async."""
+    hooks_table = data.get("hooks") if isinstance(data, dict) else None
+    entries = hooks_table.get("PostCompact") if isinstance(hooks_table, dict) else None
+    found: list[dict] = []
+    for entry in entries if isinstance(entries, list) else []:
+        inner = entry.get("hooks") if isinstance(entry, dict) else None
+        for handler in inner if isinstance(inner, list) else []:
+            if (
+                isinstance(handler, dict)
+                and _runs_post_compact_script(str(handler.get("command", "")))
+                and handler.get("async")
+            ):
+                found.append(handler)
+    return found
+
+
+def drop_post_compact_async(data: object) -> bool:
+    """Make palinode's PostCompact registration synchronous in place; True if it changed."""
+    handlers = _async_post_compact_handlers(data)
+    for handler in handlers:
+        handler.pop("async", None)
+    return bool(handlers)
+
+
+#: palinode's Claude Code hook scripts, registered under the project directory.
+_CLAUDE_HOOK_SCRIPTS = (
+    "palinode-session-start.sh",
+    "palinode-session-end.sh",
+    "palinode-user-prompt-submit.sh",
+    POST_COMPACT_SCRIPT,
+)
+#: The unquoted form ``palinode init --hook`` wrote before 0.24.1. Claude Code runs
+#: a hook through ``/bin/sh``, which splits an unquoted ``${CLAUDE_PROJECT_DIR}``
+#: at a space, so in a project whose path has one every palinode hook exits 127.
+#: Matched as written: the whole command is that one literal path.
+_UNQUOTED_PROJECT_DIR_RE = re.compile(
+    r"\$(?:\{CLAUDE_PROJECT_DIR\}|CLAUDE_PROJECT_DIR)"
+    r"((?:/[A-Za-z0-9._@+-]+)*/(?:" + "|".join(re.escape(n) for n in _CLAUDE_HOOK_SCRIPTS) + r"))"
+)
+QUOTED_PROJECT_DIR = '"${CLAUDE_PROJECT_DIR}"'
+CHANGE_SYNCHRONOUS = "made the PostCompact hook synchronous"
+CHANGE_QUOTED = "quoted ${CLAUDE_PROJECT_DIR}"
+
+
+def _handlers(data: object) -> list[dict]:
+    hooks_table = data.get("hooks") if isinstance(data, dict) else None
+    found: list[dict] = []
+    for entries in hooks_table.values() if isinstance(hooks_table, dict) else []:
+        for entry in entries if isinstance(entries, list) else []:
+            inner = entry.get("hooks") if isinstance(entry, dict) else None
+            found.extend(h for h in (inner if isinstance(inner, list) else []) if isinstance(h, dict))
+    return found
+
+
+def quote_project_dir_commands(data: object) -> bool:
+    """Quote ``${CLAUDE_PROJECT_DIR}`` in palinode's own hook commands; True if any changed.
+
+    Only a command that is exactly the unquoted path to one of palinode's four
+    Claude Code hook scripts changes, to ``"${CLAUDE_PROJECT_DIR}"/…``.
+    """
+    changed = False
+    for handler in _handlers(data):
+        command = handler.get("command")
+        if not isinstance(command, str):
+            continue
+        match = _UNQUOTED_PROJECT_DIR_RE.fullmatch(command.strip(" \t"))
+        if match:
+            handler["command"] = QUOTED_PROJECT_DIR + match.group(1)
+            changed = True
+    return changed
+
+
+def repair_claude_registrations(data: object) -> list[str]:
+    """Apply both registration repairs to one Claude Code settings object in place."""
+    changes: list[str] = []
+    if drop_post_compact_async(data):
+        changes.append(CHANGE_SYNCHRONOUS)
+    if quote_project_dir_commands(data):
+        changes.append(CHANGE_QUOTED)
+    return changes
+
+
+def registrations_needing_repair(home: Path, project_dir: Path) -> list[tuple[Path, list[str]]]:
+    """Claude Code settings files whose palinode registrations need a repair, and which."""
+    found: list[tuple[Path, list[str]]] = []
+    for path in settings_files(home, project_dir)[:3]:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        changes = repair_claude_registrations(data)
+        if changes:
+            found.append((path, changes))
+    return found
+
+
+def repair_registration(path: Path, now: datetime | None = None) -> tuple[str | None, list[str]]:
+    """Repair palinode's registrations in ``path``; return (backup, changes).
+
+    Only palinode's own handlers change. The file is copied aside first and
+    rewritten through a temp file in the same directory, keeping its mode.
+    """
+    data = json.loads(path.read_text(encoding="utf-8"))
+    changes = repair_claude_registrations(data)
+    if not changes:
+        return None, []
+    backup = _backup_path(path, now or datetime.now())
+    shutil.copy2(path, backup)
+    tmp = path.with_name(f".{path.name}.palinode-tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    shutil.copymode(path, tmp)
+    os.replace(tmp, path)
+    return str(backup), changes
+
+
 _SKIP_REASONS = {
     STATE_CURRENT: "already matches the packaged copy",
     STATE_SYMLINK: "symlink — refresh the file it points to",
@@ -363,8 +518,11 @@ def hooks_update(dry_run: bool, project_dir: Path | None, fmt: str | None) -> No
     .agents/hooks.json, and replaces each stale copy with the one this palinode
     release ships, keeping the old one as <name>.bak-<timestamp> beside it. A hook registered but absent is
     installed. Hooks that are not palinode's are never touched; symlinked
-    hooks are reported, not rewritten. Re-running when everything is current
-    changes nothing.
+    hooks are reported, not rewritten. In a Claude Code settings file,
+    palinode's own registrations are repaired, with a backup: an async
+    PostCompact handler (which Claude Code cancels) is made synchronous, and an
+    unquoted ${CLAUDE_PROJECT_DIR} (which splits at a space in the project
+    path) is quoted. Re-running when everything is current changes nothing.
     """
     home = Path.home()
     project = (project_dir or Path.cwd()).resolve()
@@ -388,11 +546,28 @@ def hooks_update(dry_run: bool, project_dir: Path | None, fmt: str | None) -> No
             entry["reason"] = _SKIP_REASONS[status.state]
         results.append(entry)
 
+    registrations: list[dict[str, object]] = []
+    for path, changes in registrations_needing_repair(home, project):
+        backup = None
+        if not dry_run:
+            backup, changes = repair_registration(path, now)
+        registrations.append({
+            "path": str(path),
+            "action": "would repair" if dry_run else "repaired",
+            "changes": changes,
+            "backup": backup,
+        })
+
     output_fmt = OutputFormat(fmt) if fmt else get_default_format()
     checked = [str(p) for p in settings_files(home, project)]
     if output_fmt == OutputFormat.JSON:
         print_result(
-            {"dry_run": dry_run, "settings_checked": checked, "hooks": results},
+            {
+                "dry_run": dry_run,
+                "settings_checked": checked,
+                "hooks": results,
+                "registrations": registrations,
+            },
             fmt=output_fmt,
         )
         return
@@ -417,5 +592,10 @@ def hooks_update(dry_run: bool, project_dir: Path | None, fmt: str | None) -> No
         console.print(line, markup=False, highlight=False)
         if dry_run and entry.get("diff"):
             click.echo(str(entry["diff"]))
-    if dry_run and any(e["state"] in _REFRESHABLE for e in results):
+    for reg in registrations:
+        line = f"{reg['action']} registration: {reg['path']} ({'; '.join(reg['changes'])})"
+        if reg.get("backup"):
+            line += f", backup {reg['backup']}"
+        console.print(line, markup=False, highlight=False)
+    if dry_run and (registrations or any(e["state"] in _REFRESHABLE for e in results)):
         console.print(f"Dry run — nothing written. Run `{UPDATE_COMMAND}` to apply.", markup=False)

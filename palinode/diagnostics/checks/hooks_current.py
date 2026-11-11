@@ -38,6 +38,9 @@ def hooks_current(ctx: DoctorContext) -> CheckResult:
         STATE_STALE,
         STATE_SYMLINK,
         UPDATE_COMMAND,
+        CHANGE_QUOTED,
+        CHANGE_SYNCHRONOUS,
+        registrations_needing_repair,
         describe_version,
         hook_statuses,
         settings_files,
@@ -58,6 +61,37 @@ def hooks_current(ctx: DoctorContext) -> CheckResult:
         )
 
     drifted = [s for s in statuses if s.state != STATE_CURRENT]
+    broken = registrations_needing_repair(home, project)
+    if broken:
+        reasons = {
+            CHANGE_SYNCHRONOUS: (
+                'palinode\'s PostCompact hook is registered with "async": true, which '
+                "Claude Code cancels, so compactions leave no checkpoint"
+            ),
+            CHANGE_QUOTED: (
+                "a palinode hook command uses ${CLAUDE_PROJECT_DIR} unquoted, which the "
+                "shell splits at a space, so in a project path with a space the hook "
+                "does not run"
+            ),
+        }
+        details = "; ".join(
+            f"{path}: " + ", and ".join(reasons[c] for c in changes) for path, changes in broken
+        )
+        return CheckResult(
+            name=_NAME,
+            severity="warn",
+            passed=False,
+            message=(
+                f"palinode's Claude Code hook registration needs a repair — {details}."
+                + (f" {len(drifted)} hook script(s) also differ from the packaged copies." if drifted else "")
+            ),
+            remediation=(
+                f"Run `{UPDATE_COMMAND}` from this directory (preview with "
+                f"`{UPDATE_COMMAND} --dry-run`). It repairs palinode's own registrations, "
+                f"keeping a backup of the settings file, and refreshes stale hooks."
+            ),
+            tags=("fast",),
+        )
     if not drifted:
         versions = sorted({describe_version(s.packaged_version) for s in statuses})
         return CheckResult(

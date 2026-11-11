@@ -22,6 +22,10 @@ save_module = importlib.import_module("palinode.cli.save")
         (403, '["capture_paused"]', False),
         (403, 'null', False),
         (403, '<html>server-private</html>', False),
+        (400, '<html>server-private</html>', False),
+        (400, '{"secret":"server-private"}', False),
+        (400, '{"detail":[""],"secret":"server-private"}', False),
+        (422, '{"detail":[{"loc":["body"]}],"secret":"server-private"}', False),
         (500, '{"detail":"capture_paused"}', False),
     ],
 )

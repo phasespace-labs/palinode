@@ -10,7 +10,7 @@ from typing import Any
 
 import click
 
-from palinode.cli._api import HTTPStatusError, RequestError, api_client
+from palinode.cli._api import HTTPStatusError, RequestError, api_client, api_error_detail
 from palinode.cli._format import OutputFormat, emit_json, get_default_format
 
 _FORMAT = click.option(
@@ -18,18 +18,7 @@ _FORMAT = click.option(
 )
 
 
-def _detail(exc: HTTPStatusError) -> str:
-    """The API's own refusal text: a string ``detail``, or a validation list."""
-    try:
-        detail = exc.response.json().get("detail")
-    except (ValueError, AttributeError):
-        detail = None
-    if isinstance(detail, list):
-        detail = "; ".join(
-            str(item.get("msg", item)) if isinstance(item, dict) else str(item)
-            for item in detail
-        )
-    return str(detail) if detail else exc.response.text or "no detail"
+_detail = api_error_detail
 
 
 def _call(fn, *args, **kwargs) -> dict[str, Any]:

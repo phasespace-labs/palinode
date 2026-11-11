@@ -1,5 +1,5 @@
 #!/bin/bash
-# palinode-hook-version: 0.24.0
+# palinode-hook-version: 0.24.1
 # palinode-post-compact.sh — save Claude Code's compaction summary as a checkpoint.
 #
 # Fires on Claude Code PostCompact (manual /compact and auto-compaction). The
@@ -19,7 +19,7 @@
 # sent, and the API rechecks a capture pause at write time.
 #
 # Install: `palinode init --hook` copies this to .claude/hooks/ and registers
-# it on PostCompact (async, so the next turn does not wait for it).
+# it on PostCompact, synchronously: Claude Code cancels an async hook.
 
 set -euo pipefail
 
@@ -74,7 +74,15 @@ NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 # never passes through shell word-splitting or quoting.
 PAYLOAD=$(echo "$INPUT" | jq -c \
   --arg project "$PROJECT" --arg now "$NOW" --argjson max "$MAX_CHARS" '
-  .compact_summary as $summary
+  # Claude Code wraps its summary in <analysis>…</analysis> and
+  # <summary>…</summary> lines. A closing </summary> left at the end of the
+  # content is what the API refuses as tool-envelope markup, so whole-line
+  # wrapper tags become Markdown headings before the save.
+  (.compact_summary | split("\n") | map(
+      if test("^\\s*<analysis>\\s*$") then "## Analysis"
+      elif test("^\\s*<summary>\\s*$") then "## Summary"
+      elif test("^\\s*</(analysis|summary)>\\s*$") then ""
+      else . end) | join("\n")) as $summary
   | .session_id as $sid
   | (.trigger // "unknown") as $trigger
   | (if ($summary | length) > $max

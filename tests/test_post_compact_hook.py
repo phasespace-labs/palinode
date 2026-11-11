@@ -158,13 +158,32 @@ def test_dry_run_prints_the_payload_and_saves_nothing(tmp_path):
 # ── Registration ─────────────────────────────────────────────────────────────
 
 
-def test_init_registers_the_hook_on_post_compact_async(tmp_path):
+def test_init_registers_the_hook_on_post_compact_synchronously(tmp_path):
+    """Claude Code cancels an async hook, so the registration must not be async."""
     settings = tmp_path / "settings.json"
     _merge_settings(settings, force=False)
     entries = json.loads(settings.read_text())["hooks"]["PostCompact"]
     hooks = [h for e in entries for h in e["hooks"]]
     assert any(h["command"].endswith("/palinode-post-compact.sh") for h in hooks)
-    assert all(h.get("async") is True for h in hooks)
+    assert not any(h.get("async") for h in hooks)
+
+
+def test_init_rerun_makes_an_async_registration_synchronous(tmp_path):
+    """A 0.24.0 install registered PostCompact async; re-running init repairs only that handler."""
+    settings = tmp_path / "settings.json"
+    other = {"type": "command", "command": "my-own-compact-hook.sh", "async": True}
+    settings.write_text(json.dumps({"hooks": {"PostCompact": [
+        {"hooks": [{"type": "command",
+                    "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/palinode-post-compact.sh",
+                    "timeout": 35, "async": True}]},
+        {"hooks": [other]},
+    ]}}), encoding="utf-8")
+    assert _merge_settings(settings, force=False) == "merged"
+    entries = json.loads(settings.read_text())["hooks"]["PostCompact"]
+    handlers = [h for e in entries for h in e["hooks"]]
+    palinode = [h for h in handlers if h["command"].endswith("/palinode-post-compact.sh")]
+    assert len(palinode) == 1 and "async" not in palinode[0] and palinode[0]["timeout"] == 35
+    assert other in handlers  # someone else's async hook is left alone
 
 
 def test_example_settings_match_init_registration():
@@ -231,3 +250,29 @@ def test_checkpoint_writes_no_daily_note_or_status_line(tmp_path, memory_dir):
     _save_through_api(body)
     assert not (memory_dir / "daily").exists() or not any((memory_dir / "daily").iterdir())
     assert not list(memory_dir.rglob("*-status.md"))
+
+
+#: The shape Claude Code writes: an analysis block, then the summary block, each
+#: wrapped in whole-line tags, so the content ends with ``</summary>``.
+CLAUDE_SHAPED = (
+    "<analysis>\nChronological walk-through of the session.\n</analysis>\n\n"
+    "<summary>\n1. Primary request: ship the ranker fix.\n"
+    "2. Pending: run the smoke tests.\n</summary>"
+)
+
+
+def test_claude_code_wrapper_tags_become_headings(tmp_path):
+    _proc, _calls, body = _run(tmp_path, summary=CLAUDE_SHAPED)
+    kept = body["content"].partition("\n\n---\n\n")[2]
+    assert "<summary>" not in kept and "</summary>" not in kept and "<analysis>" not in kept
+    assert "## Analysis\nChronological walk-through" in kept
+    assert "## Summary\n1. Primary request: ship the ranker fix." in kept
+
+
+def test_a_claude_shaped_summary_passes_the_save_routes_envelope_guard(tmp_path, memory_dir):
+    """A trailing </summary> was refused as tool-envelope markup (a 400) before."""
+    _p, _c, body = _run(tmp_path, summary=CLAUDE_SHAPED)
+    _save_through_api(body)
+    assert [f.name for f in memory_dir.rglob("compaction-checkpoint-*.md")] == [
+        f"compaction-checkpoint-{SESSION}.md"
+    ]

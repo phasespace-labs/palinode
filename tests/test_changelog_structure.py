@@ -108,6 +108,7 @@ def test_every_unreleased_bullet_sits_under_a_heading() -> None:
 # freezes it here) updates this constant as part of the release roll.
 
 _FROZEN_RELEASED = {
+    "0.24.1": "a07d12348ec950b9c6f5c27fd08c75105f5530bffe3a0c6466c4c8eec10f415a",
     "0.24.0": "ca75cb333e31c4a215c847d9ae33a62f7e0ee442f12cacb9ecbc5451bd57a446",
     "0.23.0": "be623ef3fd6e416fa12500ba37f4d12d7dd886b94b31162891b36130a9169df6",
     "0.22.0": "03fb66d137d2f9701e174f26e6e2c0299bfe6920c0683f3e68c75e45e0c8ba03",

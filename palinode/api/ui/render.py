@@ -18,6 +18,8 @@ from __future__ import annotations
 import nh3
 from markdown_it import MarkdownIt
 
+from palinode.core.memory_write import _WIKI_FOOTER_MARKER
+
 # Tags we allow through the sanitizer. Deliberately conservative: prose,
 # headings, lists, code, tables, links. No <script>, <style>, <iframe>,
 # <object>, <form>, or event-handler-bearing elements.
@@ -55,6 +57,38 @@ _ALLOWED_URL_SCHEMES: set[str] = {"http", "https", "mailto"}
 _md = MarkdownIt("commonmark", {"html": False, "linkify": True, "typographer": False})
 _md.enable("table")
 
+# The wiki footer's marker comment sits on the line after its "## See also"
+# heading. With HTML off, markdown-it escapes it and the page shows it as
+# text. It is dropped from markdown-it's own token stream, so fences, indented
+# code, lists and quotes are already parsed: only a top-level paragraph whose
+# whole text is the marker, directly after a top-level h2 "See also", goes.
+# The marker in any other place (code, a quote, a list, prose) still shows.
+def _drop_footer_marker(tokens: list) -> list:
+    kept: list = []
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if (
+            tok.type == "paragraph_open"
+            and tok.level == 0
+            and i + 2 < len(tokens)
+            and tokens[i + 1].type == "inline"
+            and tokens[i + 1].content.strip() == _WIKI_FOOTER_MARKER
+            and tokens[i + 2].type == "paragraph_close"
+            and len(kept) >= 3
+            and kept[-1].type == "heading_close"
+            and kept[-3].type == "heading_open"
+            and kept[-3].tag == "h2"
+            and kept[-3].level == 0
+            and kept[-2].type == "inline"
+            and kept[-2].content.strip() == "See also"
+        ):
+            i += 3
+            continue
+        kept.append(tok)
+        i += 1
+    return kept
+
 
 def render_markdown(body: str) -> str:
     """Render a markdown *body* to sanitized HTML.
@@ -68,7 +102,9 @@ def render_markdown(body: str) -> str:
     """
     if not body or not body.strip():
         return ""
-    raw_html = _md.render(body)
+    env: dict = {}
+    tokens = _drop_footer_marker(_md.parse(body, env))
+    raw_html = _md.renderer.render(tokens, _md.options, env)
     return sanitize_html(raw_html)
 
 

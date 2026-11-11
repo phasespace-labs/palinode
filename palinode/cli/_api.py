@@ -35,6 +35,20 @@ assert SESSION_END_TIMEOUT_SECONDS == _SESSION_END_TIMEOUT_SENTINEL or os.enviro
 # `ReadTimeout` is a `RequestError` subclass, so a handler that wants the
 # specific message must catch it *before* `RequestError`.
 HTTPStatusError = httpx.HTTPStatusError
+
+
+def api_error_detail(exc: HTTPStatusError) -> str:
+    """The API's own refusal text: a string ``detail``, or a validation list."""
+    try:
+        detail = exc.response.json().get("detail")
+    except (ValueError, AttributeError):
+        detail = None
+    if isinstance(detail, list):
+        detail = "; ".join(
+            str(item.get("msg", item)) if isinstance(item, dict) else str(item)
+            for item in detail
+        )
+    return str(detail) if detail else exc.response.text or "no detail"
 RequestError = httpx.RequestError
 ReadTimeout = httpx.ReadTimeout
 

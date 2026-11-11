@@ -299,3 +299,186 @@ def test_init_installed_hooks_are_current_then_refresh_after_drift(env):
     assert _update().exit_code == 0
     assert hook.read_text(encoding="utf-8") == packaged_hooks()[END]
     assert hooks_current(DoctorContext(config=None)).passed
+
+
+# -- PostCompact registration: Claude Code cancels an async hook -------------------------------------
+
+POST = "palinode-post-compact.sh"
+
+
+def _async_post_compact_fixture(home: Path) -> Path:
+    """User-level install from 0.24.0: current script, registration marked async."""
+    script = home / ".claude" / "hooks" / POST
+    script.write_text(packaged_hooks()[POST], encoding="utf-8")
+    script.chmod(0o755)
+    settings = home / ".claude" / "settings.json"
+    settings.write_text(json.dumps({
+        "model": "keep-me",
+        "hooks": {"PostCompact": [
+            {"hooks": [{"type": "command", "command": f"~/.claude/hooks/{POST}",
+                        "timeout": 35, "async": True}]},
+            {"hooks": [{"type": "command", "command": "other-tool.sh", "async": True}]},
+        ]},
+    }), encoding="utf-8")
+    settings.chmod(0o600)
+    return settings
+
+
+def test_doctor_warns_on_an_async_post_compact_registration(env):
+    home, _ = env
+    _async_post_compact_fixture(home)
+    result = hooks_current(DoctorContext(config=None))
+    assert not result.passed
+    assert "async" in result.message and "cancels" in result.message
+    assert "palinode hooks update" in result.remediation
+
+
+def test_update_dry_run_reports_the_registration_and_writes_nothing(env, tmp_path):
+    home, _ = env
+    _async_post_compact_fixture(home)
+    before = _snapshot(tmp_path)
+    out = _update("--dry-run")
+    assert out.exit_code == 0, out.output
+    regs = json.loads(out.output)["registrations"]
+    assert [(r["action"], r["changes"]) for r in regs] == [
+        ("would repair", ["made the PostCompact hook synchronous"])
+    ]
+    assert _snapshot(tmp_path) == before
+
+
+def test_update_makes_the_registration_synchronous_with_a_backup(env):
+    home, _ = env
+    settings = _async_post_compact_fixture(home)
+    out = _update()
+    assert out.exit_code == 0, out.output
+    reg = json.loads(out.output)["registrations"][0]
+    assert reg["action"] == "repaired"
+    assert reg["changes"] == ["made the PostCompact hook synchronous"]
+    data = json.loads(settings.read_text())
+    palinode, other = (e["hooks"][0] for e in data["hooks"]["PostCompact"])
+    assert "async" not in palinode and palinode["timeout"] == 35
+    assert other["async"] is True  # another tool's hook is untouched
+    assert data["model"] == "keep-me"
+    assert (settings.stat().st_mode & 0o777) == 0o600
+    backup = Path(reg["backup"])
+    assert json.loads(backup.read_text())["hooks"]["PostCompact"][0]["hooks"][0]["async"] is True
+    assert hooks_current(DoctorContext(config=None)).passed
+    again = json.loads(_update().output)
+    assert again["registrations"] == []
+
+
+@pytest.mark.parametrize("command, matched", [
+    # The forms palinode writes or documents:
+    ("~/.claude/hooks/palinode-post-compact.sh", True),
+    ('"$HOME"/.claude/hooks/palinode-post-compact.sh', True),
+    ("$HOME/.claude/hooks/palinode-post-compact.sh", True),
+    ("${CLAUDE_PROJECT_DIR}/.claude/hooks/palinode-post-compact.sh", True),
+    ('"${CLAUDE_PROJECT_DIR}/.claude/hooks/palinode-post-compact.sh"', True),
+    ("  ~/.claude/hooks/palinode-post-compact.sh  ", True),
+    # Never another tool's hook:
+    ("~/.claude/hooks/palinode-post-compact.sh.backup", False),
+    ("my-palinode-post-compact.sh", False),
+    ("~/.claude/hooks/palinode-post-compact.sh#backup", False),
+    ("logger palinode-post-compact.sh", False),
+    ("exec -a palinode-post-compact.sh /usr/bin/true", False),
+    ("bash -c 'echo palinode-post-compact.sh'", False),
+    ("bash --init-file /x/palinode-post-compact.sh /dev/stdin", False),
+    ("bash -s /x/palinode-post-compact.sh", False),
+    ("2 >/dev/null ~/.claude/hooks/palinode-post-compact.sh", False),
+    ('"X=1" ~/.claude/hooks/palinode-post-compact.sh', False),
+    ("~/.claude/hooks/palinode-post-compact.sh |& logger", False),
+    ("true&&~/.claude/hooks/palinode-post-compact.sh", False),
+    ("$(echo x)/palinode-post-compact.sh", False),
+    ("${PALINODE_SCRUB_UNSET:-printf$IFS}/palinode-post-compact.sh", False),
+    ("X=/x/palinode-post-compact.sh", False),
+    ("#/palinode-post-compact.sh", False),
+    ("palinode-post-compact.sh", False),
+    ("$OTHER/palinode-post-compact.sh", False),
+    ("/Users/someone/.claude/hooks/palinode-post-compact.sh", True),
+    ("${HOME}/.claude/hooks/palinode-post-compact.sh", True),
+    ("$'HOME'/.claude/hooks/palinode-post-compact.sh", False),
+    ('$"HOME"/.claude/hooks/palinode-post-compact.sh', False),
+    ("'~/.claude/hooks/palinode-post-compact.sh'", False),
+    ('"~/.claude/hooks/palinode-post-compact.sh"', False),
+    ("~user/.claude/hooks/palinode-post-compact.sh", False),
+    ('"/tmp/palinode-post-compact.sh\u00a0"', False),
+    ("/tmp/palinode-post-compact.sh\u00a0", False),
+    ("\t~/.claude/hooks/palinode-post-compact.sh ", True),
+    # Other wrappings are documented as not recognised:
+    ("bash ~/.claude/hooks/palinode-post-compact.sh", False),
+    ("~/.claude/hooks/palinode-post-compact.sh 2>/dev/null", False),
+    ("env -u BASH_ENV ~/.claude/hooks/palinode-post-compact.sh", False),
+])
+def test_only_the_post_compact_script_itself_is_matched(command, matched):
+    from palinode.cli.hooks import drop_post_compact_async
+
+    data = {"hooks": {"PostCompact": [{"hooks": [
+        {"type": "command", "command": command, "async": True},
+    ]}]}}
+    assert drop_post_compact_async(data) is matched
+    assert ("async" in data["hooks"]["PostCompact"][0]["hooks"][0]) is not matched
+
+
+# -- Unquoted ${CLAUDE_PROJECT_DIR}: split at a space in the project path ------
+
+
+def _unquoted_project_fixture(project: Path) -> Path:
+    """A project install from before 0.24.1: unquoted ${CLAUDE_PROJECT_DIR}."""
+    hooks_dir = project / ".claude" / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    for name in (START, PROMPT):
+        (hooks_dir / name).write_text(packaged_hooks()[name], encoding="utf-8")
+        (hooks_dir / name).chmod(0o755)
+    settings = project / ".claude" / "settings.json"
+    settings.write_text(json.dumps({"hooks": {
+        "SessionStart": [{"hooks": [
+            {"type": "command", "command": f"${{CLAUDE_PROJECT_DIR}}/.claude/hooks/{START}", "timeout": 20},
+        ]}],
+        "UserPromptSubmit": [{"hooks": [
+            {"type": "command", "command": f"$CLAUDE_PROJECT_DIR/.claude/hooks/{PROMPT}", "timeout": 20},
+            {"type": "command", "command": "${CLAUDE_PROJECT_DIR}/tools/other-hook.sh"},
+        ]}],
+    }}), encoding="utf-8")
+    return settings
+
+
+def test_doctor_warns_on_an_unquoted_project_dir(env):
+    _, project = env
+    _unquoted_project_fixture(project)
+    result = hooks_current(DoctorContext(config=None))
+    assert not result.passed
+    assert "unquoted" in result.message and "space" in result.message
+
+
+def test_update_quotes_palinode_commands_only(env):
+    _, project = env
+    settings = _unquoted_project_fixture(project)
+    out = _update()
+    assert out.exit_code == 0, out.output
+    reg = json.loads(out.output)["registrations"][0]
+    assert reg["changes"] == ["quoted ${CLAUDE_PROJECT_DIR}"] and Path(reg["backup"]).exists()
+    data = json.loads(settings.read_text())
+    start = data["hooks"]["SessionStart"][0]["hooks"][0]
+    prompt, other = data["hooks"]["UserPromptSubmit"][0]["hooks"]
+    assert start["command"] == f'"${{CLAUDE_PROJECT_DIR}}"/.claude/hooks/{START}' and start["timeout"] == 20
+    assert prompt["command"] == f'"${{CLAUDE_PROJECT_DIR}}"/.claude/hooks/{PROMPT}'
+    assert other["command"] == "${CLAUDE_PROJECT_DIR}/tools/other-hook.sh"  # not palinode's
+    assert hooks_current(DoctorContext(config=None)).passed
+    assert json.loads(_update().output)["registrations"] == []
+
+
+def test_init_writes_quoted_project_dir_and_a_rerun_repairs_an_old_install(tmp_path):
+    from palinode.cli.init import _merge_settings
+
+    fresh = tmp_path / "fresh.json"
+    _merge_settings(fresh, force=False)
+    commands = [h["command"] for v in json.loads(fresh.read_text())["hooks"].values()
+                for e in v for h in e["hooks"]]
+    assert commands and all(c.startswith('"${CLAUDE_PROJECT_DIR}"/') for c in commands)
+    old = tmp_path / "old.json"
+    old.write_text(json.dumps({"hooks": {"SessionStart": [{"hooks": [
+        {"type": "command", "command": f"${{CLAUDE_PROJECT_DIR}}/.claude/hooks/{START}"},
+    ]}]}}), encoding="utf-8")
+    assert _merge_settings(old, force=False) == "merged"
+    first = json.loads(old.read_text())["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+    assert first == f'"${{CLAUDE_PROJECT_DIR}}"/.claude/hooks/{START}'

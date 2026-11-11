@@ -323,13 +323,15 @@ class TestRefusedPaths:
         assert _files(memory_dir) == []
 
     @pytest.mark.parametrize("condition, written, words", _BROKEN_PATHS)
-    def test_cli_exits_non_zero_and_writes_nothing(
+    def test_cli_exits_non_zero_names_the_condition_and_writes_nothing(
         self, cli_via_api, memory_dir, condition, written, words
     ):
         result = _cli_save("--path", written)
 
         assert result.exit_code != 0, (condition, written, result.output)
         assert "API returned 400" in result.output
+        # The API's reason reaches the terminal, not just the status code.
+        assert _says_one_of(result.output, words), (condition, result.output)
         assert _files(memory_dir) == []
 
     def test_each_condition_gets_its_own_message(self, client, memory_dir):

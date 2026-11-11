@@ -6,6 +6,33 @@ from palinode.cli._format import console, print_result, get_default_format, Outp
 from palinode.core.lifecycle_render import render_retained_copies
 from palinode.core.parity import MEMORY_TYPES
 
+#: Statuses whose ``detail`` is a save refusal worth showing (path, type, validation).
+_REFUSAL_STATUSES = frozenset({400, 422})
+
+
+def _refusal_detail(body: object) -> str | None:
+    """The API's own refusal text from a parsed body, or None.
+
+    A ``detail`` string, or a validation list whose items are strings or carry a
+    string ``msg``. Nothing else, and never the raw body: a proxy page or a body
+    with other fields must not reach the terminal.
+    """
+    if not isinstance(body, dict):
+        return None
+    detail = body.get("detail")
+    if isinstance(detail, str):
+        return detail.strip() or None
+    if isinstance(detail, list):
+        parts = [
+            item if isinstance(item, str) else item.get("msg")
+            for item in detail
+            if isinstance(item, str) or (isinstance(item, dict) and isinstance(item.get("msg"), str))
+        ]
+        text = "; ".join(part.strip() for part in parts if part and part.strip())
+        return text or None
+    return None
+
+
 @click.command()
 @click.argument("content", required=False)
 @click.option(
@@ -392,9 +419,15 @@ def save(
                 "`palinode controls resume --capture --no-recall`."
             )
         else:
-            console.print(
-                f"[red]Error saving memory: API returned {e.response.status_code}.[/red]"
-            )
+            message = f"Error saving memory: API returned {e.response.status_code}."
+            # A save refusal (400/422) names its reason, and `--path` has many.
+            # Only the API's own string or validation detail is shown: never a
+            # raw body (a proxy page) and never another status's detail.
+            reason = _refusal_detail(detail) if e.response.status_code in _REFUSAL_STATUSES else None
+            if reason:
+                message = f"Error saving memory: API returned {e.response.status_code}: {reason}"
+            # Plain echo, so a `[...]` in a path is not read as rich markup.
+            click.echo(message)
         raise click.Abort() from e
     except Exception as e:
         console.print(f"[red]Error saving memory: {str(e)}[/red]")

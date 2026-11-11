@@ -173,6 +173,56 @@ def test_memory_detail_renders_seeded_fact(client):
     assert "Saved" in html
 
 
+def test_memory_detail_hides_the_auto_footer_marker_and_keeps_its_links(client):
+    """The footer's HTML-comment marker is not shown as text; the link list is."""
+    root = Path(config.memory_dir) / "decisions"
+    root.mkdir(parents=True, exist_ok=True)
+    shapes = {
+        "footer-writer-shape": "## See also\n<!-- palinode-auto-footer -->\n- [[harbor-notes]]\n",
+        "footer-blank-line": "## See also\n\n<!-- palinode-auto-footer -->\n- [[harbor-notes]]\n",
+    }
+    for slug, footer in shapes.items():
+        (root / f"{slug}.md").write_text(
+            f"---\ntype: Decision\n---\n\n# {slug}\n\nBody.\n\n{footer}", encoding="utf-8"
+        )
+        page = client.get(f"/ui/memory/decisions/{slug}")
+        assert page.status_code == 200
+        assert "palinode-auto-footer" not in page.text, slug
+        assert "See also" in page.text and "harbor-notes" in page.text, slug
+
+
+def test_auto_footer_marker_quoted_outside_a_footer_still_renders():
+    from palinode.api.ui.render import render_markdown
+
+    quoted = "The footer starts with `<!-- palinode-auto-footer -->` on its own line.\n"
+    assert "palinode-auto-footer" in render_markdown(quoted)
+    fenced = "```\n<!-- palinode-auto-footer -->\n```\n"
+    assert "palinode-auto-footer" in render_markdown(fenced)
+    fenced_footer = "```\n## See also\n<!-- palinode-auto-footer -->\n```\n"
+    assert "palinode-auto-footer" in render_markdown(fenced_footer)
+    tilde = "~~~markdown\n## See also\n\n<!-- palinode-auto-footer -->\n~~~\n"
+    assert "palinode-auto-footer" in render_markdown(tilde)
+    long_fence = "````\n```\n## See also\n<!-- palinode-auto-footer -->\n````\n"
+    assert "palinode-auto-footer" in render_markdown(long_fence)
+    indented = "    ## See also\n    <!-- palinode-auto-footer -->\n"
+    assert "palinode-auto-footer" in render_markdown(indented)
+    quoted_block = "> ## See also\n> <!-- palinode-auto-footer -->\n"
+    assert "palinode-auto-footer" in render_markdown(quoted_block)
+    in_list = "- ## See also\n\n  <!-- palinode-auto-footer -->\n"
+    assert "palinode-auto-footer" in render_markdown(in_list)
+
+
+def test_a_real_footer_after_a_list_local_fence_is_still_hidden():
+    from palinode.api.ui.render import render_markdown
+
+    body = (
+        "- item\n\n  ```\n  code\n\nAfter the list.\n\n"
+        "## See also\n<!-- palinode-auto-footer -->\n- [[harbor-notes]]\n"
+    )
+    html = render_markdown(body)
+    assert "palinode-auto-footer" not in html and "harbor-notes" in html
+
+
 def test_memory_detail_404_for_missing(client):
     res = client.get("/ui/memory/decisions/does-not-exist")
     assert res.status_code == 404

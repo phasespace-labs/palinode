@@ -1122,7 +1122,7 @@ exit 0
 # Byte-for-byte identical to examples/hooks/palinode-post-compact.sh.
 POST_COMPACT_HOOK_SCRIPT = """\
 #!/bin/bash
-# palinode-hook-version: 0.24.0
+# palinode-hook-version: 0.24.1
 # palinode-post-compact.sh — save Claude Code's compaction summary as a checkpoint.
 #
 # Fires on Claude Code PostCompact (manual /compact and auto-compaction). The
@@ -1142,7 +1142,7 @@ POST_COMPACT_HOOK_SCRIPT = """\
 # sent, and the API rechecks a capture pause at write time.
 #
 # Install: `palinode init --hook` copies this to .claude/hooks/ and registers
-# it on PostCompact (async, so the next turn does not wait for it).
+# it on PostCompact, synchronously: Claude Code cancels an async hook.
 
 set -euo pipefail
 
@@ -1197,7 +1197,15 @@ NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 # never passes through shell word-splitting or quoting.
 PAYLOAD=$(echo "$INPUT" | jq -c \\
   --arg project "$PROJECT" --arg now "$NOW" --argjson max "$MAX_CHARS" '
-  .compact_summary as $summary
+  # Claude Code wraps its summary in <analysis>…</analysis> and
+  # <summary>…</summary> lines. A closing </summary> left at the end of the
+  # content is what the API refuses as tool-envelope markup, so whole-line
+  # wrapper tags become Markdown headings before the save.
+  (.compact_summary | split("\\n") | map(
+      if test("^\\\\s*<analysis>\\\\s*$") then "## Analysis"
+      elif test("^\\\\s*<summary>\\\\s*$") then "## Summary"
+      elif test("^\\\\s*</(analysis|summary)>\\\\s*$") then ""
+      else . end) | join("\\n")) as $summary
   | .session_id as $sid
   | (.trigger // "unknown") as $trigger
   | (if ($summary | length) > $max
@@ -1421,7 +1429,7 @@ SETTINGS_HOOK_BLOCK = {
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/palinode-session-start.sh",
+                        "command": '"${CLAUDE_PROJECT_DIR}"/.claude/hooks/palinode-session-start.sh',
                         "timeout": 20,
                     }
                 ]
@@ -1432,7 +1440,7 @@ SETTINGS_HOOK_BLOCK = {
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/palinode-session-end.sh",
+                        "command": '"${CLAUDE_PROJECT_DIR}"/.claude/hooks/palinode-session-end.sh',
                         "timeout": 35,
                     }
                 ]
@@ -1447,22 +1455,22 @@ SETTINGS_HOOK_BLOCK = {
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/palinode-user-prompt-submit.sh",
+                        "command": '"${CLAUDE_PROJECT_DIR}"/.claude/hooks/palinode-user-prompt-submit.sh',
                         "timeout": 20,
                     }
                 ]
             }
         ],
-        # Compaction checkpoint. PostCompact cannot change the
-        # compaction; async keeps the save off the next turn's critical path.
+        # Compaction checkpoint. PostCompact cannot change the compaction.
+        # Synchronous on purpose: Claude Code cancels an async hook, so an
+        # async registration almost never saved a checkpoint.
         "PostCompact": [
             {
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/palinode-post-compact.sh",
+                        "command": '"${CLAUDE_PROJECT_DIR}"/.claude/hooks/palinode-post-compact.sh',
                         "timeout": 35,
-                        "async": True,
                     }
                 ]
             }
@@ -2098,6 +2106,12 @@ def _merge_settings(path: Path, force: bool) -> str:
         if not already:
             event_hooks.append(SETTINGS_HOOK_BLOCK["hooks"][event][0])
             merged_any = True
+    # Earlier installs registered PostCompact async (Claude Code cancels it) and
+    # left ${CLAUDE_PROJECT_DIR} unquoted (split at a space); a re-run repairs both.
+    from palinode.cli.hooks import repair_claude_registrations
+
+    if repair_claude_registrations(existing):
+        merged_any = True
     path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
     return "merged" if merged_any else "skipped (palinode hooks already registered)"
 
