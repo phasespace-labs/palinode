@@ -80,7 +80,6 @@ value in the canonical type enum, which is a schema change, not a backfill.
 """
 from __future__ import annotations
 
-import glob
 import logging
 import os
 import re
@@ -94,7 +93,8 @@ import yaml
 from palinode.core import git_tools
 from palinode.core.config import config
 from palinode.core.memory_write import _MEMORY_CATEGORY_DIRS, _TYPE_TO_CATEGORY
-from palinode.core.skip_dirs import SKIP_FOR_LINT, is_skipped_path
+from palinode.core.memory_files import list_memory_files
+from palinode.core.skip_dirs import SKIP_FOR_LINT
 
 logger = logging.getLogger("palinode.migration.frontmatter_backfill")
 
@@ -204,10 +204,8 @@ def _iter_memory_files(base_dir: str) -> list[str]:
     """
     base_real = os.path.realpath(base_dir)
     out: list[str] = []
-    for filepath in sorted(glob.glob(os.path.join(base_dir, "**/*.md"), recursive=True)):
-        rel_path = os.path.relpath(filepath, base_dir)
-        if is_skipped_path(rel_path, SKIP_FOR_LINT):
-            continue
+    for memory_file in list_memory_files(base_dir, extra=SKIP_FOR_LINT):
+        filepath, rel_path = memory_file.path, memory_file.rel_path
         resolved = os.path.realpath(filepath)
         if resolved != base_real and not resolved.startswith(base_real + os.sep):
             logger.warning(

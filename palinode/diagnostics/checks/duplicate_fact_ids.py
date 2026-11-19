@@ -28,6 +28,7 @@ from collections import Counter
 from pathlib import Path
 
 from palinode.consolidation.fact_ids import FACT_LINE_RE
+from palinode.core.memory_files import list_memory_files
 from palinode.core.parser import split_frontmatter
 from palinode.diagnostics.registry import register
 from palinode.diagnostics.types import CheckResult, DoctorContext
@@ -58,7 +59,15 @@ def status_fact_ids_unique(ctx: DoctorContext) -> CheckResult:
     """Warn when a status document carries the same fact id on two lines."""
     memory_dir = Path(ctx.config.memory_dir)
     projects_dir = memory_dir / "projects"
-    targets = sorted(projects_dir.glob("*-status.md")) if projects_dir.is_dir() else []
+    targets = (
+        sorted(
+            Path(f.path)
+            for f in list_memory_files(str(memory_dir), under="projects", is_recursive=False)
+            if f.path.endswith("-status.md")
+        )
+        if projects_dir.is_dir()
+        else []
+    )
 
     if not targets:
         return CheckResult(

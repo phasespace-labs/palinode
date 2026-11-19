@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import glob
 import re
 from datetime import date, datetime, timezone
 from typing import Any, Collection
@@ -16,7 +15,8 @@ from palinode.core import typed_links
 from palinode.core.packing import estimate_tokens
 from palinode.core.ranker import parse_iso_utc
 from palinode.core.relative_dates import anchor_for, find_relative_dates
-from palinode.core.skip_dirs import SKIP_FOR_LINT, is_skipped_path
+from palinode.core.memory_files import list_memory_files
+from palinode.core.skip_dirs import SKIP_FOR_LINT
 
 #: What to do about a `core: true` memory that has grown past a gist. Carried
 #: on every finding so the instruction reaches whichever surface renders it.
@@ -394,7 +394,6 @@ def run_lint_pass(*, file_paths: Collection[str] | None = None) -> dict[str, Any
     An empty collection selects nothing; it never falls back to the full store.
     """
     base_dir = getattr(config, 'memory_dir', config.palinode_dir)
-    pattern = os.path.join(base_dir, "**/*.md")
     
     orphaned_files = []
     stale_files = []
@@ -429,22 +428,18 @@ def run_lint_pass(*, file_paths: Collection[str] | None = None) -> dict[str, Any
     entity_references: dict[str, int] = {}
     all_files = []
     
-    candidates = glob.glob(pattern, recursive=True)
+    candidates = list_memory_files(base_dir, extra=SKIP_FOR_LINT)
     if file_paths is not None:
-        candidates = sorted(
-            p for p in candidates if os.path.relpath(p, base_dir) in file_paths
-        )
-    for filepath in candidates:
-        rel_path = os.path.relpath(filepath, base_dir)
-        parts = rel_path.split(os.sep)
+        candidates = [f for f in candidates if f.rel_path in file_paths]
+    for memory_file in candidates:
+        filepath, rel_path = memory_file.path, memory_file.rel_path
+        parts = rel_path.split("/")
         if file_paths is not None and any(
             os.path.islink(os.path.join(base_dir, *parts[:depth]))
             for depth in range(1, len(parts) + 1)
         ):
             continue
-        if is_skipped_path(rel_path, SKIP_FOR_LINT):
-            continue
-            
+
         try:
             with open(filepath, "r", encoding="utf-8") as f:
                 content = f.read()

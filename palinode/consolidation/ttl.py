@@ -27,7 +27,6 @@ new status into the chunk index directly — no body re-embed required.
 """
 from __future__ import annotations
 
-import glob
 import logging
 import os
 import re
@@ -37,7 +36,8 @@ from palinode.consolidation.archive import set_archived_frontmatter
 from palinode.consolidation.retirement import SUPERSEDED_ONLY, classify
 from palinode.core import expiry, parser, store, git_tools
 from palinode.core.config import config
-from palinode.core.skip_dirs import SKIP_FOR_TTL, is_skipped_path
+from palinode.core.memory_files import list_memory_files
+from palinode.core.skip_dirs import SKIP_FOR_TTL
 
 logger = logging.getLogger("palinode.ttl")
 
@@ -137,11 +137,8 @@ def is_expired(meta: dict, now: datetime) -> bool:
 
 
 def _iter_memory_files(root: str):
-    for path in glob.glob(os.path.join(root, "**", "*.md"), recursive=True):
-        rel = os.path.relpath(path, root)
-        if is_skipped_path(rel, SKIP_FOR_TTL):
-            continue
-        yield path
+    for memory_file in list_memory_files(root, extra=SKIP_FOR_TTL):
+        yield memory_file.path
 
 
 def _archive_file(path: str) -> None:

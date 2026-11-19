@@ -17,7 +17,8 @@ from palinode.core.tiers import apply_tier
 from palinode.core.parser import VALID_EPISTEMICS, VALID_UPDATE_POLICIES
 from palinode.core.scope import ScopeChain, other_project, resolve_scope_chain
 from palinode.core.cross_refs import filter_read_cross_refs
-from palinode.core.skip_dirs import SKIP_FOR_LISTING, is_skipped_path
+from palinode.core.memory_files import list_memory_files
+from palinode.core.skip_dirs import SKIP_FOR_LISTING
 from palinode.core.expiry import core_has_expired
 from palinode.core.lifecycle import eligibility, retired_reason
 from palinode.core.visibility import is_visible, other_project_refs, withheld_as_other_project
@@ -408,26 +409,17 @@ def collect_memory_files(
     such a record is kept and its row names its own projects under
     ``other_project``, the key an opted-in search row carries.
     """
-    import glob
     from palinode.core import parser
 
     results = []
     base_dir = _memory_base_dir()
-    search_pattern = os.path.join(base_dir, "**/*.md")
 
     effective_skip_dirs = set(skip_dirs) if skip_dirs is not None else SKIP_FOR_LISTING
 
-    for filepath in glob.glob(search_pattern, recursive=True):
-        try:
-            if os.path.commonpath([base_dir, os.path.realpath(filepath)]) != base_dir:
-                continue
-        except ValueError:
-            continue
-        rel_path = os.path.relpath(filepath, base_dir)
-        parts = rel_path.split(os.sep)
-
-        if is_skipped_path(rel_path, effective_skip_dirs):
-            continue
+    for memory_file in list_memory_files(base_dir, extra=effective_skip_dirs, stays_inside_store=True):
+        filepath = memory_file.path
+        rel_path = memory_file.rel_path
+        parts = rel_path.split("/")
 
         if not include_history and parts[-1].endswith("-history.md"):
             continue
@@ -662,7 +654,6 @@ def generate_summaries_api() -> dict[str, Any]:
     produces non-zero error counts / last_error, not an HTTP failure, so the
     watcher debounce keeps working.
     """
-    import glob
     import time as _time
     from palinode.core import parser
     # Late lookup on the server module so tests that
@@ -722,7 +713,8 @@ def generate_summaries_api() -> dict[str, Any]:
     _srv._fallback_state["remaining"] = config.auto_summary.llm_fallback_max_per_run
     resolved = resolve_processing_policy()
     # Use palinode_dir since that's generally where memories are kept
-    for filepath in glob.glob(os.path.join(config.palinode_dir, "**/*.md"), recursive=True):
+    for memory_file in list_memory_files(config.palinode_dir):
+        filepath = memory_file.path
         try:
             with open(filepath, encoding="utf-8") as f:
                 content = f.read()
@@ -739,11 +731,10 @@ def generate_summaries_api() -> dict[str, Any]:
             # never raises: it returns the _DESCRIPTION_DEFERRED sentinel when
             # Ollama is slow / circuit-open (count as a transient error; the
             # watcher retries) or a string (LLM result or first-line fallback).
-            _rel = os.path.relpath(filepath, config.palinode_dir)
             if (
                 describe_enabled
                 and not metadata.get("description")
-                and _srv._is_description_eligible(_rel)
+                and _srv._is_description_eligible(memory_file.rel_path)
             ):
                 desc = _srv._generate_description(content)
                 # Compare against the server module's sentinel: _generate_description

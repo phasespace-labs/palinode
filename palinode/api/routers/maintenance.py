@@ -20,7 +20,6 @@ Extracted from palinode/api/server.py:
 """
 from __future__ import annotations
 
-import glob
 import logging
 import os
 from datetime import datetime
@@ -31,6 +30,7 @@ from pydantic import BaseModel
 
 from palinode.core import store
 from palinode.core.config import config
+from palinode.core.memory_files import list_memory_files
 from palinode.core.parity import CORRECTION_ACTIONS
 from palinode.core.path_guard import to_rel_path
 
@@ -119,11 +119,7 @@ def reindex_api(since: str | None = None) -> dict[str, Any]:
             except ValueError:
                 raise HTTPException(status_code=400, detail=f"Invalid ISO timestamp: {since}")
 
-        files = [
-            fp
-            for fp in glob.glob(os.path.join(config.palinode_dir, "**/*.md"), recursive=True)
-            if handler.is_valid_file(fp)
-        ]
+        files = [f.path for f in list_memory_files(config.palinode_dir)]
 
         _reindex_state["running"] = True
         _reindex_state["started_at"] = _utc_now().isoformat().replace("+00:00", "Z")

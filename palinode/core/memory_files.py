@@ -1,0 +1,111 @@
+"""The one place that turns a path into a store path and lists the memory files.
+
+Every reader of the store asks this module which files are memory. The rule for
+directory segments stays in :mod:`palinode.core.skip_dirs`; this module adds the
+store-relative spelling of a path (the given spelling first, then the resolved
+spelling of the path and the store) and the walk.
+"""
+from __future__ import annotations
+
+import os
+from collections.abc import Iterable
+from dataclasses import dataclass
+
+from palinode.core.skip_dirs import is_skipped_path
+
+
+@dataclass(frozen=True)
+class MemoryFile:
+    """A memory file: ``path`` in the store's own spelling, ``rel_path`` relative to the store."""
+
+    path: str
+    rel_path: str
+
+
+def _relative_inside(path: str, store_dir: str) -> str | None:
+    try:
+        rel = os.path.relpath(path, store_dir)
+    except ValueError:  # another drive on Windows
+        return None
+    if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+        return None
+    return rel.replace(os.sep, "/")
+
+
+def find_store_path(path: str, store_dir: str) -> str | None:
+    """Return ``path`` relative to ``store_dir`` with ``/`` separators, or None outside it.
+
+    A symlinked store root makes events arrive in the other spelling, so the
+    resolved paths are tried when the given ones do not match.
+    """
+    rel = _relative_inside(path, store_dir)
+    if rel is None:
+        rel = _relative_inside(os.path.realpath(path), os.path.realpath(store_dir))
+    return rel
+
+
+def _is_memory_name(name: str) -> bool:
+    return name.endswith(".md") and not name.startswith(".")
+
+
+def is_memory_path(path: str, store_dir: str, extra: Iterable[str] = frozenset()) -> bool:
+    """True when ``path`` is a memory file of the store, judged by its store path."""
+    if not _is_memory_name(os.path.basename(path)):
+        return False
+    rel = find_store_path(path, store_dir)
+    return rel is not None and not is_skipped_path(rel, extra)
+
+
+def _is_inside(path: str, root_real: str) -> bool:
+    try:
+        return os.path.commonpath([os.path.realpath(path), root_real]) == root_real
+    except ValueError:
+        return False
+
+
+def list_memory_files(
+    store_dir: str,
+    *,
+    under: str = "",
+    extra: Iterable[str] = frozenset(),
+    is_recursive: bool = True,
+    stays_inside_store: bool = False,
+) -> list[MemoryFile]:
+    """List the memory files under ``store_dir``, or under its folder ``under``, sorted by store path.
+
+    ``rel_path`` is always relative to ``store_dir``. Linked folders are followed;
+    a link back to a folder on the current descent is not entered, so a loop ends.
+    A folder the rule skips is never entered. ``stays_inside_store`` drops a file
+    whose real path lies outside the real store root.
+    """
+    skip = frozenset(extra)
+    start = under.replace("\\", "/").strip("/")
+    if start and is_skipped_path(f"{start}/x", skip):
+        return []
+    store_real = os.path.realpath(store_dir)
+    found: list[MemoryFile] = []
+
+    def visit(rel_dir: str, ancestors: frozenset[str], dir_real: str) -> None:
+        disk_dir = os.path.join(store_dir, rel_dir) if rel_dir else store_dir
+        try:
+            with os.scandir(disk_dir) as entries:
+                listed = sorted(entries, key=lambda e: e.name)
+        except OSError:
+            return
+        for entry in listed:
+            rel = f"{rel_dir}/{entry.name}" if rel_dir else entry.name
+            if entry.is_dir():
+                if not is_recursive or is_skipped_path(f"{rel}/x", skip):
+                    continue
+                child_real = os.path.realpath(entry.path) if entry.is_symlink() else os.path.join(dir_real, entry.name)
+                if child_real in ancestors:
+                    continue
+                visit(rel, ancestors | {child_real}, child_real)
+            elif _is_memory_name(entry.name) and entry.is_file():
+                if stays_inside_store and not _is_inside(entry.path, store_real):
+                    continue
+                found.append(MemoryFile(path=os.path.join(store_dir, rel), rel_path=rel))
+
+    start_real = os.path.realpath(os.path.join(store_dir, start)) if start else store_real
+    visit(start, frozenset({start_real}), start_real)
+    return sorted(found, key=lambda f: f.rel_path)

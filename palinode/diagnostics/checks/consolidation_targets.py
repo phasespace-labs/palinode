@@ -29,6 +29,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from palinode.consolidation.fact_ids import count_body_facts
+from palinode.core.memory_files import list_memory_files
 from palinode.diagnostics.registry import register
 from palinode.diagnostics.types import CheckResult, DoctorContext
 
@@ -43,9 +44,10 @@ _PROJECT_REF_RE = re.compile(r"project/([A-Za-z0-9][A-Za-z0-9._-]*)")
 _MAX_DAILY_NOTES = 30
 
 
-def _status_targets(projects_dir: Path) -> list[Path]:
+def _status_targets(memory_dir: Path) -> list[Path]:
     """Every ``projects/*-status.md`` — the layer session-end appends to."""
-    return sorted(projects_dir.glob("*-status.md"))
+    files = list_memory_files(str(memory_dir), under="projects", is_recursive=False)
+    return [Path(f.path) for f in files if f.path.endswith("-status.md")]
 
 
 def _target_for(projects_dir: Path, project_id: str) -> Path | None:
@@ -80,7 +82,11 @@ def _recent_daily_targets(memory_dir: Path, projects_dir: Path, lookback_days: i
         return []
     cutoff = (datetime.now(UTC) - timedelta(days=max(lookback_days, 1))).strftime("%Y-%m-%d")
     notes = sorted(
-        (path for path in daily_dir.glob("*.md") if path.stem >= cutoff),
+        (
+            Path(f.path)
+            for f in list_memory_files(str(memory_dir), under="daily", is_recursive=False)
+            if Path(f.path).stem >= cutoff
+        ),
         reverse=True,
     )[:_MAX_DAILY_NOTES]
 
@@ -117,7 +123,7 @@ def consolidation_targets_tagged(ctx: DoctorContext) -> CheckResult:
         )
 
     lookback_days = getattr(ctx.config.consolidation, "lookback_days", 7)
-    targets: list[Path] = _status_targets(projects_dir)
+    targets: list[Path] = _status_targets(memory_dir)
     seen = {str(path) for path in targets}
     for path in _recent_daily_targets(memory_dir, projects_dir, lookback_days):
         if str(path) not in seen:

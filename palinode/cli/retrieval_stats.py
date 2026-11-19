@@ -18,7 +18,7 @@ from typing import Any
 import click
 
 from palinode.core.config import config
-from palinode.core.skip_dirs import is_skipped_path
+from palinode.core.memory_files import list_memory_files
 from palinode.cli._format import console
 
 
@@ -67,17 +67,8 @@ def _stats(events: list[dict[str, Any]]) -> dict[str, Any]:
 
     # Distribution: 0 retrievals, 1-3, 4+
     # Note: "0 retrievals" means files in memory_dir that have never appeared.
-    all_md: list[str] = []
     memory_dir = config.memory_dir
-    try:
-        for root, _dirs, fnames in os.walk(memory_dir):
-            for fn in fnames:
-                if fn.endswith(".md"):
-                    rel = os.path.relpath(os.path.join(root, fn), memory_dir)
-                    if not is_skipped_path(rel):
-                        all_md.append(rel)
-    except OSError:
-        pass
+    all_md = [f.rel_path for f in list_memory_files(memory_dir)]
 
     # Normalize file paths — strip memory_dir prefix for comparison
     def _rel(fp: str) -> str:

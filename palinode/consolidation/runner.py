@@ -9,7 +9,6 @@ from __future__ import annotations
 import os
 import re
 import json
-import glob
 import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
@@ -27,6 +26,7 @@ LlmFn = Callable[[str, str], tuple[str, str]]
 import yaml
 
 from palinode.core.config import config
+from palinode.core.memory_files import list_memory_files
 from palinode.core.capture_policy import (
     ResolvedProcessingPolicy, automatic_note_processing_allowed, resolve_processing_policy,
 )
@@ -112,7 +112,8 @@ def _get_decisions_for_project(project_id: str, resolved: ResolvedProcessingPoli
         return []
 
     active_decisions = []
-    for filepath in glob.glob(os.path.join(decisions_dir, "*.md")):
+    for memory_file in list_memory_files(config.memory_dir, under="decisions", is_recursive=False):
+        filepath = memory_file.path
         with open(filepath, "r", encoding="utf-8") as f:
             content = f.read()
             parts = content.split("---")
@@ -430,7 +431,9 @@ def _collect_daily_notes(
         source_dir = os.path.join(config.memory_dir, source)
         if not os.path.exists(source_dir):
             continue
-        candidates.extend(glob.glob(os.path.join(source_dir, "*.md")))
+        candidates.extend(
+            f.path for f in list_memory_files(config.memory_dir, under=source, is_recursive=False)
+        )
 
     if not candidates:
         return [], 0
@@ -504,7 +507,8 @@ def _notes_written_between(
         source_dir = os.path.join(config.memory_dir, source)
         if not os.path.exists(source_dir):
             continue
-        for filepath in glob.glob(os.path.join(source_dir, "*.md")):
+        for memory_file in list_memory_files(config.memory_dir, under=source, is_recursive=False):
+            filepath = memory_file.path
             if earlier < _modified_at(filepath) <= later:
                 total += 1
     return total
@@ -1905,7 +1909,8 @@ def _retire_project_less_daily_notes(
     cutoff = ((now or _utc_now()) - timedelta(days=days)).strftime("%Y-%m-%d")
 
     aged: list[dict] = []
-    for filepath in sorted(glob.glob(os.path.join(daily_dir, "*.md"))):
+    for memory_file in list_memory_files(config.memory_dir, under="daily", is_recursive=False):
+        filepath = memory_file.path
         named = _DATED_FILENAME.match(os.path.basename(filepath))
         if named and named.group(1) >= cutoff:
             continue

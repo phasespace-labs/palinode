@@ -38,7 +38,7 @@ from palinode.core.lifecycle import (
 )
 from palinode.core.path_guard import to_rel_path
 from palinode.core.quote_verify import QuoteStatus, verify_source_anchors
-from palinode.core.skip_dirs import is_skipped_path
+from palinode.core.memory_files import list_memory_files
 from palinode.core.where import matches_where
 # The hybrid-search scoring pipeline + its pure decay/predicate helpers live in
 # ranker.py. Re-exported here so `store.effective_importance`,
@@ -236,14 +236,6 @@ def scan_memory_content(content: str) -> tuple[bool, str]:
         return False, "Content has unusually high ratio of special characters"
     return True, "ok"
 
-def _glob_md_files(directory: str):
-    """Yield the memory .md file paths under *directory* (recursive)."""
-    import glob as _glob
-    for path in _glob.iglob(os.path.join(directory, "**", "*.md"), recursive=True):
-        if not is_skipped_path(os.path.relpath(path, directory)):
-            yield path
-
-
 def _ensure_db() -> None:
     """Disambiguate first-run from misconfiguration before SQLite auto-creates.
 
@@ -274,7 +266,7 @@ def _ensure_db() -> None:
     # Count .md files in memory_dir (recursive).  If the directory doesn't
     # exist yet we treat that as 0 files (brand-new install).
     try:
-        md_count = sum(1 for _ in _glob_md_files(memory_dir))
+        md_count = len(list_memory_files(memory_dir))
     except (OSError, ValueError):
         md_count = 0
 
@@ -1048,6 +1040,16 @@ def delete_file_chunks(file_path: str) -> None:
     cursor.execute("DELETE FROM entities WHERE file_path = ?", (file_path,))
     db.commit()
     db.close()
+
+def list_indexed_file_paths() -> list[str]:
+    """Return every file path that holds at least one indexed chunk."""
+    db = get_db()
+    try:
+        rows = db.execute("SELECT DISTINCT file_path FROM chunks").fetchall()
+    finally:
+        db.close()
+    return [row["file_path"] for row in rows]
+
 
 def gc_orphaned_chunks(valid_paths: Collection[str]) -> tuple[int, int]:
     """Delete indexed chunks whose source file is no longer on disk.

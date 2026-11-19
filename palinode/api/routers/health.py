@@ -22,6 +22,7 @@ from palinode import __version__
 from palinode.core import store, git_tools
 from palinode.core.config import config
 from palinode.core.disclosure import runtime_disclosure
+from palinode.core.memory_files import list_memory_files
 from palinode.core.ollama_client import OllamaRole
 
 from palinode.api._util import _auto_summary_state, _reindex_state, _utc_now
@@ -349,11 +350,11 @@ def auto_summary_health_api() -> dict[str, Any]:
     pending_descriptions = 0
     min_chars = config.auto_summary.min_content_chars
     try:
-        for filepath in glob.glob(os.path.join(config.palinode_dir, "**/*.md"), recursive=True):
+        for memory_file in list_memory_files(config.palinode_dir):
             if pending >= 1000 and pending_descriptions >= 1000:
                 break
             try:
-                with open(filepath, encoding="utf-8") as f:
+                with open(memory_file.path, encoding="utf-8") as f:
                     content = f.read()
                 metadata, body = parser.parse_frontmatter(content)
                 # description backlog — not core-gated, no length gate.
@@ -361,11 +362,10 @@ def auto_summary_health_api() -> dict[str, Any]:
                 # (the same eligibility predicate the backfill worklist uses), so
                 # the count reflects real work and drains to a stable floor
                 # instead of being pinned by structural / non-memory files.
-                _rel = os.path.relpath(filepath, config.palinode_dir)
                 if (
                     pending_descriptions < 1000
                     and not metadata.get("description")
-                    and _is_description_eligible(_rel)
+                    and _is_description_eligible(memory_file.rel_path)
                 ):
                     pending_descriptions += 1
                 if pending >= 1000:

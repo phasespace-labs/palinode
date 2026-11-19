@@ -15,7 +15,6 @@ from __future__ import annotations
 import logging
 import os
 import sys
-import glob
 from pathlib import Path
 from dataclasses import field
 from typing import Annotated, Literal
@@ -23,7 +22,7 @@ from pydantic.dataclasses import dataclass
 from pydantic import Field, TypeAdapter, ValidationError
 import yaml
 
-from palinode.core.skip_dirs import is_skipped_path
+from palinode.core.memory_files import list_memory_files
 
 _logger = logging.getLogger("palinode.config")
 ToolSurface = Literal["core", "full"]
@@ -1138,11 +1137,7 @@ def load_config() -> Config:
 
     # Print summary string
     try:
-        num_files = sum(
-            1
-            for path in glob.glob(os.path.join(cfg.memory_dir, "**/*.md"), recursive=True)
-            if not is_skipped_path(os.path.relpath(path, cfg.memory_dir))
-        )
+        num_files = len(list_memory_files(cfg.memory_dir))
     except (OSError, ValueError):
         num_files = 0
 

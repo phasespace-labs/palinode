@@ -21,15 +21,14 @@ Design (the periodic project-memory review job):
 """
 from __future__ import annotations
 
-import glob
-import os
 from typing import Any
 
 import frontmatter
 
 from palinode.core.config import config
 from palinode.core.lint import run_lint_pass
-from palinode.core.skip_dirs import SKIP_FOR_LISTING, is_skipped_path
+from palinode.core.memory_files import list_memory_files
+from palinode.core.skip_dirs import SKIP_FOR_LISTING
 
 
 def _normalize_project_ref(project: str | None) -> str | None:
@@ -49,10 +48,8 @@ def _scope_files(project_ref: str | None) -> set[str] | None:
         return None
     base = getattr(config, "memory_dir", config.palinode_dir)
     scope: set[str] = set()
-    for filepath in glob.glob(os.path.join(base, "**", "*.md"), recursive=True):
-        rel = os.path.relpath(filepath, base)
-        if is_skipped_path(rel, SKIP_FOR_LISTING):
-            continue
+    for memory_file in list_memory_files(base, extra=SKIP_FOR_LISTING):
+        filepath, rel = memory_file.path, memory_file.rel_path
         try:
             entities = frontmatter.load(filepath).metadata.get("entities", [])
         except Exception:
