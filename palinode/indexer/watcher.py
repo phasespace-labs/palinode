@@ -409,12 +409,12 @@ schedules summary and description generation."""
     def _delete_rows_under_directory(self, directory: str) -> None:
         """Drop the rows of every indexed file under *directory*, in either spelling of the store."""
         prefix = find_store_path(directory, config.palinode_dir)
-        if prefix is None:
+        if prefix is None or prefix == ".":  # a renamed parent arrives as the store root's deletion
             return
         try:
             for indexed in store.list_indexed_file_paths():
                 rel = find_store_path(indexed, config.palinode_dir)
-                if rel is None or not (prefix == "." or rel.startswith(prefix + "/")):
+                if rel is None or not rel.startswith(prefix + "/"):
                     continue
                 logger.info(f"Deleting chunks for: {indexed}")
                 store.delete_file_chunks(indexed)
