@@ -6,9 +6,18 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Added
 
+- **One walker lists the memory files.** `palinode/core/memory_files.py` is now the only code that turns a path into a store path and the only code that walks the store for memory files. The watcher, `/reindex`, `/list`, the browse UI, lint, TTL, propagation, the session digest, cross-refs, the doctor checks and about twenty other readers ask it, so they agree on which files are memory. `scripts/check-memory-walk.sh` runs in CI and fails when a recursive Markdown glob, an `os.walk` or an `rglob` over the store appears outside it.
+
 ### Changed
 
+- **A symlinked folder is followed the same way on every surface.** Before, `/list` and the browse UI dropped a file in a folder linked to a place outside the store, while search and `/reindex` indexed it. The walker follows links and judges each file by its store path. `/list` and the browse UI keep hiding a file whose real path lies outside the store, so search can still return a file that `/list` does not show. Whether the index should follow such a link is an open question for the maintainers.
+
 ### Fixed
+
+- **A file name starting with `.` is not indexed by the watcher.** The watcher indexed `people/.draft.md`, but `/reindex` skipped it and its cleanup pass then dropped what the watcher had indexed. Every surface now skips a hidden file name.
+- **A symlink loop is walked once.** With `people/loop -> people`, `/reindex` listed `people/a.md` 33 times, once for each level of the loop, and indexed it 33 times. The walk now ends at the first link back to a folder it is already in.
+- **The watcher drops the rows of every file that leaves the store.** It skipped a deleted or moved file that the "never memory" rule rejects, so a file indexed before the rule changed kept its rows until the next `/reindex`. It now drops them whatever the rule says.
+- **A deleted or moved folder drops the rows under it.** A folder moved out of the store, such as with Move to Trash in Finder, reaches the watcher as one folder deletion, which it ignored, so every file in it kept its rows and stayed searchable. It now drops every row under that folder, and no row of a sibling whose name starts the same way.
 
 ### Removed
 
