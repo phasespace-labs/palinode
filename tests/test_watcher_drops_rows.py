@@ -148,6 +148,41 @@ def test_deleting_a_folder_drops_rows_kept_in_the_link_spelling_of_a_real_store(
     assert _indexed_paths() == []
 
 
+def test_deleting_the_store_root_keeps_every_row(root: Path, handler) -> None:
+    _seed(root / "people" / "a.md")
+
+    handler.on_deleted(DirDeletedEvent(config.palinode_dir))
+
+    assert _indexed_paths() == [str(root / "people" / "a.md")]
+
+
+def test_deleting_the_real_spelling_of_a_linked_store_root_keeps_every_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+    _configure_store(link, real, monkeypatch)
+    store.init_db()
+    _seed(link / "people" / "a.md")
+    h = PalinodeHandler()
+    try:
+        h.on_deleted(DirDeletedEvent(str(real)))
+    finally:
+        h.shutdown()
+
+    assert _indexed_paths() == [str(link / "people" / "a.md")]
+
+
+def test_moving_the_store_root_keeps_every_row(root: Path, handler) -> None:
+    _seed(root / "people" / "a.md")
+
+    handler.on_moved(DirMovedEvent(config.palinode_dir, str(root.parent / "renamed")))
+
+    assert _indexed_paths() == [str(root / "people" / "a.md")]
+
+
 def test_moving_a_folder_away_drops_the_rows_under_its_source(root: Path, handler) -> None:
     _seed(root / "people" / "a.md")
     _seed(root / "peoplex" / "b.md")

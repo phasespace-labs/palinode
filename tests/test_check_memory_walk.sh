@@ -123,6 +123,36 @@ do
     fi
 done
 
+# ── 4b. an allowlist entry exempts one call, not its whole file ─────────────
+ALLOWED_COPY_DIR="$(mktemp -d)"
+ALLOWED_COPY="$ALLOWED_COPY_DIR/palinode/api/ui/router.py"
+mkdir -p "$(dirname "$ALLOWED_COPY")"
+cat > "$ALLOWED_COPY" <<'PY'
+import glob
+import os
+
+
+def history_files(base):
+    return glob.glob(os.path.join(base, "**/*-history.md"), recursive=True)
+PY
+if bash "$CHECK" "$ALLOWED_COPY" >/dev/null 2>&1; then
+    ok "the allowed -history.md call passes in a file named like api/ui/router.py"
+else
+    ng "the allowed -history.md call was flagged"
+fi
+cat >> "$ALLOWED_COPY" <<'PY'
+
+
+def memory_files(root):
+    return glob.glob(os.path.join(root, "**", "*.md"), recursive=True)
+PY
+if bash "$CHECK" "$ALLOWED_COPY" >/dev/null 2>&1; then
+    ng "a memory glob beside an allowed call in api/ui/router.py was NOT caught"
+else
+    ok "a memory glob beside an allowed call is still caught"
+fi
+rm -rf "$ALLOWED_COPY_DIR"
+
 # ── 5. a bulk reader of memory is not exempt by name ────────────────────────
 for reader in palinode/core/lint.py palinode/api/routers/maintenance.py; do
     if grep -q "$reader" "$CHECK"; then

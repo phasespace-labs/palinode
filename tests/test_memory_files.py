@@ -12,7 +12,9 @@ from palinode.core.memory_files import (
     MemoryFile,
     find_store_path,
     is_memory_path,
+    is_spec_document,
     list_memory_files,
+    list_spec_documents,
 )
 from palinode.core.skip_dirs import (
     SKIP_FOR_CROSS_REFS,
@@ -209,6 +211,14 @@ def test_a_linked_store_root_lists_paths_in_the_link_spelling(tmp_path: Path) ->
     ]
 
 
+def test_files_are_ordered_by_store_path_not_folder_by_folder(store: Path) -> None:
+    _write(store / "a" / "x.md")
+    _write(store / "a.md")
+    _write(store / "a-b.md")
+
+    assert _rel_paths(list_memory_files(str(store))) == ["a-b.md", "a.md", "a/x.md"]
+
+
 # ── list_memory_files: skipped folders are never entered ─────────────────────
 
 
@@ -325,3 +335,69 @@ def test_a_walk_under_a_folder_gives_paths_relative_to_the_store(fixture_store: 
 
 def test_a_walk_under_a_folder_the_surface_skips_lists_nothing(fixture_store: Path) -> None:
     assert list_memory_files(str(fixture_store), under="archive", extra=SKIP_FOR_LISTING) == []
+
+
+# ── spec documents: hand-written specs/ files a cross-link may name ─────────
+
+
+@pytest.mark.parametrize("rel", ["specs/a.md", "specs/sub/s.md"])
+def test_a_hand_written_file_under_specs_is_a_spec_document(rel: str) -> None:
+    assert is_spec_document(rel) is True
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "specs/prompts/x.md",
+        "specs/archive/x.md",
+        "specs/.hid/x.md",
+        "notes/specs/x.md",
+        "specs.md",
+    ],
+)
+def test_a_prompt_draft_or_file_outside_specs_is_not_a_spec_document(rel: str) -> None:
+    assert is_spec_document(rel) is False
+
+
+def test_spec_documents_are_listed_by_store_path_in_order(store: Path) -> None:
+    _write(store / "specs" / "sub" / "s.md")
+    _write(store / "specs" / "amr.md")
+    _write(store / "specs" / ".draft.md")
+    _write(store / "specs" / "prompts" / "p.md")
+    _write(store / "specs" / "archive" / "old.md")
+    _write(store / "notes" / "a.md")
+
+    assert list_spec_documents(str(store)) == [
+        MemoryFile(path=os.path.join(str(store), "specs/amr.md"), rel_path="specs/amr.md"),
+        MemoryFile(path=os.path.join(str(store), "specs/sub/s.md"), rel_path="specs/sub/s.md"),
+    ]
+
+
+def test_a_store_without_specs_has_no_spec_documents(store: Path) -> None:
+    _write(store / "notes" / "a.md")
+
+    assert list_spec_documents(str(store)) == []
+
+
+def test_a_symlink_loop_under_specs_lists_each_document_once(store: Path) -> None:
+    _write(store / "specs" / "amr.md")
+    (store / "specs" / "loop").symlink_to(store / "specs", target_is_directory=True)
+
+    assert _rel_paths(list_spec_documents(str(store))) == ["specs/amr.md"]
+
+
+def test_a_folder_linked_into_specs_is_listed_under_its_store_path(
+    tmp_path: Path, store: Path
+) -> None:
+    _write(tmp_path / "elsewhere" / "x.md")
+    (store / "specs").mkdir()
+    (store / "specs" / "ext").symlink_to(tmp_path / "elsewhere", target_is_directory=True)
+
+    assert _rel_paths(list_spec_documents(str(store))) == ["specs/ext/x.md"]
+
+
+def test_a_link_into_specs_from_a_prompt_folder_is_judged_by_its_store_path(store: Path) -> None:
+    _write(store / "specs" / "prompts" / "p.md")
+    (store / "specs" / "shared").symlink_to(store / "specs" / "prompts", target_is_directory=True)
+
+    assert _rel_paths(list_spec_documents(str(store))) == ["specs/shared/p.md"]
