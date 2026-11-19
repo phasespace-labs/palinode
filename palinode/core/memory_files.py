@@ -8,10 +8,10 @@ spelling of the path and the store) and the walk.
 from __future__ import annotations
 
 import os
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-from palinode.core.skip_dirs import is_skipped_path
+from palinode.core.skip_dirs import SKIP_FOR_CROSS_REFS, is_skipped_path
 
 
 @dataclass(frozen=True)
@@ -56,11 +56,60 @@ def is_memory_path(path: str, store_dir: str, extra: Iterable[str] = frozenset()
     return rel is not None and not is_skipped_path(rel, extra)
 
 
+def is_spec_document(rel_path: str) -> bool:
+    """True for a hand-written ``specs/<name>.md`` that is not a prompt, draft or log.
+
+    ``specs/`` is never memory, but a cross-link may name a document in it.
+    """
+    head, _, rest = rel_path.replace("\\", "/").partition("/")
+    return head == "specs" and not is_skipped_path(rest, SKIP_FOR_CROSS_REFS)
+
+
 def _is_inside(path: str, root_real: str) -> bool:
     try:
         return os.path.commonpath([os.path.realpath(path), root_real]) == root_real
     except ValueError:
         return False
+
+
+def _walk_files(
+    store_dir: str,
+    start: str,
+    is_pruned_dir: Callable[[str], bool],
+    is_recursive: bool,
+    stays_inside_store: bool,
+) -> list[MemoryFile]:
+    store_real = os.path.realpath(store_dir)
+    found: list[MemoryFile] = []
+
+    def visit(rel_dir: str, ancestors: frozenset[str], dir_real: str) -> None:
+        disk_dir = os.path.join(store_dir, rel_dir) if rel_dir else store_dir
+        try:
+            with os.scandir(disk_dir) as entries:
+                listed = sorted(entries, key=lambda e: e.name)
+        except OSError:
+            return
+        for entry in listed:
+            rel = f"{rel_dir}/{entry.name}" if rel_dir else entry.name
+            if entry.is_dir():
+                if not is_recursive or is_pruned_dir(rel):
+                    continue
+                child_real = (
+                    os.path.realpath(entry.path)
+                    if entry.is_symlink()
+                    else os.path.join(dir_real, entry.name)
+                )
+                if child_real in ancestors:
+                    continue
+                visit(rel, ancestors | {child_real}, child_real)
+            elif _is_memory_name(entry.name) and entry.is_file():
+                if stays_inside_store and not _is_inside(entry.path, store_real):
+                    continue
+                found.append(MemoryFile(path=os.path.join(store_dir, rel), rel_path=rel))
+
+    start_real = os.path.realpath(os.path.join(store_dir, start)) if start else store_real
+    visit(start, frozenset({start_real}), start_real)
+    return sorted(found, key=lambda f: f.rel_path)
 
 
 def list_memory_files(
@@ -82,30 +131,25 @@ def list_memory_files(
     start = under.replace("\\", "/").strip("/")
     if start and is_skipped_path(f"{start}/x", skip):
         return []
-    store_real = os.path.realpath(store_dir)
-    found: list[MemoryFile] = []
+    return _walk_files(
+        store_dir,
+        start,
+        lambda rel_dir: is_skipped_path(f"{rel_dir}/x", skip),
+        is_recursive,
+        stays_inside_store,
+    )
 
-    def visit(rel_dir: str, ancestors: frozenset[str], dir_real: str) -> None:
-        disk_dir = os.path.join(store_dir, rel_dir) if rel_dir else store_dir
-        try:
-            with os.scandir(disk_dir) as entries:
-                listed = sorted(entries, key=lambda e: e.name)
-        except OSError:
-            return
-        for entry in listed:
-            rel = f"{rel_dir}/{entry.name}" if rel_dir else entry.name
-            if entry.is_dir():
-                if not is_recursive or is_skipped_path(f"{rel}/x", skip):
-                    continue
-                child_real = os.path.realpath(entry.path) if entry.is_symlink() else os.path.join(dir_real, entry.name)
-                if child_real in ancestors:
-                    continue
-                visit(rel, ancestors | {child_real}, child_real)
-            elif _is_memory_name(entry.name) and entry.is_file():
-                if stays_inside_store and not _is_inside(entry.path, store_real):
-                    continue
-                found.append(MemoryFile(path=os.path.join(store_dir, rel), rel_path=rel))
 
-    start_real = os.path.realpath(os.path.join(store_dir, start)) if start else store_real
-    visit(start, frozenset({start_real}), start_real)
-    return sorted(found, key=lambda f: f.rel_path)
+def list_spec_documents(store_dir: str) -> list[MemoryFile]:
+    """List the hand-written spec documents under ``<store_dir>/specs``, sorted by store path.
+
+    ``rel_path`` starts with ``specs/``. Folders and links are handled as in
+    :func:`list_memory_files`; a folder that is not a spec document is not entered.
+    """
+    return _walk_files(
+        store_dir,
+        "specs",
+        lambda rel_dir: not is_spec_document(f"{rel_dir}/x"),
+        is_recursive=True,
+        stays_inside_store=False,
+    )

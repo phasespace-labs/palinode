@@ -38,7 +38,7 @@ from palinode.core import git_tools
 from palinode.core import parser as _parser
 from palinode.core.config import config
 from palinode.core.scope import ScopeChain, other_project, project_entities
-from palinode.core.memory_files import list_memory_files
+from palinode.core.memory_files import is_spec_document, list_memory_files, list_spec_documents
 from palinode.core.skip_dirs import SKIP_FOR_CROSS_REFS, is_skipped_path
 from palinode.core.visibility import is_visible
 
@@ -91,32 +91,8 @@ def _whole_match(candidate: str, text_lower: str) -> bool:
     return _candidate_pattern(candidate).search(text_lower) is not None
 
 
-def _is_spec_document(rel_path: str) -> bool:
-    """A hand-written ``specs/<name>.md`` that is not a prompt, draft or log."""
-    head, _, rest = rel_path.replace("\\", "/").partition("/")
-    return head == "specs" and not is_skipped_path(rest, SKIP_FOR_CROSS_REFS)
-
-
 def _is_skipped(rel_path: str) -> bool:
-    return is_skipped_path(rel_path, SKIP_FOR_CROSS_REFS) and not _is_spec_document(rel_path)
-
-
-def _list_linkable_files(memory_dir: str) -> list[tuple[str, str]]:
-    """``(path, store path)`` of every memory a cross-link may target, spec documents included.
-
-    The walker never enters ``specs/``, so its documents are listed from their own
-    root and judged by the path inside it, as :func:`_is_spec_document` does.
-    """
-    linkable = [
-        (f.path, f.rel_path)
-        for f in list_memory_files(memory_dir, extra=SKIP_FOR_CROSS_REFS)
-    ]
-    specs_dir = os.path.join(memory_dir, "specs")
-    linkable.extend(
-        (f.path, f"specs/{f.rel_path}")
-        for f in list_memory_files(specs_dir, extra=SKIP_FOR_CROSS_REFS)
-    )
-    return linkable
+    return is_skipped_path(rel_path, SKIP_FOR_CROSS_REFS) and not is_spec_document(rel_path)
 
 
 def path_to_ref(rel_path: str) -> str:
@@ -166,7 +142,12 @@ def build_registry(
     previous = _registry_cache.get(memory_dir, {})
     current: dict[str, tuple[tuple[int, int] | None, str, dict[str, Any] | None]] = {}
     projects = project_entities(source_metadata or {})
-    for filepath, rel in _list_linkable_files(memory_dir):
+    sources = [
+        *list_memory_files(memory_dir, extra=SKIP_FOR_CROSS_REFS),
+        *list_spec_documents(memory_dir),
+    ]
+    for memory_file in sources:
+        filepath, rel = memory_file.path, memory_file.rel_path
         parts = rel.split("/")
         ref = path_to_ref(rel)
         slug = parts[-1][:-3] if parts[-1].endswith(".md") else parts[-1]
