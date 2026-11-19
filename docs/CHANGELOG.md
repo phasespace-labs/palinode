@@ -10,7 +10,9 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Changed
 
-- **A symlinked folder is followed the same way on every surface.** Before, `/list` and the browse UI dropped a file in a folder linked to a place outside the store, while search and `/reindex` indexed it. The walker follows links and judges each file by its store path. `/list` and the browse UI keep hiding a file whose real path lies outside the store, so search can still return a file that `/list` does not show. Whether the index should follow such a link is an open question for the maintainers.
+- **`retrieval_stats` and the OpenClaw migration follow symlinked folders.** They walked with `os.walk`, which does not follow links, so they missed files that search and `/reindex` index. They now follow links like every other surface. `/list` and the browse UI still hide a file whose real path lies outside the store, so search can return a file that `/list` does not show. Whether the index should follow such a link is an open question for the maintainers.
+- **Health, `/generate-summaries` and the store and config counts skip never-memory folders.** They had no skip rule, so they read Markdown under `node_modules/`, `venv/`, `.git/` and the other folders that are never memory.
+- **A broken symlink is no longer listed as a memory file.** The walker lists only files that exist, so a link whose target is gone is skipped on every surface.
 
 ### Fixed
 
