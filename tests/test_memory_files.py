@@ -270,6 +270,15 @@ def test_a_symlink_loop_lists_each_file_once(store: Path) -> None:
     assert _rel_paths(list_memory_files(str(store))) == ["people/a.md"]
 
 
+def test_a_symlink_loop_spelled_in_another_case_lists_each_file_once(store: Path) -> None:
+    _write(store / "people" / "a.md")
+    if not (store / "PEOPLE").exists():
+        pytest.skip("People is another folder on a case-sensitive filesystem")
+    os.symlink("../People", store / "people" / "loop")
+
+    assert _rel_paths(list_memory_files(str(store))) == ["people/a.md"]
+
+
 def test_two_links_to_one_folder_list_both_store_paths(store: Path) -> None:
     _write(store / "notes" / "x.md")
     (store / "alias1").symlink_to(store / "notes", target_is_directory=True)

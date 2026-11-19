@@ -332,3 +332,19 @@ def test_apply_writes_multiple_files(tmp_path):
     for i in range(3):
         content = (mem / "decisions" / f"dec-{i}.md").read_text(encoding="utf-8")
         assert "<!-- palinode-auto-footer -->" in content
+
+
+def test_include_glob_skips_a_folder_named_like_markdown_and_a_broken_link(tmp_path):
+    mem = _make_memory_dir(tmp_path)
+    (mem / "people").mkdir()
+    (mem / "people" / "a.md").write_text(_FRONTMATTER_ENTITIES, encoding="utf-8")
+    (mem / "odd.md").mkdir()
+    (mem / "odd.md" / "c.md").write_text(_FRONTMATTER_ALL_INLINE, encoding="utf-8")
+    (mem / "people" / "broken.md").symlink_to(mem / "nowhere.md")
+
+    result = _invoke(CliRunner(), ["--include", "**/*.md"], mem)
+
+    assert (result.exit_code, result.output.splitlines()[-1]) == (
+        0,
+        "Summary: 1 would be updated, 1 unchanged",
+    )

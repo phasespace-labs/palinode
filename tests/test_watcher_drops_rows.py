@@ -213,6 +213,136 @@ def test_moving_a_file_into_the_store_indexes_the_destination(root: Path, handle
     assert handler.scheduled == [str(dest)]
 
 
+# ── a path event in either spelling of a linked store ───────────────────────
+
+
+@pytest.fixture()
+def linked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    real = tmp_path / "real"
+    (real / "people").mkdir(parents=True)
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+    _configure_store(link, real, monkeypatch)
+    store.init_db()
+    return real, link
+
+
+def test_deleting_a_file_in_the_real_spelling_drops_its_link_spelled_rows(linked, handler) -> None:
+    real, link = linked
+    _seed(link / "people" / "a.md")
+    _seed(link / "people" / "b.md")
+
+    handler.on_deleted(FileDeletedEvent(str(real / "people" / "a.md")))
+
+    assert _indexed_paths() == [str(link / "people" / "b.md")]
+
+
+def test_moving_a_file_in_the_real_spelling_drops_its_link_spelled_rows(linked, handler) -> None:
+    real, link = linked
+    _seed(link / "people" / "a.md")
+    _seed(link / "people" / "b.md")
+
+    handler.on_moved(
+        FileMovedEvent(str(real / "people" / "b.md"), str(real / "people" / "c.md"))
+    )
+
+    assert _indexed_paths() == [str(link / "people" / "a.md")]
+
+
+def test_deleting_a_file_in_the_link_spelling_drops_its_real_spelled_rows(linked, handler) -> None:
+    real, link = linked
+    _seed(real / "people" / "a.md")
+    _seed(real / "people" / "b.md")
+
+    handler.on_deleted(FileDeletedEvent(str(link / "people" / "a.md")))
+
+    assert _indexed_paths() == [str(real / "people" / "b.md")]
+
+
+def test_deleting_a_folder_drops_its_rows_in_both_spellings_of_a_linked_store(
+    linked, handler
+) -> None:
+    real, link = linked
+    _seed(link / "people" / "a.md")
+    _seed(real / "people" / "b.md")
+
+    handler.on_deleted(DirDeletedEvent(str(real / "people")))
+
+    assert _indexed_paths() == []
+
+
+# ── a removed link to a folder arrives as a file event ──────────────────────
+
+
+@pytest.fixture()
+def shared_link(tmp_path: Path, root: Path) -> Path:
+    outside = tmp_path / "outside" / "shared"
+    outside.mkdir(parents=True)
+    (outside / "e.md").write_text("# e\n", encoding="utf-8")
+    (root / "shared").symlink_to(outside, target_is_directory=True)
+    _seed(root / "shared" / "e.md")
+    _seed(root / "sharedx" / "f.md")
+    return root
+
+
+def test_removing_a_link_to_a_folder_drops_the_rows_under_it(shared_link: Path, handler) -> None:
+    (shared_link / "shared").unlink()
+
+    handler.on_deleted(FileDeletedEvent(str(shared_link / "shared")))
+
+    assert _indexed_paths() == [str(shared_link / "sharedx" / "f.md")]
+
+
+def test_moving_a_link_to_a_folder_drops_the_rows_under_its_source(
+    shared_link: Path, handler
+) -> None:
+    (shared_link / "shared").rename(shared_link / "elsewhere")
+
+    handler.on_moved(
+        FileMovedEvent(str(shared_link / "shared"), str(shared_link / "elsewhere"))
+    )
+
+    assert _indexed_paths() == [str(shared_link / "sharedx" / "f.md")]
+
+
+# ── a folder name is matched literally ──────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("deleted", "sibling"),
+    [("peo_le", "people"), ("100%", "1000"), ("a\\b", "a/b")],
+)
+def test_deleting_a_folder_with_pattern_characters_drops_only_its_own_rows(
+    root: Path, handler, deleted: str, sibling: str
+) -> None:
+    _seed(root / deleted / "x.md")
+    _seed(root / sibling / "y.md")
+
+    handler.on_deleted(DirDeletedEvent(str(root / deleted)))
+
+    assert _indexed_paths() == [str(root / sibling / "y.md")]
+
+
+def _is_case_sensitive(folder: Path) -> bool:
+    probe = folder / "case-probe"
+    probe.write_text("", encoding="utf-8")
+    try:
+        return not (folder / "CASE-PROBE").exists()
+    finally:
+        probe.unlink()
+
+
+def test_deleting_a_folder_keeps_a_sibling_that_differs_only_in_case(root: Path, handler) -> None:
+    if not _is_case_sensitive(root):
+        pytest.skip("one folder on a case-insensitive filesystem")
+    _seed(root / "people" / "x.md")
+    _seed(root / "People" / "y.md")
+
+    handler.on_deleted(DirDeletedEvent(str(root / "people")))
+
+    assert _indexed_paths() == [str(root / "People" / "y.md")]
+
+
 # ── reindex walks the store once ─────────────────────────────────────────────
 
 
