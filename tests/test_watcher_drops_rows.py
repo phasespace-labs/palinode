@@ -148,6 +148,41 @@ def test_deleting_a_folder_drops_rows_kept_in_the_link_spelling_of_a_real_store(
     assert _indexed_paths() == []
 
 
+@pytest.fixture()
+def late_link(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "zlink"
+    link.symlink_to(real, target_is_directory=True)
+    _configure_store(real, real, monkeypatch)
+    store.init_db()
+    return real, link
+
+
+def test_deleting_a_folder_drops_rows_in_a_link_spelling_that_sorts_after_the_store(
+    late_link, handler
+) -> None:
+    real, link = late_link
+    _seed(link / "people" / "a.md")
+    _seed(link / "people.md")
+
+    handler.on_deleted(DirDeletedEvent(str(real / "people")))
+
+    assert _indexed_paths() == [str(link / "people.md")]
+
+
+def test_deleting_a_file_drops_its_rows_kept_in_the_link_spelling_of_a_real_store(
+    late_link, handler
+) -> None:
+    real, link = late_link
+    _seed(link / "people" / "a.md")
+    _seed(link / "people" / "a.md.bak")
+
+    handler.on_deleted(FileDeletedEvent(str(real / "people" / "a.md")))
+
+    assert _indexed_paths() == [str(link / "people" / "a.md.bak")]
+
+
 def test_deleting_the_store_root_keeps_every_row(root: Path, handler) -> None:
     _seed(root / "people" / "a.md")
 
