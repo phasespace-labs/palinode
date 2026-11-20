@@ -31,7 +31,6 @@ what's written is what was previewed.
 """
 from __future__ import annotations
 
-import glob
 import hashlib
 import json
 import os
@@ -44,6 +43,7 @@ from palinode.core.agent_directed import agent_directed_spans
 from palinode.core.config import config
 from palinode.core.parser import parse_frontmatter, parse_sources
 from palinode.core.revalidation import normalize_ref
+from palinode.core.memory_files import list_memory_files
 from palinode.core.skip_dirs import is_skipped_path
 
 FORMAT = "palinode-handoff/1"
@@ -123,12 +123,9 @@ def _read(root: str, rel: str) -> tuple[dict[str, Any], str, str] | None:
 
 
 def _walk(root: str) -> list[str]:
-    out = []
-    for path in glob.glob(os.path.join(root, "**", "*.md"), recursive=True):
-        rel = os.path.relpath(path, root)
-        if _never_exportable(rel) is None:
-            out.append(rel)
-    return sorted(out)
+    return [
+        f.rel_path for f in list_memory_files(root) if _never_exportable(f.rel_path) is None
+    ]
 
 
 def _in_project(meta: dict[str, Any], project: str, index: dict[str, str]) -> bool:

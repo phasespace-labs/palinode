@@ -36,7 +36,6 @@ path on, and a re-index reports every repaired file unchanged.
 """
 from __future__ import annotations
 
-import glob
 import json as _json
 import os
 
@@ -50,6 +49,7 @@ from palinode.consolidation.status_doc import (
 )
 from palinode.core import git_tools
 from palinode.core.config import config
+from palinode.core.memory_files import list_memory_files
 from palinode.core.parser import split_frontmatter
 
 #: The directories ``bootstrap_all_fact_ids`` walks — i.e. every directory whose
@@ -94,14 +94,16 @@ def _propagate_entities(path: str, content: str) -> int:
 
 
 def _status_targets() -> list[str]:
-    pattern = os.path.join(config.memory_dir, "projects", "*-status.md")
-    return sorted(glob.glob(pattern))
+    files = list_memory_files(config.memory_dir, under="projects", is_recursive=False)
+    return sorted(f.path for f in files if f.path.endswith("-status.md"))
 
 
 def _all_memory_targets() -> list[str]:
     found: list[str] = []
     for directory in MEMORY_DIRS:
-        found.extend(glob.glob(os.path.join(config.memory_dir, directory, "*.md")))
+        found.extend(
+            f.path for f in list_memory_files(config.memory_dir, under=directory, is_recursive=False)
+        )
     return sorted(set(found))
 
 

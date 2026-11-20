@@ -21,7 +21,7 @@ import urllib.request
 from palinode.core import store, parser, embedder, cross_refs  # noqa: F401  (embedder re-exported for test patches)
 from palinode.core.config import config
 from palinode.core.log_files import LazyDirFileHandler
-from palinode.core.skip_dirs import is_skipped_path
+from palinode.core.memory_files import find_store_path, is_memory_path
 from palinode.indexer.index_file import index_file
 from palinode.indexer.watcher_identity import remove_identity, write_identity
 import json
@@ -39,17 +39,6 @@ DESCRIPTION_DEBOUNCE_S = 10.0
 # timer that has not fired yet exits immediately; one already inside its blocking
 # urlopen cannot be interrupted, so the wait is bounded rather than indefinite.
 SHUTDOWN_JOIN_TIMEOUT_S = 2.0
-
-
-def _find_path_in_store(path: str, store_dir: str) -> str | None:
-    """Return *path* relative to *store_dir*, or None when it lies outside."""
-    try:
-        rel = os.path.relpath(path, store_dir)
-    except ValueError:  # different drive on Windows
-        return None
-    if rel == os.pardir or rel.startswith(os.pardir + os.sep):
-        return None
-    return rel
 
 
 def _utc_now() -> datetime:
@@ -283,11 +272,10 @@ schedules summary and description generation."""
     def is_valid_file(self, path: str) -> bool:
         """Return True if *path* is a Markdown file the index holds.
 
-        The shared rule, :func:`palinode.core.skip_dirs.is_skipped_path`, reads the
-        path relative to the store root, so a store under ``venv/`` or a dot folder
-        still indexes. A file outside the store, in both the given and the resolved
-        spelling of the paths, is not valid. ``/reindex`` filters through this
-        predicate and its GC pass drops every indexed path the walk no longer yields.
+        The shared rule, :func:`palinode.core.memory_files.is_memory_path`, judges
+        the path relative to the store root, so a store under ``venv/`` or a dot
+        folder still indexes. ``/reindex`` lists the same files and its GC pass
+        drops every indexed path the walk no longer yields.
 
         Args:
             path (str): Path to check.
@@ -295,16 +283,7 @@ schedules summary and description generation."""
         Returns:
             bool: Whether the file should be indexed.
         """
-        if not path.endswith('.md'):
-            return False
-
-        rel = _find_path_in_store(path, config.palinode_dir)
-        if rel is None:
-            # A symlinked store root makes events arrive in the other spelling.
-            rel = _find_path_in_store(os.path.realpath(path), os.path.realpath(config.palinode_dir))
-        if rel is None:
-            return False
-        return not is_skipped_path(rel)
+        return is_memory_path(path, config.palinode_dir)
 
     def _process_file(self, filepath: str, *, retry_empty: bool = False) -> None:
         """Index a Markdown file, then schedule summary/description generation if needed.
@@ -417,18 +396,45 @@ schedules summary and description generation."""
         if not event.is_directory and self.is_valid_file(event.src_path):
             self._schedule_index(event.src_path)
 
+    def _delete_rows_under(self, path: str) -> None:
+        """Drop the rows of a path that left the store: the file itself, or every file under it.
+
+        The path does not say whether it was a file or a folder, because a removed
+        link to a folder arrives as a file event. Rows are matched by store path,
+        so either spelling of a linked store root finds them.
+        """
+        memory_dir = config.palinode_dir
+        target = find_store_path(path, memory_dir)
+        # watchdog reports the store root's deletion when the store or a parent folder is renamed
+        if target is None or target == ".":
+            return
+        roots = tuple(dict.fromkeys(
+            (memory_dir.rstrip("/") + "/", os.path.realpath(memory_dir).rstrip("/") + "/")
+        ))
+        try:
+            doomed, outside_roots = store.list_indexed_file_paths_for_store_path(roots, target)
+            for indexed in outside_roots:
+                rel = find_store_path(indexed, memory_dir)
+                if rel is not None and (rel == target or rel.startswith(target + "/")):
+                    doomed.append(indexed)
+            if not doomed:
+                return
+            for indexed in doomed:
+                logger.info(f"Deleting chunks for: {indexed}")
+            store.delete_chunks_for_file_paths(doomed)
+        except Exception as e:
+            logger.error(f"Failed to delete chunks under {path}: {e}")
+
     def on_deleted(self, event: FileDeletedEvent | DirDeletedEvent) -> None:
-        """Delete the file's chunks from the store when it is removed.
+        """Drop the rows of a removed file, or of every file under a removed folder.
+
+        A folder moved out of the store, such as to the Trash, arrives only as a
+        directory deletion, so the rows under it go here.
 
         Args:
             event: Watchdog deletion event.
         """
-        if not event.is_directory and self.is_valid_file(event.src_path):
-            try:
-                logger.info(f"Deleting chunks for: {event.src_path}")
-                store.delete_file_chunks(event.src_path)
-            except Exception as e:
-                logger.error(f"Failed to delete chunks for {event.src_path}: {e}")
+        self._delete_rows_under(event.src_path)
 
     def on_moved(self, event: FileMovedEvent | DirMovedEvent) -> None:
         """Reconcile a rename: retire the old path, index the new one.
@@ -436,20 +442,11 @@ schedules summary and description generation."""
         Without this, a ``mv`` (which watchdog delivers here, not to
         ``on_modified``) was dropped silently: chunk ids are derived from the
         path, so every chunk of the moved file orphaned under the old path, and
-        its entity rows survived too. Deleting the source's derived state
-        and indexing the destination makes a rename a first-class edit.
+        its entity rows survived too. A moved folder drops the rows under its
+        source; watchdog sends the per-file events that index the destination.
         """
-        if event.is_directory:
-            return
-        if self.is_valid_file(event.src_path):
-            try:
-                logger.info(f"Renamed away, deleting chunks for: {event.src_path}")
-                store.delete_file_chunks(event.src_path)
-            except Exception as e:
-                logger.error(
-                    f"Failed to delete chunks for moved {event.src_path}: {e}"
-                )
-        if self.is_valid_file(event.dest_path):
+        self._delete_rows_under(event.src_path)
+        if not event.is_directory and self.is_valid_file(event.dest_path):
             self._schedule_index(event.dest_path)
 
 

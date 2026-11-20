@@ -81,7 +81,6 @@ retired, and a second withdrawal reverses it.
 """
 from __future__ import annotations
 
-import glob
 import logging
 import os
 import re
@@ -90,7 +89,7 @@ from typing import Any, Callable
 
 from palinode.core.config import config
 from palinode.core.ranker import parse_iso_utc
-from palinode.core.skip_dirs import is_skipped_path
+from palinode.core.memory_files import list_memory_files
 
 logger = logging.getLogger("palinode.forget")
 
@@ -570,9 +569,8 @@ class NotAForgetRequest(ValueError):
 
 
 def _iter_memory_files(root: str):
-    for path in glob.glob(os.path.join(root, "**", "*.md"), recursive=True):
-        if not is_skipped_path(os.path.relpath(path, root)):
-            yield path
+    for memory_file in list_memory_files(root):
+        yield memory_file.path
 
 
 def withdraw_forget_request(

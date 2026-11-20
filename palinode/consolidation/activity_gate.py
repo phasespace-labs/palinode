@@ -58,6 +58,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from palinode.core.config import config
+from palinode.core.memory_files import list_memory_files
 
 logger = logging.getLogger("palinode.consolidation.activity_gate")
 
@@ -196,9 +197,9 @@ def _mode_state(state: dict[str, Any], mode: str) -> dict[str, Any]:
     return entry if isinstance(entry, dict) else {}
 
 
-def _daily_dir(memory_dir: str | os.PathLike[str] | None = None) -> Path:
+def _get_store_dir(memory_dir: str | os.PathLike[str] | None = None) -> Path:
     base = memory_dir or getattr(config, "memory_dir", None) or config.palinode_dir
-    return Path(base).expanduser() / "daily"
+    return Path(base).expanduser()
 
 
 def count_sessions_since(
@@ -212,12 +213,14 @@ def count_sessions_since(
     stalls consolidation indefinitely, so the ambiguous case resolves toward
     running.
     """
-    daily = _daily_dir(memory_dir)
-    if not daily.is_dir():
+    store_dir = _get_store_dir(memory_dir)
+    if not (store_dir / "daily").is_dir():
         return 0
 
     total = 0
-    for note in sorted(daily.glob("*.md")):
+    for note in (
+        Path(f.path) for f in list_memory_files(str(store_dir), under="daily", is_recursive=False)
+    ):
         try:
             body = note.read_text(encoding="utf-8", errors="ignore")
         except OSError as error:

@@ -95,7 +95,6 @@ operator, as every other marker is.
 """
 from __future__ import annotations
 
-import glob
 import logging
 import os
 from dataclasses import dataclass, field
@@ -1044,7 +1043,8 @@ def sweep_revalidations(
     the same place.
     """
     from palinode.core.config import config
-    from palinode.core.skip_dirs import SKIP_FOR_LISTING, is_skipped_path
+    from palinode.core.memory_files import list_memory_files
+    from palinode.core.skip_dirs import SKIP_FOR_LISTING
 
     import frontmatter as _frontmatter
 
@@ -1052,9 +1052,9 @@ def sweep_revalidations(
     clock = now or datetime.now(UTC)
     read = disk_reader(base, now=clock)
     out: list[str] = []
-    for path in sorted(glob.glob(os.path.join(base, "**", "*.md"), recursive=True)):
-        rel = os.path.relpath(path, base).replace(os.sep, "/")
-        if is_skipped_path(rel, SKIP_FOR_LISTING) or rel.endswith("-history.md"):
+    for memory_file in list_memory_files(base, extra=SKIP_FOR_LISTING):
+        path, rel = memory_file.path, memory_file.rel_path
+        if rel.endswith("-history.md"):
             continue
         try:
             meta = _frontmatter.load(path).metadata

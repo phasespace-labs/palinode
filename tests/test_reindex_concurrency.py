@@ -6,8 +6,8 @@ Verifies that:
 - After completion, _reindex_state["running"] is False and /status reflects it.
 - The 409 response body contains the expected detail string.
 
-handler._process_file, glob.glob and store.rebuild_fts are patched so the
-suite stays Ollama-free and fast.  Config is redirected via memory_dir
+handler._process_file and store.rebuild_fts are patched so the suite stays
+Ollama-free and fast; reindex walks a real file in tmp_path.  Config is redirected via memory_dir
 (palinode_dir is a property alias for memory_dir).
 """
 from __future__ import annotations
@@ -64,7 +64,6 @@ def client(tmp_path, monkeypatch):
 def test_single_reindex_succeeds(client):
     """A lone /reindex call with no markdown files returns status=success."""
     with (
-        mock.patch("glob.glob", return_value=[]),
         mock.patch("palinode.core.store.gc_orphaned_chunks", return_value=(0, 0)),
         mock.patch("palinode.core.store.rebuild_fts", return_value=0),
     ):
@@ -103,8 +102,9 @@ def test_invalid_since_releases_lock(client):
     srv._reindex_lock.release()
 
 
-def test_concurrent_calls_one_wins_one_loses(client):
+def test_concurrent_calls_one_wins_one_loses(client, tmp_path):
     """Two concurrent POSTs run the underlying reindex exactly once."""
+    (tmp_path / "reindex.md").write_text("# reindex\n", encoding="utf-8")
     start_requests = threading.Barrier(3)
     work_started = threading.Event()
     release_work = threading.Event()
@@ -128,11 +128,6 @@ def test_concurrent_calls_one_wins_one_loses(client):
 
     threads = [threading.Thread(target=_post_reindex, daemon=True) for _ in range(2)]
     with (
-        mock.patch("glob.glob", return_value=["/tmp/reindex.md"]),
-        mock.patch(
-            "palinode.indexer.watcher.PalinodeHandler.is_valid_file",
-            return_value=True,
-        ),
         mock.patch(
             "palinode.indexer.watcher.PalinodeHandler._process_file",
             new=_slow_process,
@@ -151,11 +146,12 @@ def test_concurrent_calls_one_wins_one_loses(client):
 
     assert not any(thread.is_alive() for thread in threads)
     assert sorted(response.status_code for response in responses) == [200, 409]
-    assert work_calls == ["/tmp/reindex.md"]
+    assert work_calls == [str(tmp_path / "reindex.md")]
 
 
-def test_health_responds_while_reindex_runs(client):
+def test_health_responds_while_reindex_runs(client, tmp_path):
     """Blocking reindex work must not occupy the API event loop."""
+    (tmp_path / "reindex.md").write_text("# reindex\n", encoding="utf-8")
     work_started = threading.Event()
     release_work = threading.Event()
     reindex_responses = []
@@ -169,11 +165,6 @@ def test_health_responds_while_reindex_runs(client):
 
     reindex_thread = threading.Thread(target=_post_reindex, daemon=True)
     with (
-        mock.patch("glob.glob", return_value=["/tmp/reindex.md"]),
-        mock.patch(
-            "palinode.indexer.watcher.PalinodeHandler.is_valid_file",
-            return_value=True,
-        ),
         mock.patch(
             "palinode.indexer.watcher.PalinodeHandler._process_file",
             new=_slow_process,
@@ -199,7 +190,6 @@ def test_health_responds_while_reindex_runs(client):
 def test_reindex_state_resets_after_completion(client):
     """_reindex_state["running"] is False after /reindex completes."""
     with (
-        mock.patch("glob.glob", return_value=[]),
         mock.patch("palinode.core.store.gc_orphaned_chunks", return_value=(0, 0)),
         mock.patch("palinode.core.store.rebuild_fts", return_value=0),
     ):

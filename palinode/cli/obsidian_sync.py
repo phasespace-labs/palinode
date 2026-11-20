@@ -41,7 +41,8 @@ from palinode.core import git_tools
 from palinode.core.config import config
 from palinode.core.memory_write import _apply_wiki_footer
 from palinode.core.parser import parse_markdown
-from palinode.core.skip_dirs import SKIP_FOR_LINT, is_skipped_path
+from palinode.core.memory_files import find_store_path, is_memory_path, list_memory_files
+from palinode.core.skip_dirs import SKIP_FOR_LINT
 
 def _walk_memory_files(
     memory_dir: str,
@@ -64,16 +65,17 @@ def _walk_memory_files(
     """
     if include:
         # User supplied a specific glob — expand it relative to memory_dir.
-        raw = glob.glob(os.path.join(memory_dir, include), recursive=True)
+        raw = [
+            (fp, rel)
+            for fp in glob.glob(os.path.join(memory_dir, include), recursive=True)
+            if os.path.isfile(fp) and is_memory_path(fp, memory_dir, SKIP_FOR_LINT)
+            and (rel := find_store_path(fp, memory_dir)) is not None
+        ]
     else:
-        raw = glob.glob(os.path.join(memory_dir, "**/*.md"), recursive=True)
+        raw = [(f.path, f.rel_path) for f in list_memory_files(memory_dir, extra=SKIP_FOR_LINT)]
 
     results: list[str] = []
-    for filepath in raw:
-        rel = os.path.relpath(filepath, memory_dir)
-        if is_skipped_path(rel, SKIP_FOR_LINT):
-            continue
-
+    for filepath, rel in raw:
         # Apply exclude glob (relative to memory_dir)
         if exclude and fnmatch.fnmatch(rel, exclude):
             continue

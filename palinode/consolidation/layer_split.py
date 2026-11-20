@@ -17,6 +17,7 @@ import yaml
 from datetime import UTC, datetime
 from palinode.core import git_tools
 from palinode.core.config import config
+from palinode.core.memory_files import list_memory_files
 from palinode.core.path_guard import to_rel_path
 
 logger = logging.getLogger("palinode.consolidation.layer_split")
@@ -308,7 +309,6 @@ def split_all_core_files() -> dict:
     
     Returns stats dict.
     """
-    import glob
     from palinode.core import store
     from palinode.core import embedder
     
@@ -328,7 +328,8 @@ def split_all_core_files() -> dict:
         full_dir = os.path.join(config.memory_dir, d)
         if not os.path.exists(full_dir):
             continue
-        for f in glob.glob(os.path.join(full_dir, "*.md")):
+        for memory_file in list_memory_files(config.memory_dir, under=d, is_recursive=False):
+            f = memory_file.path
             # Skip already-split files
             if f.endswith("-status.md") or f.endswith("-history.md"):
                 continue

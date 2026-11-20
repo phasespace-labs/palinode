@@ -13,7 +13,7 @@ build folder still indexes. The index skips nothing beyond that. A surface that
 shows less passes one of the ``SKIP_FOR_*`` constants as ``extra``; ``extra``
 only adds skips.
 
-``core.cross_refs`` has one further exception, ``_is_spec_document``: a
+``core.cross_refs`` has one further exception, ``memory_files.is_spec_document``: a
 hand-written ``specs/<name>.md`` can be linked.
 """
 from __future__ import annotations

@@ -19,7 +19,7 @@ import os
 import struct
 import hashlib
 from contextlib import contextmanager
-from typing import Any, Callable, Collection, Iterator, Mapping, Sequence
+from typing import Any, Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from palinode.core.config import config
 from palinode.core.defaults import (
@@ -38,7 +38,7 @@ from palinode.core.lifecycle import (
 )
 from palinode.core.path_guard import to_rel_path
 from palinode.core.quote_verify import QuoteStatus, verify_source_anchors
-from palinode.core.skip_dirs import is_skipped_path
+from palinode.core.memory_files import list_memory_files
 from palinode.core.where import matches_where
 # The hybrid-search scoring pipeline + its pure decay/predicate helpers live in
 # ranker.py. Re-exported here so `store.effective_importance`,
@@ -236,14 +236,6 @@ def scan_memory_content(content: str) -> tuple[bool, str]:
         return False, "Content has unusually high ratio of special characters"
     return True, "ok"
 
-def _glob_md_files(directory: str):
-    """Yield the memory .md file paths under *directory* (recursive)."""
-    import glob as _glob
-    for path in _glob.iglob(os.path.join(directory, "**", "*.md"), recursive=True):
-        if not is_skipped_path(os.path.relpath(path, directory)):
-            yield path
-
-
 def _ensure_db() -> None:
     """Disambiguate first-run from misconfiguration before SQLite auto-creates.
 
@@ -274,7 +266,7 @@ def _ensure_db() -> None:
     # Count .md files in memory_dir (recursive).  If the directory doesn't
     # exist yet we treat that as 0 files (brand-new install).
     try:
-        md_count = sum(1 for _ in _glob_md_files(memory_dir))
+        md_count = len(list_memory_files(memory_dir))
     except (OSError, ValueError):
         md_count = 0
 
@@ -335,6 +327,17 @@ def get_db() -> sqlite3.Connection:
     # last transactions on power loss — every row here is re-derivable from
     # the markdown source of truth.
     db.execute("PRAGMA synchronous=NORMAL")
+    return db
+
+
+def _get_db_without_vec() -> sqlite3.Connection:
+    """Open a connection that reads the ``chunks`` table without loading sqlite-vec.
+
+    Loading the extension costs about 0.2 ms, which a per-event watcher query cannot pay.
+    """
+    _ensure_db()
+    db = sqlite3.connect(config.db_path, timeout=DB_BUSY_TIMEOUT_SECONDS)
+    db.row_factory = sqlite3.Row
     return db
 
 
@@ -1020,34 +1023,107 @@ def replace_entities(
         )
 
 
+_DELETE_BATCH_SIZE = 500  # an IN list stays under SQLite's bound-variable limit
+
+
 def delete_file_chunks(file_path: str) -> None:
     """Deletes all chunks associated with a specific file path.
 
     Args:
         file_path (str): The path to the file whose chunks should be erased.
     """
+    delete_chunks_for_file_paths([file_path])
+
+
+def delete_chunks_for_file_paths(file_paths: Iterable[str]) -> None:
+    """Delete the chunks and entities of every given file path in one transaction."""
+    paths = list(file_paths)
     db = get_db()
-    cursor = db.cursor()
-    cursor.execute("SELECT id FROM chunks WHERE file_path = ?", (file_path,))
-    ids = [row["id"] for row in cursor.fetchall()]
-    if ids:
-        # Clean FTS5 index before deleting the source rows (best-effort).
-        # Must run first: the sanctioned 'delete' reads column values off the
-        # still-present chunks row to re-derive the tokens to remove.
-        for chunk_id in ids:
-            try:
-                fts5_delete_chunk(cursor, chunk_id)
-            except Exception:
-                pass  # FTS5 may be out of sync — periodic rebuild handles this
-        
-        placeholders, params = _parameterize_in_clause(ids)
-        # B608 rationale - placeholders is "?,?,..." from _parameterize_in_clause; values bound via params
-        cursor.execute(f"DELETE FROM chunks WHERE id IN ({placeholders})", params)  # nosec B608
-        cursor.execute(f"DELETE FROM chunks_vec WHERE id IN ({placeholders})", params)  # nosec B608
-        
-    cursor.execute("DELETE FROM entities WHERE file_path = ?", (file_path,))
-    db.commit()
-    db.close()
+    try:
+        cursor = db.cursor()
+        for start in range(0, len(paths), _DELETE_BATCH_SIZE):
+            batch = paths[start:start + _DELETE_BATCH_SIZE]
+            path_placeholders, path_params = _parameterize_in_clause(batch)
+            # B608 rationale - placeholders is "?,?,..." from _parameterize_in_clause; values bound via params
+            cursor.execute(f"SELECT id FROM chunks WHERE file_path IN ({path_placeholders})", path_params)  # nosec B608
+            ids = [row["id"] for row in cursor.fetchall()]
+            if ids:
+                # Clean FTS5 index before deleting the source rows (best-effort).
+                # Must run first: the sanctioned 'delete' reads column values off the
+                # still-present chunks row to re-derive the tokens to remove.
+                for chunk_id in ids:
+                    try:
+                        fts5_delete_chunk(cursor, chunk_id)
+                    except Exception:
+                        pass  # FTS5 may be out of sync — periodic rebuild handles this
+
+                for id_start in range(0, len(ids), _DELETE_BATCH_SIZE):
+                    placeholders, params = _parameterize_in_clause(ids[id_start:id_start + _DELETE_BATCH_SIZE])
+                    cursor.execute(f"DELETE FROM chunks WHERE id IN ({placeholders})", params)  # nosec B608
+                    cursor.execute(f"DELETE FROM chunks_vec WHERE id IN ({placeholders})", params)  # nosec B608
+            cursor.execute(f"DELETE FROM entities WHERE file_path IN ({path_placeholders})", path_params)  # nosec B608
+        db.commit()
+    finally:
+        db.close()
+
+
+def list_indexed_file_paths_for_store_path(
+    roots: Iterable[str], target: str,
+) -> tuple[list[str], list[str]]:
+    """Return the indexed paths a store path covers, split by where they lie.
+
+    ``roots`` each end in ``/``. The first list holds ``target`` and every file
+    under it, in each root. The second holds every indexed path under none of
+    the roots, which the caller must resolve itself. Both are binary ranges on
+    the file path index, so a sibling that only sorts beside ``target`` is not
+    returned and the cost does not grow with the size of the index.
+    """
+    roots = tuple(roots)
+    db = _get_db_without_vec()
+    try:
+        under_roots: list[str] = []
+        for root in roots:
+            at = root + target
+            rows = db.execute(
+                "SELECT file_path FROM chunks WHERE file_path = ? "
+                "UNION SELECT file_path FROM chunks WHERE file_path >= ? AND file_path < ?",
+                (at, at + "/", at + "0"),  # "0" is the byte after "/"
+            ).fetchall()
+            under_roots.extend(row["file_path"] for row in rows)
+
+        spans: list[tuple[str, str]] = []
+        for low, high in sorted({(root, root[:-1] + "0") for root in roots}):
+            if spans and low < spans[-1][1]:
+                spans[-1] = (spans[-1][0], max(spans[-1][1], high))
+            else:
+                spans.append((low, high))
+        gaps: list[tuple[str | None, str | None]] = []
+        previous_high: str | None = None
+        for low, high in spans:
+            gaps.append((previous_high, low))
+            previous_high = high
+        gaps.append((previous_high, None))
+
+        outside_roots: list[str] = []
+        for low, high in gaps:
+            conditions = []
+            params: list[str] = []
+            if low is not None:
+                conditions.append("file_path >= ?")
+                params.append(low)
+            if high is not None:
+                conditions.append("file_path < ?")
+                params.append(high)
+            where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+            rows = db.execute(
+                f"SELECT DISTINCT file_path FROM chunks{where}",  # nosec B608 - fixed fragments, bound values
+                params,
+            ).fetchall()
+            outside_roots.extend(row["file_path"] for row in rows)
+    finally:
+        db.close()
+    return under_roots, outside_roots
+
 
 def gc_orphaned_chunks(valid_paths: Collection[str]) -> tuple[int, int]:
     """Delete indexed chunks whose source file is no longer on disk.

@@ -37,7 +37,6 @@ project's records never fill the empty sections.
 """
 from __future__ import annotations
 
-import glob
 import os
 import re
 import subprocess
@@ -64,7 +63,8 @@ from palinode.core.packing import (
     estimate_tokens,
     pack,
 )
-from palinode.core.skip_dirs import SKIP_FOR_DIGEST, is_skipped_path
+from palinode.core.memory_files import list_memory_files
+from palinode.core.skip_dirs import SKIP_FOR_DIGEST
 
 #: Bounded digest sizes — the digest rides the session cold-start path.
 MAX_CORE_MEMORIES = 10
@@ -310,10 +310,8 @@ def _scan_memories(base_dir: str) -> list[dict[str, Any]]:
     from palinode.core import parser
 
     out: list[dict[str, Any]] = []
-    for filepath in glob.glob(os.path.join(base_dir, "**/*.md"), recursive=True):
-        rel = os.path.relpath(filepath, base_dir)
-        if is_skipped_path(rel, SKIP_FOR_DIGEST):
-            continue
+    for memory_file in list_memory_files(base_dir, extra=SKIP_FOR_DIGEST):
+        filepath, rel = memory_file.path, memory_file.rel_path
         try:
             with open(filepath, encoding="utf-8") as f:
                 meta, _ = parser.parse_frontmatter(f.read())

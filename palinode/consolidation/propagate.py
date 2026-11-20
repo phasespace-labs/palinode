@@ -41,7 +41,6 @@ the commit are deterministic for a given store state.
 """
 from __future__ import annotations
 
-import glob
 import logging
 import os
 import re
@@ -50,7 +49,8 @@ from typing import Any
 
 from palinode.core import git_tools
 from palinode.core.config import config
-from palinode.core.skip_dirs import SKIP_FOR_LISTING, is_skipped_path
+from palinode.core.memory_files import list_memory_files
+from palinode.core.skip_dirs import SKIP_FOR_LISTING
 from palinode.core.typed_links import parse_link_refs
 
 logger = logging.getLogger("palinode.consolidation.propagate")
@@ -119,9 +119,9 @@ def find_dependents(source_refs: list[str], base_dir: str | None = None) -> list
     import frontmatter as _frontmatter
 
     out: list[str] = []
-    for path in sorted(glob.glob(os.path.join(base, "**", "*.md"), recursive=True)):
-        rel = os.path.relpath(path, base).replace(os.sep, "/")
-        if is_skipped_path(rel, SKIP_FOR_LISTING) or rel.endswith("-history.md"):
+    for memory_file in list_memory_files(base, extra=SKIP_FOR_LISTING):
+        path, rel = memory_file.path, memory_file.rel_path
+        if rel.endswith("-history.md"):
             continue
         if _normalize_ref(rel) in wanted:
             continue  # a memory is not its own dependent

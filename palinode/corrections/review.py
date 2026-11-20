@@ -72,7 +72,7 @@ from palinode.core import path_guard
 from palinode.core.config import config
 from palinode.core.parity import CORRECTION_APPLIED_PARTIAL
 from palinode.core.revalidation import normalize_ref
-from palinode.core.skip_dirs import is_skipped_path
+from palinode.core.memory_files import list_memory_files
 from palinode.corrections.content import content_loss
 from palinode.corrections.queue import load_candidates
 
@@ -262,9 +262,7 @@ def resolve_target(ref: str) -> tuple[str, str]:
         path_guard.resolve_memory_path(f"{stem}.md")
         root = _memory_root()
         matches = {
-            os.path.relpath(found, root)
-            for found in glob.glob(os.path.join(root, "**", f"{stem}.md"), recursive=True)
-            if os.path.isfile(found) and not is_skipped_path(os.path.relpath(found, root))
+            f.rel_path for f in list_memory_files(root) if os.path.basename(f.rel_path) == f"{stem}.md"
         }
         if len(matches) == 1:
             rel = matches.pop()
@@ -343,15 +341,8 @@ def referencing_records(rel: str) -> list[dict[str, str]]:
     wikilink = f"[[{os.path.splitext(os.path.basename(rel))[0]}]]"
     root = _memory_root()
     found: list[dict[str, str]] = []
-    for path in sorted(glob.glob(os.path.join(root, "**", "*.md"), recursive=True)):
-        try:
-            if os.path.commonpath([root, os.path.realpath(path)]) != root:
-                continue
-        except ValueError:
-            continue
-        other = os.path.relpath(path, root)
-        if is_skipped_path(other):
-            continue
+    for memory_file in list_memory_files(root, stays_inside_store=True):
+        path, other = memory_file.path, memory_file.rel_path
         if other == rel:
             continue
         try:
@@ -609,8 +600,7 @@ def transcript_availability(candidate: dict[str, Any]) -> tuple[bool, str]:
             "involved — but the surrounding conversation cannot be re-read."
         )
     for root in roots:
-        pattern = os.path.join(os.path.expanduser(str(root)), "**", f"{session_id}*")
-        if glob.glob(pattern, recursive=True):
+        if glob.glob(os.path.join(os.path.expanduser(str(root)), "**", f"{session_id}*"), recursive=True):
             return True, ""
     return False, (
         "the source is unavailable: the transcript for session "

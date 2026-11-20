@@ -16,10 +16,8 @@ Default lint (no flag) never reaches this module.
 """
 from __future__ import annotations
 
-import glob
 import logging
 import math
-import os
 from typing import Any
 
 import frontmatter as _frontmatter
@@ -27,7 +25,8 @@ import frontmatter as _frontmatter
 from palinode.core.config import config
 from palinode.core import parser
 from palinode.core.ollama_client import OllamaError, OllamaRole, get_ollama_client
-from palinode.core.skip_dirs import SKIP_FOR_LINT, is_skipped_path
+from palinode.core.memory_files import list_memory_files
+from palinode.core.skip_dirs import SKIP_FOR_LINT
 
 logger = logging.getLogger("palinode.lint.contradictions")
 
@@ -77,13 +76,10 @@ def _collect_decision_memories(memory_dir: str) -> list[dict[str, Any]]:
         body (str): markdown body (frontmatter stripped)
         embedding (list[float]): may be empty if embedding unavailable
     """
-    pattern = os.path.join(memory_dir, "**", "*.md")
     memories: list[dict[str, Any]] = []
 
-    for filepath in glob.glob(pattern, recursive=True):
-        rel = os.path.relpath(filepath, memory_dir)
-        if is_skipped_path(rel, SKIP_FOR_LINT):
-            continue
+    for memory_file in list_memory_files(memory_dir, extra=SKIP_FOR_LINT):
+        filepath, rel = memory_file.path, memory_file.rel_path
         try:
             with open(filepath, "r", encoding="utf-8") as fh:
                 content = fh.read()

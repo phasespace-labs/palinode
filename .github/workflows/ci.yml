@@ -157,3 +157,9 @@ jobs:
 
       - name: Run choke-point-linter test suite
         run: bash tests/test_check_write_choke_point.sh
+
+      - name: Enforce the memory walk choke point
+        run: bash scripts/check-memory-walk.sh
+
+      - name: Run memory-walk-linter test suite
+        run: bash tests/test_check_memory_walk.sh

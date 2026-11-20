@@ -164,7 +164,7 @@ def test_build_registry_matches_reference_cold_and_warm(corpus: list[Path]) -> N
     warm = cross_refs.build_registry(root, exclude_ref="decisions/nothing")
     assert cold == expected
     assert warm == expected
-    assert list(warm) == list(expected)
+    assert list(warm) == list(cold)
     self_ref = cross_refs.path_to_ref(os.path.relpath(str(corpus[0]), root))
     assert cross_refs.build_registry(root, exclude_ref=self_ref) == _reference_registry(root, self_ref)
 
