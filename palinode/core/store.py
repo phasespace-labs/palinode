@@ -19,7 +19,7 @@ import os
 import struct
 import hashlib
 from contextlib import contextmanager
-from typing import Any, Callable, Collection, Iterator, Mapping, Sequence
+from typing import Any, Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from palinode.core.config import config
 from palinode.core.defaults import (
@@ -1012,34 +1012,49 @@ def replace_entities(
         )
 
 
+_DELETE_BATCH_SIZE = 500  # an IN list stays under SQLite's bound-variable limit
+
+
 def delete_file_chunks(file_path: str) -> None:
     """Deletes all chunks associated with a specific file path.
 
     Args:
         file_path (str): The path to the file whose chunks should be erased.
     """
+    delete_chunks_for_file_paths([file_path])
+
+
+def delete_chunks_for_file_paths(file_paths: Iterable[str]) -> None:
+    """Delete the chunks and entities of every given file path in one transaction."""
+    paths = list(file_paths)
     db = get_db()
-    cursor = db.cursor()
-    cursor.execute("SELECT id FROM chunks WHERE file_path = ?", (file_path,))
-    ids = [row["id"] for row in cursor.fetchall()]
-    if ids:
-        # Clean FTS5 index before deleting the source rows (best-effort).
-        # Must run first: the sanctioned 'delete' reads column values off the
-        # still-present chunks row to re-derive the tokens to remove.
-        for chunk_id in ids:
-            try:
-                fts5_delete_chunk(cursor, chunk_id)
-            except Exception:
-                pass  # FTS5 may be out of sync — periodic rebuild handles this
-        
-        placeholders, params = _parameterize_in_clause(ids)
-        # B608 rationale - placeholders is "?,?,..." from _parameterize_in_clause; values bound via params
-        cursor.execute(f"DELETE FROM chunks WHERE id IN ({placeholders})", params)  # nosec B608
-        cursor.execute(f"DELETE FROM chunks_vec WHERE id IN ({placeholders})", params)  # nosec B608
-        
-    cursor.execute("DELETE FROM entities WHERE file_path = ?", (file_path,))
-    db.commit()
-    db.close()
+    try:
+        cursor = db.cursor()
+        for start in range(0, len(paths), _DELETE_BATCH_SIZE):
+            batch = paths[start:start + _DELETE_BATCH_SIZE]
+            path_placeholders, path_params = _parameterize_in_clause(batch)
+            # B608 rationale - placeholders is "?,?,..." from _parameterize_in_clause; values bound via params
+            cursor.execute(f"SELECT id FROM chunks WHERE file_path IN ({path_placeholders})", path_params)  # nosec B608
+            ids = [row["id"] for row in cursor.fetchall()]
+            if ids:
+                # Clean FTS5 index before deleting the source rows (best-effort).
+                # Must run first: the sanctioned 'delete' reads column values off the
+                # still-present chunks row to re-derive the tokens to remove.
+                for chunk_id in ids:
+                    try:
+                        fts5_delete_chunk(cursor, chunk_id)
+                    except Exception:
+                        pass  # FTS5 may be out of sync — periodic rebuild handles this
+
+                for id_start in range(0, len(ids), _DELETE_BATCH_SIZE):
+                    placeholders, params = _parameterize_in_clause(ids[id_start:id_start + _DELETE_BATCH_SIZE])
+                    cursor.execute(f"DELETE FROM chunks WHERE id IN ({placeholders})", params)  # nosec B608
+                    cursor.execute(f"DELETE FROM chunks_vec WHERE id IN ({placeholders})", params)  # nosec B608
+            cursor.execute(f"DELETE FROM entities WHERE file_path IN ({path_placeholders})", path_params)  # nosec B608
+        db.commit()
+    finally:
+        db.close()
+
 
 def list_indexed_file_paths() -> list[str]:
     """Return every file path that holds at least one indexed chunk."""

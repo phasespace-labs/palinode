@@ -12,6 +12,7 @@ import re
 from typing import MutableSet
 from palinode.core.config import config
 from palinode.core import parser, git_tools
+from palinode.core.memory_files import list_memory_files
 from palinode.core.hashing import stable_md5_hexdigest
 from palinode.core.path_guard import resolve_memory_path, to_rel_path
 from palinode.consolidation.status_doc import fact_ids as document_fact_ids
@@ -220,16 +221,10 @@ def bootstrap_all_fact_ids() -> dict:
     dirs = ["people", "projects", "decisions", "insights"]
     
     for d in dirs:
-        full_dir = os.path.join(config.memory_dir, d)
-        if not os.path.exists(full_dir):
-            continue
-        for f in os.listdir(full_dir):
-            if not f.endswith('.md'):
-                continue
-            fp = os.path.join(full_dir, f)
-            count = add_fact_ids_to_file(fp)
+        for memory_file in list_memory_files(config.memory_dir, under=d, is_recursive=False):
+            count = add_fact_ids_to_file(memory_file.path)
             if count > 0:
                 stats["files"] += 1
                 stats["facts_tagged"] += count
-    
+
     return stats

@@ -72,6 +72,14 @@ def _is_inside(path: str, root_real: str) -> bool:
         return False
 
 
+def _get_folder_identity(path: str) -> tuple[int, int] | None:
+    try:
+        info = os.stat(path)
+    except OSError:
+        return None
+    return info.st_dev, info.st_ino
+
+
 def _walk_files(
     store_dir: str,
     start: str,
@@ -82,7 +90,7 @@ def _walk_files(
     store_real = os.path.realpath(store_dir)
     found: list[MemoryFile] = []
 
-    def visit(rel_dir: str, ancestors: frozenset[str], dir_real: str) -> None:
+    def visit(rel_dir: str, ancestors: frozenset[tuple[int, int]]) -> None:
         disk_dir = os.path.join(store_dir, rel_dir) if rel_dir else store_dir
         try:
             with os.scandir(disk_dir) as entries:
@@ -94,21 +102,17 @@ def _walk_files(
             if entry.is_dir():
                 if not is_recursive or is_pruned_dir(rel):
                     continue
-                child_real = (
-                    os.path.realpath(entry.path)
-                    if entry.is_symlink()
-                    else os.path.join(dir_real, entry.name)
-                )
-                if child_real in ancestors:
+                identity = _get_folder_identity(entry.path)
+                if identity is None or identity in ancestors:
                     continue
-                visit(rel, ancestors | {child_real}, child_real)
+                visit(rel, ancestors | {identity})
             elif _is_memory_name(entry.name) and entry.is_file():
                 if stays_inside_store and not _is_inside(entry.path, store_real):
                     continue
                 found.append(MemoryFile(path=os.path.join(store_dir, rel), rel_path=rel))
 
-    start_real = os.path.realpath(os.path.join(store_dir, start)) if start else store_real
-    visit(start, frozenset({start_real}), start_real)
+    start_identity = _get_folder_identity(os.path.join(store_dir, start) if start else store_dir)
+    visit(start, frozenset({start_identity}) if start_identity else frozenset())
     return sorted(found, key=lambda f: f.rel_path)
 
 

@@ -12,6 +12,7 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 - **`retrieval_stats` and the OpenClaw migration follow symlinked folders.** They walked with `os.walk`, which does not follow links, so they missed files that search and `/reindex` index. They now follow links like every other surface. `/list` and the browse UI still hide a file whose real path lies outside the store, so search can return a file that `/list` does not show. Whether the index should follow such a link is an open question for the maintainers.
 - **Health, `/generate-summaries` and the store and config counts skip never-memory folders.** They had no skip rule, so they read Markdown under `node_modules/`, `venv/`, `.git/` and the other folders that are never memory.
+- **A consolidation source inside a folder that is never memory yields nothing.** The runner judged a subfolder against itself, so `inbox/processed/` could be read as a source. It is now judged by its path in the store and is skipped, like `inbox/` itself.
 - **A broken symlink is no longer listed as a memory file.** The walker lists only files that exist, so a link whose target is gone is skipped on every surface.
 
 ### Fixed
@@ -20,6 +21,12 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 - **A symlink loop is walked once.** With `people/loop -> people`, `/reindex` listed `people/a.md` 33 times, once for each level of the loop, and indexed it 33 times. The walk now ends at the first link back to a folder it is already in.
 - **The watcher drops the rows of every file that leaves the store.** It skipped a deleted or moved file that the "never memory" rule rejects, so a file indexed before the rule changed kept its rows until the next `/reindex`. It now drops them whatever the rule says.
 - **A deleted or moved folder drops the rows under it.** A folder moved out of the store, such as with Move to Trash in Finder, reaches the watcher as one folder deletion, which it ignored, so every file in it kept its rows and stayed searchable. It now drops every row under that folder, and no row of a sibling whose name starts the same way.
+- **The watcher finds rows in either spelling of a linked store root.** With a store that is a symlink, a file deleted or moved in the other spelling of the root kept its rows, because the watcher matched the event path to the stored path as plain text. It now matches by store path.
+- **Removing a link to a folder drops the rows under it.** The watcher gets that removal as a file event, and it ignored the event when the name did not end in `.md`. It now drops every row under the link's name.
+- **A folder deletion drops rows in one transaction.** Dropping 5000 files took 12 s because each file opened its own connection and walked every indexed path through `realpath`. It now takes about 1.6 s, nearly all of it the vector index's row deletes.
+- **`POST /bootstrap-fact-ids` skips a file name starting with `.`.** It listed each folder itself and tagged `people/.draft.md`, which every other surface ignores. It now lists through the walker.
+- **A symlink loop spelled in another case is walked once.** On a case-insensitive filesystem, `people/loop -> ../People` made each file appear twice, because the loop check compared the text of the real paths. It now compares the folders themselves.
+- **`obsidian-sync --include` skips a folder named like a Markdown file and a broken link.** Both made the sync report a read error. A match must now be a file that exists.
 
 ### Removed
 

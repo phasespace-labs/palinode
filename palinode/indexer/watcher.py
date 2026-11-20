@@ -396,30 +396,32 @@ schedules summary and description generation."""
         if not event.is_directory and self.is_valid_file(event.src_path):
             self._schedule_index(event.src_path)
 
-    def _delete_rows_for_file(self, path: str) -> None:
-        """Drop the rows of a Markdown path that left the store, whatever the rule says of it."""
-        if not path.endswith(".md"):
-            return
-        try:
-            logger.info(f"Deleting chunks for: {path}")
-            store.delete_file_chunks(path)
-        except Exception as e:
-            logger.error(f"Failed to delete chunks for {path}: {e}")
+    def _delete_rows_under(self, path: str) -> None:
+        """Drop the rows of a path that left the store: the file itself, or every file under it.
 
-    def _delete_rows_under_directory(self, directory: str) -> None:
-        """Drop the rows of every indexed file under *directory*, in either spelling of the store."""
-        prefix = find_store_path(directory, config.palinode_dir)
-        if prefix is None or prefix == ".":  # a renamed parent arrives as the store root's deletion
+        The path does not say whether it was a file or a folder, because a removed
+        link to a folder arrives as a file event. Rows are matched by store path,
+        so either spelling of a linked store root finds them.
+        """
+        memory_dir = config.palinode_dir
+        target = find_store_path(path, memory_dir)
+        if target is None or target == ".":
             return
+        plain_roots = (memory_dir.rstrip("/") + "/", os.path.realpath(memory_dir).rstrip("/") + "/")
         try:
+            doomed = []
             for indexed in store.list_indexed_file_paths():
-                rel = find_store_path(indexed, config.palinode_dir)
-                if rel is None or not rel.startswith(prefix + "/"):
-                    continue
+                root = next((r for r in plain_roots if indexed.startswith(r)), None)
+                rel = indexed[len(root):] if root else find_store_path(indexed, memory_dir)
+                if rel is not None and (rel == target or rel.startswith(target + "/")):
+                    doomed.append(indexed)
+            if not doomed:
+                return
+            for indexed in doomed:
                 logger.info(f"Deleting chunks for: {indexed}")
-                store.delete_file_chunks(indexed)
+            store.delete_chunks_for_file_paths(doomed)
         except Exception as e:
-            logger.error(f"Failed to delete chunks under {directory}: {e}")
+            logger.error(f"Failed to delete chunks under {path}: {e}")
 
     def on_deleted(self, event: FileDeletedEvent | DirDeletedEvent) -> None:
         """Drop the rows of a removed file, or of every file under a removed folder.
@@ -430,10 +432,7 @@ schedules summary and description generation."""
         Args:
             event: Watchdog deletion event.
         """
-        if event.is_directory:
-            self._delete_rows_under_directory(event.src_path)
-        else:
-            self._delete_rows_for_file(event.src_path)
+        self._delete_rows_under(event.src_path)
 
     def on_moved(self, event: FileMovedEvent | DirMovedEvent) -> None:
         """Reconcile a rename: retire the old path, index the new one.
@@ -444,11 +443,8 @@ schedules summary and description generation."""
         its entity rows survived too. A moved folder drops the rows under its
         source; watchdog sends the per-file events that index the destination.
         """
-        if event.is_directory:
-            self._delete_rows_under_directory(event.src_path)
-            return
-        self._delete_rows_for_file(event.src_path)
-        if self.is_valid_file(event.dest_path):
+        self._delete_rows_under(event.src_path)
+        if not event.is_directory and self.is_valid_file(event.dest_path):
             self._schedule_index(event.dest_path)
 
 

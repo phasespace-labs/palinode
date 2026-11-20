@@ -68,7 +68,7 @@ def _walk_memory_files(
         raw = [
             (fp, rel)
             for fp in glob.glob(os.path.join(memory_dir, include), recursive=True)
-            if is_memory_path(fp, memory_dir, SKIP_FOR_LINT)
+            if os.path.isfile(fp) and is_memory_path(fp, memory_dir, SKIP_FOR_LINT)
             and (rel := find_store_path(fp, memory_dir)) is not None
         ]
     else:
