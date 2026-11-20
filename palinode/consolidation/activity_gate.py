@@ -197,7 +197,7 @@ def _mode_state(state: dict[str, Any], mode: str) -> dict[str, Any]:
     return entry if isinstance(entry, dict) else {}
 
 
-def _store_dir(memory_dir: str | os.PathLike[str] | None = None) -> Path:
+def _get_store_dir(memory_dir: str | os.PathLike[str] | None = None) -> Path:
     base = memory_dir or getattr(config, "memory_dir", None) or config.palinode_dir
     return Path(base).expanduser()
 
@@ -213,7 +213,7 @@ def count_sessions_since(
     stalls consolidation indefinitely, so the ambiguous case resolves toward
     running.
     """
-    store_dir = _store_dir(memory_dir)
+    store_dir = _get_store_dir(memory_dir)
     if not (store_dir / "daily").is_dir():
         return 0
 

@@ -22,7 +22,7 @@ class MemoryFile:
     rel_path: str
 
 
-def _relative_inside(path: str, store_dir: str) -> str | None:
+def _find_relative_path_inside(path: str, store_dir: str) -> str | None:
     try:
         rel = os.path.relpath(path, store_dir)
     except ValueError:  # another drive on Windows
@@ -38,9 +38,9 @@ def find_store_path(path: str, store_dir: str) -> str | None:
     A symlinked store root makes events arrive in the other spelling, so the
     resolved paths are tried when the given ones do not match.
     """
-    rel = _relative_inside(path, store_dir)
+    rel = _find_relative_path_inside(path, store_dir)
     if rel is None:
-        rel = _relative_inside(os.path.realpath(path), os.path.realpath(store_dir))
+        rel = _find_relative_path_inside(os.path.realpath(path), os.path.realpath(store_dir))
     return rel
 
 
