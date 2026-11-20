@@ -1,11 +1,10 @@
 #!/bin/bash
 # check-memory-walk.sh — enforce the core/memory_files.py walk choke point.
 #
-# core/memory_files.py is the only code that turns a path into a store path and
-# the only code that walks the store for memory files, so every surface agrees
-# on which files are memory: the rule for skipped folders, hidden file names,
-# symlinked folders and loops lives in one place. Until this script, that was
-# prose only: a new `glob.glob(os.path.join(root, "**", "*.md"), recursive=True)`
+# core/memory_files.py is the only code that walks the store for memory files,
+# so every surface agrees on which files are memory: the rule for skipped
+# folders, hidden file names, symlinked folders and loops lives in one place.
+# Until this script, that was prose only: a new `glob.glob(os.path.join(root, "**", "*.md"), recursive=True)`
 # brought back a second, slightly different rule. A call is flagged when it is:
 #
 #   1. os.walk( or rglob( — always

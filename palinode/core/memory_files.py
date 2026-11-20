@@ -1,4 +1,4 @@
-"""The one place that turns a path into a store path and lists the memory files.
+"""The one place that walks the store for memory files.
 
 Every reader of the store asks this module which files are memory. The rule for
 directory segments stays in :mod:`palinode.core.skip_dirs`; this module adds the

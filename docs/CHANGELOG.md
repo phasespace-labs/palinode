@@ -6,7 +6,7 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Added
 
-- **One walker lists the memory files.** `palinode/core/memory_files.py` is now the only code that turns a path into a store path and the only code that walks the store for memory files. The watcher, `/reindex`, `/list`, the browse UI, lint, TTL, propagation, the session digest, cross-refs, the doctor checks and about twenty other readers ask it, so they agree on which files are memory. `scripts/check-memory-walk.sh` runs in CI and fails when a recursive Markdown glob, an `os.walk` or an `rglob` over the store appears outside it.
+- **One walker lists the memory files.** `palinode/core/memory_files.py` is now the only code that walks the store for memory files. The watcher, `/reindex`, `/list`, the browse UI, lint, TTL, propagation, the session digest, cross-refs, the doctor checks and about twenty other readers ask it, so they agree on which files are memory. `scripts/check-memory-walk.sh` runs in CI and fails when a recursive Markdown glob, an `os.walk` or an `rglob` over the store appears outside it.
 
 ### Changed
 
