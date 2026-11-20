@@ -323,6 +323,60 @@ def test_deleting_a_folder_with_pattern_characters_drops_only_its_own_rows(
     assert _indexed_paths() == [str(root / sibling / "y.md")]
 
 
+# ── a match ends at the path's own boundary ─────────────────────────────────
+
+
+def test_deleting_a_folder_keeps_rows_whose_paths_sort_beside_it(root: Path, handler) -> None:
+    _seed(root / "people" / "a.md")
+    _seed(root / "people-x" / "x.md")
+    _seed(root / "people.d" / "x.md")
+    _seed(root / "people.md")
+    _seed(root / "people0" / "x.md")
+
+    handler.on_deleted(DirDeletedEvent(str(root / "people")))
+
+    assert _indexed_paths() == [
+        str(root / "people-x" / "x.md"),
+        str(root / "people.d" / "x.md"),
+        str(root / "people.md"),
+        str(root / "people0" / "x.md"),
+    ]
+
+
+def test_deleting_a_file_keeps_rows_whose_paths_start_with_its_name(root: Path, handler) -> None:
+    _seed(root / "people" / "a.md")
+    _seed(root / "people" / "a.md.bak")
+    _seed(root / "people" / "a.mdx")
+    _seed(root / "people" / "a" / "x.md")
+
+    handler.on_deleted(FileDeletedEvent(str(root / "people" / "a.md")))
+
+    assert _indexed_paths() == [
+        str(root / "people" / "a.md.bak"),
+        str(root / "people" / "a.mdx"),
+        str(root / "people" / "a" / "x.md"),
+    ]
+
+
+def test_removing_a_link_to_a_folder_keeps_a_file_named_like_it(root: Path, handler) -> None:
+    _seed(root / "shared" / "e.md")
+    _seed(root / "shared.md")
+    _seed(root / "shared-x" / "f.md")
+
+    handler.on_deleted(FileDeletedEvent(str(root / "shared")))
+
+    assert _indexed_paths() == [str(root / "shared-x" / "f.md"), str(root / "shared.md")]
+
+
+def test_deleting_a_folder_named_beyond_ascii_keeps_its_longer_sibling(root: Path, handler) -> None:
+    _seed(root / "ludzie" / "żółw" / "a.md")
+    _seed(root / "ludzie" / "żółwie" / "b.md")
+
+    handler.on_deleted(DirDeletedEvent(str(root / "ludzie" / "żółw")))
+
+    assert _indexed_paths() == [str(root / "ludzie" / "żółwie" / "b.md")]
+
+
 def _is_case_sensitive(folder: Path) -> bool:
     probe = folder / "case-probe"
     probe.write_text("", encoding="utf-8")
