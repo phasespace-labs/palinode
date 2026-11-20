@@ -330,6 +330,17 @@ def get_db() -> sqlite3.Connection:
     return db
 
 
+def _get_db_without_vec() -> sqlite3.Connection:
+    """Open a connection that reads the ``chunks`` table without loading sqlite-vec.
+
+    Loading the extension costs about 0.2 ms, which a per-event watcher query cannot pay.
+    """
+    _ensure_db()
+    db = sqlite3.connect(config.db_path, timeout=DB_BUSY_TIMEOUT_SECONDS)
+    db.row_factory = sqlite3.Row
+    return db
+
+
 def _validated_embedding_dimensions() -> int:
     """Ensure embedding dimensions are numeric before interpolating into DDL."""
     try:
@@ -1056,14 +1067,62 @@ def delete_chunks_for_file_paths(file_paths: Iterable[str]) -> None:
         db.close()
 
 
-def list_indexed_file_paths() -> list[str]:
-    """Return every file path that holds at least one indexed chunk."""
-    db = get_db()
+def list_indexed_file_paths_for_store_path(
+    roots: Iterable[str], target: str,
+) -> tuple[list[str], list[str]]:
+    """Return the indexed paths a store path covers, split by where they lie.
+
+    ``roots`` each end in ``/``. The first list holds ``target`` and every file
+    under it, in each root. The second holds every indexed path under none of
+    the roots, which the caller must resolve itself. Both are binary ranges on
+    the file path index, so a sibling that only sorts beside ``target`` is not
+    returned and the cost does not grow with the size of the index.
+    """
+    roots = tuple(roots)
+    db = _get_db_without_vec()
     try:
-        rows = db.execute("SELECT DISTINCT file_path FROM chunks").fetchall()
+        under_roots: list[str] = []
+        for root in roots:
+            at = root + target
+            rows = db.execute(
+                "SELECT file_path FROM chunks WHERE file_path = ? "
+                "UNION SELECT file_path FROM chunks WHERE file_path >= ? AND file_path < ?",
+                (at, at + "/", at + "0"),  # "0" is the byte after "/"
+            ).fetchall()
+            under_roots.extend(row["file_path"] for row in rows)
+
+        spans: list[tuple[str, str]] = []
+        for low, high in sorted({(root, root[:-1] + "0") for root in roots}):
+            if spans and low < spans[-1][1]:
+                spans[-1] = (spans[-1][0], max(spans[-1][1], high))
+            else:
+                spans.append((low, high))
+        gaps: list[tuple[str | None, str | None]] = []
+        previous_high: str | None = None
+        for low, high in spans:
+            gaps.append((previous_high, low))
+            previous_high = high
+        gaps.append((previous_high, None))
+
+        outside_roots: list[str] = []
+        for low, high in gaps:
+            conditions = []
+            params: list[str] = []
+            if low is not None:
+                conditions.append("file_path >= ?")
+                params.append(low)
+            if high is not None:
+                conditions.append("file_path < ?")
+                params.append(high)
+            where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+            rows = db.execute(
+                f"SELECT DISTINCT file_path FROM chunks{where}",  # nosec B608 - fixed fragments, bound values
+                params,
+            ).fetchall()
+            outside_roots.extend(row["file_path"] for row in rows)
     finally:
         db.close()
-    return [row["file_path"] for row in rows]
+    return under_roots, outside_roots
 
 
 def gc_orphaned_chunks(valid_paths: Collection[str]) -> tuple[int, int]:

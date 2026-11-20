@@ -405,14 +405,16 @@ schedules summary and description generation."""
         """
         memory_dir = config.palinode_dir
         target = find_store_path(path, memory_dir)
+        # watchdog reports the store root's deletion when the store or a parent folder is renamed
         if target is None or target == ".":
             return
-        plain_roots = (memory_dir.rstrip("/") + "/", os.path.realpath(memory_dir).rstrip("/") + "/")
+        roots = tuple(dict.fromkeys(
+            (memory_dir.rstrip("/") + "/", os.path.realpath(memory_dir).rstrip("/") + "/")
+        ))
         try:
-            doomed = []
-            for indexed in store.list_indexed_file_paths():
-                root = next((r for r in plain_roots if indexed.startswith(r)), None)
-                rel = indexed[len(root):] if root else find_store_path(indexed, memory_dir)
+            doomed, outside_roots = store.list_indexed_file_paths_for_store_path(roots, target)
+            for indexed in outside_roots:
+                rel = find_store_path(indexed, memory_dir)
                 if rel is not None and (rel == target or rel.startswith(target + "/")):
                     doomed.append(indexed)
             if not doomed:
