@@ -12,6 +12,7 @@ See ADR-009 §3.1-3.4 for the hierarchy, auto-detection, and access rules.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -255,6 +256,85 @@ def other_project(chain: ScopeChain | None, metadata: dict[str, Any]) -> bool:
 def with_other_projects(chain: ScopeChain | None) -> ScopeChain | None:
     """``chain`` with other projects' records let through, identity unchanged."""
     return replace(chain, include_other_projects=True) if chain is not None else None
+
+
+def effective_project_scope(
+    context: Sequence[str] | None,
+    *,
+    cwd: str | None = None,
+    project: str | None = None,
+):
+    """The project scope a delivery applies, and where it came from.
+
+    Three cases, and the difference between the last two is load-bearing —
+    what this returns is both what the delivery applies and what it reports,
+    so the two can never disagree:
+
+    - **No ``context`` at all** — the caller resolved nothing (the REST and
+      plugin surfaces). The pinned ``PALINODE_PROJECT`` applies, and only
+      that: never the API host's own directory, which is not the caller's
+      repository. Routes accepting ``cwd`` / ``project`` use those caller
+      hints in the same resolver when no context list was supplied.
+    - **A ``context`` naming a project** — the caller already resolved scope
+      on the surface closest to it (the MCP server and the CLI both do,
+      through the one shared resolver) and that decision stands: ``explicit``.
+    - **A ``context`` that names no project, empty list included** — the
+      caller stated a scope with no project in it. That is a decision too, so
+      no project is applied and none is reported. It is how a caller opts out
+      of a pinned server's scope; ``palinode search --no-context`` sends
+      exactly this.
+
+    This server's ``context.enabled: false`` overrides all three: the caller
+    resolved its project under its own config, which may not be this one.
+    Returns a :class:`palinode.core.context_prime.ProjectResolution`.
+    """
+    from palinode.core.config import config
+    from palinode.core.context_prime import ProjectResolution, resolve_context
+
+    if not config.context.enabled:
+        return ProjectResolution(None, "disabled")
+    if context is None:
+        return resolve_context(cwd=cwd, project=project)
+    project = next((ref for ref in context
+                    if isinstance(ref, str) and ref.startswith("project/")), None)
+    return resolve_context(project=project) if project else ProjectResolution(None, "none")
+
+
+def search_scope_chain(
+    context: Sequence[str] | None = None,
+    session_id: str | None = None,
+    include_other_projects: bool = False,
+) -> ScopeChain | None:
+    """The session scope chain for ADR-009 Layer 2 gating of a delivery.
+
+    The project level is taken from the caller-supplied ambient ``context``
+    (the same ``project/*`` refs used for the ADR-008 boost — never guessed);
+    agent/harness/member/org come from env + config via
+    :func:`resolve_scope_chain`.
+
+    Returns ``None`` unless the chain carries a real **identity** level. The
+    gate is :meth:`ScopeChain.has_identity`, not ``is_empty``: ``session_id``
+    is ADR-007 recall-dedup telemetry that any caller may send, and a
+    ``session/<id>``-only chain describes nobody — treating it as a scope
+    would silently hide every explicitly-scoped shared memory. ``None`` still
+    withholds ``private``/``restricted`` memories at the choke point; it only
+    turns off *scope isolation*.
+
+    A chain carrying a project isolates to it: records tagged to a different
+    project are withheld at the same choke point, unless
+    ``include_other_projects`` asks for them.
+    """
+    from palinode.core.config import config
+
+    project = None
+    for ref in (context or []):
+        if isinstance(ref, str) and ref.startswith("project/"):
+            project = ref.split("/", 1)[1]
+            break
+    chain = resolve_scope_chain(config, project=project, session_id=session_id)
+    if not chain.has_identity():
+        return None
+    return with_other_projects(chain) if include_other_projects else chain
 
 
 def visible_on_chain(

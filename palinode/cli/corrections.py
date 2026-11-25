@@ -18,7 +18,7 @@ import click
 
 from palinode.cli._api import HTTPStatusError, RequestError, api_client
 from palinode.cli._format import OutputFormat, console, emit_json, get_default_format
-from palinode.core.parity import CORRECTION_ACTIONS, CORRECTION_APPLIED_PARTIAL
+from palinode.core.operations import CORRECTION_ACTIONS, CORRECTION_APPLIED_PARTIAL
 
 
 def _listing_options(command: Callable[..., Any]) -> Callable[..., Any]:

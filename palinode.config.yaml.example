@@ -223,7 +223,8 @@ search:
   # the two floors above do that. Turning this on withholds the slate on the
   # MCP surface when the verdict is `none` (nothing found clears even the low
   # mark). Off by default: an empty slate cannot be told apart from an empty
-  # store. Other surfaces always return their rows.
+  # store. Other surfaces always return their rows. Set it on the API server:
+  # MCP follows the server's setting, not its own config.
   abstain_on_no_confident_match: false
   # Default number of results
   default_limit: 15

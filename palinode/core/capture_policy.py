@@ -161,6 +161,45 @@ def _normalize_path(value: object) -> str:
         raise CapturePolicyError("Invalid path exclusion") from exc
 
 
+def _canonical_request_path(value: object) -> str:
+    """The real location of an automatic request's own path (a hook's cwd or transcript).
+
+    Unlike an exclusion entry, a request path may run through a symlink: macOS
+    ``/tmp`` and ``/var/folders`` are symlinks, and so is a checkout reached
+    through a linked directory. It is followed to where it really is, and that
+    path is what exclusions are checked against; an exclusion entry has no
+    symlink components (:func:`_normalize_path`), so both sides are real
+    paths. A path that does not exist on this server (another host, a file not
+    written yet) is kept as written from its first missing component.
+
+    Raises :class:`CapturePolicyError` when the path cannot be verified here:
+    ``..``, a component this process cannot inspect (EACCES), a dangling
+    symlink, or a symlink loop.
+    """
+    if not isinstance(value, str) or not value or "\x00" in value:
+        raise CapturePolicyError("Invalid path")
+    raw = Path(value)
+    if not raw.is_absolute() or ".." in raw.parts:
+        raise CapturePolicyError("Invalid path")
+    existing = Path(raw.anchor)
+    missing: tuple[str, ...] = ()
+    for index, part in enumerate(raw.parts[1:]):
+        probe = existing / part
+        try:
+            os.lstat(probe)
+        except (FileNotFoundError, NotADirectoryError):
+            missing = raw.parts[1 + index:]
+            break
+        except OSError as exc:
+            raise CapturePolicyError("Unverifiable path") from exc
+        existing = probe
+    try:
+        real = os.path.realpath(existing, strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise CapturePolicyError("Unverifiable path") from exc
+    return str(Path(real, *missing))
+
+
 def _string_list(value: object, normalizer, label: str) -> tuple[str, ...]:
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         raise CapturePolicyError(f"Invalid {label}")
@@ -343,6 +382,10 @@ def evaluate_capture_policy(
     # cannot read (``/root`` or a 0700 home raises EACCES). An unverifiable
     # path only matters when there is an exclusion to check it against; with
     # none configured it is dropped, never resolved through.
+    # A symlinked path is followed to its real location, and the real path is
+    # checked against the exclusions. The project is resolved from the cwd as
+    # the caller wrote it, so a checkout reached through a link keeps the name
+    # the user sees.
     normalized_cwd: str | None = None
     candidates: list[str] = []
     unverifiable = False
@@ -350,13 +393,13 @@ def evaluate_capture_policy(
         if value is None:
             continue
         try:
-            normalized = _normalize_path(value)
+            real = _canonical_request_path(value)
         except CapturePolicyError:
             unverifiable = True
             continue
-        candidates.append(normalized)
+        candidates.append(real)
         if is_cwd:
-            normalized_cwd = normalized
+            normalized_cwd = os.path.normpath(value)
     if unverifiable and (policy.excluded_paths or policy.excluded_projects):
         return PolicyDecision(False, "invalid_scope")
     if normalized_project is None and normalized_cwd is not None:

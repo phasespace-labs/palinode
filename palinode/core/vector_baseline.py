@@ -51,11 +51,8 @@ _cache: dict[str, object] = {}
 def _index_state() -> tuple[tuple[str, str], int]:
     from palinode.core import store
 
-    db = store.get_db()
-    try:
-        (count,) = db.execute("SELECT count(*) FROM chunks").fetchone()
-    finally:
-        db.close()
+    with store.reader() as reader:
+        count = reader.chunk_count()
     return (str(config.db_path), config.embeddings.primary.model), int(count)
 
 

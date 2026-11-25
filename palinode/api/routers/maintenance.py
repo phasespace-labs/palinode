@@ -31,7 +31,7 @@ from pydantic import BaseModel
 
 from palinode.core import store
 from palinode.core.config import config
-from palinode.core.parity import CORRECTION_ACTIONS
+from palinode.core.operations import CORRECTION_ACTIONS
 from palinode.core.path_guard import to_rel_path
 
 from palinode.api._util import _reindex_lock, _reindex_state, _safe_500, _utc_now
@@ -411,7 +411,7 @@ def correction_apply_api(req: CorrectionApplyRequest) -> dict[str, Any]:
     string, on purpose) and would read to generic client tooling as a blind
     retry, which is the wrong move on a store that is already half-written.
     """
-    from palinode.core.parity import CORRECTION_APPLIED_PARTIAL
+    from palinode.core.operations import CORRECTION_APPLIED_PARTIAL
     from palinode.corrections.review import apply_correction
 
     try:

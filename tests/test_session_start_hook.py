@@ -256,14 +256,6 @@ def test_no_auth_header_by_default(tmp_path):
 # ---- Drift guards -------------------------------------------------------
 
 
-def test_embedded_init_copy_matches_canonical_script():
-    """`palinode init` embeds the hook as a string constant (installed packages
-    can't read examples/). This pins the two byte-for-byte so they can't drift."""
-    from palinode.cli.init import SESSION_START_HOOK_SCRIPT
-
-    assert SESSION_START_HOOK_SCRIPT == HOOK.read_text()
-
-
 def test_examples_settings_registers_both_hooks():
     settings = json.loads((HOOK.parent / "settings.json").read_text())
     hooks = settings["hooks"]

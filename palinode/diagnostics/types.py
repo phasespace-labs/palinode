@@ -7,6 +7,7 @@ and the formatters.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 from palinode.core.config import Config
@@ -49,6 +50,12 @@ class DoctorContext:
 
     Start simple: just the resolved Config. Later expansions can add
     connection objects, caches, or flags without breaking existing checks.
+
+    ``home`` and ``cwd`` are the directories a check reads client-side files
+    relative to (the hook checks), taken once here instead of from process
+    state inside each check.
     """
 
     config: Config
+    home: Path = field(default_factory=Path.home)
+    cwd: Path = field(default_factory=Path.cwd)

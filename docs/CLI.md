@@ -965,48 +965,54 @@ palinode hooks update [OPTIONS]
 ```
 
 Find every palinode hook registered in the Claude Code settings cascade
-(`~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`)
-and in Codex's hook layers (`hooks.json` and `config.toml` under `$CODEX_HOME`,
-default `~/.codex`, and under the project's `.codex/`), or in the project's Cursor `.cursor/hooks.json` or Antigravity
-`.agents/hooks.json`, and replace each copy that differs from the one this release ships. The old copy
-is kept beside it as `<name>.bak-<YYYYMMDD-HHMMSS>`. A hook that is registered
-but missing gets installed. When everything is current, a re-run writes nothing.
+(`~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`),
+in Codex's hook layers (`hooks.json` and `config.toml` under `$CODEX_HOME`,
+default `~/.codex`, and under the project's `.codex/`), and in the project's Cursor
+`.cursor/hooks.json` and Antigravity `.agents/hooks.json`, and bring palinode's
+hooks up to what this release ships. Each harness's registrations are defined once,
+in `palinode/hooks/`, and these rules come from those definitions.
 
-A hook counts as palinode's only when its script is named like one `init`
-writes (`palinode-session-start.sh`, `palinode-session-end.sh`,
-`palinode-user-prompt-submit.sh`, `palinode-post-compact.sh`,
-`palinode-cursor-hook.sh`, `palinode-agy-hook.sh`) and reads like palinode's. A
-Cursor or Antigravity command names both the adapter and the script it runs, and
-both are checked. Other hooks are never written. A symlinked hook is reported but
-not rewritten: refresh the file it points to.
+**Scripts.** Each palinode script a registration runs is compared with the packaged
+copy. A copy that matches some palinode release is replaced, and the old one kept
+beside it as `<name>.bak-<YYYYMMDD-HHMMSS>`. A copy that matches no palinode release
+is someone's edit: it is reported, and replaced (with the same backup) only with
+`--force`. A hook that is registered but missing gets installed. A symlinked hook is
+reported but not rewritten: refresh the file it points to.
 
-Settings files are left alone except for two repairs to palinode's own Claude Code
-registrations, each made after copying the file to `<name>.bak-<YYYYMMDD-HHMMSS>`:
+**Registrations.** A registration is palinode's to rewrite only when its command is
+exactly a form palinode writes: `"${CLAUDE_PROJECT_DIR}"/.claude/hooks/palinode-<name>.sh`
+(what `init --hook` writes), the documented user-level `~/.claude/hooks/palinode-<name>.sh`,
+the unquoted `${CLAUDE_PROJECT_DIR}/…` that `init` wrote before 0.24.1, and the one form
+each of Codex, Cursor and Antigravity has. Before a file changes it is copied to
+`<name>.bak-<YYYYMMDD-HHMMSS>`, and another tool's hook is never touched.
 
-- **PostCompact made synchronous.** Claude Code cancels a hook registered with
-  `"async": true`, and v0.24.0 registered `palinode-post-compact.sh` that way, so its
-  compaction checkpoint was almost never saved. `update` removes `async` from that
-  handler.
-- **`${CLAUDE_PROJECT_DIR}` quoted.** Claude Code runs a hook through `/bin/sh`, so an
-  unquoted `${CLAUDE_PROJECT_DIR}/.claude/hooks/palinode-<name>.sh`, the form `init`
-  wrote before 0.24.1, splits at a space in the project path and the hook exits 127.
-  `update` rewrites it to `"${CLAUDE_PROJECT_DIR}"/.claude/hooks/palinode-<name>.sh`
-  for palinode's four Claude Code scripts.
+- **What an earlier release wrote is repaired.** The unquoted `${CLAUDE_PROJECT_DIR}`
+  is quoted: `/bin/sh` splits it at a space in the project path, and the hook exits
+  127. An async PostCompact handler, as v0.24.0 registered it, is made synchronous:
+  Claude Code cancels an async hook, so compactions left no checkpoint. An old
+  timeout (the 15 s SessionEnd budget of v0.7–v0.8) is reset.
+- **What you changed is kept.** A timeout no release wrote, or an async you added, is
+  reported under `registrations_kept` and reset only with `--force`. An unquoted
+  command in it is still quoted.
+- **A registration a newer release added is registered,** with its script, when that
+  script was never installed and the file is one `palinode init` writes (the project
+  `.claude/settings.json`, `.codex/hooks.json`, `.cursor/hooks.json`,
+  `.agents/hooks.json`). In a file you put together yourself, such as
+  `~/.claude/settings.json`, it is reported and added only with `--force`.
+- **A registration you removed stays removed.** When its script is still installed
+  and another palinode hook for that harness is still registered at the same level
+  (user or project), it is reported, and `--force` restores it. Where none is left,
+  palinode's hooks count as uninstalled there and nothing is reported.
+- **A registration in another form is never rewritten.** Its script is still
+  refreshed. If it is async or uses `${CLAUDE_PROJECT_DIR}` unquoted, it is reported
+  for you to fix by hand (`fix_by_hand` in `--format json`).
 
-Each repaired file is reported as `repaired registration` (`would repair` with
+Each changed file is reported as `repaired registration` (`would repair` with
 `--dry-run`), naming its changes; `--format json` lists them under `registrations`.
-Nothing else in the file changes, and another tool's hook is never touched. Both
-repairs match a command only when it is just the path to a palinode script, as `init`
-and the manual install write it. For the PostCompact repair that is a literal path
-ending in `/palinode-post-compact.sh` (letters, digits and `._@+-`), optionally starting
-with `~`, `$HOME`, `${HOME}`, `$CLAUDE_PROJECT_DIR` or `${CLAUDE_PROJECT_DIR}` (a
-variable prefix may be in double quotes), or that whole path in double quotes; `~`
-counts only outside quotes. For the quoting repair it is exactly the unquoted
-`$CLAUDE_PROJECT_DIR` or `${CLAUDE_PROJECT_DIR}` path. The text is matched as written,
-trimming only spaces and tabs. Any other command (other quoting or expansion, an
-interpreter, an assignment, a redirection, a pipeline) is left as it is; fix such an
-entry by hand. Re-running `palinode init --hook` makes the same repairs in the project
-`.claude/settings.json` it writes, without a backup; `update` covers the whole cascade.
+Codex ties a hook's trust to its `hooks.json` entry, so when `update` writes a Codex
+registration it says to re-trust the hooks with `/hooks`; it only ever appends,
+after every existing entry. Re-running `palinode init --hook` makes the same repairs
+in the project `.claude/settings.json` it writes, without a backup.
 
 Each packaged hook carries a `# palinode-hook-version: X.Y.Z` stamp on its
 second line, naming the release in which it last changed. The output shows
@@ -1016,6 +1022,7 @@ installed → packaged versions. Copies from before the stamp existed show as
 | Option | Default | Meaning |
 |---|---|---|
 | `--dry-run` | off | Show what would change, with a unified diff, and write nothing |
+| `--force` | off | Also replace edited scripts, reset registrations you changed, and add registrations you removed or never had, keeping backups |
 | `--project-dir PATH` | current directory | Project whose `.claude/settings*.json`, `.codex/` hooks, `.cursor/hooks.json` and `.agents/hooks.json` to read |
 | `--format [text\|json]` | auto | Output format |
 

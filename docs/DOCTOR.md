@@ -207,11 +207,13 @@ Tagged `fast`: a bounded read of a handful of small files, no network.
 
 `palinode init --hook` copies the Claude Code hook scripts once, and later runs skip them. An install keeps the hook it started with while the server and the packaged hooks move on. Release smokes install the current hook fresh, so they never see the stale copy. It shows up only as recall or capture behaviour that a release was supposed to have fixed.
 
-The check walks the Claude Code settings cascade relative to the current directory (`~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`) and Codex's hook layers (`hooks.json` and `config.toml` under `$CODEX_HOME`, default `~/.codex`, and under `.codex/`). It reads each registered hook command and compares every palinode hook script byte-for-byte with the packaged copy. Hooks that are not palinode's are ignored.
+The check walks the Claude Code settings cascade relative to the current directory (`~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`), Codex's hook layers (`hooks.json` and `config.toml` under `$CODEX_HOME`, default `~/.codex`, and under `.codex/`), and the project's Cursor `.cursor/hooks.json` and Antigravity `.agents/hooks.json`. It compares every palinode hook script byte-for-byte with the packaged copy, and every palinode registration with what this release writes. Hooks that are not palinode's are ignored. The rules are the ones [`palinode hooks update`](CLI.md#palinode-hooks-update) applies, so the diagnosis and the fix agree.
 
-- Warn: a palinode hook differs from the packaged copy, or is registered but missing. The message names each path with its installed and packaged `palinode-hook-version` stamps; copies from before the stamp existed show as `unstamped`. The remediation is [`palinode hooks update`](CLI.md#palinode-hooks-update), run from the same directory (`--dry-run` first to see the diff).
+- Warn: a palinode hook differs from the packaged copy, or is registered but missing. The message names each path with its installed and packaged `palinode-hook-version` stamps; copies from before the stamp existed show as `unstamped`. A copy that matches no palinode release is named as edited. The remediation is `palinode hooks update`, run from the same directory (`--dry-run` first to see the diff), and `--force` for an edited copy.
+- Warn: a palinode registration an earlier release wrote needs a repair (async, an unquoted `${CLAUDE_PROJECT_DIR}`, an old timeout), or a registration a newer release added is missing from a file `palinode init` writes. `palinode hooks update` fixes both.
+- Warn, fixed by hand: a registration in a form palinode does not write that is async or uses `${CLAUDE_PROJECT_DIR}` unquoted.
 - Warn, not fixable by the command: a symlinked hook whose target differs. Refresh the file the link points to.
-- Info: every registered palinode hook matches, or none is registered.
+- Info: every registered palinode hook matches, or none is registered. The message also notes registrations you changed or removed, and ones a newer release added that are missing from a file you put together yourself; `palinode hooks update --force` sets them to what palinode writes.
 
 Tagged `fast`: a few small local reads, no network.
 

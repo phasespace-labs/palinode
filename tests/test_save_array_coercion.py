@@ -58,20 +58,20 @@ def test_every_save_array_param_is_guarded_in_the_handler() -> None:
 
     This used to grep the handler source for a per-param
     ``body[...] = _coerce_str_array(arguments[...])`` line. Coercion is now
-    declared once in ``core/write_input.py``'s ``SAVE_PARAMS`` and applied by
+    declared once in the save spec (``core/operations.py``'s ``SAVE``) and applied by
     ``build_payload``, so there is no such line to find and the string match
     would pass vacuously the moment anyone reformatted it.
 
     Pointed at the declaration instead, and derived from the *live MCP schema*
     rather than a hardcoded list: every parameter the save tool advertises as an
-    array must be declared ``array=True`` in the spec. A newly added array param
-    that nobody adds to ``SAVE_PARAMS`` fails here — which the old grep could
+    array must be an array in the spec. A newly added array param
+    that nobody adds to the spec fails here — which the old grep could
     not catch either, since it only ever checked the five names written into
     this file.
     """
     import asyncio
 
-    from palinode.core.write_input import SAVE_PARAMS
+    from palinode.core.operations import SAVE
     from palinode.mcp import list_tools as mcp_list_tools
 
     tools = asyncio.run(mcp_list_tools())
@@ -83,11 +83,11 @@ def test_every_save_array_param_is_guarded_in_the_handler() -> None:
     }
     assert schema_arrays, "save tool advertises no array params — schema lookup broke"
 
-    coerced = {p.name for p in SAVE_PARAMS if p.array}
+    coerced = {p.name for p in SAVE.params if p.array or p.type == "array"}
     missing = schema_arrays - coerced
     assert not missing, (
         f"{sorted(missing)} advertised as arrays by the save tool but not declared "
-        "array=True in core/write_input.py::SAVE_PARAMS — they forward verbatim, "
+        "as arrays in core/operations.py::SAVE — they forward verbatim, "
         "which is the partial-tolerance defect this module exists to prevent."
     )
 
@@ -104,12 +104,12 @@ def test_empty_arrays_survive_as_an_assertion() -> None:
     things depending on which surface the caller used. ``[]`` is a claim the
     caller made — only ``None`` means "never specified".
     """
-    from palinode.core.write_input import SAVE_PARAMS, build_payload
+    from palinode.core.operations import SAVE, build_payload
 
-    payload = build_payload(SAVE_PARAMS, {"contradicts": [], "backed_by": []})
+    payload = build_payload(SAVE.params, {"contradicts": [], "backed_by": []})
     assert payload == {"contradicts": [], "backed_by": []}
 
-    assert build_payload(SAVE_PARAMS, {"contradicts": None}) == {}
+    assert build_payload(SAVE.params, {"contradicts": None}) == {}
 
 
 def test_blank_free_text_is_still_elided() -> None:
@@ -118,10 +118,10 @@ def test_blank_free_text_is_still_elided() -> None:
     ``title=""`` carries nothing the server could act on, and forwarding it
     would be a behaviour change dressed up as a unification.
     """
-    from palinode.core.write_input import SAVE_PARAMS, build_payload
+    from palinode.core.operations import SAVE, build_payload
 
-    assert build_payload(SAVE_PARAMS, {"title": "", "slug": "", "project": ""}) == {}
-    assert build_payload(SAVE_PARAMS, {"title": "Real"}) == {"title": "Real"}
+    assert build_payload(SAVE.params, {"title": "", "slug": "", "project": ""}) == {}
+    assert build_payload(SAVE.params, {"title": "Real"}) == {"title": "Real"}
 
 
 def _capturing_client():
@@ -180,7 +180,7 @@ def test_cli_and_mcp_agree_on_the_same_logical_save() -> None:
     The point of the seam: the CLI adapter and the MCP handler now derive their
     payload from one spec, so they cannot drift apart per-param the way they had.
     """
-    from palinode.core.write_input import SAVE_PARAMS, build_payload
+    from palinode.core.operations import SAVE, build_payload
 
     client, captured = _capturing_client()
     client.save(
@@ -202,7 +202,6 @@ def test_cli_and_mcp_agree_on_the_same_logical_save() -> None:
         "contradicts": [],
         "sources": [{"ref": "a.md", "quote": "q"}],
     }
-    mcp_body = {"content": "body", "type": "Insight"}
-    mcp_body.update(build_payload(SAVE_PARAMS, mcp_arguments))
+    mcp_body = build_payload(SAVE.params, mcp_arguments)
 
     assert cli_body == mcp_body

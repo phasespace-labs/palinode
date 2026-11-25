@@ -48,7 +48,7 @@ from palinode.core.audit import AuditLogger
 from palinode.core.agent_directed import read_notice, withhold_agent_directed
 from palinode.core.framing import MEMORY_IS_DATA
 from palinode.core.auth import load_api_token
-from palinode.core.config import ToolSurface, config, validate_tool_surface
+from palinode.core.config import SearchConfig, ToolSurface, config, validate_tool_surface
 from palinode.core.defaults import (
     CONSOLIDATION_TIMEOUT_SECONDS as _CONSOLIDATE_TIMEOUT,
     SAVE_SOURCE_HEADER as _SOURCE_HEADER,
@@ -70,24 +70,22 @@ from palinode.core.explain import (
 )
 from palinode.core.lifecycle_render import render_lifecycle_preview, render_retained_copies
 from palinode.core.where import WhereError, parse_where
-from palinode.core.parity import (
-    CATEGORIES,
+from palinode.core.operations import (
     CORRECTION_ACTIONS,
-    MEMORY_TYPES,
     PROMPT_TASKS,
     RESOLVE_INTENTS,
-    RESOLVE_MODES,
-    TIERS,
+    required_params,
+    schema_properties,
 )
+from palinode.core.operations import LIST as LIST_SPEC
+from palinode.core.operations import READ as READ_SPEC
+from palinode.core.operations import SAVE as SAVE_SPEC
+from palinode.core.operations import SEARCH as SEARCH_SPEC
 from palinode.core.scoring import describe_match
 from palinode.core.path_guard import to_rel_path
 from palinode.core.typed_links import parse_link_refs
-from palinode.core.write_input import (
-    SAVE_PARAMS,
-    SESSION_END_PARAMS,
-    build_payload,
-    coerce_str_array,
-)
+from palinode.core.operations import SESSION_END as SESSION_END_SPEC
+from palinode.core.operations import build_payload, coerce_str_array
 
 logger = logging.getLogger("palinode.mcp")
 logging.basicConfig(level=logging.WARNING)  # quiet — don't pollute stdio
@@ -358,7 +356,7 @@ server.middleware.append(_tailor_instructions)
 
 
 #: Alias for the canonical implementation, which lives in
-#: :mod:`palinode.core.write_input` so CLI and API share it rather than
+#: :mod:`palinode.core.operations` so CLI and API share it rather than
 #: re-deriving it. Kept as a module-level name because this is the
 #: address the coercion has always had from MCP's side.
 _coerce_str_array = coerce_str_array
@@ -687,6 +685,292 @@ _FULL_CONTENT_HARD_CAP = 4000  # Politeness ceiling for full=True.
 #: MCP surface only. The REST API and CLI are separate paths and legitimately
 #: want wide recall for consolidation, dedup and wiki-maintenance passes.
 MCP_SEARCH_LIMIT_MAX = 50
+
+
+def _session_end_input_properties() -> dict[str, Any]:
+    """``palinode_session_end`` properties: the spec's MCP params, MCP's own wording."""
+    return schema_properties(SESSION_END_SPEC, {
+        "summary": {"description": "What was accomplished in this session (1-3 sentences)"},
+        "decisions": {"description": "Key decisions made (optional)"},
+        "blockers": {"description": "Open blockers or next steps (optional)"},
+        "project": {
+            "description": (
+                "Project slug to append status to (e.g., 'palinode'). Auto-detected if omitted."
+            ),
+        },
+        "source": {
+            "description": (
+                "Source surface that created this memory (e.g., 'claude-code', 'cursor', 'api'). "
+                "Auto-detected if omitted."
+            ),
+        },
+        # push=true lets wrap-style callers commit and ship the session note in
+        # one call; omitted uses server config.
+        "push": {"description": "Push the memory repo after committing the session note."},
+        "dry_run": {
+            "description": (
+                "Validate and render the entry without writing, committing, or "
+                "pushing anything. Use to check a payload before committing it, "
+                "or to diagnose a failing session-end without leaving entries "
+                "behind in the daily note."
+            ),
+        },
+    }, surface="mcp")
+
+
+def _save_input_properties() -> dict[str, Any]:
+    """``palinode_save`` properties: the spec's structure, MCP's own wording.
+
+    ``ps`` is MCP's shorthand for type=ProjectSnapshot (a spec ``Shorthand``),
+    so it is not a save parameter and is added here, after ``type``. Kept terse
+    on purpose: this schema sits under a client cap that silently drops an
+    over-budget tool (``tests/test_mcp_schema_size_budget.py``).
+    """
+    props = schema_properties(SAVE_SPEC, {
+        "content": {"description": "The memory content to save (markdown supported)"},
+        "type": {"description": "Memory type. Required unless `ps=true` is given."},
+        "slug": {"description": "Optional URL-safe filename slug (auto-generated if omitted)"},
+        # `path` is described in the tool description: the schema is at its budget.
+        "core": {
+            "description": "If true, this memory is always injected at session start (core memory).",
+        },
+        "entities": {"description": "Related entity refs e.g. ['person/alice', 'project/alpha']"},
+        "project": {
+            "description": "Project slug shorthand — 'palinode' becomes entity 'project/palinode'.",
+        },
+        "title": {"description": "Human-readable title, used in list/search displays."},
+        "metadata": {"description": "Additional frontmatter fields to merge into the saved memory."},
+        "confidence": {"description": "Confidence in this memory's accuracy (0.0-1.0)."},
+        "priority": {
+            "minimum": 1,
+            "maximum": 5,
+            "description": (
+                "Human-assigned memory priority (1–5). Stored as `priority` "
+                "frontmatter; missing means normal (3)."
+            ),
+        },
+        # ADR-018: omitting it leaves the memory `unmarked` (no claim — NOT fact).
+        "epistemic": {
+            "description": (
+                "Kind of claim: fact=observed, inference=derived, open_question=unresolved, "
+                "unverified=asserted but unchecked. Omit to leave unmarked — unmarked is NOT fact."
+            ),
+        },
+        "external_refs": {
+            "additionalProperties": {"type": "string"},
+            "description": "SDLC object references such as github_pr or jira_issue.",
+        },
+        "source": {"description": "Source surface that created this memory."},
+        # Append composes a new body out of the old one; replace overwrites and
+        # marks a sticky living document protected from history-forking compaction.
+        "update_policy": {
+            "description": (
+                "Same slug: 'append' adds to body; 'replace' replaces body, "
+                "keeps non-body metadata, marks a living doc. Sticky."
+            ),
+        },
+        "sources": {
+            "description": "Citation anchors for passages this memory quotes.",
+            "fields": {
+                "ref": "Path under the memory dir of the cited source.",
+                "quote": "The exact passage cited.",
+                "quote_hash": "Optional; computed on save.",
+            },
+        },
+        "contradicts": {
+            "description": (
+                "Refs (category/slug) this memory conflicts with; neither wins — "
+                "surfaced for review."
+            ),
+        },
+        "backed_by": {
+            "description": "Refs (category/slug) that support/back this memory (evidence links).",
+        },
+        "claims": {
+            "description": (
+                "Binds each claim to the source span justifying it. "
+                "Read back via palinode_blame(claims=true)."
+            ),
+            "fields": {
+                "text": "The claim as stated in the memory.",
+                "source_id": "A sources[].ref that justifies the claim.",
+                "span.quote": "The justifying passage in the source.",
+                "span.quote_hash": "Optional; computed on save.",
+                "claim_id": "Optional; derived on save.",
+                "anchor_id": "Optional pointer within a large source.",
+            },
+        },
+    })
+    ps = {
+        "type": "boolean",
+        "description": (
+            "Shorthand for type=ProjectSnapshot (the CLI `--ps` flag). "
+            "If true, omit `type`; any other type value errors."
+        ),
+    }
+    ordered: dict[str, Any] = {}
+    for name, prop in props.items():
+        ordered[name] = prop
+        if name == "type":
+            ordered["ps"] = ps
+    return ordered
+
+
+def _list_input_properties() -> dict[str, Any]:
+    """``palinode_list`` properties: the spec's structure, MCP's own wording."""
+    return schema_properties(LIST_SPEC, {
+        "category": {
+            "description": "Filter by category: people, projects, decisions, insights, research",
+        },
+        "core_only": {
+            "description": "If true, only return files with core: true in frontmatter",
+        },
+        "where": {
+            "description": "Frontmatter filters as key=value (e.g. status=open); all must match.",
+        },
+        "include_inbox": {"description": "Also list inbox/, where ActionItems are saved."},
+        "include_other_projects": {
+            "description": (
+                "Also list records tagged to other projects, after this "
+                "project's under their own heading, each labelled: context "
+                "only, never this project's decisions. Don't turn this on "
+                "to find a value this project's memory lacks; ask the user."
+            ),
+        },
+    })
+
+
+def _read_input_properties() -> dict[str, Any]:
+    """``palinode_read`` properties: the spec's structure, MCP's own wording."""
+    return schema_properties(READ_SPEC, {
+        "file_path": {
+            "description": "Relative path to the memory file (e.g., 'people/alice.md', 'projects/palinode-status.md')",
+        },
+        "meta": {
+            "description": (
+                "If true, the response includes parsed frontmatter "
+                "alongside the body. Omit for the body only."
+            ),
+        },
+        "tier": {
+            "description": (
+                "How much of the file to return. 'abstract' is the "
+                "summary line (~300 chars) — enough to judge "
+                "relevance; 'overview' is frontmatter plus the head "
+                "of the body; 'full' is the whole file. Omit for "
+                "'full'."
+            ),
+        },
+    })
+
+
+def _search_input_properties() -> dict[str, Any]:
+    """``palinode_search`` properties: the spec's structure, MCP's own wording.
+
+    ``full`` is MCP-only and render-only (it picks snippet or body from a
+    response the API always fills), so it is not a search parameter and is
+    added here after the spec's.
+    """
+    out_of_box = SearchConfig()
+    props = schema_properties(SEARCH_SPEC, {
+        "query": {"description": "Natural language search query"},
+        "category": {
+            "description": "Filter by category (memory directory name): people, projects, decisions, insights, research",
+        },
+        "limit": {
+            "description": (
+                f"Max results to return (server default; {out_of_box.default_limit} "
+                "out of the box)"
+            ),
+            # Bounds the one unbounded path on this surface.
+            # `full=true` caps each result at _FULL_CONTENT_HARD_CAP
+            # but has no aggregate ceiling, so limit is what decides
+            # how large a single tool result can get — and results
+            # persist in `messages` for the rest of the session.
+            # Capping the *count* truncates nothing: no memory is cut
+            # mid-body, the model just cannot ask for fifty of them.
+            # Generous on purpose — this stops pathology, it does not
+            # tune recall. MCP surface only; the API and CLI keep wide
+            # recall for consolidation and wiki-maintenance sweeps.
+            "maximum": MCP_SEARCH_LIMIT_MAX,
+        },
+        "date_after": {"description": "Filter results after an ISO date (e.g. 2024-01-01)"},
+        "date_before": {"description": "Filter results before an ISO date"},
+        "include_daily": {
+            "description": "Include daily session notes at full rank (default: false, daily/ files are penalized)",
+        },
+        # Telemetry stays out of default recall so monitoring churn does not
+        # pollute human memory search.
+        "include_telemetry": {"description": "Include machine/monitor telemetry memories."},
+        "include_other_projects": {
+            "description": (
+                "Also return memories tagged to other projects. They "
+                "come after this project's results, under their own "
+                "heading, each labelled with its project and this "
+                "one's: context only, never this project's decisions. "
+                "Off by default: a project-scoped search leaves them "
+                "out. Don't turn this on to find a value this "
+                "project's memory lacks; ask the user instead."
+            ),
+        },
+        "since_days": {
+            "description": (
+                "Only return memories created/updated in the last "
+                "N days.  Equivalent to setting `date_after` to "
+                "now-N days; the API derives one from the other."
+            ),
+        },
+        "types": {"description": "Filter by memory type (matches frontmatter `type`)."},
+        "where": {
+            "description": "Frontmatter filters as key=value (e.g. status=open); all must match.",
+        },
+        "min_priority": {
+            "minimum": 1,
+            "maximum": 5,
+            "description": "Only return memories with human-assigned priority at least this value. Missing priority counts as normal (3).",
+        },
+        "threshold": {
+            "description": (
+                "Vector similarity floor (0.0-1.0); ignored in lexical mode. "
+                f"Server default; {out_of_box.mcp_threshold} out of the box."
+            ),
+        },
+        "tier": {
+            "description": (
+                "How much of each hit to return. 'abstract' caps "
+                "every hit at ~300 chars (summary first) for cheap "
+                "relevance checks; 'overview' returns frontmatter "
+                "plus the head of the body; 'full' is the chunk "
+                "body. Omit to keep the default snippet view."
+            ),
+        },
+        # Read-only closure over the typed links; the caller opts in because
+        # it multiplies file reads per hit.
+        "resolve": {
+            "description": (
+                "Attach evidence around each hit: 'linked' follows "
+                "superseded_by/contradicts/backed_by both ways under "
+                "fixed budgets; 'full' adds bounded unlinked discovery. "
+                "Each hit reports coverage and a resolution — a current "
+                "answer, an unresolved conflict with both sides, or "
+                "insufficient evidence. Default none."
+            ),
+        },
+        "include_retired": {
+            "description": (
+                "With resolve: also show retired records (archived, "
+                "superseded, retracted, expired) in each hit's "
+                "evidence, labelled. Off by default."
+            ),
+        },
+    })
+    # Default snippets keep search results within MCP budget; full=True still
+    # caps rendered content.
+    props["full"] = {
+        "type": "boolean",
+        "description": "Return full chunk content instead of snippets.",
+    }
+    return props
 
 #: The delivery-explanation record cap, taken from the one definition rather
 #: than restated: every surface bounds the same way and says how much it left
@@ -1171,41 +1455,9 @@ def _all_tools() -> list[types.Tool]:
                 "Use to browse what memories exist before reading or searching. "
                 "Scoped like palinode_search: this project's records and ones naming no project."
             ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "category": {
-                        "type": "string",
-                        "description": "Filter by category: people, projects, decisions, insights, research",
-                        "enum": list(CATEGORIES),
-                    },
-                    "core_only": {
-                        "type": "boolean",
-                        "description": "If true, only return files with core: true in frontmatter",
-                        "default": False,
-                    },
-                    "where": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Frontmatter filters as key=value (e.g. status=open); all must match.",
-                    },
-                    "include_inbox": {
-                        "type": "boolean",
-                        "description": "Also list inbox/, where ActionItems are saved.",
-                        "default": False,
-                    },
-                    "include_other_projects": {
-                        "type": "boolean",
-                        "description": (
-                            "Also list records tagged to other projects, after this "
-                            "project's under their own heading, each labelled: context "
-                            "only, never this project's decisions. Don't turn this on "
-                            "to find a value this project's memory lacks; ask the user."
-                        ),
-                        "default": False,
-                    },
-                },
-            },
+            # ADR-022: properties come from the list spec; MCP supplies only
+            # its own descriptions. No `default`: an omitted param is unset.
+            inputSchema={"type": "object", "properties": _list_input_properties()},
             annotations=types.ToolAnnotations(
                 title="List Memory Files",
                 readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False,
@@ -1217,35 +1469,11 @@ def _all_tools() -> list[types.Tool]:
                 "Read the full contents of a memory file. Use after palinode_list or palinode_search "
                 "to see the complete content of a specific file."
             ),
+            # ADR-022: properties come from the read spec.
             inputSchema={
                 "type": "object",
-                "properties": {
-                    "file_path": {
-                        "type": "string",
-                        "description": "Relative path to the memory file (e.g., 'people/alice.md', 'projects/palinode-status.md')",
-                    },
-                    "meta": {
-                        "type": "boolean",
-                        "description": (
-                            "If true, the response includes parsed frontmatter "
-                            "alongside the body.  Default false (body only) to "
-                            "match prior behavior."
-                        ),
-                        "default": False,
-                    },
-                    "tier": {
-                        "type": "string",
-                        "enum": list(TIERS),
-                        "description": (
-                            "How much of the file to return. 'abstract' is the "
-                            "summary line (~300 chars) — enough to judge "
-                            "relevance; 'overview' is frontmatter plus the head "
-                            "of the body; 'full' is the whole file. Omit for "
-                            "'full'."
-                        ),
-                    },
-                },
-                "required": ["file_path"],
+                "properties": _read_input_properties(),
+                "required": required_params(READ_SPEC),
             },
             annotations=types.ToolAnnotations(
                 title="Read Memory File",
@@ -1259,141 +1487,13 @@ def _all_tools() -> list[types.Tool]:
                 "decisions, insights, or research. Returns the most relevant memory "
                 "file excerpts ranked by configured hybrid or lexical retrieval."
             ),
+            # ADR-022: properties come from the search spec; MCP supplies only
+            # its own descriptions and its lower result cap. No `default`: an
+            # omitted param is the server's to fill.
             inputSchema={
                 "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Natural language search query",
-                    },
-                    "category": {
-                        "type": "string",
-                        "description": "Filter by category (memory directory name): people, projects, decisions, insights, research",
-                        "enum": list(CATEGORIES),
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": f"Max results to return (default {config.search.default_limit})",
-                        "default": config.search.default_limit,
-                        # Bounds the one unbounded path on this surface.
-                        # `full=true` caps each result at _FULL_CONTENT_HARD_CAP
-                        # but has no aggregate ceiling, so limit is what decides
-                        # how large a single tool result can get — and results
-                        # persist in `messages` for the rest of the session.
-                        # Capping the *count* truncates nothing: no memory is cut
-                        # mid-body, the model just cannot ask for fifty of them.
-                        # Generous on purpose — this stops pathology, it does not
-                        # tune recall. MCP surface only; the API and CLI keep wide
-                        # recall for consolidation and wiki-maintenance sweeps.
-                        "maximum": MCP_SEARCH_LIMIT_MAX,
-                    },
-                    "date_after": {
-                        "type": "string",
-                        "description": "Filter results after an ISO date (e.g. 2024-01-01)",
-                    },
-                    "date_before": {
-                        "type": "string",
-                        "description": "Filter results before an ISO date",
-                    },
-                    "include_daily": {
-                        "type": "boolean",
-                        "description": "Include daily session notes at full rank (default: false, daily/ files are penalized)",
-                        "default": False,
-                    },
-                    "include_telemetry": {
-                        "type": "boolean",
-                        # Telemetry stays out of default recall so monitoring
-                        # churn does not pollute human memory search.
-                        "description": "Include machine/monitor telemetry memories.",
-                        "default": False,
-                    },
-                    "include_other_projects": {
-                        "type": "boolean",
-                        "description": (
-                            "Also return memories tagged to other projects. They "
-                            "come after this project's results, under their own "
-                            "heading, each labelled with its project and this "
-                            "one's: context only, never this project's decisions. "
-                            "Off by default: a project-scoped search leaves them "
-                            "out. Don't turn this on to find a value this "
-                            "project's memory lacks; ask the user instead."
-                        ),
-                        "default": False,
-                    },
-                    "since_days": {
-                        "type": "integer",
-                        "description": (
-                            "Only return memories created/updated in the last "
-                            "N days.  Equivalent to setting `date_after` to "
-                            "now-N days; the API derives one from the other."
-                        ),
-                    },
-                    "types": {
-                        "type": "array",
-                        "items": {
-                            "type": "string",
-                            "enum": list(MEMORY_TYPES),
-                        },
-                        "description": "Filter by memory type (matches frontmatter `type`).",
-                    },
-                    "where": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Frontmatter filters as key=value (e.g. status=open); all must match.",
-                    },
-                    "min_priority": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 5,
-                        "description": "Only return memories with human-assigned priority at least this value. Missing priority counts as normal (3).",
-                    },
-                    "threshold": {
-                        "type": "number",
-                        "description": "Vector similarity floor (0.0-1.0); ignored in lexical mode.",
-                    },
-                    "full": {
-                        "type": "boolean",
-                        # Default snippets keep search results within MCP
-                        # budget; full=True still caps rendered content.
-                        "description": "Return full chunk content instead of snippets.",
-                        "default": False,
-                    },
-                    "tier": {
-                        "type": "string",
-                        "enum": list(TIERS),
-                        "description": (
-                            "How much of each hit to return. 'abstract' caps "
-                            "every hit at ~300 chars (summary first) for cheap "
-                            "relevance checks; 'overview' returns frontmatter "
-                            "plus the head of the body; 'full' is the chunk "
-                            "body. Omit to keep the default snippet view."
-                        ),
-                    },
-                    "resolve": {
-                        "type": "string",
-                        "enum": list(RESOLVE_MODES),
-                        # Read-only closure over the typed links; the caller
-                        # opts in because it multiplies file reads per hit.
-                        "description": (
-                            "Attach evidence around each hit: 'linked' follows "
-                            "superseded_by/contradicts/backed_by both ways under "
-                            "fixed budgets; 'full' adds bounded unlinked discovery. "
-                            "Each hit reports coverage and a resolution — a current "
-                            "answer, an unresolved conflict with both sides, or "
-                            "insufficient evidence. Default none."
-                        ),
-                    },
-                    "include_retired": {
-                        "type": "boolean",
-                        "description": (
-                            "With resolve: also show retired records (archived, "
-                            "superseded, retracted, expired) in each hit's "
-                            "evidence, labelled. Off by default."
-                        ),
-                        "default": False,
-                    },
-                },
-                "required": ["query"],
+                "properties": _search_input_properties(),
+                "required": required_params(SEARCH_SPEC),
             },
             annotations=types.ToolAnnotations(
                 title="Search Memory",
@@ -1409,152 +1509,12 @@ def _all_tools() -> list[types.Tool]:
                 "distinctive phrase before retrying, or you'll duplicate it. "
                 "`path` (e.g. team/x.md) names the file in place of <folder>/<slug>.md."
             ),
+            # ADR-022: properties come from the save spec; MCP supplies its
+            # descriptions and `ps`. `type` is not required here: `ps` can supply it.
             inputSchema={
                 "type": "object",
-                "properties": {
-                    "content": {
-                        "type": "string",
-                        "description": "The memory content to save (markdown supported)",
-                    },
-                    "type": {
-                        "type": "string",
-                        "description": "Memory type. Required unless `ps=true` is given.",
-                        "enum": list(MEMORY_TYPES),
-                    },
-                    "ps": {
-                        "type": "boolean",
-                        "description": "Shorthand for type=ProjectSnapshot (the CLI `--ps` flag). If true, omit `type`; any other type value errors.",
-                    },
-                    "slug": {
-                        "type": "string",
-                        "description": "Optional URL-safe filename slug (auto-generated if omitted)",
-                    },
-                    # Described in the tool description: the input schema sits at its size budget.
-                    "path": {"type": "string"},
-                    "core": {
-                        "type": "boolean",
-                        "description": "If true, this memory is always injected at session start (core memory).",
-                    },
-                    "entities": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Related entity refs e.g. ['person/alice', 'project/alpha']",
-                    },
-                    "project": {
-                        "type": "string",
-                        "description": "Project slug shorthand — 'palinode' becomes entity 'project/palinode'.",
-                    },
-                    "title": {
-                        "type": "string",
-                        "description": "Human-readable title, used in list/search displays.",
-                    },
-                    "metadata": {
-                        "type": "object",
-                        "description": "Additional frontmatter fields to merge into the saved memory.",
-                    },
-                    "confidence": {
-                        "type": "number",
-                        "description": "Confidence in this memory's accuracy (0.0-1.0).",
-                    },
-                    "priority": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 5,
-                        "description": "Human-assigned memory priority (1–5). Stored as `priority` frontmatter; missing means normal (3).",
-                    },
-                    "epistemic": {
-                        "type": "string",
-                        "enum": ["fact", "inference", "open_question", "unverified"],
-                        # ADR-018: the KIND of claim this memory makes.
-                        # Omitting it leaves the memory `unmarked` (no claim —
-                        # NOT fact); no frontmatter is written.
-                        "description": "Kind of claim: fact=observed, inference=derived, open_question=unresolved, unverified=asserted but unchecked. Omit to leave unmarked — unmarked is NOT fact.",
-                    },
-                    "external_refs": {
-                        "type": "object",
-                        "additionalProperties": {"type": "string"},
-                        # External refs preserve SDLC provenance while still
-                        # allowing integration-specific keys.
-                        "description": "SDLC object references such as github_pr or jira_issue.",
-                    },
-                    "source": {
-                        "type": "string",
-                        "description": "Source surface that created this memory.",
-                    },
-                    "update_policy": {
-                        "type": "string",
-                        "enum": ["append", "replace"],
-                        # Both halves are real now: append composes a new body
-                        # out of the old one; replace overwrites AND marks a
-                        # sticky living document protected from history-forking
-                        # compaction.
-                        # Kept terse on purpose: this schema is 86 B under a
-                        # client cap that silently drops an over-budget tool
-                        # (see tests/test_mcp_schema_size_budget.py).
-                        "description": (
-                            "Same slug: 'append' adds to body; 'replace' replaces body, "
-                            "keeps non-body metadata, marks a living doc. Sticky."
-                        ),
-                    },
-                    "sources": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "ref": {"type": "string", "description": "Path under the memory dir of the cited source."},
-                                "quote": {"type": "string", "description": "The exact passage cited."},
-                                "quote_hash": {"type": "string", "description": "Optional; computed on save."},
-                            },
-                            "required": ["ref", "quote"],
-                        },
-                        # Source-citation anchors: each anchors a memory
-                        # to the exact passage it cites. quote_hash is computed
-                        # server-side when omitted; the verifier reads these back.
-                        "description": "Citation anchors for passages this memory quotes.",
-                    },
-                    "contradicts": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        # (G4): typed conflict link. Records that this memory
-                        # conflicts with the listed refs WITHOUT picking a winner
-                        # (that's supersession's job). Surfaced by `palinode lint`.
-                        "description": "Refs (category/slug) this memory conflicts with; neither wins — surfaced for review.",
-                    },
-                    "backed_by": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        # (G4): typed evidence link — this memory is supported
-                        # by the listed source/fact refs.
-                        "description": "Refs (category/slug) that support/back this memory (evidence links).",
-                    },
-                    "claims": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "text": {"type": "string", "description": "The claim as stated in the memory."},
-                                "source_id": {"type": "string", "description": "A sources[].ref that justifies the claim."},
-                                "span": {
-                                    "type": "object",
-                                    "properties": {
-                                        "quote": {"type": "string", "description": "The justifying passage in the source."},
-                                        "quote_hash": {"type": "string", "description": "Optional; computed on save."},
-                                    },
-                                    "required": ["quote"],
-                                },
-                                "claim_id": {"type": "string", "description": "Optional; derived on save."},
-                                "anchor_id": {"type": "string", "description": "Optional pointer within a large source."},
-                            },
-                            "required": ["text", "source_id", "span"],
-                        },
-                        # Claim-level source anchors: bind a claim inside this
-                        # memory to the source span that justifies it. claim_id
-                        # (addressing) composes with quote_hash (integrity);
-                        # blame resolves them back.
-                        "description": "Binds each claim to the source span justifying it. Read back via palinode_blame(claims=true).",
-                    },
-                },
-                "required": ["content"],
+                "properties": _save_input_properties(),
+                "required": required_params(SAVE_SPEC, "mcp"),
             },
             annotations=types.ToolAnnotations(
                 title="Save Memory",
@@ -2123,48 +2083,12 @@ def _all_tools() -> list[types.Tool]:
                 "Writes a session summary to today's daily notes and appends status to relevant project files. "
                 "Provide a brief summary of what was accomplished, decisions made, and any blockers."
             ),
+            # ADR-022: properties come from the session-end spec, less the
+            # provenance only a harness supplies (CLI and REST only).
             inputSchema={
                 "type": "object",
-                "properties": {
-                    "summary": {
-                        "type": "string",
-                        "description": "What was accomplished in this session (1-3 sentences)",
-                    },
-                    "decisions": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Key decisions made (optional)",
-                    },
-                    "blockers": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Open blockers or next steps (optional)",
-                    },
-                    "project": {
-                        "type": "string",
-                        "description": "Project slug to append status to (e.g., 'palinode'). Auto-detected if omitted.",
-                    },
-                    "source": {
-                        "type": "string",
-                        "description": "Source surface that created this memory (e.g., 'claude-code', 'cursor', 'api'). Auto-detected if omitted.",
-                    },
-                    "push": {
-                        "type": "boolean",
-                        # push=true lets wrap-style callers commit and ship the
-                        # session note in one call; omitted uses server config.
-                        "description": "Push the memory repo after committing the session note.",
-                    },
-                    "dry_run": {
-                        "type": "boolean",
-                        "description": (
-                            "Validate and render the entry without writing, committing, or "
-                            "pushing anything. Use to check a payload before committing it, "
-                            "or to diagnose a failing session-end without leaving entries "
-                            "behind in the daily note."
-                        ),
-                    },
-                },
-                "required": ["summary"],
+                "properties": _session_end_input_properties(),
+                "required": required_params(SESSION_END_SPEC, "mcp"),
             },
             annotations=types.ToolAnnotations(
                 title="End Session",
@@ -2841,27 +2765,19 @@ async def _tool_list(arguments: dict[str, Any]) -> list[types.TextContent]:
         where = _where_argument(arguments)
     except WhereError as e:
         return _text(f"Error: {e}")
-    params: dict[str, Any] = {}
-    if arguments.get("category"):
-        params["category"] = arguments["category"]
-    if arguments.get("core_only"):
-        params["core_only"] = "true"
+    # ADR-022: the spec decides what reaches the API; an unset param is absent.
+    params: dict[str, Any] = build_payload(LIST_SPEC.params, {**arguments, "where": where or None})
+    if params.get("core_only"):
         # Browsing, not injecting: a core memory the lifecycle classifier
         # retired stays in this listing, labelled with why it no longer acts.
         # The injection consumers of the same endpoint (the SessionStart hook,
         # the plugins) omit the flag and get it withheld.
-        params["include_retired_core"] = "true"
-    if where:
-        params["where"] = where
-    if str(arguments.get("include_inbox", False)).lower() in ("true", "1"):
-        params["include_inbox"] = "true"
+        params["include_retired_core"] = True
     # The session's project, resolved as search resolves it, so a scoped
     # session browses its own records the way it searches them. Always
     # stated, empty included; an empty project leaves the listing unscoped.
     project = _resolve_scope().project
     params["project"] = project or ""
-    if str(arguments.get("include_other_projects", False)).lower() in ("true", "1"):
-        params["include_other_projects"] = "true"
 
     resp = await _get("/list", params=params)
     if resp.status_code != 200:
@@ -2914,12 +2830,10 @@ def _format_list(data: list[dict[str, Any]], headers: Any, project: str | None) 
 # ── read ──────────────────────────────────────────────────────────
 @_handles("palinode_read")
 async def _tool_read(arguments: dict[str, Any]) -> list[types.TextContent]:
-    include_meta = bool(arguments.get("meta", False))
-    params: dict[str, Any] = {"file_path": arguments["file_path"], "meta": "true"}
+    # ADR-022: the spec decides what reaches the API; an unset param is absent.
+    params: dict[str, Any] = build_payload(READ_SPEC.params, arguments)
+    include_meta = bool(params.get("meta"))
     params["project"] = _resolve_scope().project or ""
-    tier = arguments.get("tier")
-    if tier:
-        params["tier"] = tier
     resp = await _get("/read", params=params)
     if resp.status_code != 200:
         return _text(f"Error reading file: {resp.text}")
@@ -2946,49 +2860,24 @@ async def _tool_read(arguments: dict[str, Any]) -> list[types.TextContent]:
 
 
 # ── search ────────────────────────────────────────────────────────
+def _server_abstains(receipt: dict[str, Any] | None) -> bool:
+    """Whether the server's ``search.abstain_on_no_confident_match`` is on."""
+    retrieval = receipt.get("retrieval") if isinstance(receipt, dict) else None
+    return isinstance(retrieval, dict) and retrieval.get("abstain_on_no_confident_match") is True
+
+
 @_handles("palinode_search")
 async def _tool_search(arguments: dict[str, Any]) -> list[types.TextContent]:
     try:
         where = _where_argument(arguments)
     except WhereError as e:
         return _text(f"Error: {e}")
-    body: dict[str, Any] = {"query": arguments["query"]}
-    if where:
-        body["where"] = where
-    if arguments.get("tier"):
-        body["tier"] = arguments["tier"]
-    if arguments.get("category"):
-        body["category"] = arguments["category"]
-    if arguments.get("limit"):
-        body["limit"] = int(arguments["limit"])
-    if arguments.get("date_after"):
-        body["date_after"] = arguments["date_after"]
-    if arguments.get("date_before"):
-        body["date_before"] = arguments["date_before"]
-    if arguments.get("include_daily"):
-        body["include_daily"] = True
-    if arguments.get("include_telemetry"):
-        body["include_telemetry"] = True
-    if str(arguments.get("include_other_projects", False)).lower() in ("true", "1"):
-        body["include_other_projects"] = True
-    if arguments.get("since_days") is not None:
-        body["since_days"] = int(arguments["since_days"])
-    if arguments.get("types"):
-        body["types"] = _coerce_str_array(arguments["types"])
-    if arguments.get("min_priority") is not None:
-        body["min_priority"] = int(arguments["min_priority"])
-    # ADR-010: caller-supplied threshold wins; otherwise use
-    # the MCP-tuned default (typically tighter than the API default
-    # to keep auto-context noise low).
-    if arguments.get("threshold") is not None:
-        body["threshold"] = float(arguments["threshold"])
-    else:
-        body["threshold"] = config.search.mcp_threshold
-    # Opt-in evidence closure; "none" is the API default and is not sent.
-    if arguments.get("resolve") and arguments["resolve"] != "none":
-        body["resolve"] = arguments["resolve"]
-    if str(arguments.get("include_retired", False)).lower() in ("true", "1"):
-        body["include_retired"] = True
+    # ADR-022: the spec decides what reaches the API. A param the caller did
+    # not set is absent, including `threshold` and `limit`: the server owns
+    # both defaults, and picks the MCP-tuned floor from the source header.
+    body: dict[str, Any] = build_payload(
+        SEARCH_SPEC.params, {**arguments, "where": where or None},
+    )
     # Always ask for the delivery receipt. It is not a tool parameter: an agent
     # never has a reason to decline provenance for what it was just handed, and
     # the cost is two lines of text without `resolve`.
@@ -3015,12 +2904,15 @@ async def _tool_search(arguments: dict[str, Any]) -> list[types.TextContent]:
     else:
         results, receipt = payload, None
     # Opt-in abstention (`search.abstain_on_no_confident_match`, default off):
-    # withhold a slate the server judged worth nothing. Applied here, on the
-    # one surface whose reader is a model, and only to the rendering — the
-    # receipt and the retrieval log still record what the store delivered, so
-    # switching this on changes what is shown and never what is measured.
+    # withhold a slate the server judged worth nothing. The setting is the
+    # server's, read from the receipt: this process may run on another machine
+    # with no config of its own. Applied here, on the one surface whose reader
+    # is a model, and only to the rendering — the receipt and the retrieval log
+    # still record what the store delivered, so switching this on changes what
+    # is shown and never what is measured. An older API reports no setting, and
+    # nothing is withheld.
     withheld = 0
-    if config.search.abstain_on_no_confident_match and results:
+    if results and _server_abstains(receipt):
         from palinode.core.confidence import NONE, delivered_verdict
 
         if delivered_verdict(receipt) == NONE:
@@ -3044,17 +2936,10 @@ async def _tool_save(arguments: dict[str, Any]) -> list[types.TextContent]:
     except ValueError as e:
         return _text(f"Error: {e}")
 
-    body: dict[str, Any] = {
-        "content": arguments["content"],
-        "type": resolved_type,
-    }
-    # One inclusion rule for every surface — a param is sent
-    # when it is not None, so an explicitly-empty `contradicts: []`
-    # survives as the assertion the caller made. The `omit_if_empty`
-    # strings (source/slug/project/title) still elide when blank, which
-    # is what this handler already did for them. ADR-010: an omitted
-    # `source` lets the X-Palinode-Source header carry attribution.
-    body.update(build_payload(SAVE_PARAMS, arguments))
+    # ADR-022: the save spec's inclusion rule — a param is sent when it is not
+    # None, so an explicitly-empty `contradicts: []` survives as the assertion
+    # the caller made. `ps` has been resolved into `type`.
+    body: dict[str, Any] = build_payload(SAVE_SPEC.params, {**arguments, "type": resolved_type})
 
     resp = await _post("/save", json=body, timeout=_SAVE_TIMEOUT)
     if resp.status_code != 200:
@@ -3656,14 +3541,14 @@ async def _tool_trigger(arguments: dict[str, Any]) -> list[types.TextContent]:
 # ── session_end ───────────────────────────────────────────────────
 @_handles("palinode_session_end")
 async def _tool_session_end(arguments: dict[str, Any]) -> list[types.TextContent]:
-    body: dict[str, Any] = {"summary": arguments.get("summary", "")}
-    # Forward empty arrays rather than dropping them. The server's
-    # envelope guard reads the absence of `decisions`/`blockers` as the
-    # signature of an absorbed tool call, so eliding `[]` here
-    # manufactured that signature for callers who had simply nothing to
-    # report. That rule now lives in core/write_input.py and applies on
-    # every surface, not just this one.
-    body.update(build_payload(SESSION_END_PARAMS, arguments))
+    # ADR-022: the session-end spec's rule. Empty arrays are forwarded, not
+    # dropped: the server's envelope guard reads the absence of
+    # `decisions`/`blockers` as the signature of an absorbed tool call, so
+    # eliding `[]` manufactured that signature for callers who had simply
+    # nothing to report.
+    body: dict[str, Any] = build_payload(
+        SESSION_END_SPEC.params, {**arguments, "summary": arguments.get("summary", "")},
+    )
 
     resp = await _post("/session-end", json=body, timeout=_SESSION_END_TIMEOUT)
     if resp.status_code != 200:
@@ -3910,7 +3795,7 @@ async def _correction_call(
     "refused" would reasonably conclude the store was untouched and re-run the
     correction instead of finishing it.
     """
-    from palinode.core.parity import CORRECTION_APPLIED_PARTIAL
+    from palinode.core.operations import CORRECTION_APPLIED_PARTIAL
 
     resp = await _post(f"/corrections/{phase}", json=body, timeout=120.0)
     if resp.status_code == 409:

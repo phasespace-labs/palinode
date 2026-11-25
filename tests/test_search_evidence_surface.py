@@ -15,7 +15,6 @@ import pytest
 from click.testing import CliRunner
 from fastapi.testclient import TestClient
 
-import palinode.mcp as mcp
 from palinode.api.server import app
 from palinode.cli.search import _evidence_lines, search as cli_search
 from palinode.core import store
@@ -133,33 +132,6 @@ def test_rest_recency_branch_attaches_too(client, mem):
 
 
 # ── MCP ──────────────────────────────────────────────────────────────────────
-
-
-class _Resp:
-    status_code = 200
-
-    def __init__(self, payload):
-        self._payload = payload
-
-    def json(self):
-        return self._payload
-
-
-@pytest.mark.asyncio
-async def test_mcp_forwards_resolve_and_omits_none(monkeypatch):
-    captured: list[dict] = []
-
-    async def _fake_post(path, json=None, timeout=30.0):
-        captured.append(json)
-        return _Resp([])
-
-    monkeypatch.setattr(mcp, "_post", _fake_post)
-    monkeypatch.setattr(mcp, "_resolve_context", lambda: None)
-    await mcp._tool_search({"query": "q", "resolve": "full"})
-    await mcp._tool_search({"query": "q", "resolve": "none"})
-    await mcp._tool_search({"query": "q"})
-    assert captured[0]["resolve"] == "full"
-    assert "resolve" not in captured[1] and "resolve" not in captured[2]
 
 
 def _hit(**evidence) -> dict:

@@ -373,8 +373,9 @@ def test_run_from_home_each_hook_is_reported_once(tmp_path: Path) -> None:
 
 
 def test_every_hook_init_installs_is_observed(tmp_path: Path) -> None:
-    from palinode.cli.init import _HOOK_EVENTS
+    from palinode.hooks.claude import CLAUDE
 
+    _HOOK_EVENTS = [(reg.event, reg.script) for reg in CLAUDE.registrations]
     home = tmp_path / "home"
     _register(home / ".claude" / "settings.json", {event: script for event, script in _HOOK_EVENTS})
     _install(home / ".claude" / "hooks", *(script for _event, script in _HOOK_EVENTS))
@@ -388,7 +389,8 @@ def test_status_discloses_what_the_compaction_checkpoint_sends(monkeypatch, tmp_
     """The cap quoted to the user is the one the installed hook applies."""
     import re
 
-    from palinode.cli.init import POST_COMPACT_HOOK_SCRIPT
+    from palinode.hooks import script as _hook_script
+    POST_COMPACT_HOOK_SCRIPT = _hook_script("palinode-post-compact.sh")
 
     controls_module = importlib.import_module("palinode.cli.controls")
     monkeypatch.setattr(controls_module, "api_client", _ControlsAPI())
@@ -447,7 +449,13 @@ def _scaffold(project: Path, *flags: str) -> None:
 
 def test_every_codex_cursor_and_agy_hook_init_installs_is_observed(tmp_path: Path) -> None:
     """What ``palinode init`` registers is what status discloses."""
-    from palinode.cli.init import _ANTIGRAVITY_HOOK_EVENTS, _CODEX_HOOK_EVENTS, _CURSOR_HOOK_EVENTS
+    from palinode.hooks.agy import ANTIGRAVITY
+    from palinode.hooks.codex import CODEX
+    from palinode.hooks.cursor import CURSOR
+
+    def registered(spec):
+        return [(reg.event, reg.script) for reg in spec.registrations]
+
 
     project = tmp_path / "project"
     project.mkdir()
@@ -456,9 +464,9 @@ def test_every_codex_cursor_and_agy_hook_init_installs_is_observed(tmp_path: Pat
     observed = _observed_project_setup(project, home=tmp_path / "home")
 
     for key, pairs in (
-        ("codex_hooks", _CODEX_HOOK_EVENTS),
-        ("cursor_hooks", _CURSOR_HOOK_EVENTS),
-        ("agy_hooks", _ANTIGRAVITY_HOOK_EVENTS),
+        ("codex_hooks", registered(CODEX)),
+        ("cursor_hooks", registered(CURSOR)),
+        ("agy_hooks", registered(ANTIGRAVITY)),
     ):
         assert observed[key] == [
             {"event": event, "scope": "project", "settings_registration_observed": True, "script_observed": True}

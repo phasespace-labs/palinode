@@ -16,21 +16,9 @@ hard-code."
 """
 from __future__ import annotations
 
-from palinode.core.config import config
 
-
-# ── Search ───────────────────────────────────────────────────────────────────
-
-#: Default ``limit`` for ``search`` and ``list`` operations.
-SEARCH_LIMIT_DEFAULT: int = 3
-
-#: Default similarity ``threshold`` for ``search`` (server-side).  Driven by
-#: ``config.search.api_threshold`` so deployments can tune via YAML.
-SEARCH_THRESHOLD_DEFAULT: float = config.search.api_threshold
-
-#: Default similarity threshold for ambient/MCP search (typically tighter than
-#: explicit search to keep auto-context noise low).  Driven by config.
-SEARCH_THRESHOLD_MCP: float = config.search.mcp_threshold
+# Search defaults are the server's (ADR-022): ``config.search`` holds them and
+# ``palinode.core.operations.SEARCH`` records which params it fills.
 
 
 # ── Triggers ─────────────────────────────────────────────────────────────────
@@ -205,9 +193,6 @@ ALLOWED_MEMORY_EXTENSIONS: tuple[str, ...] = (".md",)
 
 
 __all__ = [
-    "SEARCH_LIMIT_DEFAULT",
-    "SEARCH_THRESHOLD_DEFAULT",
-    "SEARCH_THRESHOLD_MCP",
     "TRIGGER_FLOOR",
     "TRIGGER_THRESHOLD_DEFAULT",
     "TRIGGER_MIN_SHARED_TERMS",

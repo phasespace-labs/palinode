@@ -18,9 +18,12 @@ import sys
 
 import pytest
 
-from palinode.cli.init import SESSION_START_HOOK_SCRIPT, USER_PROMPT_SUBMIT_HOOK_SCRIPT
+from palinode.hooks import script as _hook_script
 from palinode.core.capture_policy import update_capture_policy
 from palinode.core.config import config
+
+SESSION_START_HOOK_SCRIPT = _hook_script("palinode-session-start.sh")
+USER_PROMPT_SUBMIT_HOOK_SCRIPT = _hook_script("palinode-user-prompt-submit.sh")
 
 SECRET = "sk-ant-THISISAHARMLESSNEGATIVEFIXTURE0123456789"
 ROOT = Path(__file__).resolve().parents[1]

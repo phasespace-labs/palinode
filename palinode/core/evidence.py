@@ -77,7 +77,6 @@ are untouched; this module only ever reads files the guard admits.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import os
 import re
@@ -88,10 +87,11 @@ from typing import Any, Iterable
 from palinode.core import parser as _parser
 from palinode.core import revalidation as _reval
 from palinode.core import store
+from palinode.core.store import ChunkReader
 from palinode.core.agent_directed import withhold_agent_directed
 from palinode.core.config import config
 from palinode.core.lifecycle import Eligibility, eligibility
-from palinode.core.parity import RESOLVE_MODES
+from palinode.core.operations import RESOLVE_MODES
 from palinode.core.path_guard import PathTraversalError, resolve_memory_path
 from palinode.core.projection import project_current_text
 from palinode.core.scope import ScopeChain, chain_allows
@@ -416,27 +416,24 @@ def _load(cache: RequestCache, rel: str) -> _Loaded | None:
     return loaded
 
 
-def _index_hashes(cache: RequestCache, db: Any, loaded: _Loaded) -> dict[str, str] | None:
+def _index_hashes(cache: RequestCache, reader: ChunkReader, loaded: _Loaded) -> dict[str, str] | None:
     """``{section_id: content_hash}`` the index holds for this file, or ``None``."""
     if loaded.rel in cache.index_hashes:
         return cache.index_hashes[loaded.rel]
-    rows = db.execute(
-        "SELECT section_id, content_hash FROM chunks WHERE file_path IN (?, ?)",
-        (_stored_path(loaded.rel), loaded.abs_path),
-    ).fetchall()
+    rows = reader.section_hashes((_stored_path(loaded.rel), loaded.abs_path))
     out: dict[str, str] | None = None
     if rows:
         out = {}
-        for r in rows:
-            if r["content_hash"]:
-                out[r["section_id"] or "root"] = r["content_hash"]
+        for _path, section_id, content_hash in rows:
+            if content_hash:
+                out[section_id or "root"] = content_hash
     cache.index_hashes[loaded.rel] = out
     return out
 
 
-def _freshness(cache: RequestCache, db: Any, loaded: _Loaded) -> str:
+def _freshness(cache: RequestCache, reader: ChunkReader, loaded: _Loaded) -> str:
     """Raw-hash agreement between the live sections and the index (``check_freshness``'s comparand)."""
-    stored = _index_hashes(cache, db, loaded)
+    stored = _index_hashes(cache, reader, loaded)
     if not stored:
         return "unknown"
     live = {
@@ -496,7 +493,7 @@ def _iso(moment: datetime | None) -> str | None:
 
 def _record(
     cache: RequestCache,
-    db: Any,
+    reader: ChunkReader,
     loaded: _Loaded,
     *,
     relation: str,
@@ -517,7 +514,7 @@ def _record(
         title=_title(loaded.meta, loaded.projected_body),
         currency=currency,
         currency_reason=reason,
-        freshness=_freshness(cache, db, loaded),
+        freshness=_freshness(cache, reader, loaded),
         effective_at=_iso(elig.effective_at),
         epistemic=elig.epistemic,
         excerpt=_excerpt(loaded.projected_body),
@@ -546,39 +543,23 @@ def _aliases_of(ref: str) -> set[str]:
     return out
 
 
-_REVERSE_SQL = """
-SELECT DISTINCT c.file_path AS file_path, 'superseded_by' AS field, j.value AS value
-  FROM chunks c, json_each(c.metadata, '$.superseded_by') j
- WHERE c.metadata LIKE '%"superseded_by"%' AND j.type = 'text'
-UNION ALL
-SELECT DISTINCT c.file_path, 'contradicts', j.value
-  FROM chunks c, json_each(c.metadata, '$.contradicts') j
- WHERE c.metadata LIKE '%"contradicts"%' AND j.type = 'text'
-UNION ALL
-SELECT DISTINCT c.file_path, 'backed_by', j.value
-  FROM chunks c, json_each(c.metadata, '$.backed_by') j
- WHERE c.metadata LIKE '%"backed_by"%' AND j.type = 'text'
-"""
-
-
-def _reverse_index(cache: RequestCache, db: Any) -> dict[str, list[tuple[str, str]]]:
+def _reverse_index(cache: RequestCache, reader: ChunkReader) -> dict[str, list[tuple[str, str]]]:
     """``{target_ref: [(citing_rel, field), ...]}`` from the index, built once."""
     if cache.reverse is not None:
         return cache.reverse
     cache.reverse_lookups += 1
     index: dict[str, list[tuple[str, str]]] = {}
     try:
-        rows = db.execute(_REVERSE_SQL).fetchall()
+        rows = reader.reverse_links()
     except Exception as exc:  # noqa: BLE001 — a broken index is index lag, not a crash
         logger.warning("reverse-link scan failed; reverse edges unavailable: %s", exc)
         rows = []
-    for row in rows:
-        rel = normalize_memory_path(row["file_path"])
-        value = row["value"]
+    for file_path, field_name, value in rows:
+        rel = normalize_memory_path(file_path)
         if not rel or not isinstance(value, str) or not value.strip():
             continue
         target = _ref_of(value.strip())
-        index.setdefault(target, []).append((rel, row["field"]))
+        index.setdefault(target, []).append((rel, field_name))
     for entries in index.values():
         entries.sort()
     cache.reverse = index
@@ -599,7 +580,7 @@ class _Run:
         chain: ScopeChain | None,
         now: datetime | None,
         cache: RequestCache,
-        db: Any,
+        reader: ChunkReader,
         seed_refs: set[str],
     ) -> None:
         self.mode = mode
@@ -611,7 +592,7 @@ class _Run:
         self.chain = chain
         self.now = now
         self.cache = cache
-        self.db = db
+        self.reader = reader
         self.edges_used = 0
         self.files_used = 0
         self.fallback_queries = 0
@@ -718,7 +699,7 @@ class _Run:
         self, node: _Loaded, field_name: str
     ) -> list[str]:
         """Refs whose *indexed* frontmatter names ``node`` under ``field_name``."""
-        index = _reverse_index(self.cache, self.db)
+        index = _reverse_index(self.cache, self.reader)
         out: list[str] = []
         for alias in sorted(_aliases_of(node.ref)):
             for rel, fld in index.get(alias, []):
@@ -772,7 +753,7 @@ class _Run:
                     if loaded is None:
                         continue
                     self._add(bucket, _record(
-                        self.cache, self.db, loaded, relation=field_name,
+                        self.cache, self.reader, loaded, relation=field_name,
                         direction="forward", depth=depth + 1, via=node.ref, now=self.now,
                     ))
                     if loaded.ref not in seen_nodes:
@@ -793,7 +774,7 @@ class _Run:
                         seed.reasons.add(INDEX_LAG)
                         continue
                     self._add(bucket, _record(
-                        self.cache, self.db, loaded, relation=field_name,
+                        self.cache, self.reader, loaded, relation=field_name,
                         direction="reverse", depth=depth + 1, via=node.ref, now=self.now,
                     ))
                     if loaded.ref not in seen_nodes:
@@ -823,7 +804,7 @@ class _Run:
                 break
             walked.add(loaded.ref)
             self._add(seed.replacements, _record(
-                self.cache, self.db, loaded, relation="superseded_by",
+                self.cache, self.reader, loaded, relation="superseded_by",
                 direction="forward", depth=hop, via=cur.ref, now=self.now,
             ))
             cur = loaded
@@ -852,7 +833,7 @@ class _Run:
                         continue
                     walked_back.add(loaded.ref)
                     self._add(seed.replacements, _record(
-                        self.cache, self.db, loaded, relation="superseded_by",
+                        self.cache, self.reader, loaded, relation="superseded_by",
                         direction="reverse", depth=hop, via=cur.ref, now=self.now,
                     ))
                     next_level.append(loaded)
@@ -886,7 +867,7 @@ class _Run:
                         return
                     continue
                 seed.discovered.append(_record(
-                    self.cache, self.db, loaded, relation=relation,
+                    self.cache, self.reader, loaded, relation=relation,
                     direction="discovered", depth=1, via=seed_loaded.ref, now=self.now,
                 ))
 
@@ -957,7 +938,7 @@ class _Run:
         if chunk_id:
             if not self._query(seed):
                 return
-            vec = _stored_vector(self.db, str(chunk_id))
+            vec = _stored_vector(self.reader, str(chunk_id))
             if vec:
                 hits = store.search_internal(
                     vec, top_k=_FALLBACK_TOP_K, threshold=config.search.api_threshold
@@ -966,20 +947,11 @@ class _Run:
                 _take(dict.fromkeys(refs), "neighbor")
 
 
-def _stored_vector(db: Any, chunk_id: str) -> list[float] | None:
+def _stored_vector(reader: ChunkReader, chunk_id: str) -> list[float] | None:
     try:
-        row = db.execute(
-            "SELECT vec_to_json(embedding) AS v FROM chunks_vec WHERE id = ?", (chunk_id,)
-        ).fetchone()
+        return reader.stored_vector(chunk_id)
     except Exception:  # noqa: BLE001 — no vector, no neighbour stage
         return None
-    if not row or not row["v"]:
-        return None
-    try:
-        vec = json.loads(row["v"])
-    except ValueError:
-        return None
-    return vec if isinstance(vec, list) and vec else None
 
 
 def _seed_text(seed_row: dict[str, Any], loaded: _Loaded) -> str:
@@ -1030,7 +1002,7 @@ def resolve_evidence(
     seed's *live* frontmatter is re-read for its links, never the row's cached
     metadata. ``chain`` is the requester's scope chain exactly as the search
     resolved it (``None`` = access control only), applied to every expanded
-    record. ``mode`` is one of :data:`palinode.core.parity.RESOLVE_MODES`;
+    record. ``mode`` is one of :data:`palinode.core.operations.RESOLVE_MODES`;
     ``none`` returns empty evidence for each seed without touching disk.
     """
     if mode not in RESOLVE_MODES:
@@ -1048,9 +1020,8 @@ def resolve_evidence(
         seed.seed_ref = _ref_of(rel) if rel else None
     seed_refs = {s.seed_ref for s in out if s.seed_ref}
 
-    db = store.get_db()
-    try:
-        run = _Run(mode=mode, budget=budget, chain=chain, now=now, cache=cache, db=db,
+    with store.reader() as reader:
+        run = _Run(mode=mode, budget=budget, chain=chain, now=now, cache=cache, reader=reader,
                    seed_refs=seed_refs)
         loaded_seeds: list[_Loaded | None] = []
         for row, seed in zip(seeds, out, strict=True):
@@ -1099,8 +1070,6 @@ def resolve_evidence(
             fallback_reads=run.fallback_reads,
             reverse_lookups=cache.reverse_lookups,
         )
-    finally:
-        db.close()
     return EvidenceResult(seeds=out, mode=mode, budget=budget, stats=stats)
 
 

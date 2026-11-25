@@ -24,16 +24,25 @@ import sys
 from pathlib import Path
 
 PARITY_PY = Path(__file__).parent.parent / "palinode" / "core" / "parity.py"
+OPERATIONS_PY = PARITY_PY.with_name("operations.py")
+
+#: The one palinode module ``parity.py`` may import: the operation spec it
+#: re-exports (ADR-022). It is held to the same rule below, with no palinode
+#: imports at all, so the bare-interpreter guarantee still holds transitively.
+_PARITY_MAY_IMPORT = {"palinode.core.operations"}
 
 
-def _imported_top_level_modules(path: Path) -> set[str]:
+def _imported_top_level_modules(path: Path, allowed: set[str] = frozenset()) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     modules: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                modules.add(alias.name.split(".")[0])
+                if alias.name not in allowed:
+                    modules.add(alias.name.split(".")[0])
         elif isinstance(node, ast.ImportFrom):
+            if not node.level and node.module in allowed:
+                continue
             # `from . import x` / `from .foo import x` have level > 0 and are
             # intra-package — those are exactly what we must forbid here, since
             # any palinode module may pull in a third-party dependency.
@@ -44,8 +53,18 @@ def _imported_top_level_modules(path: Path) -> set[str]:
     return modules
 
 
+def test_operations_imports_only_stdlib() -> None:
+    imported = _imported_top_level_modules(OPERATIONS_PY)
+    non_stdlib = sorted(m for m in imported if m not in sys.stdlib_module_names)
+    assert not non_stdlib, (
+        f"palinode/core/operations.py imports non-stdlib module(s): {non_stdlib}.\n"
+        "parity.py re-exports its vocabularies, so it must stay importable with a "
+        "bare `python` for the same reason parity.py must."
+    )
+
+
 def test_parity_imports_only_stdlib() -> None:
-    imported = _imported_top_level_modules(PARITY_PY)
+    imported = _imported_top_level_modules(PARITY_PY, _PARITY_MAY_IMPORT)
     non_stdlib = sorted(m for m in imported if m not in sys.stdlib_module_names)
 
     assert not non_stdlib, (
@@ -78,3 +97,29 @@ def test_parity_imports_under_a_bare_interpreter() -> None:
         f"(no site-packages):\n{result.stderr}"
     )
     assert result.stdout.strip().isdigit()
+
+
+def test_production_code_does_not_import_parity() -> None:
+    """ADR-022 §2: ``parity.py`` is test bookkeeping; production imports the spec.
+
+    The shared vocabularies live in ``core/operations.py``. A production module
+    importing ``parity.py`` would tie shipping code to the test registry again.
+    """
+    package = PARITY_PY.parent.parent
+    offenders: list[str] = []
+    for path in sorted(package.rglob("*.py")):
+        if path == PARITY_PY:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            names: list[str] = []
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+                names = [node.module] + [f"{node.module}.{a.name}" for a in node.names]
+            if any(n == "palinode.core.parity" for n in names):
+                offenders.append(f"{path.relative_to(package.parent)}:{node.lineno}")
+    assert not offenders, (
+        "Production code imports palinode.core.parity; import the vocabulary from "
+        "palinode.core.operations instead (ADR-022 §2):\n  " + "\n  ".join(offenders)
+    )

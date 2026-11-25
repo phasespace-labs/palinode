@@ -49,9 +49,10 @@ from typing import Literal
 # project dependencies installed. Any third-party import here — directly, or
 # transitively via another palinode module — breaks the TypeScript side of the
 # parity contract with a `ModuleNotFoundError` that has nothing to do with
-# parity. That is why the canonical enums below live *here* and are re-exported
-# by their consumers, rather than being imported from a module that parses
-# frontmatter. `tests/test_parity_is_dependency_free.py` enforces it.
+# parity. That is why the canonical enums live in `core/operations.py`, itself
+# stdlib-only, rather than in a module that parses frontmatter; the one palinode
+# import this module may make is that one. `tests/test_parity_is_dependency_free.py`
+# enforces both.
 
 ParamType = Literal["string", "boolean", "array", "integer", "number", "object"]
 Surface = Literal["cli", "mcp", "api", "plugin"]
@@ -77,6 +78,22 @@ class CanonicalParam:
     #: must use this exact tuple (order-insensitive).
     enum: tuple[str, ...] | None = None
     notes: str = ""
+    #: The surfaces that advertise the param, when not all do (a spec
+    #: ``Param.surfaces``, with its reason there). ``None``: every surface.
+    surfaces: tuple[str, ...] | None = None
+
+
+def _from_spec(spec: "OperationSpec") -> tuple[CanonicalParam, ...]:
+    """The parity view of a migrated operation, derived from its spec (ADR-022).
+
+    ``default_key`` is ``None`` for every param: the server owns defaults, and
+    the spec's ``server_default`` says where each one comes from.
+    """
+    return tuple(
+        CanonicalParam(name=p.name, type=p.type, required=p.required, enum=p.enum,
+                       surfaces=p.surfaces)
+        for p in spec.params
+    )
 
 
 @dataclass(frozen=True)
@@ -109,6 +126,12 @@ class Operation:
     #: rather than xfailing, and ``registered_capabilities`` counts the named
     #: capability as registered, so it needs no ``INVENTORY_BACKLOG`` row.
     surface_realizations: dict[tuple[Surface, str], str] = field(default_factory=dict)
+    #: The click dest of a param the CLI takes under another name in the same
+    #: command (``--type`` → ``memory_type``, a Python keyword clash). Permanent,
+    #: like a realization, but the param stays on the command itself, so it names
+    #: an option rather than a capability. The CLI checks read it, so an
+    #: unrecorded rename still fails.
+    cli_dests: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -159,126 +182,30 @@ ADMIN_EXEMPT_OPERATIONS: frozenset[str] = frozenset(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Canonical category + type sets
+# Canonical category + type sets: defined in core/operations.py (ADR-022)
 # ─────────────────────────────────────────────────────────────────────────────
 
-
-#: The canonical ``category`` enum.  Matches the memory-directory names
-#: (plural) — that is the value the ``chunks.category`` column stores
-#: (``palinode/api/server.py:660-668`` and the watcher's directory-basename
-#: derivation).  Surfaces that expose a ``category`` filter MUST use
-#: this exact tuple — ADR-010, finding.
-CATEGORIES: tuple[str, ...] = (
-    "people",
-    "projects",
-    "decisions",
-    "insights",
-    "research",
-)
-
-#: The canonical memory ``type`` enum (used by save).  Lives here so
-#: the API can validate ``SaveRequest.type`` server-side instead of
-#: relying on per-surface enum lists. ADR-010, finding.
-MEMORY_TYPES: tuple[str, ...] = (
-    "PersonMemory",
-    "Decision",
-    "ProjectSnapshot",
-    "Insight",
-    "ResearchRef",
-    "ActionItem",
-)
-
-#: The canonical write-semantics enum (ADR-015 §5). ``append`` is episodic;
-#: ``replace`` marks a living/current-state document. Defined here rather than
-#: in ``core/parser.py`` for the same reason ``CATEGORIES`` and ``MEMORY_TYPES``
-#: are: the surfaces that must agree on it should all import one tuple, and this
-#: module is the one every surface can import (see the dependency note at the
-#: top). ``core/parser.py`` re-exports it, so the many
-#: ``from palinode.core.parser import VALID_UPDATE_POLICIES`` call sites are
-#: unaffected.
-VALID_UPDATE_POLICIES: tuple[str, ...] = ("append", "replace")
-
-#: The canonical epistemic-marker enum (ADR-018) — the KIND of claim a memory
-#: makes, orthogonal to ``type``. The ABSENCE of the field is its own state
-#: (``unmarked``) and is deliberately NOT a member: for an audit-grade store,
-#: "nobody declared this" must not silently inherit the authority of "verified".
-VALID_EPISTEMICS: tuple[str, ...] = (
-    "fact",
-    "inference",
-    "open_question",
-    "unverified",
-)
-
-#: The Auditable Memory Records (AMR) specification version every record the
-#: save path writes declares in its ``auditable_memory`` frontmatter field.
-#: The declaration is REQUIRED by the spec (§4.1) and is what makes a
-#: conforming record distinguishable from one that merely looks similar — an
-#: implementation that emits no declaration conforms at no level (§7).
-AMR_SPEC_VERSION: str = "0.1"
-
-#: Versions the save surface recognises. A caller-supplied
-#: ``auditable_memory`` outside this set is rejected, never guessed at (§4.1).
-VALID_AMR_VERSIONS: tuple[str, ...] = (AMR_SPEC_VERSION,)
-
-#: The canonical read-tier enum — how much of a memory a caller wants
-#: back. Tiers are deterministic views computed at read time, never a second
-#: content store; ``full`` is the content unchanged and is what every surface
-#: returns when the caller says nothing.
-TIERS: tuple[str, ...] = (
-    "abstract",
-    "overview",
-    "full",
-)
-
-#: The canonical evidence-resolution enum on search — how much of the
-#: evidence around each hit to gather (``palinode.core.evidence``). ``none``
-#: is what every surface does when the caller says nothing; ``linked``
-#: follows the typed links both ways under fixed budgets; ``full`` adds
-#: bounded unlinked discovery. Read-only on every surface.
-RESOLVE_MODES: tuple[str, ...] = (
-    "none",
-    "linked",
-    "full",
-)
-
-#: The canonical intent enum on the bounded-resolution operation — what the
-#: caller is asking the store to answer. ``current_state`` is the only value
-#: and every surface defaults to it; the field exists so an as-of / known-at
-#: question has somewhere to land once the temporal-assertion work defines
-#: those semantics. Until then no surface advertises them, because a
-#: parameter a caller can pass and the resolver cannot honour is worse than
-#: the absence of one.
-RESOLVE_INTENTS: tuple[str, ...] = (
-    "current_state",
-)
-
-#: The canonical correction-review action enum. ``supersede`` records a
-#: replacement and archives the original with ``superseded_by``; ``retire``
-#: withdraws it with no successor. Both end at ``status: archived`` — the same
-#: two outcomes ``palinode archive`` has always had, now reachable through a
-#: previewed, revision-checked, confirmed review. Mirrored (not redefined) in
-#: :mod:`palinode.corrections.review`, which keeps this module stdlib-only.
-CORRECTION_ACTIONS: tuple[str, ...] = (
-    "supersede",
-    "retire",
-)
-
-#: The value ``applied`` carries when a document-level correction got its
-#: first write in and not its second: the replacement is saved, the original
-#: is still current. Neither a refusal (which writes nothing) nor a success,
-#: so it is a third value rather than a boolean. Every surface reads it to
-#: decide how to report; mirrored (not redefined) in
-#: :mod:`palinode.corrections.review`, which keeps this module stdlib-only.
-CORRECTION_APPLIED_PARTIAL = "partial"
-
-#: The canonical prompt-task enum.  Single source replacing the duplicate
-#: ``"enum"`` keys at ``palinode/mcp.py:624-625``. ADR-010, finding.
-PROMPT_TASKS: tuple[str, ...] = (
-    "compaction",
-    "extraction",
-    "update",
-    "classification",
-    "nightly-consolidation",
+# Re-exported for the registry below and for the parity tests. Production code
+# imports these from ``palinode.core.operations``, never from this module.
+from palinode.core.operations import LIST as _SPEC_LIST  # noqa: E402
+from palinode.core.operations import READ as _SPEC_READ  # noqa: E402
+from palinode.core.operations import SAVE as _SPEC_SAVE  # noqa: E402
+from palinode.core.operations import SESSION_END as _SPEC_SESSION_END  # noqa: E402
+from palinode.core.operations import SEARCH as _SPEC_SEARCH  # noqa: E402
+from palinode.core.operations import OperationSpec  # noqa: E402,F401
+from palinode.core.operations import (  # noqa: E402,F401
+    CATEGORIES,
+    MEMORY_TYPES,
+    VALID_UPDATE_POLICIES,
+    VALID_EPISTEMICS,
+    AMR_SPEC_VERSION,
+    VALID_AMR_VERSIONS,
+    TIERS,
+    RESOLVE_MODES,
+    RESOLVE_INTENTS,
+    CORRECTION_ACTIONS,
+    CORRECTION_APPLIED_PARTIAL,
+    PROMPT_TASKS,
 )
 
 
@@ -299,18 +226,8 @@ REGISTRY: tuple[Operation, ...] = (
     # ── list ────────────────────────────────────────────────────────────────
     Operation(
         name="list",
-        canonical_params=(
-            CanonicalParam(name="category", type="string", enum=CATEGORIES),
-            CanonicalParam(name="core_only", type="boolean"),
-            CanonicalParam(name="where", type="array"),
-            # Lifts the inbox/ skip; ActionItems are saved there.
-            CanonicalParam(name="include_inbox", type="boolean"),
-            # Project isolation opt-out, as on search: a project-scoped list
-            # leaves out records tagged to another project; true lists them,
-            # labelled. REST and the CLI additionally take `project`, the
-            # scope itself; the MCP tool sends its session's project.
-            CanonicalParam(name="include_other_projects", type="boolean"),
-        ),
+        # Defined in core/operations.py (ADR-022).
+        canonical_params=_from_spec(_SPEC_LIST),
         cli_command="list",
         mcp_tool="palinode_list",
         api_endpoint=("GET", "/list"),
@@ -318,54 +235,19 @@ REGISTRY: tuple[Operation, ...] = (
     # ── read ────────────────────────────────────────────────────────────────
     Operation(
         name="read",
-        canonical_params=(
-            CanonicalParam(name="file_path", type="string", required=True),
-            CanonicalParam(name="meta", type="boolean"),
-            CanonicalParam(name="tier", type="string", enum=TIERS),
-        ),
+        # Defined in core/operations.py (ADR-022).
+        canonical_params=_from_spec(_SPEC_READ),
         cli_command="read",
         mcp_tool="palinode_read",
         api_endpoint=("GET", "/read"),
         known_drift={},
     ),
     # ── search ──────────────────────────────────────────────────────────────
+    # Defined in core/operations.py (ADR-022); its params are derived, never
+    # restated here. Only the parity bookkeeping below is this module's.
     Operation(
         name="search",
-        canonical_params=(
-            CanonicalParam(name="query", type="string", required=True),
-            CanonicalParam(
-                name="limit", type="integer", default_key="SEARCH_LIMIT_DEFAULT"
-            ),
-            CanonicalParam(name="category", type="string", enum=CATEGORIES),
-            CanonicalParam(
-                name="threshold",
-                type="number",
-                default_key="SEARCH_THRESHOLD_DEFAULT",
-            ),
-            CanonicalParam(name="since_days", type="integer"),
-            CanonicalParam(name="types", type="array", enum=MEMORY_TYPES),
-            CanonicalParam(name="where", type="array"),
-            CanonicalParam(name="min_priority", type="integer"),
-            CanonicalParam(name="date_after", type="string"),
-            CanonicalParam(name="date_before", type="string"),
-            CanonicalParam(name="include_daily", type="boolean"),
-            # ADR-015 §5: telemetry-exclusion override; default false so
-            # monitoring writes don't pollute recall. First-class on all surfaces.
-            CanonicalParam(name="include_telemetry", type="boolean"),
-            # How much of each hit to render. Omitted → unchanged
-            # behaviour (snippet + content), so tiering is opt-in.
-            CanonicalParam(name="tier", type="string", enum=TIERS),
-            # Bounded evidence resolution around each hit. Omitted → no
-            # traversal, so an ordinary request stays byte-identical.
-            CanonicalParam(name="resolve", type="string", enum=RESOLVE_MODES),
-            # Project isolation opt-out: a project-scoped search leaves out
-            # records tagged to a different project; true returns them too,
-            # each labelled with its own project.
-            CanonicalParam(name="include_other_projects", type="boolean"),
-            # With `resolve`: retired records in each hit's evidence are left
-            # out by default; true keeps them, labelled.
-            CanonicalParam(name="include_retired", type="boolean"),
-        ),
+        canonical_params=_from_spec(_SPEC_SEARCH),
         cli_command="search",
         mcp_tool="palinode_search",
         api_endpoint=("POST", "/search"),
@@ -381,69 +263,30 @@ REGISTRY: tuple[Operation, ...] = (
     # courtesy, not a parity obligation.
     Operation(
         name="save",
-        canonical_params=(
-            CanonicalParam(name="content", type="string", required=True),
-            CanonicalParam(name="type", type="string", enum=MEMORY_TYPES),
-            CanonicalParam(name="entities", type="array"),
-            CanonicalParam(name="project", type="string"),
-            CanonicalParam(name="metadata", type="object"),
-            CanonicalParam(name="confidence", type="number"),
-            CanonicalParam(name="priority", type="integer"),
-            CanonicalParam(name="external_refs", type="object"),
-            CanonicalParam(name="title", type="string"),
-            CanonicalParam(name="slug", type="string"),
-            CanonicalParam(name="path", type="string"),
-            CanonicalParam(name="core", type="boolean"),
-            CanonicalParam(name="source", type="string"),
-            # ADR-015 §5: write-semantics axis. On a save to an existing
-            # (category, slug): "append" keeps the prior body and adds beneath
-            # it; "replace" overwrites and marks a living/current-state
-            # document. First-class on all surfaces so callers don't need to
-            # tunnel it through metadata.
-            CanonicalParam(
-                name="update_policy",
-                type="string",
-                enum=VALID_UPDATE_POLICIES,
-            ),
-            # ADR-018: epistemic marker — the KIND of claim the memory makes
-            # (fact / inference / open_question / unverified), orthogonal to
-            # ``type``. It shipped first-class on all four surfaces while going
-            # unregistered here, because the param test only walks this registry
-            # outward: an unregistered param was not a case, so nothing could
-            # fail. Registering it is what makes it enforceable.
-            CanonicalParam(
-                name="epistemic",
-                type="string",
-                enum=VALID_EPISTEMICS,
-            ),
-            # source-citation anchors. A list of {ref, quote, quote_hash}
-            # dicts; the quote_hash is computed/verified on save. First-class on
-            # all surfaces so callers don't tunnel citations through metadata.
-            # The CLI surfaces this as the repeatable ``--cite REF::QUOTE`` flag
-            # (dest ``sources``); MCP/API/plugin take the structured list.
-            CanonicalParam(name="sources", type="array"),
-            # (G4): typed relationship links. ``contradicts`` records a
-            # conflict with no winner picked; ``backed_by`` records an
-            # evidence/support edge. First-class plaintext lists on all surfaces
-            # so callers don't tunnel them through metadata. CLI surfaces them as
-            # the repeatable ``--contradicts``/``--backed-by`` flags.
-            CanonicalParam(name="contradicts", type="array"),
-            CanonicalParam(name="backed_by", type="array"),
-            # claim-level source anchors. A list of {claim_id?, text,
-            # source_id, span:{quote, quote_hash}, anchor_id?} dicts binding a
-            # claim inside the memory to the source span that justifies it;
-            # claim_id + quote_hash are derived/verified on save. First-class
-            # on all surfaces so callers don't tunnel bindings through
-            # metadata. The CLI surfaces this as the repeatable
-            # ``--claim TEXT::REF::QUOTE`` flag (dest ``claims``); MCP/API/
-            # plugin take the structured list.
-            CanonicalParam(name="claims", type="array"),
-        ),
+        # Defined in core/operations.py (ADR-022), with the ps and --file
+        # shorthands. The CLI surfaces `sources` and `claims` as the repeatable
+        # --cite REF::QUOTE and --claim TEXT::REF::QUOTE flags, `metadata` as
+        # --metadata-json, and `priority` also as --important / --critical.
+        canonical_params=_from_spec(_SPEC_SAVE),
         cli_command="save",
         mcp_tool="palinode_save",
         api_endpoint=("POST", "/save"),
         plugin_tool="palinode_save",
         known_drift={},
+        cli_dests={"type": "memory_type", "external_refs": "external_ref_pairs"},
+    ),
+    # ── session_end ─────────────────────────────────────────────────────────
+    Operation(
+        name="session_end",
+        # Defined in core/operations.py (ADR-022). Its provenance params are
+        # CLI and REST only (the spec's `surfaces`); the plugin calls the
+        # endpoint from its lifecycle hook and exposes no tool for it.
+        canonical_params=_from_spec(_SPEC_SESSION_END),
+        cli_command="session-end",
+        mcp_tool="palinode_session_end",
+        api_endpoint=("POST", "/session-end"),
+        known_drift={},
+        cli_dests={"decisions": "decision", "blockers": "blocker"},
     ),
     # ── consolidate ─────────────────────────────────────────────────────────
     Operation(
@@ -1191,7 +1034,6 @@ INVENTORY_BACKLOG: dict[Surface, dict[str, int | InventoryBacklogEntry]] = {
         "palinode_orphan_repair": 170,
         "palinode_prompt": 170,
         "palinode_push": 170,
-        "palinode_session_end": 170,
     },
     "api": {
         "DELETE /triggers/{trigger_id}": 170,
@@ -1210,7 +1052,6 @@ INVENTORY_BACKLOG: dict[Surface, dict[str, int | InventoryBacklogEntry]] = {
         "POST /prompts/{name}/activate": 170,
         "POST /push": 170,
         "POST /search-associative": 170,
-        "POST /session-end": 170,
     },
     "cli": {
         "dedup-suggest": 170,
@@ -1223,7 +1064,6 @@ INVENTORY_BACKLOG: dict[Surface, dict[str, int | InventoryBacklogEntry]] = {
         "prompt list": 170,
         "prompt show": 170,
         "push": 170,
-        "session-end": 170,
         "trigger list": 170,
         "trigger remove": 170,
     },

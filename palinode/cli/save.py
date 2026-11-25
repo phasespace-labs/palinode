@@ -4,7 +4,7 @@ import click
 from palinode.cli._api import HTTPStatusError, api_client
 from palinode.cli._format import console, print_result, get_default_format, OutputFormat
 from palinode.core.lifecycle_render import render_retained_copies
-from palinode.core.parity import MEMORY_TYPES
+from palinode.core.operations import MEMORY_TYPES
 
 #: Statuses whose ``detail`` is a save refusal worth showing (path, type, validation).
 _REFUSAL_STATUSES = frozenset({400, 422})
@@ -318,7 +318,8 @@ def save(
         result = api_client.save(
             content,
             memory_type,
-            entities=list(entities),
+            # Nothing when no --entity was given: the save spec sends a list only when set.
+            entities=list(entities) or None,
             title=title,
             source=source,
             sync=sync,

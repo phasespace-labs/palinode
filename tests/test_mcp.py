@@ -198,46 +198,6 @@ async def test_dispatch_search_timeout_keeps_plain_message(monkeypatch):
     assert "duplicate" not in text
 
 
-@pytest.mark.asyncio
-async def test_dispatch_save_forwards_priority(monkeypatch):
-    captured = {}
-
-    async def fake_post(path, json=None, timeout=30.0):
-        captured["path"] = path
-        captured["json"] = json
-        return _FakeResponse({"file_path": "/palinode/decisions/mcp-priority.md", "id": "decisions-mcp-priority"})
-
-    monkeypatch.setattr(mcp, "_post", fake_post)
-    result = await _dispatch_tool(
-        "palinode_save",
-        {"content": "body", "type": "Decision", "priority": 5},
-    )
-
-    assert captured["path"] == "/save"
-    assert captured["json"]["priority"] == 5
-    assert "Saved" in result[0].text
-
-
-@pytest.mark.asyncio
-async def test_dispatch_search_forwards_min_priority(monkeypatch):
-    captured = {}
-
-    async def fake_post(path, json=None, timeout=30.0):
-        captured["path"] = path
-        captured["json"] = json
-        return _FakeResponse([])
-
-    monkeypatch.setattr(mcp, "_post", fake_post)
-    result = await _dispatch_tool(
-        "palinode_search",
-        {"query": "anything", "min_priority": 4},
-    )
-
-    assert captured["path"] == "/search"
-    assert captured["json"]["min_priority"] == 4
-    assert "No results" in result[0].text
-
-
 # ── rel_path parity: MCP tool text must render the API's rel_path, never a
 # raw absolute path, for a memory_dir with no "/palinode/" substring — the
 # regression coverage for the seven hardcoded-literal call sites ────────────

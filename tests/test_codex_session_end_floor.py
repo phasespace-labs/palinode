@@ -8,8 +8,7 @@ preflight, the project tag) is the code Claude Code runs.
 
 The rollout below is trimmed from what codex-cli 0.165.0 wrote for a
 prior-session prompt (``codex exec``, one user input, two tool calls, one
-reply), with account identifiers dropped and session and turn IDs replaced.
-Codex's SessionEnd payload carries
+reply), with account identifiers dropped and session and turn IDs replaced. Codex's SessionEnd payload carries
 ``session_id``, ``transcript_path``, ``cwd``, ``hook_event_name`` and
 ``reason`` ("other" for ``codex exec``) and no message text.
 
@@ -27,9 +26,13 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from palinode.cli.init import CODEX_HOOKS_BLOCK, init
+from palinode.cli.init import init
+from pathlib import Path as _Path
+from palinode.hooks.codex import CODEX as _CODEX
 from tests import test_resolve_bundle as scenarios
 from tests import test_resolve_hook_live as live
+
+CODEX_HOOKS_BLOCK = _CODEX.registration_block(_Path("."))
 
 mem = scenarios.mem
 live_api = live.live_api
@@ -40,8 +43,6 @@ pytestmark = pytest.mark.skipif(
 )
 
 BATCH = "cedar-1111aaaa"
-SESSION_ID = "33333333-cccc-7ccc-8ccc-cccccccccccc"
-TURN_ID = "44444444-dddd-7ddd-8ddd-dddddddddddd"
 PROMPT = (
     "We're starting the ledger migration in this repo. The data team assigned us "
     f"batch {BATCH}; that's the id we'll use. Don't change any files today — read "
@@ -54,9 +55,9 @@ REPLY = (
 
 
 def _rollout(*, user_text: str = PROMPT, tool_calls: int = 2, extra: list[dict] | None = None) -> list[dict]:
-    turn = TURN_ID
+    turn = "44444444-dddd-7ddd-8ddd-dddddddddddd"
     lines: list[dict] = [
-        {"type": "session_meta", "payload": {"id": SESSION_ID,
+        {"type": "session_meta", "payload": {"id": "33333333-cccc-7ccc-8ccc-cccccccccccc",
                                              "cli_version": "0.165.0", "originator": "codex_exec"}},
         {"type": "event_msg", "payload": {"type": "task_started", "turn_id": turn}},
         # Codex's own context blocks arrive as user-role response items, never
@@ -108,7 +109,7 @@ def _session_end(repo: Path, transcript: Path, api_url: str) -> subprocess.Compl
     [group] = registered["hooks"]["SessionEnd"]
     [handler] = group["hooks"]
     assert handler == CODEX_HOOKS_BLOCK["hooks"]["SessionEnd"][0]["hooks"][0]
-    payload = {"session_id": SESSION_ID, "transcript_path": str(transcript),
+    payload = {"session_id": "33333333-cccc-7ccc-8ccc-cccccccccccc", "transcript_path": str(transcript),
                "cwd": str(repo), "hook_event_name": "SessionEnd", "reason": "other"}
     proc = subprocess.run(
         ["/bin/sh", "-c", handler["command"]], cwd=repo, input=json.dumps(payload),
@@ -161,7 +162,7 @@ def test_session_end_called_from_code_mode_is_not_captured_twice(mem, live_api, 
     ``custom_tool_call`` is named ``exec`` and its ``item_completed`` event
     carries ``{type: McpToolCall, server, tool}`` with no ``invocation``.
     """
-    turn = TURN_ID
+    turn = "44444444-dddd-7ddd-8ddd-dddddddddddd"
     explicit = [
         {"type": "response_item", "payload": {
             "type": "custom_tool_call", "status": "completed", "call_id": "call_se", "name": "exec",
@@ -179,7 +180,7 @@ def test_session_end_called_from_code_mode_is_not_captured_twice(mem, live_api, 
 
 
 def test_another_mcp_tool_from_code_mode_does_not_skip_the_floor(mem, live_api, codex_checkout, tmp_path):
-    turn = TURN_ID
+    turn = "44444444-dddd-7ddd-8ddd-dddddddddddd"
     other = [{"type": "event_msg", "payload": {"type": "item_completed", "turn_id": turn, "item": {
         "type": "McpToolCall", "id": "exec-2", "server": "palinode", "tool": "palinode_search",
         "arguments": {"query": "ledger"}}}}]

@@ -202,7 +202,7 @@ async def test_mcp_list_is_scoped_to_the_session(store, monkeypatch):
         wide = (await mcp._tool_list({"category": "decisions", "include_other_projects": True}))[0].text
     assert sent[0]["project"] == "project/alpha"
     assert "include_other_projects" not in sent[0]
-    assert sent[1]["include_other_projects"] == "true"
+    assert sent[1]["include_other_projects"] is True  # sent as include_other_projects=true
     assert BETA not in scoped and PRIVATE_BETA not in scoped
     assert f"{ALPHA}.md" in scoped and f"{SHARED}.md" in scoped
     assert f"{BETA_LABEL} {BETA}.md" in wide

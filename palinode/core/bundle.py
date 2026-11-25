@@ -143,7 +143,7 @@ from palinode.core.packing import (
     Unit,
     pack,
 )
-from palinode.core.parity import RESOLVE_INTENTS
+from palinode.core.operations import RESOLVE_INTENTS
 from palinode.core.path_guard import PathTraversalError, resolve_memory_path
 from palinode.core.projection import project_current_text
 from palinode.core.receipt import (
@@ -578,29 +578,22 @@ def _revisions_for(rels: Iterable[str]) -> dict[str, str]:
     for rel in wanted:
         paths.append(rel)
         paths.append(os.path.join(config.memory_dir, rel))
-    placeholders = ",".join("?" for _ in paths)
     best: dict[str, tuple[str, str]] = {}
-    db = store.get_db()
-    try:
-        # B608: placeholders is "?,?,..." built from the count of paths; every
-        # value is bound, nothing user-supplied is interpolated.
-        rows = db.execute(
-            "SELECT file_path, section_id, content_hash FROM chunks "  # nosec B608
-            f"WHERE file_path IN ({placeholders}) AND content_hash IS NOT NULL",
-            tuple(paths),
-        ).fetchall()
-    except Exception:  # pragma: no cover - a store without the column
-        return {}
-    finally:
-        db.close()
-    for row in rows:
-        rel = normalize_memory_path(str(row["file_path"] or ""))
+    with store.reader() as reader:
+        try:
+            rows = reader.section_hashes(paths)
+        except Exception:  # pragma: no cover - a store without the column
+            return {}
+    for file_path, section_id, content_hash in rows:
+        if content_hash is None:
+            continue
+        rel = normalize_memory_path(str(file_path or ""))
         if not rel:
             continue
-        section = row["section_id"] or "root"
+        section = section_id or "root"
         prev = best.get(rel)
         if prev is None or (prev[0] != "root" and (section == "root" or section < prev[0])):
-            best[rel] = (section, str(row["content_hash"]))
+            best[rel] = (section, str(content_hash))
     return {rel: value[1] for rel, value in best.items()}
 
 
@@ -662,52 +655,26 @@ def _seed_from_ref(ref: str) -> dict[str, Any] | None:
             "content": raw, "metadata": {}, "content_hash": None}
 
 
-def _query_seeds(query: str, limit: int) -> tuple[list[dict[str, Any]], set[str]]:
-    """Seeds for a natural-language query, and any coverage reasons earned.
+def _query_seeds(query: str, limit: int, chain: ScopeChain | None):
+    """Seeds for a natural-language query: the search ``/search`` runs.
 
-    The same retrieval ``/search`` performs — ``store.search_hybrid`` with the
-    same floor (``config.search.api_threshold``), the same
-    ``hybrid_enabled`` switch and the same telemetry exclusion — because the
-    two arms fail on opposite query shapes: the vector arm blurs exact
-    identifiers, and a per-turn resolve that misses the fact id the user just
-    typed is the worst version of that. Vector-only seeds were the pre-v0.18
-    recall bug re-introduced one layer up; ``store.search``'s own docstring
-    says every ranked caller goes through ``search_hybrid``.
+    One call to :func:`palinode.core.search.search`, so the floor, both arms,
+    the visibility gate (the ranker's floors measured against what the caller
+    may see) and the widening of a window hidden rows starved are the same
+    as every other surface's. The caller is the ``resolve`` surface with the
+    chain the requester resolved, so there is no ambient context boost, as
+    before, and the API's floor (``config.search.api_threshold``) applies.
 
-    ``record_access=False`` keeps the read-only property: the merged write is
-    gated on that flag and the inner vector pass suppresses its own, so no
-    ``recall_count`` moves. The retrieval log is written by the ``/search``
-    router, not by the store, so calling the store directly writes no row
-    either — this operation is not a retrieval event, it is an analysis of one.
-
-    With no embedder, BM25 alone, which the caller reports as
-    :data:`DEGRADED_KEYWORD_ONLY`.
+    Read-only: no ``recall_count`` moves and no retrieval-log row is written —
+    this operation is not a retrieval event, it is an analysis of one. With
+    no embedder, the keyword arm alone (``active_mode`` says so), which the
+    caller reports as :data:`DEGRADED_KEYWORD_ONLY`.
     """
-    from palinode.core import embedder
+    from palinode.core.search import Caller, SearchQuery, search
 
-    reasons: set[str] = set()
-    if config.search.retrieval_mode == "lexical":
-        reasons.add(DEGRADED_KEYWORD_ONLY)
-        return store.search_hybrid(query, None, top_k=limit, record_access=False), reasons
-    try:
-        embedding = embedder.embed(query)
-    except (embedder.EmbeddingUnavailable, embedder.EmbeddingInputError) as exc:
-        logger.info("resolve: embedder unavailable, keyword-only seeds (%r)", exc)
-        embedding = None
-    if not embedding:
-        reasons.add(DEGRADED_KEYWORD_ONLY)
-        return store.search_hybrid(query, None, top_k=limit, record_access=False), reasons
-    return (
-        store.search_hybrid(
-            query_text=query,
-            query_embedding=embedding,
-            top_k=limit,
-            threshold=config.search.api_threshold,
-            hybrid_weight=config.search.hybrid_weight,
-            use_fts=config.search.hybrid_enabled,
-            record_access=False,
-        ),
-        reasons,
+    return search(
+        SearchQuery(query=query, limit=limit),
+        Caller.from_chain(chain, source="resolve", keyword_fallback=True),
     )
 
 
@@ -738,7 +705,7 @@ def _collect_seeds(
     if len(visible) != len(exact_rows):
         reasons.add(TARGET_MISSING)
 
-    other_projects: set[str] = set()
+    other_projects = 0
     query_rows: list[dict[str, Any]] = []
     seed_limit = max(1, min(request.budget.max_items, MAX_SEEDS))
     query = request.query
@@ -747,28 +714,28 @@ def _collect_seeds(
 
         query = shape_prompt(query)
     if query and query.strip():
-        found, query_reasons = _query_seeds(query, seed_limit)
-        reasons |= query_reasons
-        kept = filter_visible(chain, found, other_projects=other_projects)
+        result = _query_seeds(query, seed_limit, chain)
+        if result.active_mode in ("lexical", "keyword-fallback"):
+            reasons.add(DEGRADED_KEYWORD_ONLY)
         retired = not request.include_retired and any(
-            row.get("currency") == "retired" for row in kept
+            row.get("currency") == "retired" for row in result.hits
         )
-        if (len(kept) != len(found) or retired) and len(found) >= seed_limit:
-            # Hidden or retired seeds can consume the output-sized window.
-            # Look once more within the existing over-fetch bound for current
-            # answers; deduplication below still caps traversal at MAX_SEEDS.
-            # Keep retired seeds: their lineage may lead to a current successor.
-            found, _ = _query_seeds(query, seed_limit * _SEED_OVERFETCH)
-            other_projects.clear()
-            kept = filter_visible(chain, found, other_projects=other_projects)
+        if retired and len(result.hits) >= seed_limit:
+            # Retired seeds can fill the output-sized slate (hidden ones cannot:
+            # search pages past them). Look once more within the existing
+            # over-fetch bound for current answers; deduplication below still
+            # caps traversal at MAX_SEEDS. Keep retired seeds: their lineage
+            # may lead to a current successor.
+            result = _query_seeds(query, seed_limit * _SEED_OVERFETCH, chain)
+        other_projects = result.other_projects_withheld
         # A widened window may find orphaned rows behind a stale index. The
         # source file, not its old indexed body/revision, decides what exists.
-        kept = [row for row in kept if row.get("currency_reason") not in {
+        kept = [row for row in result.hits if row.get("currency_reason") not in {
             "source missing", "source unreadable",
         }]
         # Another project's record is withheld and counted, not a missing
         # target; anything else hidden is reported as before.
-        if len(kept) + len(other_projects) != len(found):
+        if result.hidden_withheld or len(kept) != len(result.hits):
             reasons.add(TARGET_MISSING)
         query_rows = kept
         visible.extend(kept)
@@ -783,7 +750,7 @@ def _collect_seeds(
         deduped.append(row)
         if len(deduped) >= MAX_SEEDS:
             break
-    return deduped, reasons, len(other_projects), query_rows
+    return deduped, reasons, other_projects, query_rows
 
 
 # ── assembly ─────────────────────────────────────────────────────────────────

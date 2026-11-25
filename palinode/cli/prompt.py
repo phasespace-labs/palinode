@@ -6,7 +6,7 @@ from rich.table import Table
 
 from palinode.cli._api import HTTPStatusError, api_client
 from palinode.cli._format import console, get_default_format, OutputFormat, print_result
-from palinode.core.parity import PROMPT_TASKS
+from palinode.core.operations import PROMPT_TASKS
 
 
 @click.group()

@@ -23,9 +23,11 @@ import time
 
 import pytest
 
-from palinode.cli.init import USER_PROMPT_SUBMIT_HOOK_SCRIPT
+from palinode.hooks import script as _hook_script
 from palinode.core.framing import MEMORY_IS_DATA
 from tests import test_resolve_bundle as scenarios
+
+USER_PROMPT_SUBMIT_HOOK_SCRIPT = _hook_script("palinode-user-prompt-submit.sh")
 
 # The store fixture and the three scenarios are the ones the unit-level suite
 # pins, bound here by assignment rather than imported: pytest needs `mem` as a

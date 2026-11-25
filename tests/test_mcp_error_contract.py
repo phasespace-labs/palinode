@@ -94,14 +94,19 @@ def _emitted_failure_literals() -> set[str]:
 
     Two exclusions, both by construction rather than by denylist:
 
-    * ``_all_tools()`` — the MCP schema block. Its titles and descriptions are
-      *data* the server advertises, not responses it returns, and they open with
-      the same words ("Save Memory", "Archive Expired").
+    * ``_all_tools()`` — the MCP schema block — and the ``*_input_properties``
+      builders that render its spec-generated properties (ADR-022). Their
+      titles and descriptions are *data* the server advertises, not responses
+      it returns, and they open with the same words ("Save Memory", "Push the
+      memory repo…").
     * the ``DISPATCH_ERROR_PREFIXES`` assignment itself — otherwise the scan
       finds the contract and reports that the contract covers it, which is how
       a guard passes while seeing no real emission at all.
     """
     src = inspect.getsource(mcp).replace(inspect.getsource(mcp._all_tools), "")
+    for name in dir(mcp):
+        if name.endswith("_input_properties") and callable(getattr(mcp, name)):
+            src = src.replace(inspect.getsource(getattr(mcp, name)), "")
     tree = ast.parse(src)
 
     # Span of the declaration, so the contract cannot satisfy itself.

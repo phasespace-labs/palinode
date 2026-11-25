@@ -6,7 +6,7 @@ client of existing capabilities:
 
   - visible files + selected lint / chunk counts → dashboard health summary
   - visible indexed files                         → dashboard recent list
-  - ``list_api`` (file scan) + ``search_api``      → memory list + search (P1)
+  - ``list_api`` (file scan) + ``core.search``     → memory list + search (P1)
   - ``git_tools.recent_commits`` + ``diff``        → diffs / compaction (P1)
   - ``_resolve_memory_path`` + ``parser``          → fact body + frontmatter
   - ``git_tools.history``                          → git lineage / Saved commit
@@ -191,24 +191,10 @@ def _recall_for_path(resolved_abs: str) -> tuple[int, str | None]:
     Returns ``(0, None)`` if the file isn't indexed or the DB is unavailable.
     """
     try:
-        db = store.get_db()
+        with store.reader() as reader:
+            return reader.recall_for_file(resolved_abs)
     except Exception:
         return 0, None
-    try:
-        rows = db.execute(
-            "SELECT recall_count, last_recalled FROM chunks WHERE file_path = ?",
-            (resolved_abs,),
-        ).fetchall()
-    except Exception:
-        return 0, None
-    finally:
-        db.close()
-    if not rows:
-        return 0, None
-    total = sum((r["recall_count"] or 0) for r in rows)
-    recalls = [r["last_recalled"] for r in rows if r["last_recalled"]]
-    last = max(recalls) if recalls else None
-    return total, last
 
 
 # ── Views ─────────────────────────────────────────────────────────────────────
@@ -252,8 +238,8 @@ def ui_memory_list(
     )
     ctx["listing"] = rows
 
-    # Search is opt-in via ?q= and routes through the existing search_api in
-    # process (no new ranking logic). Empty q → no search section.
+    # Search is opt-in via ?q= and runs core search in process (no ranking
+    # logic of its own). Empty q → no search section.
     ctx["search"] = run_search(q, _search_memory, _rel_path)
 
     return templates.TemplateResponse(request, "memory_list.html", ctx)
@@ -557,15 +543,18 @@ def _correction_candidates(rel: str) -> list[dict[str, Any]]:
 def _search_memory(query: str) -> dict[str, Any]:
     """Run the existing search capability in-process and return result rows.
 
-    Calls ``search_api`` (the same handler the JSON ``/search`` endpoint uses)
-    so the UI inherits its embedding + hybrid ranking with zero new logic. Any
-    backend failure (embedder down, circuit open) propagates to ``run_search``,
-    which renders a soft banner rather than 500-ing the page.
+    Calls :func:`palinode.core.search.search`, the one search every surface
+    uses, so the UI inherits its embedding, ranking and visibility with no
+    logic of its own. Any backend failure (embedder down, circuit open)
+    propagates to ``run_search``, which renders a soft banner rather than
+    500-ing the page.
     """
-    from palinode.api.routers.search import SearchRequest, search_api
+    from palinode.api._util import _retrieval_logger
+    from palinode.core.search import Caller, SearchQuery, search
 
-    req = SearchRequest(query=query, limit=25, receipt=True)
-    return search_api(req, request=None)
+    return search(
+        SearchQuery(query=query, limit=25), Caller(source="ui", log=_retrieval_logger),
+    ).envelope()
 
 
 def _history_files() -> list[str]:

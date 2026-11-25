@@ -30,9 +30,12 @@ from fastapi.testclient import TestClient
 
 import palinode.mcp as mcp
 from palinode.api.server import app
-from palinode.cli.init import SESSION_START_HOOK_SCRIPT, USER_PROMPT_SUBMIT_HOOK_SCRIPT
+from palinode.hooks import script as _hook_script
 from palinode.core import store
 from palinode.core.config import config
+
+SESSION_START_HOOK_SCRIPT = _hook_script("palinode-session-start.sh")
+USER_PROMPT_SUBMIT_HOOK_SCRIPT = _hook_script("palinode-user-prompt-submit.sh")
 
 SERVER_REPO = "palinode-server-checkout"
 CLIENT_PROJECT = "quillon-client"

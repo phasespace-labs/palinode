@@ -106,71 +106,6 @@ async def test_search_schema_declares_include_telemetry():
 
 # ── threading parity: the params reach the API body ──────────────────────────
 
-@pytest.mark.asyncio
-async def test_save_forwards_update_policy_to_api(captured_post):
-    await _dispatch_tool("palinode_save", {
-        "content": "living infra state",
-        "type": "ActionItem",
-        "slug": "infra",
-        "update_policy": "replace",
-    })
-    assert captured_post["path"] == "/save"
-    assert captured_post["body"].get("update_policy") == "replace"
-
-
-@pytest.mark.asyncio
-async def test_save_omits_update_policy_when_absent(captured_post):
-    await _dispatch_tool("palinode_save", {
-        "content": "episodic note",
-        "type": "Insight",
-    })
-    assert "update_policy" not in captured_post["body"]
-
-
-@pytest.mark.asyncio
-async def test_save_forwards_epistemic_to_api(captured_post):
-    await _dispatch_tool("palinode_save", {
-        "content": "derived guess",
-        "type": "Insight",
-        "epistemic": "inference",
-    })
-    assert captured_post["path"] == "/save"
-    assert captured_post["body"].get("epistemic") == "inference"
-
-
-@pytest.mark.asyncio
-async def test_save_omits_epistemic_when_absent(captured_post):
-    await _dispatch_tool("palinode_save", {
-        "content": "plain note",
-        "type": "Insight",
-    })
-    assert "epistemic" not in captured_post["body"]
-
-
-@pytest.mark.asyncio
-async def test_save_forwards_claims_to_api(captured_post):
-    claim = {
-        "text": "the port was held",
-        "source_id": "research/paper.md",
-        "span": {"quote": "the exact passage"},
-    }
-    await _dispatch_tool("palinode_save", {
-        "content": "anchored claim",
-        "type": "Decision",
-        "claims": [claim],
-    })
-    assert captured_post["path"] == "/save"
-    assert captured_post["body"].get("claims") == [claim]
-
-
-@pytest.mark.asyncio
-async def test_save_omits_claims_when_absent(captured_post):
-    await _dispatch_tool("palinode_save", {
-        "content": "plain note",
-        "type": "Insight",
-    })
-    assert "claims" not in captured_post["body"]
-
 
 @pytest.mark.asyncio
 async def test_blame_forwards_claims_param(monkeypatch):
@@ -204,22 +139,6 @@ async def test_blame_omits_claims_param_by_default(monkeypatch):
     monkeypatch.setattr(mcp, "_get", _fake_get)
     await _dispatch_tool("palinode_blame", {"file_path": "decisions/x.md"})
     assert "claims" not in captured["params"]
-
-
-@pytest.mark.asyncio
-async def test_search_forwards_include_telemetry_to_api(captured_post):
-    await _dispatch_tool("palinode_search", {
-        "query": "uptime",
-        "include_telemetry": True,
-    })
-    assert captured_post["path"] == "/search"
-    assert captured_post["body"].get("include_telemetry") is True
-
-
-@pytest.mark.asyncio
-async def test_search_omits_include_telemetry_by_default(captured_post):
-    await _dispatch_tool("palinode_search", {"query": "uptime"})
-    assert "include_telemetry" not in captured_post["body"]
 
 
 @pytest.mark.asyncio

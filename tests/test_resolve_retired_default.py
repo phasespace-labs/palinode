@@ -290,7 +290,8 @@ def test_the_shipped_hook_does_not_carry_the_retired_value(live_api, mem, tmp_pa
 
 def test_the_hook_sends_no_history_option():
     """The hook asks for the default; history is never an automatic request."""
-    from palinode.cli.init import USER_PROMPT_SUBMIT_HOOK_SCRIPT
+    from palinode.hooks import script as _hook_script
+    USER_PROMPT_SUBMIT_HOOK_SCRIPT = _hook_script("palinode-user-prompt-submit.sh")
 
     assert "include_retired" not in USER_PROMPT_SUBMIT_HOOK_SCRIPT
     hook = os.path.join(

@@ -29,9 +29,10 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from palinode.api._util import _safe_500, effective_project_scope
+from palinode.api._util import _safe_500
+from palinode.core.scope import effective_project_scope
 from palinode.api.rate_limit import _RATE_LIMIT_SEARCH, _check_rate_limit
-from palinode.api.routers.search import _resolve_scope_chain
+from palinode.core.scope import search_scope_chain
 from palinode.core.bundle import (
     DEFAULT_MAX_CHARS,
     DEFAULT_MAX_ITEMS,
@@ -39,7 +40,7 @@ from palinode.core.bundle import (
     BundleRequest,
     build_bundle,
 )
-from palinode.core.parity import RESOLVE_INTENTS
+from palinode.core.operations import RESOLVE_INTENTS
 
 logger = logging.getLogger("palinode.api")
 router = APIRouter()
@@ -116,7 +117,7 @@ def resolve_api(req: ResolveRequest, request: Request = None) -> dict[str, Any]:
     scope = effective_project_scope(None, cwd=req.cwd, project=req.project)
     try:
         # ADR-009 Layer 2: the requester's project and session identity.
-        chain = _resolve_scope_chain(context=scope.context, session_id=req.session_id)
+        chain = search_scope_chain(context=scope.context, session_id=req.session_id)
         bundle = build_bundle(bundle_request, chain=chain)
         body = bundle.to_dict()
         from palinode.core.config import config

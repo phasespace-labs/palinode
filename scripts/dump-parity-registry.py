@@ -32,6 +32,7 @@ from palinode.core.parity import (  # noqa: E402  (sys.path mutation above)
     PROMPT_TASKS,
     REGISTRY,
 )
+from palinode.core.operations import SPECS  # noqa: E402  (stdlib-only, like parity)
 
 
 def _canonical_param_to_dict(cp: Any) -> dict[str, Any]:
@@ -83,6 +84,37 @@ def _operation_to_dict(op: Any) -> dict[str, Any]:
     }
 
 
+def _param_to_dict(p: Any) -> dict[str, Any]:
+    return {
+        "name": p.name,
+        "type": p.type,
+        "required": p.required,
+        "enum": list(p.enum) if p.enum is not None else None,
+        "server_default": p.server_default,
+        "flag": p.flag,
+        "omit_if_empty": p.omit_if_empty,
+        "unset_values": list(p.unset_values),
+        "fields": [_param_to_dict(f) for f in p.fields],
+    }
+
+
+def _spec_to_dict(spec: Any) -> dict[str, Any]:
+    """Serialize an operation spec (ADR-022): structure and forwarding rules."""
+    return {
+        "name": spec.name,
+        "endpoint": spec.endpoint,
+        "params": [_param_to_dict(p) for p in spec.params],
+        "display_overrides": [
+            {"surface": o.surface, "param": o.param, "value": o.value}
+            for o in spec.display_overrides
+        ],
+        "shorthands": [
+            {"param": s.param, "by": s.by, "surfaces": list(s.surfaces)}
+            for s in spec.shorthands
+        ],
+    }
+
+
 def build_payload() -> dict[str, Any]:
     operations = sorted(
         (_operation_to_dict(op) for op in REGISTRY),
@@ -90,6 +122,7 @@ def build_payload() -> dict[str, Any]:
     )
     return {
         "operations": operations,
+        "specs": [_spec_to_dict(spec) for spec in SPECS],
         "admin_exempt": sorted(ADMIN_EXEMPT_OPERATIONS),
         "categories": list(CATEGORIES),
         "memory_types": list(MEMORY_TYPES),

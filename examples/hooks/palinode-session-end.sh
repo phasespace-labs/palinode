@@ -1,5 +1,5 @@
 #!/bin/bash
-# palinode-hook-version: 0.24.2
+# palinode-hook-version: 0.25.0
 # palinode-session-end.sh — Auto-capture Claude Code and Codex sessions to Palinode.
 #
 # Fires on SessionEnd (including /clear, logout, exit). Reads the transcript

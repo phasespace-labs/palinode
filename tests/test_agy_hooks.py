@@ -29,17 +29,19 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from palinode.cli.hooks import STATE_CURRENT, hook_statuses, hooks, packaged_hooks
-from palinode.cli.init import (
-    ANTIGRAVITY_HOOK_SCRIPT,
-    SESSION_START_HOOK_SCRIPT,
-    USER_PROMPT_SUBMIT_HOOK_SCRIPT,
-    init,
-)
+from palinode.cli.hooks import hooks
+from palinode.hooks.installed import hook_statuses, STATE_CURRENT
+from palinode.cli.init import init
+from palinode.hooks import script as _hook_script
 from palinode.diagnostics.checks.hooks_current import hooks_current
 from palinode.diagnostics.types import DoctorContext
 from tests import test_resolve_bundle as scenarios
 from tests import test_resolve_hook_live as live
+from tests._hook_helpers import ship
+
+ANTIGRAVITY_HOOK_SCRIPT = _hook_script("palinode-agy-hook.sh")
+SESSION_START_HOOK_SCRIPT = _hook_script("palinode-session-start.sh")
+USER_PROMPT_SUBMIT_HOOK_SCRIPT = _hook_script("palinode-user-prompt-submit.sh")
 
 mem = scenarios.mem
 live_api = live.live_api
@@ -250,11 +252,6 @@ def agy_project(tmp_path, monkeypatch):
     return home, project.resolve()
 
 
-def test_the_adapter_is_a_packaged_hook():
-    assert packaged_hooks()[ADAPTER] == ANTIGRAVITY_HOOK_SCRIPT
-    assert ANTIGRAVITY_HOOK_SCRIPT == (REPO_ROOT / "examples" / "hooks" / ADAPTER).read_text()
-
-
 def test_discovery_finds_both_scripts_on_each_command_and_ignores_other_hooks(agy_project):
     home, project = agy_project
     hooks_json = project / ".agents" / "hooks.json"
@@ -267,10 +264,12 @@ def test_discovery_finds_both_scripts_on_each_command_and_ignores_other_hooks(ag
     assert all(s.state == STATE_CURRENT for s in statuses.values())
 
 
-def test_doctor_warns_on_a_stale_agy_hook_and_update_refreshes_it(agy_project):
+def test_doctor_warns_on_a_stale_agy_hook_and_update_refreshes_it(agy_project, monkeypatch):
     home, project = agy_project
     stale = project / ".agents" / "hooks" / START
-    stale.write_text("#!/bin/bash\n# palinode-session-start.sh — an older release\nexit 0\n")
+    old = "#!/bin/bash\n# palinode-session-start.sh — an older release\nexit 0\n"
+    ship(monkeypatch, START, old)
+    stale.write_text(old)
 
     result = hooks_current(DoctorContext(config=None))
     assert not result.passed and result.severity == "warn"

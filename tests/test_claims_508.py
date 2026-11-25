@@ -554,11 +554,6 @@ def test_cli_claim_malformed_rejected():
     assert body is None
 
 
-def test_cli_save_without_claim_sends_no_claims():
-    result, body = _run_cli_save(["--type", "Decision", "plain body"])
-    assert result.exit_code == 0, result.output
-    assert "claims" not in body
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Partial span marker rendering tests
 # ─────────────────────────────────────────────────────────────────────────────

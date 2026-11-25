@@ -363,7 +363,8 @@ def test_injection_consumers_request_the_withholding_selection(superseded_pair, 
 def test_session_start_consumers_inject_the_prime_digest_only(source):
     text = (REPO_ROOT / source).read_text(encoding="utf-8")
     if source == "palinode/cli/init.py":
-        from palinode.cli.init import SESSION_START_HOOK_SCRIPT as text
+        from palinode.hooks import script as _hook_script
+        text = _hook_script("palinode-session-start.sh")
     assert not _LIST_REQUEST_RE.findall(text), f"{source} requests a core listing"
     assert "/context/prime" in text and "core_memories" in text
 

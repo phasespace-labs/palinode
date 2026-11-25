@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "palinode"
-version = "0.24.1"
+version = "0.25.0"
 description = "Inspectable, correctable project memory in git-versioned Markdown for AI agents."
 authors = [
   {name = "Paul Kyle", email = "paul@phasespace.co"}
@@ -138,6 +138,7 @@ packages = [
     "palinode.corrections",
     "palinode.diagnostics",
     "palinode.diagnostics.checks",
+    "palinode.hooks",
     "palinode.import_",
     "palinode.indexer",
     "palinode.ingest",
@@ -162,3 +163,7 @@ packages = [
 "palinode.prompts" = ["*.md", "shipped-hashes.json"]
 # The working-state vocabulary prompt_query reads for automatic recall.
 "palinode.core" = ["working_state.txt"]
+# The hook scripts `palinode init` installs and `palinode hooks update`
+# refreshes, and the record of every version shipped (ADR-023).
+# examples/hooks/ is generated from these by scripts/render-hook-examples.py.
+"palinode.hooks" = ["scripts/*.sh", "shipped-hashes.json"]

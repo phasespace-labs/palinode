@@ -338,7 +338,8 @@ def test_generated_hook_cannot_inject_hidden_trigger_targets(
 
     import uvicorn
 
-    from palinode.cli.init import USER_PROMPT_SUBMIT_HOOK_SCRIPT
+    from palinode.hooks import script as _hook_script
+    USER_PROMPT_SUBMIT_HOOK_SCRIPT = _hook_script("palinode-user-prompt-submit.sh")
 
     if not (shutil.which("curl") and shutil.which("jq")):
         pytest.skip("generated hook requires curl and jq")

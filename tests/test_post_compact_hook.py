@@ -17,12 +17,14 @@ from unittest.mock import patch
 
 import pytest
 
-from palinode.cli.init import (
-    POST_COMPACT_HOOK_SCRIPT,
-    SETTINGS_HOOK_BLOCK,
-    _merge_settings,
-)
+from palinode.cli.init import _merge_settings
+from palinode.hooks import script as _hook_script
+from pathlib import Path as _Path
+from palinode.cli.init import settings_block as _settings_block
 from palinode.core.config import config
+
+POST_COMPACT_HOOK_SCRIPT = _hook_script("palinode-post-compact.sh")
+SETTINGS_HOOK_BLOCK = _settings_block(_Path("."))
 
 SESSION = "55555555-eeee-4eee-8eee-eeeeeeeeeeee"
 SUMMARY = "Shipped the ranker fix. The reviewer approved merging the PR. Next: run the smoke tests."
@@ -184,14 +186,6 @@ def test_init_rerun_makes_an_async_registration_synchronous(tmp_path):
     palinode = [h for h in handlers if h["command"].endswith("/palinode-post-compact.sh")]
     assert len(palinode) == 1 and "async" not in palinode[0] and palinode[0]["timeout"] == 35
     assert other in handlers  # someone else's async hook is left alone
-
-
-def test_example_settings_match_init_registration():
-    canonical = json.loads(
-        (Path(__file__).parent.parent / "examples" / "hooks" / "settings.json")
-        .read_text(encoding="utf-8")
-    )
-    assert canonical["hooks"]["PostCompact"] == SETTINGS_HOOK_BLOCK["hooks"]["PostCompact"]
 
 
 def test_hook_timeout_exceeds_the_curl_timeout():

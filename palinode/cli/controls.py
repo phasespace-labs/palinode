@@ -14,16 +14,11 @@ import click
 
 from palinode.cli._api import api_client
 from palinode.cli._format import OutputFormat, console, get_default_format, print_result
-from palinode.cli.hooks import codex_home
-from palinode.cli.init import (
-    _ANTIGRAVITY_HOOK_EVENTS,
-    _CODEX_HOOK_EVENTS,
-    _CURSOR_HOOK_EVENTS,
-    _HOOK_EVENTS,
-    ANTIGRAVITY_HOOKS_DIR,
-    CURSOR_HOOKS_DIR,
-    _agy_commands,
-)
+from palinode.hooks.agy import ANTIGRAVITY
+from palinode.hooks.claude import CLAUDE
+from palinode.hooks.codex import CODEX
+from palinode.hooks.cursor import CURSOR
+from palinode.hooks.spec import HarnessSpec
 from palinode.core.disclosure import (
     EXCLUSION_SCOPE,
     PAUSE_SCOPE,
@@ -31,11 +26,6 @@ from palinode.core.disclosure import (
     redact_destination,
 )
 
-
-#: The hook scripts ``palinode init --hook`` installs, by Claude Code event.
-_HOOK_SCRIPTS = dict(_HOOK_EVENTS)
-#: The hook scripts ``palinode init --codex-hook`` installs, by Codex event.
-_CODEX_HOOK_SCRIPTS = dict(_CODEX_HOOK_EVENTS)
 
 #: What each automatic capture path sends to the API, for the disclosure.
 OBSERVED_CAPTURE_RANGE = (
@@ -49,94 +39,36 @@ OBSERVED_CAPTURE_RANGE = (
 )
 
 
-def _palinode_hook_events(settings: Path) -> set[str]:
-    """The Claude Code events whose registration in ``settings`` names palinode."""
-    events: set[str] = set()
-    try:
-        raw = json.loads(settings.read_text(encoding="utf-8"))
-        hooks = raw.get("hooks", {}) if isinstance(raw, dict) else {}
-        for event, entries in hooks.items() if isinstance(hooks, dict) else ():
-            if not isinstance(event, str) or not isinstance(entries, list):
-                continue
-            if any(
-                "palinode" in str(hook).lower()
-                for entry in entries
-                if isinstance(entry, dict)
-                for hook in (
-                    entry.get("hooks", [])
-                    if isinstance(entry.get("hooks"), list)
-                    else []
-                )
-            ):
-                events.add(event)
-    except (OSError, ValueError, AttributeError):
-        pass
-    return events
+def _observed_hooks(spec: HarnessSpec, home: Path, project_dir: Path) -> list[dict[str, Any]]:
+    """Report each palinode hook ``spec`` registers, per scope it was found in.
 
-
-def _read_json(path: Path) -> Any:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-
-
-def _cursor_hook_events(hooks_json: Path) -> set[str]:
-    """The Cursor events whose ``hooks.json`` entries name a palinode script.
-
-    Cursor's entries are flat ``{"command": ...}`` objects under each event,
-    unlike Claude Code's nested ``hooks`` lists.
+    A hook is reported when its event has a handler running a palinode script
+    (:meth:`HarnessSpec.runs`) or its script is in that scope's hooks folder.
+    A file read twice under two scopes (run from the home directory, the user
+    and project files are the same) is reported once. A local settings file
+    shares the project's hooks folder, so its scripts are reported once, under
+    the project scope. Codex's ``config.toml`` layers are not read here.
     """
-    raw = _read_json(hooks_json)
-    hooks = raw.get("hooks") if isinstance(raw, dict) else None
-    events: set[str] = set()
-    for event, entries in hooks.items() if isinstance(hooks, dict) else ():
-        if isinstance(event, str) and isinstance(entries, list) and any(
-            isinstance(entry, dict) and "palinode" in str(entry.get("command", "")).lower()
-            for entry in entries
-        ):
-            events.add(event)
-    return events
-
-
-def _agy_hook_events(hooks_json: Path) -> set[str]:
-    """The Antigravity events with a palinode handler, under any hook name."""
-    raw = _read_json(hooks_json)
-    events: set[str] = set()
-    for definition in raw.values() if isinstance(raw, dict) else ():
-        if not isinstance(definition, dict):
-            continue
-        for event, handlers in definition.items():
-            if isinstance(event, str) and isinstance(handlers, list) and any(
-                "palinode" in command.lower()
-                for command in _agy_commands({"_": {event: handlers}})
-            ):
-                events.add(event)
-    return events
-
-
-def _observed_recall_hooks(
-    scopes: list[tuple[str, Path, Path]],
-    pairs: tuple[tuple[str, str], ...],
-    read_events: Any,
-) -> list[dict[str, Any]]:
-    """Report each palinode hook found in ``(scope, hooks.json, hooks dir)``."""
     found: list[dict[str, Any]] = []
     seen: set[Path] = set()
-    for scope, hooks_json, hooks_dir in scopes:
-        resolved = hooks_json.resolve()
+    for config in spec.config_files:
+        path = config.path(home, project_dir)
+        if path.suffix != ".json":
+            continue
+        resolved = path.resolve()
         if resolved in seen:
             continue
         seen.add(resolved)
-        registrations = read_events(hooks_json)
-        for event, script in pairs:
-            script_observed = (hooks_dir / script).is_file()
-            if event in registrations or script_observed:
+        registrations = spec.palinode_events(path, home, project_dir)
+        hooks_dir = config.hooks_dir(home, project_dir)
+        for reg in spec.registrations:
+            script_observed = (hooks_dir / reg.script).is_file()
+            if reg.event in registrations or (script_observed and config.scope != "project_local"):
                 found.append(
                     {
-                        "event": event,
-                        "scope": scope,
-                        "settings_registration_observed": event in registrations,
+                        "event": reg.event,
+                        "scope": config.scope,
+                        "settings_registration_observed": reg.event in registrations,
                         "script_observed": script_observed,
                     }
                 )
@@ -163,70 +95,11 @@ def _observed_project_setup(project_dir: Path, home: Path | None = None) -> dict
         "codex_instructions": False,
         "running_client_state": "unknown; Palinode cannot inspect client-managed traffic or processes",
     }
-    user_dir = (home if home is not None else Path.home()) / ".claude"
-    project_claude = project_dir / ".claude"
-    scopes = [
-        ("user", user_dir / "settings.json", user_dir / "hooks"),
-        ("project", project_claude / "settings.json", project_claude / "hooks"),
-        ("project_local", project_claude / "settings.local.json", project_claude / "hooks"),
-    ]
-    seen_settings: set[Path] = set()
-    for scope, settings, hooks_dir in scopes:
-        # Run from the home directory, the user and project files are the same.
-        resolved = settings.resolve()
-        if resolved in seen_settings:
-            continue
-        seen_settings.add(resolved)
-        registrations = _palinode_hook_events(settings)
-        for event, script in _HOOK_SCRIPTS.items():
-            script_observed = (hooks_dir / script).is_file()
-            # Local settings share the project's hooks folder; its scripts are
-            # reported once, under the project scope.
-            if event in registrations or (script_observed and scope != "project_local"):
-                observed["claude_hooks"].append(
-                    {
-                        "event": event,
-                        "scope": scope,
-                        "settings_registration_observed": event in registrations,
-                        "script_observed": script_observed,
-                    }
-                )
-    # Codex adds every layer's hooks together rather than overriding, so the
-    # user and project hooks.json are both read the same way.
-    codex_user = codex_home(home if home is not None else Path.home())
-    codex_project = project_dir / ".codex"
-    seen_codex: set[Path] = set()
-    for scope, codex_dir in (("user", codex_user), ("project", codex_project)):
-        resolved = codex_dir.resolve()
-        if resolved in seen_codex:
-            continue
-        seen_codex.add(resolved)
-        registrations = _palinode_hook_events(codex_dir / "hooks.json")
-        for event, script in _CODEX_HOOK_SCRIPTS.items():
-            script_observed = (codex_dir / "hooks" / script).is_file()
-            if event in registrations or script_observed:
-                observed["codex_hooks"].append(
-                    {
-                        "event": event,
-                        "scope": scope,
-                        "settings_registration_observed": event in registrations,
-                        "script_observed": script_observed,
-                    }
-                )
     user_home = home if home is not None else Path.home()
-    observed["cursor_hooks"] = _observed_recall_hooks(
-        [
-            ("user", user_home / ".cursor" / "hooks.json", user_home / ".cursor" / "hooks"),
-            ("project", project_dir / ".cursor" / "hooks.json", project_dir / CURSOR_HOOKS_DIR),
-        ],
-        _CURSOR_HOOK_EVENTS,
-        _cursor_hook_events,
-    )
-    observed["agy_hooks"] = _observed_recall_hooks(
-        [("project", project_dir / ".agents" / "hooks.json", project_dir / ANTIGRAVITY_HOOKS_DIR)],
-        _ANTIGRAVITY_HOOK_EVENTS,
-        _agy_hook_events,
-    )
+    observed["claude_hooks"] = _observed_hooks(CLAUDE, user_home, project_dir)
+    observed["codex_hooks"] = _observed_hooks(CODEX, user_home, project_dir)
+    observed["cursor_hooks"] = _observed_hooks(CURSOR, user_home, project_dir)
+    observed["agy_hooks"] = _observed_hooks(ANTIGRAVITY, user_home, project_dir)
     try:
         mcp = json.loads((project_dir / ".mcp.json").read_text(encoding="utf-8"))
         observed["mcp_configured"] = "palinode" in mcp.get("mcpServers", {})

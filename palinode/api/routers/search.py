@@ -2,265 +2,32 @@ from __future__ import annotations
 import os
 import re
 import logging
-from functools import partial
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from palinode.core import store, embedder
 from palinode.core.config import config
-from palinode.core.parity import CATEGORIES, MEMORY_TYPES, RESOLVE_MODES, TIERS
+from palinode.core.context_prime import InvalidProjectScope
+from palinode.core.operations import CATEGORIES, MEMORY_TYPES, RESOLVE_MODES, TIERS
 from palinode.core.path_guard import to_rel_path
 from palinode.core.ranker import parse_iso_utc
-from palinode.core.visibility import is_row_visible
-from palinode.core.where import parse_where
-from palinode.api._util import (
-    WhereEntries, _retrieval_logger, _safe_500, effective_project_scope,
+from palinode.core.scope import search_scope_chain
+from palinode.core.search import (
+    Caller, RecallDenied, SearchQuery, _fetch_visible, search,
 )
+from palinode.api._util import WhereEntries, _retrieval_logger, _safe_500
 from palinode.api.rate_limit import _RATE_LIMIT_SEARCH, _check_rate_limit
 from palinode.api.search_helpers import (
-    _apply_tier,
-    _compute_effective_date_after,
     _embedding_candidates,
     _enrich_with_rel_path,
     _enrich_with_snippets,
-    _filter_min_priority,
     _filter_type_deny,
     _filter_types,
     _read_memory_body,
     _rerank_with_preprocessing,
-    _resolve_snippet_max_chars,
 )
 logger = logging.getLogger("palinode.api")
 router = APIRouter()
-
-
-#: How much wider to re-fetch when visibility filtering starved a result
-#: window. Only paid when a hidden memory actually landed in the window.
-_VISIBILITY_OVERFETCH = 5
-
-
-def _resolve_scope_chain(
-    context: list[str] | None = None,
-    session_id: str | None = None,
-    include_other_projects: bool = False,
-):
-    """Resolve the session scope chain for ADR-009 Layer 2 search gating.
-
-    The project level is taken from the caller-supplied ambient ``context``
-    (the same ``project/*`` refs used for the ADR-008 boost — never guessed);
-    agent/harness/member/org come from env + config via
-    :func:`resolve_scope_chain`.
-
-    Returns ``None`` unless the chain carries a real **identity** level. The
-    gate is :meth:`ScopeChain.has_identity`, not ``is_empty``: ``session_id``
-    is ADR-007 recall-dedup telemetry that any caller may send, and a
-    ``session/<id>``-only chain describes nobody — treating it as a scope
-    would silently hide every explicitly-scoped shared memory. ``None`` still
-    withholds ``private``/``restricted`` memories at the choke point; it only
-    turns off *scope isolation*.
-
-    A chain carrying a project isolates to it: records tagged to a different
-    project are withheld at the same choke point, unless
-    ``include_other_projects`` asks for them.
-    """
-    from palinode.core.scope import resolve_scope_chain, with_other_projects
-
-    project = None
-    for ref in (context or []):
-        if isinstance(ref, str) and ref.startswith("project/"):
-            project = ref.split("/", 1)[1]
-            break
-    chain = resolve_scope_chain(config, project=project, session_id=session_id)
-    if not chain.has_identity():
-        return None
-    return with_other_projects(chain) if include_other_projects else chain
-
-
-def _resolve_search_scope_chain(req: "SearchRequest"):
-    """``_resolve_scope_chain`` for a /search request body."""
-    return _resolve_scope_chain(
-        context=req.context, session_id=req.session_id,
-        include_other_projects=bool(req.include_other_projects),
-    )
-
-
-def _label_other_projects(results: list[dict[str, Any]], chain) -> None:
-    """Mark each hit tagged to a project other than the request's.
-
-    Only reached when the request opted in with ``include_other_projects``;
-    by default such a hit was never delivered. ``other_project`` lists the
-    record's own project refs, so a reader sees whose decision it is.
-    """
-    from palinode.core.visibility import row_other_project_refs
-
-    if chain is None or not chain.include_other_projects:
-        return
-    for hit in results:
-        refs = row_other_project_refs(chain, hit)
-        if refs:
-            hit["other_project"] = refs
-
-
-def _has_visible_match(chain, matches: list[dict[str, Any]], other_projects: set[str]) -> bool:
-    """Is any ``where`` match a record a session on ``chain`` may see?
-
-    Answers by the live visibility rule search applies to every row. When none is,
-    ``other_projects`` collects the matches project isolation withheld.
-    """
-    from palinode.core.visibility import filter_visible, is_row_visible
-
-    cache: dict[str, dict[str, Any]] = {}
-    if any(is_row_visible(chain, row, cache=cache) for row in matches):
-        return True
-    filter_visible(chain, matches, other_projects=other_projects)
-    return False
-
-
-def _keys_absent_in_scope(chain, keys: list[str]) -> list[str]:
-    """The ``where`` keys that no record a session on ``chain`` may see has.
-
-    Judged by the visibility rule search applies to every row, so a key that
-    only private records or other projects' records carry reads as absent:
-    the reply must not say what isolation withheld.
-    """
-    cache: dict[str, dict[str, Any]] = {}
-    return [
-        key for key in dict.fromkeys(keys)
-        if not any(is_row_visible(chain, row, cache=cache)
-                   for row in store.list_chunks_with_key(key))
-    ]
-
-
-def _filter_exclusion(
-    req: "SearchRequest",
-    *,
-    chain,
-    where_matches_nothing: bool,
-    where_chunk_ids: list[str] | None,
-    rerun: Callable[[int], list[dict[str, Any]]],
-    fetch_limit: int,
-    automatic: bool,
-) -> dict[str, Any] | None:
-    """Did ``where`` or ``types`` empty this delivery, rather than the query?
-
-    Called only for an empty delivery that had either filter. ``None`` when
-    the search finds nothing without them either: then the query, or another
-    filter, is the reason, and the reply says what it always said.
-
-    When no record the caller may see satisfies ``where``, that is the answer
-    and nothing is run: the delivery skipped the query for that reason, and
-    the reply names the keys no record in scope carries. Otherwise ``rerun``
-    repeats the search without ``where`` and ``types`` (every other filter,
-    the visibility gate included, still applies) and records no recall, and
-    ``matches`` counts what it finds. Only rows the caller may see are
-    counted, so no other project's record reaches the number.
-    """
-    if where_matches_nothing:
-        return {
-            "by": ["where"],
-            "where": list(req.where or []),
-            "matches": None,
-            "matches_at_least": False,
-            "missing_keys": _keys_absent_in_scope(
-                chain, [key for key, _ in parse_where(req.where)],
-            ),
-        }
-    window: dict[str, int] = {}
-
-    def counted(n: int) -> list[dict[str, Any]]:
-        rows = rerun(n)
-        window.update(fetched=len(rows), limit=n)
-        return rows
-
-    rows = _fetch_visible(chain, counted, fetch_limit, automatic=automatic)
-    rows = _filter_type_deny(rows, req.type_deny)
-    rows = _filter_min_priority(rows, req.min_priority)
-    if not rows:
-        return None
-    applied = (["where"] if where_chunk_ids is not None else []) + (["types"] if req.types else [])
-    allowed = set(where_chunk_ids or ())
-    alone = [
-        name for name in applied
-        if (name == "where" and not any(row.get("id") in allowed for row in rows))
-        or (name == "types" and not _filter_types(rows, req.types))
-    ]
-    value: dict[str, Any] = {
-        # A filter that empties the slate on its own is named alone; when
-        # neither does, it is the two together.
-        "by": alone or applied,
-        "matches": len(rows),
-        # The window came back full, so more matches may lie behind it.
-        "matches_at_least": window.get("fetched", 0) >= window.get("limit", 1),
-        "missing_keys": [],
-    }
-    if "where" in value["by"]:
-        value["where"] = list(req.where or [])
-    if "types" in value["by"]:
-        value["types"] = list(req.types or [])
-    return value
-
-
-def _fetch_visible(
-    chain,
-    run,
-    base_limit: int,
-    *,
-    record_recall: Callable[[list[str]], None] | None = None,
-    other_projects: set[str] | None = None,
-    automatic: bool = False,
-) -> list[dict[str, Any]]:
-    """Fetch rows and apply the ADR-009 Layer 2 visibility gate.
-
-    ``run(n)`` performs the bounded store fetch. Visibility cannot be pushed
-    into SQL — the authoritative frontmatter lives in the file, not in
-    ``chunks.metadata`` (which the indexer's unchanged-content fast path
-    leaves stale after a frontmatter-only edit) — so hidden rows are removed
-    after the fetch and can, in principle, consume the window ahead of visible
-    matches ranked just below it.
-
-    Rather than always over-fetching (which widens the RRF candidate set and
-    would perturb ranking for every search), the window is widened **only when
-    it was actually starved**: something was hidden *and* the fetch came back
-    saturated, so more rows may exist behind it. When nothing is hidden — the
-    overwhelmingly common case — this is a single fetch with today's exact
-    limits and today's exact ranking.
-
-    When a ``record_recall`` callback is supplied (hybrid/vector search),
-    both fetches suppress store-level recording. After selecting and gating
-    the window, record each distinct valid ID once, so hidden and automatic
-    lifecycle-excluded rows never acquire recall metadata. The callback carries
-    mode and session_id for ADR-007's per-session importance deduplication.
-    Callers without recall write-back (recency, associative) use plain fetches.
-
-    ``other_projects`` collects the records project isolation withheld from
-    the window that was finally used, for the delivery's withheld count.
-    """
-    from palinode.core.visibility import filter_visible
-
-    def gate(fetched: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        if other_projects is not None:
-            other_projects.clear()
-        visible = filter_visible(chain, fetched, other_projects=other_projects)
-        if automatic:
-            # Live lifecycle classification, including archive location and
-            # frontmatter-only retirement behind an unchanged index body.
-            visible = [r for r in store.check_freshness(visible)
-                       if r.get("currency") != "retired"
-                       and r.get("currency_reason") not in {"source missing", "source unreadable"}]
-        return visible
-
-    fetch_options = {"record_access": False} if record_recall is not None else {}
-    rows = run(base_limit, **fetch_options)
-    visible = gate(rows)
-    if len(visible) < len(rows) and len(rows) >= base_limit:
-        visible = gate(run(base_limit * _VISIBILITY_OVERFETCH, **fetch_options))
-    if record_recall is not None:
-        ids = dict.fromkeys(
-            row["id"] for row in visible
-            if isinstance(row.get("id"), str) and row["id"]
-        )
-        record_recall(list(ids))
-    return visible
 
 
 class SearchRequest(BaseModel):
@@ -270,7 +37,9 @@ class SearchRequest(BaseModel):
     limit: int | None = Field(
         default=config.search.default_limit, ge=1, le=config.search.max_limit
     )
-    threshold: float | None = config.search.api_threshold
+    # Server-owned default, chosen per caller by core search (ADR-022): MCP's
+    # floor for an MCP request, the API's for everything else. None = unset.
+    threshold: float | None = None
     hybrid: bool | None = None
     date_after: str | None = None
     date_before: str | None = None
@@ -359,124 +128,14 @@ class SearchRequest(BaseModel):
         return value
 
 
-def _attach_evidence(results: list[dict[str, Any]], req: "SearchRequest", chain) -> None:
-    """Opt-in evidence closure over the final hit list, plus the resolution it
-    supports. Read-only; additive.
-
-    The resolution block is decided here, once, and rendered by every surface
-    — so the MCP, CLI and REST readings of one hit cannot disagree about
-    whether a record stands, is contested, or is unknown.
-    """
-    if req.resolve and req.resolve != "none" and results:
-        from palinode.core.evidence import attach_evidence
-        from palinode.core.resolution import attach_resolution
-
-        evidence = attach_evidence(results, mode=req.resolve, chain=chain)
-        attach_resolution(results, evidence)
-        if not req.include_retired or req.automatic or req.mode == "passive":
-            from palinode.core.evidence import withhold_retired
-
-            withhold_retired(results, evidence)
-
-
-def _build_receipt(results: list[dict[str, Any]], req: "SearchRequest", chain):
-    """The delivery receipt for this response (:mod:`palinode.core.receipt`).
-
-    Built from the rows as they are about to be returned — their exact source
-    revisions, currency/freshness, and the evidence/resolution blocks already
-    attached — so it costs no lookup of its own. Always built: the receipt is
-    what the retrieval log records, whether or not the caller asked for it back.
-    """
-    from palinode.core.receipt import build_receipt
-
-    return build_receipt(
-        results,
-        request=req.model_dump(exclude_none=True),
-        scope=chain.as_list() if chain is not None else (),
-        resolve_mode=req.resolve or "none",
-        surface="search",
-        memory_dir=config.memory_dir,
-    )
-
-
-def _assess_confidence(results: list[dict[str, Any]], active_mode: str):
-    """This delivery's confidence verdict (:mod:`palinode.core.confidence`).
-
-    Read off the rows about to be returned — each already carries its two
-    pre-fusion arm scores — so it costs no second retrieval and describes
-    exactly the slate the caller gets, after the visibility gate, the type
-    filters and the ``limit`` trim have all had their say.
-    """
-    from palinode.core.confidence import assess
-
-    return assess(results, active_mode=active_mode)
-
-
-#: Row fields kept off the wire: which query units a keyword row matched is the
-#: confidence verdict's evidence (:mod:`palinode.core.confidence`), not part of
-#: the result.
-_INTERNAL_ROW_FIELDS = frozenset({"keyword_units"})
-
-
-def _delivery(results: list[dict[str, Any]], req: "SearchRequest", receipt, *,
-              active_mode: str = "recency", chain=None, scope=None,
-              confidence: dict[str, Any] | None = None,
-              other_projects_withheld: int = 0,
-              filter_exclusion: dict[str, Any] | None = None):
-    """Shape the response: today's bare array, or the receipt envelope.
-
-    With ``resolve`` on, the envelope carries the receipt's **public** view —
-    refs, exact revisions, dispositions, lineage, coverage, scope, times; never
-    memory content and never the caller's query. With ``resolve`` off there is
-    no evidence to qualify, so it carries the compact reference
-    (``bundle_id`` + ``evaluated_at``). Both shapes add caller-visible retrieval
-    diagnostics, including on an empty result, without exposing global counts.
-
-    The envelope also names the project this delivery was scoped to and the
-    source that decided it, under the same ``project`` /
-    ``project_resolved_by`` keys ``/context/prime`` already returns — so a
-    caller can see *why* a search was scoped the way it was without a second
-    request. The bare array stays byte-identical: that shape is frozen.
-
-    The diagnostics carry this delivery's ``confidence`` verdict and the arm
-    evidence behind it, alongside the ``outcome`` they always carried: rows
-    came back is one question, any of them being worth trusting is another.
-
-    A project-scoped delivery also says how many records tagged to other
-    projects it withheld (``other_projects_withheld``), so a scoped empty
-    result reads as "isolated", not as "nothing in memory".
-
-    An empty delivery that ``where`` or ``types`` emptied says so under
-    ``filter_exclusion`` (:func:`_filter_exclusion`), so it does not read as
-    "nothing matched this query". Absent otherwise.
-    """
-    # Fields the ranker carries for the confidence verdict and nothing else.
-    results = [
-        {key: value for key, value in row.items() if key not in _INTERNAL_ROW_FIELDS}
-        if isinstance(row, dict) else row
-        for row in results
-    ]
-    if not req.receipt:
-        return results
-    view = receipt.public() if (req.resolve and req.resolve != "none") else receipt.reference()
-    from palinode.core.retrieval import search_diagnostics
-
-    view["retrieval"] = search_diagnostics(
-        active_mode, matched=bool(results), chain=chain, confidence=confidence,
-    )
-    view["retrieval"]["other_projects_withheld"] = other_projects_withheld
-    if filter_exclusion is not None:
-        view["retrieval"]["filter_exclusion"] = filter_exclusion
-    envelope: dict[str, Any] = {"results": results, "receipt": view}
-    if scope is not None:
-        envelope.update(scope.fields())
-    return envelope
-
-
 class SearchAssociativeRequest(BaseModel):
     query: str
     seed_entities: list[str] | None = None
     limit: int | None = 5
+    # The same type filters as /search: an OR allow-list of memory types, and
+    # a deny-list that wins over it.
+    types: list[Literal[*MEMORY_TYPES]] | None = None
+    type_deny: list[str] | None = None
 
 
 class DedupSuggestRequest(BaseModel):
@@ -543,6 +202,10 @@ def search_api(
 ) -> list[dict[str, Any]] | dict[str, Any]:
     """Configured hybrid/lexical search against derived `.palinode.db` chunks.
 
+    Transport for :func:`palinode.core.search.search`, which owns the policy:
+    this parses the body, names the caller from the ``X-Palinode-Source``
+    header, rate-limits, and maps the core's refusals to status codes.
+
     Empty query routes to recency-only mode: returns the most recent
     chunks ordered by created_at desc, optionally filtered by `types` and
     `since_days`. Skips embedding entirely.
@@ -554,334 +217,56 @@ def search_api(
         delivery receipt (:mod:`palinode.core.receipt`) beside it.
 
     # Security audit (I2, 2026-04-30):
-    # - All SQL goes through store.search / store.search_hybrid /
-    #   store.list_recent / store.search_fts; every cursor.execute() in
-    #   those helpers uses ? placeholders (no f-string interpolation of
-    #   user input into SQL). Verified directly in palinode/core/store.py.
-    # - No LLM call inside search_api itself — only embedder.embed() on
-    #   the query string, which is a vector model and not a prompt
-    #   injection surface.
-    # - Result sets are bounded: req.limit (capped server-side via
-    #   config.search.default_limit when unset), with an internal
-    #   over-fetch factor of 5x when `types` filter is active. The
-    #   over-fetch ceiling is itself bounded by the underlying SQL
-    #   LIMIT clause.
+    # - All SQL goes through store.search_hybrid / store.list_recent /
+    #   store.list_chunks_matching; every cursor.execute() in those helpers
+    #   uses ? placeholders (no f-string interpolation of user input into SQL).
+    # - No LLM call on the search path — only embedder.embed() on the query
+    #   string, which is a vector model and not a prompt injection surface.
+    # - Result sets are bounded: req.limit (config.search.default_limit when
+    #   unset, capped at config.search.max_limit), with an internal over-fetch
+    #   factor of 5x when a post-fetch filter is active, itself bounded by the
+    #   underlying SQL LIMIT clause.
     # - FTS5 query string is sanitized via store.sanitize_fts_query()
     #   before MATCH, defending against operator-injection (`OR`, `NEAR`).
     """
-    from palinode.core.capture_policy import evaluate_capture_policy
-
-    # The scope this delivery applies, resolved once through the shared
-    # resolver: the caller's own ``context`` when it sent one, else the pinned
-    # setting. Resolved *before* the capture-policy check so a pinned project
-    # is the project the policy is evaluated against, and reported on the way
-    # out. One resolution decides all three, so what the response reports is
-    # always what the search applied — an explicit ``context`` (including an
-    # empty one) is never overridden here, which is why the substitution is
-    # guarded on the field being absent rather than on it being falsy. The one
-    # exception is this server's ``context.enabled: false``, which no caller's
-    # ``context`` can turn back on.
-    scope = effective_project_scope(req.context)
-    if req.context is None or scope.basis == "disabled":
-        req.context = scope.context
-    decision = evaluate_capture_policy(
-        "recall",
-        automatic=req.automatic or req.mode == "passive",
-        cwd=req.cwd,
-        project=scope.project.removeprefix("project/") if scope.project else None,
-        source_path=req.source_path,
-    )
-    if not decision.allowed:
-        # The request query must never reach embedding, retrieval logging, or
-        # an error body when an automatic recall is denied.
-        raise HTTPException(status_code=403, detail=decision.reason)
+    query, caller = _search_inputs(req, request)
     if request:
         client_ip = request.client.host if request.client else "unknown"
         if not _check_rate_limit(client_ip, "search", _RATE_LIMIT_SEARCH):
             raise HTTPException(status_code=429, detail="Rate limit exceeded")
-    where_conditions = parse_where(req.where)
     try:
-        effective_date_after = _compute_effective_date_after(req)
-        limit = req.limit or config.search.default_limit
-
-        # ADR-015 §2.3: None → default hard-exclude of telemetry; [] → include
-        # telemetry when the caller passes the explicit override.
-        kind_exclude_list = [] if req.include_telemetry else None
-
-        # ADR-009 Layer 2: the session scope chain. `None` = no scope
-        # identity → access control only (private/restricted still withheld).
-        scope_chain = _resolve_search_scope_chain(req)
-
-        if req.prompt:
-            from palinode.core.prompt_query import shape_prompt
-
-            req.query = shape_prompt(req.query)
-            if not req.query:
-                active_mode = "lexical" if config.search.retrieval_mode == "lexical" else "hybrid"
-                return _delivery(
-                    [], req, _build_receipt([], req, scope_chain),
-                    active_mode=active_mode, chain=scope_chain, scope=scope,
-                    confidence=_assess_confidence([], active_mode),
-                )
-        # `where` is resolved to chunk ids before anything ranks, so a match is never
-        # lost for ranking low; no visible match needs neither an embedding nor a query.
-        where_matches = store.list_chunks_matching(where_conditions) if where_conditions else None
-        where_chunk_ids = None if where_matches is None else [row["id"] for row in where_matches]
-        where_withheld: set[str] = set()
-        where_matches_nothing = where_matches is not None and not _has_visible_match(
-            scope_chain, where_matches, where_withheld,
-        )
-        # Only the receipt envelope can carry the explanation; the bare array
-        # is frozen, so a caller that cannot receive it does not pay for it.
-        explain_filters = bool(req.receipt) and bool(where_conditions or req.types)
-
-        # empty query → recency-only mode. Skip embedding, query chunks
-        # directly ordered by created_at desc, apply types/date_after filter.
-        if not req.query.strip():
-            recent_limit = limit * 5 if req.min_priority else limit
-            recent_other: set[str] = set()
-            recent = [] if where_matches_nothing else _fetch_visible(
-                scope_chain,
-                lambda n: store.list_recent(
-                    types=req.types,
-                    category=req.category,
-                    date_after=effective_date_after,
-                    date_before=req.date_before,
-                    limit=n,
-                    kind_exclude_list=kind_exclude_list,
-                    chunk_ids=where_chunk_ids,
-                ),
-                recent_limit,
-                other_projects=recent_other,
-                automatic=req.automatic or req.mode == "passive",
-            )
-            # apply type_deny post-fetch (list_recent does allow-filter
-            # types, but has no deny param — mirror the same pattern as below).
-            recent = _filter_type_deny(recent, req.type_deny)
-            recent = _filter_min_priority(recent, req.min_priority)
-            recent = recent[:limit]
-            recent_exclusion = None if recent or not explain_filters else _filter_exclusion(
-                req, chain=scope_chain, where_matches_nothing=where_matches_nothing,
-                where_chunk_ids=where_chunk_ids,
-                rerun=lambda n: store.list_recent(
-                    category=req.category,
-                    date_after=effective_date_after,
-                    date_before=req.date_before,
-                    limit=n,
-                    kind_exclude_list=kind_exclude_list,
-                ),
-                fetch_limit=recent_limit,
-                automatic=req.automatic or req.mode == "passive",
-            )
-            # enrich with snippet so MCP callers stay within budget.
-            _enrich_with_snippets(recent, "", _resolve_snippet_max_chars(req.max_chars))
-            _apply_tier(recent, req.tier)
-            _enrich_with_rel_path(recent)
-            _label_other_projects(recent, scope_chain)
-            _attach_evidence(recent, req, scope_chain)
-            return _delivery(recent, req, _build_receipt(recent, req, scope_chain),
-                             chain=scope_chain, scope=scope,
-                             other_projects_withheld=len(where_withheld if where_matches_nothing else recent_other),
-                             filter_exclusion=recent_exclusion)
-
-        # ADR-008: Augment query with project context before embedding
-        embed_query = req.query
-        if req.context and config.context.enabled and config.context.embed_augment:
-            # Extract project name from entity ref (e.g., "project/palinode" → "palinode")
-            project_names = [e.split("/", 1)[-1] for e in req.context if "/" in e]
-            if project_names:
-                embed_query = f"In the context of {', '.join(project_names)}: {req.query}"
-
-        lexical = config.search.retrieval_mode == "lexical"
-        active_mode = "lexical" if lexical else "hybrid"
-        try:
-            query_emb: list[float] | None = (
-                None if lexical or where_matches_nothing else embedder.embed(embed_query)
-            )
-        except embedder.EmbeddingInputError as e:
-            # Per-input embed rejection (e.g. bge-m3 emitting NaN for this
-            # exact string): the backend is healthy and the index is intact,
-            # so degrade this one query to the keyword arm instead of failing
-            # it. text_len only — the log never carries the query text.
-            logger.warning(
-                "query embed rejected; keyword fallback op=search "
-                "outcome=keyword_fallback text_len=%d error=%r",
-                e.text_len, e.ollama_message,
-            )
-            query_emb = None
-            active_mode = "keyword-fallback"
-        if query_emb is not None and not query_emb:
-            raise RuntimeError("Embedder returned an empty query vector")
-
-        use_hybrid = req.hybrid if req.hybrid is not None else config.search.hybrid_enabled
-
-        # ADR-007 §3.2: demand classification flows to the importance nudge.
-        # Default explicit (the historical behavior of every existing caller);
-        # an ambient/auto-inject caller passes mode="passive" to suppress the
-        # importance nudge while still recording recall_count/last_recalled.
-        recall_mode = "passive" if req.mode == "passive" else "explicit"
-
-        # Over-fetch when types filter is in play so we still have a chance of
-        # returning `limit` results after the post-fetch type filter.
-        store_limit = limit * 5 if (req.types or req.type_deny or req.min_priority) else limit
-
-        # `or` treats an explicit threshold=0.0 (a legitimate "no floor"
-        # request) as falsy and silently reinstates the default.
-        # `is not None` is the correct "caller didn't set it" check.
-        effective_threshold = (
-            req.threshold if req.threshold is not None else config.search.api_threshold
-        )
-
-        # The ranker's floors use the gate's own rule, so a withheld best match cannot set one.
-        visible = partial(is_row_visible, scope_chain, cache={})
-
-        if query_emb is None:
-            def _run(n: int, record_access: bool = True,
-                     chunk_ids: list[str] | None = where_chunk_ids) -> list[dict[str, Any]]:
-                hits = store.search_hybrid(
-                    query_text=req.query, query_embedding=None,
-                    category=req.category, top_k=n,
-                    date_after=effective_date_after, date_before=req.date_before,
-                    context_entities=req.context, include_daily=bool(req.include_daily),
-                    kind_exclude_list=kind_exclude_list, mode=recall_mode,
-                    session_id=req.session_id, record_access=record_access,
-                    visible=visible,
-                    chunk_ids=chunk_ids,
-                )
-                for h in hits:
-                    h["mode"] = active_mode
-                return hits
-        elif use_hybrid:
-            def _run(n: int, record_access: bool = True,
-                     chunk_ids: list[str] | None = where_chunk_ids) -> list[dict[str, Any]]:
-                return store.search_hybrid(
-                    query_text=req.query,
-                    query_embedding=query_emb,
-                    category=req.category,
-                    top_k=n,
-                    threshold=effective_threshold,
-                    hybrid_weight=config.search.hybrid_weight,
-                    date_after=effective_date_after,
-                    date_before=req.date_before,
-                    context_entities=req.context,
-                    include_daily=bool(req.include_daily),
-                    kind_exclude_list=kind_exclude_list,
-                    mode=recall_mode,
-                    session_id=req.session_id,
-                    record_access=record_access,
-                    visible=visible,
-                    chunk_ids=chunk_ids,
-                )
-        else:
-            # Vector-only search routes through search_hybrid(use_fts=False):
-            # rank_hybrid ranks the vector candidates alone (empty FTS arm) so
-            # this path gets the same decay re-rank, priority nudge, ambient-
-            # context boost, once-only daily penalty, per-file dedup, and
-            # date-window handling as hybrid=true, instead of the second,
-            # undocumented ranking policy `store.search` used to be.
-            def _run(n: int, record_access: bool = True,
-                     chunk_ids: list[str] | None = where_chunk_ids) -> list[dict[str, Any]]:
-                return store.search_hybrid(
-                    query_text=req.query,
-                    query_embedding=query_emb,
-                    category=req.category,
-                    top_k=n,
-                    threshold=effective_threshold,
-                    date_after=effective_date_after,
-                    date_before=req.date_before,
-                    context_entities=req.context,
-                    include_daily=bool(req.include_daily),
-                    kind_exclude_list=kind_exclude_list,
-                    mode=recall_mode,
-                    session_id=req.session_id,
-                    record_access=record_access,
-                    use_fts=False,
-                    visible=visible,
-                    chunk_ids=chunk_ids,
-                )
-
-        # Defer ADR-007 write-back until visibility and lifecycle gating have
-        # selected the window, recording each admitted ID once per retrieval.
-        other_withheld: set[str] = set()
-        results = [] if where_matches_nothing else _fetch_visible(
-            scope_chain,
-            _run,
-            store_limit,
-            record_recall=lambda ids: store.record_recall(
-                ids, mode=recall_mode, session_id=req.session_id
-            ),
-            other_projects=other_withheld,
-            automatic=req.automatic or req.mode == "passive",
-        )
-
-        # Apply type filters post-fetch, then trim to caller's limit.
-        # type_deny takes precedence: applied after allow-list so a type in both
-        # lists is excluded.
-        results = _filter_types(results, req.types)
-        results = _filter_type_deny(results, req.type_deny)
-        results = _filter_min_priority(results, req.min_priority)
-        final = results[:limit]
-        exclusion = None if final or not explain_filters else _filter_exclusion(
-            req, chain=scope_chain, where_matches_nothing=where_matches_nothing,
-            where_chunk_ids=where_chunk_ids,
-            rerun=lambda n: _run(n, record_access=False, chunk_ids=None),
-            fetch_limit=store_limit,
-            automatic=req.automatic or req.mode == "passive",
-        )
-        if active_mode == "hybrid" and not use_hybrid:
-            active_mode = "vector"
-        for hit in final:
-            hit["retrieval_mode"] = active_mode
-
-        # per-result snippet enrichment so MCP callers (and any other
-        # budget-constrained consumer) can avoid pulling full chunk bodies.
-        # `content` is preserved untouched for CLI/API consumers.
-        # Per-request max_chars overrides config default when supplied.
-        _enrich_with_snippets(final, req.query, _resolve_snippet_max_chars(req.max_chars))
-        _apply_tier(final, req.tier)
-        _enrich_with_rel_path(final)
-        _label_other_projects(final, scope_chain)
-
-        # Issue emit retrieval events (explicit — came in via /search API).
-        # Source attribution: the X-Palinode-Source header tells us the surface
-        # (mcp → "palinode_search", cli → "cli_search", api → "api_search").
-        _search_source = "api_search"
-        if request is not None:
-            from palinode.core.defaults import SAVE_SOURCE_HEADER
-            hdr = request.headers.get(SAVE_SOURCE_HEADER, "")
-            if hdr == "mcp":
-                _search_source = "palinode_search"
-            elif hdr == "cli":
-                _search_source = "cli_search"
-        # Evidence closure runs over the final hit list, after truncation: a
-        # linked correction rides on its seed's `evidence` block, so no top-k
-        # window can keep the stale record and cut off what corrects it.
-        _attach_evidence(final, req, scope_chain)
-        confidence = _assess_confidence(final, active_mode)
-        receipt = _build_receipt(final, req, scope_chain)
-        # The retrieval log is written last so each row carries the receipt
-        # this delivery produced (bundle, policy, scope, revision,
-        # disposition, coverage). The *set* of logged rows is unchanged — the
-        # plain hit list, never the evidence gathered around it.
-        _retrieval_logger.record_search_results(
-            final,
-            query=req.query,
-            source=_search_source,
-            mode=recall_mode,
-            session_id=req.session_id,
-            receipt=receipt,
-            confidence=confidence["confidence"] if confidence else None,
-        )
-        return _delivery(final, req, receipt, active_mode=active_mode,
-                         chain=scope_chain, scope=scope, confidence=confidence,
-                         other_projects_withheld=len(where_withheld if where_matches_nothing else other_withheld),
-                         filter_exclusion=exclusion)
-    except embedder.EmbeddingInputError:
-        raise  # typed 422 via the app-level handler in server.py
-    except embedder.EmbeddingUnavailable:
-        raise  # typed 503 via the app-level handler in server.py
+        result = search(query, caller)
+    except RecallDenied as denied:
+        raise HTTPException(status_code=403, detail=denied.reason)
+    except (InvalidProjectScope, embedder.EmbeddingInputError, embedder.EmbeddingUnavailable):
+        raise  # typed 400 / 422 / 503 via the app-level handlers in server.py
     except Exception as e:
         raise _safe_500(e, "Search failed")
+    return result.envelope() if req.receipt else result.rows
+
+
+def _search_inputs(req: SearchRequest, request: Request | None) -> tuple[SearchQuery, Caller]:
+    """The core's two inputs for a /search body: what is asked, and who asks."""
+    from palinode.core.defaults import SAVE_SOURCE_HEADER
+
+    header = request.headers.get(SAVE_SOURCE_HEADER, "") if request is not None else ""
+    query = SearchQuery(
+        query=req.query, category=req.category, limit=req.limit,
+        date_after=req.date_after, date_before=req.date_before,
+        include_daily=bool(req.include_daily), include_telemetry=bool(req.include_telemetry),
+        include_other_projects=req.include_other_projects, since_days=req.since_days,
+        types=req.types, where=req.where, min_priority=req.min_priority,
+        threshold=req.threshold, tier=req.tier, resolve=req.resolve,
+        include_retired=req.include_retired, type_deny=req.type_deny, hybrid=req.hybrid,
+        max_chars=req.max_chars, prompt=req.prompt,
+    )
+    caller = Caller(
+        source=header if header in ("mcp", "cli") else "api",
+        session_id=req.session_id, context=req.context, cwd=req.cwd,
+        source_path=req.source_path, automatic=req.automatic, mode=req.mode,
+        log=_retrieval_logger,
+    )
+    return query, caller
 
 
 @router.post("/search-associative")
@@ -891,9 +276,12 @@ def search_associative_api(req: SearchAssociativeRequest) -> list[dict[str, Any]
     Subject to the same ADR-009 Layer 2 visibility gate as ``/search``.
     Entity-graph traversal reaches memories no query term matched, so leaving
     it ungated would have made it the way around every rule ``/search``
-    enforces. Note ``store.search_associative`` returns rows with empty
-    ``metadata`` — it never parses frontmatter — which is exactly why the
-    choke point reads the file rather than trusting the row.
+    enforces. The gate reads each file's live frontmatter rather than trusting
+    the row.
+
+    ``types`` and ``type_deny`` filter on each row's frontmatter ``type`` as
+    they do on ``/search``. They are applied inside the paging window, so
+    rows they remove cannot crowd out the matches ranked below them.
     """
     try:
         seed_entities = req.seed_entities
@@ -904,13 +292,16 @@ def search_associative_api(req: SearchAssociativeRequest) -> list[dict[str, Any]
         # No ambient context on this request shape, so the chain comes from
         # env identity alone (agent/harness/member/org).
         results = _fetch_visible(
-            _resolve_scope_chain(),
+            search_scope_chain(),
             lambda n: store.search_associative(
                 query_text=req.query,
                 seed_entities=seed_entities,
                 top_k=n,
             ),
             limit,
+            eligible=lambda rows: _filter_type_deny(
+                _filter_types(rows, req.types), req.type_deny,
+            ),
         )[:limit]
 
         # per-result snippet enrichment so MCP callers (and any other
@@ -1074,17 +465,12 @@ def cluster_neighbors_api(req: ClusterNeighborsRequest) -> list[dict[str, Any]]:
         linked_slugs.add(source_slug)
 
         # Scan all indexed files for incoming links to source_slug.
-        db = store.get_db()
-        try:
-            all_fps = db.execute(
-                "SELECT DISTINCT file_path FROM chunks"
-            ).fetchall()
-        finally:
-            db.close()
+        with store.reader() as reader:
+            all_fps = reader.indexed_paths()
 
         incoming_file_paths: set[str] = set()
         link_re = re.compile(r"\[\[([^\]|]+?)(?:\|[^\]]+?)?\]\]")
-        for (fp,) in all_fps:
+        for fp in all_fps:
             incoming_file_paths.add(fp)
             fp_body = _read_memory_body(fp)
             if fp_body and source_slug in fp_body:

@@ -117,7 +117,7 @@ def test_http_mcp_header_defers_to_real_api(scoped_memory, monkeypatch, enabled,
     monkeypatch.setattr(mcp, "_post", post)
     monkeypatch.setattr(mcp, "_get", get)
     args = {"palinode_session_init": {}, "palinode_resolve": {"query": "foreign"},
-            "palinode_read": {"file_path": "decisions/foreign"}}[tool]
+            "palinode_read": {"file_path": "decisions/foreign", "meta": True}}[tool]
     reply = _call_over_http(tool, args, headers={"X-Palinode-Project": "home"})
     assert not reply["result"].get("isError"), reply
     text = reply["result"]["content"][0]["text"]
@@ -139,7 +139,9 @@ def test_http_mcp_header_defers_to_real_api(scoped_memory, monkeypatch, enabled,
             "[other project: project/foreign — not project/home] "
             "Context only, not this project's decision.\n"
         )
-        assert text == (notice if enabled else "") + body["content"]
+        # The frontmatter it asked for sits between the notice and the body.
+        assert text.startswith((notice if enabled else "") + "---\n")
+        assert text.endswith(body["content"])
 
 
 @pytest.mark.parametrize("enabled", [False, True])

@@ -27,11 +27,15 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from palinode.cli.init import CODEX_HOOKS_BLOCK, init
+from palinode.cli.init import init
+from pathlib import Path as _Path
+from palinode.hooks.codex import CODEX as _CODEX
 from tests import test_resolve_bundle as scenarios
 from tests import test_resolve_hook_live as live
 from tests import test_session_start_hook_live as start_live
 from tests.test_codex_hooks import CODEX_SESSION_START, CODEX_USER_PROMPT_SUBMIT
+
+CODEX_HOOKS_BLOCK = _CODEX.registration_block(_Path("."))
 
 mem = scenarios.mem
 live_api = live.live_api

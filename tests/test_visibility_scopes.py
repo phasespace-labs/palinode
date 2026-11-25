@@ -32,11 +32,9 @@ from fastapi.testclient import TestClient
 
 import palinode.core.config as config_module
 from palinode.api.routers.memory import collect_memory_files
-from palinode.api.routers.search import (
-    SearchRequest,
-    _fetch_visible,
-    _resolve_search_scope_chain,
-)
+from palinode.api.routers.search import SearchRequest
+from palinode.core.scope import search_scope_chain
+from palinode.core.search import _fetch_visible
 from palinode.api.server import app
 from palinode.core import store
 from palinode.core.config import config
@@ -49,6 +47,14 @@ from palinode.core.scope import (
 )
 from palinode.core.visibility import filter_visible, is_visible, normalize_memory_path
 from tests._store_helpers import upsert_chunks
+
+
+def _resolve_search_scope_chain(req):
+    """The chain core search resolves for a /search body."""
+    return search_scope_chain(
+        context=req.context, session_id=req.session_id,
+        include_other_projects=bool(req.include_other_projects),
+    )
 
 client = TestClient(app)
 
@@ -657,10 +663,12 @@ def test_widened_fetch_counts_recall_once(recall_widen_db):
 
     # rank1 sits in BOTH passes (top-2 initial + top-10 widened): counted once.
     assert _recall_count("rank1") == 1
+    # rank2 surfaced only by the widened pass and is delivered: counted once.
+    assert _recall_count("rank2") == 1
     # Hidden rows never acquire recall metadata.
     assert _recall_count("rank0") == 0
-    # a row surfaced only by the widened pass is likewise counted exactly once.
-    assert _recall_count("rank3") == 1
+    # Nor does a visible row past the delivered slate: the caller never received it.
+    assert _recall_count("rank3") == 0
 
 
 def _recall_metadata() -> dict[str, tuple]:
@@ -704,9 +712,12 @@ def test_search_records_only_visible_recall(recall_widen_db, monkeypatch, hybrid
         assert response.status_code == 200, response.text
         after = _recall_metadata()
         assert after["rank0"] == before["rank0"]
-        # All five visible rows belong to the selected window, even when the
-        # response is subsequently trimmed to two results.
-        for rank in range(1, 6):
+        # Only the delivered rows are recorded: with limit=2 the three visible
+        # rows past the slate keep their metadata, though the window held them.
+        delivered = range(1, min(limit, 5) + 1)
+        for rank in range(min(limit, 5) + 1, 6):
+            assert after[f"rank{rank}"] == before[f"rank{rank}"]
+        for rank in delivered:
             key = f"rank{rank}"
             frequency, recency, importance = after[key]
             assert frequency == before[key][0] + count
@@ -740,9 +751,10 @@ def test_fetch_visible_gates_widened_only_and_retired_rows(recall_widen_db):
     assert calls == [(2, False), (10, False)]
     assert {r["id"] for r in rows} == {"rank1", "rank2", "rank5"}
     after = _recall_metadata()
-    for key in ("rank0", "rank3", "rank4"):
+    # Hidden, retired, and past the two delivered rows: no recall.
+    for key in ("rank0", "rank3", "rank4", "rank5"):
         assert after[key] == before[key]
-    for key in ("rank1", "rank2", "rank5"):
+    for key in ("rank1", "rank2"):
         assert after[key][0] == before[key][0] + 1
 
 

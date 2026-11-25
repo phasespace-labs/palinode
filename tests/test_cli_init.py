@@ -17,11 +17,9 @@ import pytest
 from click.testing import CliRunner
 
 from palinode.cli import main
-from palinode.cli.init import (
-    HOOK_SCRIPT,
-    WRAP_COMMAND_BODY,
-    _slugify,
-)
+from palinode.cli.init import WRAP_COMMAND_BODY, _slugify
+from palinode.hooks import script as _hook_script
+HOOK_SCRIPT = _hook_script("palinode-session-end.sh")
 
 
 # ---- Slug ---------------------------------------------------------------

@@ -12,11 +12,14 @@ from __future__ import annotations
 import pytest
 
 import palinode.mcp as mcp
-from palinode.cli.init import SESSION_START_HOOK_SCRIPT, USER_PROMPT_SUBMIT_HOOK_SCRIPT
+from palinode.hooks import script as _hook_script
 from palinode.core.bundle import BundleRequest, build_bundle
 from palinode.core.framing import MEMORY_IS_DATA
 from tests import test_resolve_bundle as scenarios
 from tests.test_resolve_retired_default import rebuild_index
+
+SESSION_START_HOOK_SCRIPT = _hook_script("palinode-session-start.sh")
+USER_PROMPT_SUBMIT_HOOK_SCRIPT = _hook_script("palinode-user-prompt-submit.sh")
 
 mem = scenarios.mem
 

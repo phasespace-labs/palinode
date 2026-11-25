@@ -1,19 +1,15 @@
 """``where`` and ``include_inbox`` on every surface: parity registry, CLI and MCP.
 
-The REST behaviour is in ``test_where_filter.py``. This file pins the other
-surfaces to it:
+The REST behaviour is in ``test_where_filter.py``. That each surface advertises
+and forwards ``where`` and ``include_inbox`` on ``list`` (one ``where`` query
+parameter per entry, ``include_inbox=true``) is generated from the list spec in
+``test_operation_spec.py`` (ADR-022). This file pins what the spec cannot:
 
-* ``palinode.core.parity`` lists ``where`` (array) and ``include_inbox`` (boolean)
-  on ``list``, and no ``include_inbox`` on ``search``;
-* the CLI takes a repeatable ``--where`` and ``--include-inbox`` on ``list``; a
-  malformed entry is a click usage error (exit code 2) raised before any request
-  is made;
-* ``palinode_list`` takes ``where`` (array of strings) and ``include_inbox``; a
-  malformed entry is an ``Error:`` reply with no request. Search's are in
-  ``test_search_where_surfaces.py``.
-
-On the wire: ``GET /list`` carries one ``where`` query parameter per entry plus
-``include_inbox=true``.
+* ``search`` registers no ``include_inbox``;
+* a malformed ``where`` entry is a click usage error (exit code 2) on the CLI,
+  and an ``Error:`` reply on ``palinode_list``, both before any request is made.
+  Search's are in ``test_search_where_surfaces.py``;
+* the CLI against the real app finds an inbox ActionItem only with the flag.
 
 Tests marked *red* fail on v0.22.0 for the reason in their docstring; the rest
 pass on v0.22.0 and must keep passing. No test reaches the network: requests are
@@ -92,74 +88,12 @@ def _param(operation: str, name: str):
     return {p.name: p for p in parity.by_name(operation).canonical_params}.get(name)
 
 
-def test_list_registers_where_as_an_array_of_strings():
-    """Red: no ``where`` parameter is registered on ``list``."""
-    param = _param("list", "where")
-
-    assert param is not None
-    assert param.type == "array"
-    assert not param.required
-
-
-def test_list_registers_include_inbox_as_a_boolean():
-    """Red: no ``include_inbox`` parameter is registered on ``list``."""
-    param = _param("list", "include_inbox")
-
-    assert param is not None
-    assert param.type == "boolean"
-    assert not param.required
-
-
 def test_search_does_not_register_include_inbox():
     """Search already reaches the inbox; the flag is the listing's."""
     assert _param("search", "include_inbox") is None
 
 
-# ── MCP tool schemas ────────────────────────────────────────────────────────
-
-def _schema(tool_name: str) -> dict:
-    tools = {tool.name: tool.input_schema for tool in mcp._all_tools()}
-    return tools[tool_name]["properties"]
-
-
-def test_mcp_list_declares_where_as_an_array_of_strings():
-    """Red: the tool schema has no ``where`` property."""
-    prop = _schema("palinode_list")["where"]
-
-    assert prop["type"] == "array"
-    assert prop["items"]["type"] == "string"
-
-
-def test_mcp_list_declares_include_inbox_as_a_boolean():
-    """Red: the tool schema has no ``include_inbox`` property."""
-    assert _schema("palinode_list")["include_inbox"]["type"] == "boolean"
-
-
-# ── CLI: what goes on the wire ──────────────────────────────────────────────
-
-def test_cli_list_without_flags_sends_neither_parameter(cli_recorder):
-    result = _invoke("list", "--format", "json")
-
-    assert result.exit_code == 0, result.output
-    params = cli_recorder.requests[-1].url.params
-    assert cli_recorder.requests[-1].url.path == "/list"
-    assert "where" not in params
-    assert "include_inbox" not in params
-
-
-def test_cli_list_sends_each_where_entry_and_the_inbox_flag(cli_recorder):
-    """Red: ``--where`` and ``--include-inbox`` are unknown options (exit code 2)."""
-    result = _invoke(
-        "list", "--where", "status=open", "--where", "entities=project/my-app",
-        "--include-inbox", "--format", "json",
-    )
-
-    assert result.exit_code == 0, result.output
-    request = cli_recorder.requests[-1]
-    assert request.method == "GET"
-    assert request.url.path == "/list"
-    assert request.url.params.get_list("where") == ["status=open", "entities=project/my-app"]
-    assert request.url.params["include_inbox"] == "true"
+# ── CLI: a malformed entry ──────────────────────────────────────────────
 
 
 @pytest.mark.parametrize("entry", ["no-equals", "=value", "bad key=x", "1abc=x", "status="])
@@ -237,32 +171,7 @@ def test_cli_list_without_include_inbox_shows_no_actionitem_end_to_end(real_app)
     assert json.loads(result.output) == []
 
 
-# ── MCP: what goes on the wire ──────────────────────────────────────────────
-
-def test_mcp_list_without_arguments_sends_neither_parameter(mcp_recorder):
-    _call_tool("palinode_list", {})
-
-    params = mcp_recorder.requests[-1].url.params
-    assert mcp_recorder.requests[-1].url.path == "/list"
-    assert "where" not in params
-    assert "include_inbox" not in params
-
-
-def test_mcp_list_sends_each_where_entry_and_the_inbox_flag(mcp_recorder):
-    """Red: both arguments are ignored."""
-    _call_tool("palinode_list", {
-        "where": ["status=open", "entities=project/my-app"], "include_inbox": True,
-    })
-
-    params = mcp_recorder.requests[-1].url.params
-    assert params.get_list("where") == ["status=open", "entities=project/my-app"]
-    assert params["include_inbox"] == "true"
-
-
-def test_mcp_list_does_not_send_include_inbox_when_false(mcp_recorder):
-    _call_tool("palinode_list", {"include_inbox": False})
-
-    assert "include_inbox" not in mcp_recorder.requests[-1].url.params
+# ── MCP: a malformed entry ──────────────────────────────────────────────
 
 
 @pytest.mark.parametrize("entry", ["no-equals", "=value", "bad key=x", "1abc=x", "status="])

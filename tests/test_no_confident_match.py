@@ -412,8 +412,9 @@ class _Resp:
         return self._payload
 
 
-def _envelope(verdict: str) -> dict:
-    return {
+def _envelope(verdict: str, server_abstains: bool | None = None) -> dict:
+    """A search envelope; ``server_abstains`` is the server's switch (None: an older API)."""
+    envelope = {
         "results": [{"file_path": "/store/insights/bicycles.md", "rel_path": "insights/bicycles.md",
                      "score": 1.0, "raw_score": 0.45, "keyword_score": None,
                      "snippet": "Office bicycles are stored behind the goods lift.",
@@ -428,6 +429,9 @@ def _envelope(verdict: str) -> dict:
                                            "keyword": {"best": None, "verdict": "none",
                                                        "confident_at": 0.22, "weak_at": 0.13}}}},
     }
+    if server_abstains is not None:
+        envelope["receipt"]["retrieval"]["abstain_on_no_confident_match"] = server_abstains
+    return envelope
 
 
 @pytest.fixture()
@@ -442,20 +446,26 @@ def mcp_search(monkeypatch):
     return _fake_post
 
 
+def test_the_server_reports_its_switch_and_it_is_off_by_default(client, monkeypatch):
+    assert _retrieval(_search(client, Q_FAR))["abstain_on_no_confident_match"] is False
+    monkeypatch.setattr(config.search, "abstain_on_no_confident_match", True)
+    payload = _search(client, Q_FAR)
+    assert _retrieval(payload)["abstain_on_no_confident_match"] is True
+    # The server reports the policy; it does not apply it to its own rows.
+    assert payload["results"]
+
+
 @pytest.mark.asyncio
-async def test_the_switch_is_off_by_default(mcp_search):
-    mcp_search.payload = _envelope("none")
-    assert config.search.abstain_on_no_confident_match is False
+async def test_the_servers_switch_off_shows_a_none_slate(mcp_search):
+    mcp_search.payload = _envelope("none", server_abstains=False)
     rendered = (await mcp._tool_search({"query": "sonar"}))[0].text
     assert "bicycles" in rendered
     assert rendered.splitlines()[1].startswith("No confident match.")
 
 
 @pytest.mark.asyncio
-async def test_the_switch_on_empties_only_a_none_slate(mcp_search, monkeypatch):
-    monkeypatch.setattr(config.search, "abstain_on_no_confident_match", True)
-
-    mcp_search.payload = _envelope("none")
+async def test_the_servers_switch_on_empties_only_a_none_slate(mcp_search):
+    mcp_search.payload = _envelope("none", server_abstains=True)
     withheld = (await mcp._tool_search({"query": "sonar"}))[0].text
     assert "bicycles" not in withheld
     assert "1 weak result withheld" in withheld
@@ -463,7 +473,18 @@ async def test_the_switch_on_empties_only_a_none_slate(mcp_search, monkeypatch):
     # An abstention must not read as an empty store.
     assert "the store was searched and is not empty" in withheld
 
-    mcp_search.payload = _envelope("weak")
+    mcp_search.payload = _envelope("weak", server_abstains=True)
     assert "bicycles" in (await mcp._tool_search({"query": "batch"}))[0].text
-    mcp_search.payload = _envelope("confident")
+    mcp_search.payload = _envelope("confident", server_abstains=True)
     assert "bicycles" in (await mcp._tool_search({"query": "PLNC-4821"}))[0].text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("local", "server"), [(True, False), (False, True), (True, None)],
+                         ids=["local-on-server-off", "local-off-server-on", "local-on-older-api"])
+async def test_mcp_follows_the_server_not_its_own_config(mcp_search, monkeypatch, local, server):
+    """A remote MCP process's own config never decides what the server's answer shows."""
+    monkeypatch.setattr(config.search, "abstain_on_no_confident_match", local)
+    mcp_search.payload = _envelope("none", server_abstains=server)
+    rendered = (await mcp._tool_search({"query": "sonar"}))[0].text
+    assert ("bicycles" not in rendered) is (server is True)

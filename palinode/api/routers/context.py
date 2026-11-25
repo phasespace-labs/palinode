@@ -26,7 +26,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from palinode.api._util import effective_project_scope
+from palinode.core.scope import effective_project_scope
 from palinode.core.config import config
 from palinode.core.scope import ScopeChain, resolve_scope_chain, scope_level_name
 

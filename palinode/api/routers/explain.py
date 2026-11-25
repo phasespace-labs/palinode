@@ -37,7 +37,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Query
 
 from palinode.api._util import _retrieval_logger, _safe_500
-from palinode.api.routers.search import _resolve_scope_chain
+from palinode.core.scope import search_scope_chain
 
 # The inspector's own bind predicate, imported rather than re-derived: this
 # route serves the same two fields the inspector page does, and a lookalike
@@ -91,7 +91,7 @@ def explain_api(
         return explain_delivery(
             safe_id,
             memory_dir=config.memory_dir,
-            chain=_resolve_scope_chain(session_id=session_id),
+            chain=search_scope_chain(session_id=session_id),
             query_access=QueryAccess(
                 requested=view == "diagnostics",
                 loopback=bind_is_loopback(),

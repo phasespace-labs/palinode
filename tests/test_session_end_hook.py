@@ -9,8 +9,10 @@ from unittest.mock import patch
 
 import pytest
 
-from palinode.cli.init import HOOK_SCRIPT
+from palinode.hooks import script as _hook_script
 from palinode.core.config import config
+
+HOOK_SCRIPT = _hook_script("palinode-session-end.sh")
 
 
 def _assistant(*blocks):

@@ -419,6 +419,10 @@ class SearchConfig:
     #: and log are unaffected by it either way, and every other surface
     #: (REST, CLI, inspector, plugin) keeps returning its rows — this is a
     #: presentation choice on the one surface whose reader is a model.
+    #:
+    #: **The API server's setting decides.** The server reports it in
+    #: ``receipt.retrieval`` and MCP follows that, so an MCP process on
+    #: another machine cannot override it with its own config.
     abstain_on_no_confident_match: bool = False
     # Budgets for the opt-in evidence resolver (``resolve`` on search).
     evidence: EvidenceConfig = field(default_factory=EvidenceConfig)
@@ -1175,5 +1179,12 @@ def load_config() -> Config:
     return cfg
 
 
-# Singleton config instance
+# Singleton config instance.
+#
+# Deliberate: config is loaded once per process and read as this global; a
+# change takes effect on restart. Passing config into every module was
+# considered and declined, because no production bug traces to the global, and
+# tests get isolation from the snapshot-and-restore fixture in tests/conftest.py.
+# Avoid copying config values into other module-level names at import: such a
+# copy goes stale whenever a test changes config.
 config = load_config()

@@ -22,7 +22,7 @@ from palinode.consolidation.fact_ids import document_fact_ids, stamp_fact_id
 from palinode.core import git_tools
 from palinode.core.config import config
 from palinode.core.envelope import envelope_complaint
-from palinode.core.parity import PROMPT_TASKS
+from palinode.core.operations import PROMPT_TASKS
 from palinode.core.relative_dates import normalize_lines, normalize_text
 from palinode.core.visibility import DAILY_ENTRY_PROJECT_LABEL
 from palinode.prompts import store_prompts_dir

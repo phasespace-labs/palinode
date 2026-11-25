@@ -330,10 +330,3 @@ def test_cli_cite_malformed_rejected():
     assert "REF::QUOTE" in result.output
     assert result.exit_code != 0  # raise click.Abort() → non-zero exit
     assert body is None  # never reached the API
-
-
-def test_cli_save_without_cite_sends_no_sources():
-    """A save with no `--cite` omits the sources field entirely (clean body)."""
-    result, body = _run_cli_save(["--type", "Decision", "plain body"])
-    assert result.exit_code == 0, result.output
-    assert "sources" not in body

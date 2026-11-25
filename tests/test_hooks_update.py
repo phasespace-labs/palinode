@@ -15,20 +15,20 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from palinode.cli.hooks import (
+from palinode.cli.hooks import hooks
+from palinode.hooks.installed import (
+    hook_statuses,
     STATE_CURRENT,
     STATE_FOREIGN,
     STATE_MISSING,
     STATE_STALE,
     STATE_SYMLINK,
-    hook_statuses,
-    hook_version,
-    hooks,
-    packaged_hooks,
 )
+from palinode.hooks import hook_version, packaged_scripts as packaged_hooks
 from palinode.cli.init import init
 from palinode.diagnostics.checks.hooks_current import hooks_current
 from palinode.diagnostics.types import DoctorContext
+from tests._hook_helpers import ship
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 END = "palinode-session-end.sh"
@@ -43,6 +43,8 @@ FOREIGN_HOOK = "#!/bin/bash\necho 'my own lint hook'\n"
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
+    # The fixture's "older release" copy counts as shipped, so it is stale.
+    ship(monkeypatch, END, STALE_HOOK)
     home = tmp_path / "home"
     project = tmp_path / "project"
     (home / ".claude" / "hooks").mkdir(parents=True)
@@ -100,12 +102,6 @@ def test_every_packaged_hook_carries_a_version_stamp_on_line_two():
         assert lines[0].startswith("#!"), name
         assert re.fullmatch(r"# palinode-hook-version: \d+\.\d+\.\d+", lines[1]), name
         assert hook_version(content) is not None
-
-
-def test_packaged_hooks_match_examples_byte_for_byte():
-    """The stamp must not break init/examples parity — the refresh source is init's copy."""
-    for name, content in packaged_hooks().items():
-        assert content == (REPO_ROOT / "examples" / "hooks" / name).read_text(encoding="utf-8"), name
 
 
 # -- discovery -------------------------------------------------------------
@@ -367,58 +363,6 @@ def test_update_makes_the_registration_synchronous_with_a_backup(env):
     assert again["registrations"] == []
 
 
-@pytest.mark.parametrize("command, matched", [
-    # The forms palinode writes or documents:
-    ("~/.claude/hooks/palinode-post-compact.sh", True),
-    ('"$HOME"/.claude/hooks/palinode-post-compact.sh', True),
-    ("$HOME/.claude/hooks/palinode-post-compact.sh", True),
-    ("${CLAUDE_PROJECT_DIR}/.claude/hooks/palinode-post-compact.sh", True),
-    ('"${CLAUDE_PROJECT_DIR}/.claude/hooks/palinode-post-compact.sh"', True),
-    ("  ~/.claude/hooks/palinode-post-compact.sh  ", True),
-    # Never another tool's hook:
-    ("~/.claude/hooks/palinode-post-compact.sh.backup", False),
-    ("my-palinode-post-compact.sh", False),
-    ("~/.claude/hooks/palinode-post-compact.sh#backup", False),
-    ("logger palinode-post-compact.sh", False),
-    ("exec -a palinode-post-compact.sh /usr/bin/true", False),
-    ("bash -c 'echo palinode-post-compact.sh'", False),
-    ("bash --init-file /x/palinode-post-compact.sh /dev/stdin", False),
-    ("bash -s /x/palinode-post-compact.sh", False),
-    ("2 >/dev/null ~/.claude/hooks/palinode-post-compact.sh", False),
-    ('"X=1" ~/.claude/hooks/palinode-post-compact.sh', False),
-    ("~/.claude/hooks/palinode-post-compact.sh |& logger", False),
-    ("true&&~/.claude/hooks/palinode-post-compact.sh", False),
-    ("$(echo x)/palinode-post-compact.sh", False),
-    ("${PALINODE_SCRUB_UNSET:-printf$IFS}/palinode-post-compact.sh", False),
-    ("X=/x/palinode-post-compact.sh", False),
-    ("#/palinode-post-compact.sh", False),
-    ("palinode-post-compact.sh", False),
-    ("$OTHER/palinode-post-compact.sh", False),
-    ("/Users/someone/.claude/hooks/palinode-post-compact.sh", True),
-    ("${HOME}/.claude/hooks/palinode-post-compact.sh", True),
-    ("$'HOME'/.claude/hooks/palinode-post-compact.sh", False),
-    ('$"HOME"/.claude/hooks/palinode-post-compact.sh', False),
-    ("'~/.claude/hooks/palinode-post-compact.sh'", False),
-    ('"~/.claude/hooks/palinode-post-compact.sh"', False),
-    ("~user/.claude/hooks/palinode-post-compact.sh", False),
-    ('"/tmp/palinode-post-compact.sh\u00a0"', False),
-    ("/tmp/palinode-post-compact.sh\u00a0", False),
-    ("\t~/.claude/hooks/palinode-post-compact.sh ", True),
-    # Other wrappings are documented as not recognised:
-    ("bash ~/.claude/hooks/palinode-post-compact.sh", False),
-    ("~/.claude/hooks/palinode-post-compact.sh 2>/dev/null", False),
-    ("env -u BASH_ENV ~/.claude/hooks/palinode-post-compact.sh", False),
-])
-def test_only_the_post_compact_script_itself_is_matched(command, matched):
-    from palinode.cli.hooks import drop_post_compact_async
-
-    data = {"hooks": {"PostCompact": [{"hooks": [
-        {"type": "command", "command": command, "async": True},
-    ]}]}}
-    assert drop_post_compact_async(data) is matched
-    assert ("async" in data["hooks"]["PostCompact"][0]["hooks"][0]) is not matched
-
-
 # -- Unquoted ${CLAUDE_PROJECT_DIR}: split at a space in the project path ------
 
 
@@ -435,7 +379,7 @@ def _unquoted_project_fixture(project: Path) -> Path:
             {"type": "command", "command": f"${{CLAUDE_PROJECT_DIR}}/.claude/hooks/{START}", "timeout": 20},
         ]}],
         "UserPromptSubmit": [{"hooks": [
-            {"type": "command", "command": f"$CLAUDE_PROJECT_DIR/.claude/hooks/{PROMPT}", "timeout": 20},
+            {"type": "command", "command": f"${{CLAUDE_PROJECT_DIR}}/.claude/hooks/{PROMPT}", "timeout": 20},
             {"type": "command", "command": "${CLAUDE_PROJECT_DIR}/tools/other-hook.sh"},
         ]}],
     }}), encoding="utf-8")
@@ -456,7 +400,12 @@ def test_update_quotes_palinode_commands_only(env):
     out = _update()
     assert out.exit_code == 0, out.output
     reg = json.loads(out.output)["registrations"][0]
-    assert reg["changes"] == ["quoted ${CLAUDE_PROJECT_DIR}"] and Path(reg["backup"]).exists()
+    # The two events this install never had, whose scripts were never
+    # installed, are added with their scripts (ADR-023 §6).
+    assert reg["changes"] == [
+        "quoted ${CLAUDE_PROJECT_DIR}", "registered SessionEnd", "registered PostCompact",
+    ] and Path(reg["backup"]).exists()
+    assert (project / ".claude" / "hooks" / POST).read_text() == packaged_hooks()[POST]
     data = json.loads(settings.read_text())
     start = data["hooks"]["SessionStart"][0]["hooks"][0]
     prompt, other = data["hooks"]["UserPromptSubmit"][0]["hooks"]

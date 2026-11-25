@@ -26,12 +26,15 @@ EXCLUSION_SCOPE = (
 # capture_policy.evaluate_capture_policy is the behaviour; this is its
 # disclosure, served by /status so every surface states the server's rule.
 UNVERIFIABLE_PATH_POLICY = (
-    "when the server cannot inspect an automatic request's cwd or transcript "
-    "path (another host, a directory its user cannot read, or a symlinked "
-    "path), and no project or path exclusion is configured, the path is "
-    "dropped and the capture or recall goes ahead without it; with any "
-    "exclusion configured, the request is refused (invalid_scope) so an "
-    "exclusion cannot be bypassed. A path is never resolved through a symlink"
+    "an automatic request's cwd and transcript path are followed through any "
+    "symlink to their real location, and the real path is checked against path "
+    "exclusions; exclusion entries themselves may not contain a symlink. When "
+    "the server cannot verify the path (a directory its user cannot read, a "
+    "dangling symlink or a symlink loop), and no project or path exclusion is "
+    "configured, the path is dropped and the capture or recall goes ahead "
+    "without it; with any exclusion configured, the request is refused "
+    "(invalid_scope) so an exclusion cannot be bypassed. A path that does not "
+    "exist on the server, such as one on another host, is checked as written"
 )
 #: Shown when /status predates the disclosure; such servers refuse instead.
 UNVERIFIABLE_PATH_POLICY_UNREPORTED = (

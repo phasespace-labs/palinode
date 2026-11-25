@@ -87,7 +87,7 @@ def blame_api(file_path: str, search: str | None = None, claims: bool = False, s
     """
     delivery_result = None
     if sessions:
-        from palinode.api.routers.search import _resolve_scope_chain
+        from palinode.core.scope import search_scope_chain
         from palinode.core.session_deliveries import session_deliveries
 
         try:
@@ -95,7 +95,7 @@ def blame_api(file_path: str, search: str | None = None, claims: bool = False, s
         except PathTraversalError as exc:
             raise _http_path_error(exc)
         delivery_result = session_deliveries(
-            safe_rel, config.memory_dir, chain=_resolve_scope_chain(),
+            safe_rel, config.memory_dir, chain=search_scope_chain(),
             log_enabled=_retrieval_logger.enabled and config.instrumentation.capture_retrievals,
         )
     # Issue blame access is an explicit retrieval.

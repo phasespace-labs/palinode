@@ -282,7 +282,8 @@ def test_the_shipped_hook_scoped_to_alpha_never_sees_beta(live_api, store, tmp_p
 
 def test_the_hook_sends_no_cross_project_option():
     """Crossing projects is never an automatic request."""
-    from palinode.cli.init import USER_PROMPT_SUBMIT_HOOK_SCRIPT
+    from palinode.hooks import script as _hook_script
+    USER_PROMPT_SUBMIT_HOOK_SCRIPT = _hook_script("palinode-user-prompt-submit.sh")
 
     assert "include_other_projects" not in USER_PROMPT_SUBMIT_HOOK_SCRIPT
 
@@ -640,7 +641,9 @@ def _stub_curl_run(workdir, script: str, cwd: str) -> str:
 def test_a_linked_worktree_resolves_to_the_main_repositorys_project(
     linked_worktree, tmp_path, which, monkeypatch,
 ):
-    from palinode.cli.init import SESSION_START_HOOK_SCRIPT, USER_PROMPT_SUBMIT_HOOK_SCRIPT
+    from palinode.hooks import script as _hook_script
+    SESSION_START_HOOK_SCRIPT = _hook_script("palinode-session-start.sh")
+    USER_PROMPT_SUBMIT_HOOK_SCRIPT = _hook_script("palinode-user-prompt-submit.sh")
     from palinode.core.context_prime import resolve_context
 
     main, linked = linked_worktree
@@ -658,7 +661,8 @@ def test_a_linked_worktree_resolves_to_the_main_repositorys_project(
 
 @pytest.mark.skipif(not shutil.which("jq"), reason="the hook needs jq")
 def test_a_directory_outside_git_is_sent_unchanged(tmp_path):
-    from palinode.cli.init import USER_PROMPT_SUBMIT_HOOK_SCRIPT
+    from palinode.hooks import script as _hook_script
+    USER_PROMPT_SUBMIT_HOOK_SCRIPT = _hook_script("palinode-user-prompt-submit.sh")
 
     plain = tmp_path.resolve() / "plain-dir"
     plain.mkdir()

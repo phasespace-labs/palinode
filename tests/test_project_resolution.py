@@ -674,20 +674,20 @@ def test_reported_scope_is_the_scope_applied(
     that sent one — an empty list included — decided the scope itself, and the
     pin neither replaces it nor is reported over it.
     """
-    from palinode.api import _util
-    from palinode.api.routers import search as search_router
+    from palinode.core import scope as core_scope
+    from palinode.core import search as core_search
     from palinode.core import store
 
     monkeypatch.setenv("PALINODE_PROJECT", "harbor-notes")
     store.init_db()
     applied: list[list[str] | None] = []
-    original = search_router._delivery
+    original = core_search._Search.run
 
-    def record(results, req, receipt, **kwargs):
-        applied.append(req.context)
-        return original(results, req, receipt, **kwargs)
+    def record(self):
+        applied.append(self.context)
+        return original(self)
 
-    monkeypatch.setattr(search_router, "_delivery", record)
+    monkeypatch.setattr(core_search._Search, "run", record)
     body = {"query": "", "receipt": True}
     if context is not None:
         body["context"] = context
@@ -701,7 +701,7 @@ def test_reported_scope_is_the_scope_applied(
     assert [ref for ref in boosted if ref.startswith("project/")] == (
         [expected_project] if expected_project else []
     )
-    assert _util.effective_project_scope(context).fields() == {
+    assert core_scope.effective_project_scope(context).fields() == {
         "project": expected_project, "project_resolved_by": expected_basis,
     }
 

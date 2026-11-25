@@ -455,7 +455,8 @@ def hook_script_path(dest_dir: str) -> str:
     installs — so the benchmark runs the script a user actually gets, not a
     copy of it that could drift.
     """
-    from palinode.cli.init import USER_PROMPT_SUBMIT_HOOK_SCRIPT
+    from palinode.hooks import script as _hook_script
+    USER_PROMPT_SUBMIT_HOOK_SCRIPT = _hook_script("palinode-user-prompt-submit.sh")
 
     path = os.path.join(dest_dir, "palinode-user-prompt-submit.sh")
     with open(path, "w", encoding="utf-8") as handle:

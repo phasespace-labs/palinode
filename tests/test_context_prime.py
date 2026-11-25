@@ -123,7 +123,7 @@ def test_nonproject_override_preserves_other_level_prefix(all_level_memory_dir, 
 def test_resolved_nonproject_forms_select_same_scoped_core(
     all_level_memory_dir, monkeypatch, level, entity_ref,
 ):
-    from palinode.api.routers.search import SearchRequest, _resolve_search_scope_chain
+    from palinode.core.scope import search_scope_chain
 
     value = f"{level}/abc" if entity_ref else "abc"
     session_id = value if level == "session" else None
@@ -140,9 +140,7 @@ def test_resolved_nonproject_forms_select_same_scoped_core(
     assert res.json()["scope_chain"] == chain.as_list()
     assert _core_files(res) == {"decisions/legacy.md", f"decisions/{level}-abc.md"}
 
-    search_chain = _resolve_search_scope_chain(SearchRequest(
-        query="test", context=["project/palinode"], session_id=session_id,
-    ))
+    search_chain = search_scope_chain(context=["project/palinode"], session_id=session_id)
     assert search_chain is not None
     assert getattr(search_chain, level) == "abc"
     assert search_chain.as_list() == ScopeChain(**{level: "abc"}, project="palinode").as_list()

@@ -21,9 +21,11 @@ import subprocess
 
 import pytest
 
-from palinode.cli.init import SESSION_START_HOOK_SCRIPT
+from palinode.hooks import script as _hook_script
 from tests import test_resolve_bundle as scenarios
 from tests import test_resolve_hook_live as live
+
+SESSION_START_HOOK_SCRIPT = _hook_script("palinode-session-start.sh")
 
 mem = scenarios.mem
 live_api = live.live_api

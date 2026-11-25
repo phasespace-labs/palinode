@@ -1,6 +1,8 @@
 """Focused policy tests: persistence, API gates, and secret-negative paths."""
 from __future__ import annotations
 
+import os
+
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -237,8 +239,8 @@ def test_project_path_and_linked_worktree_preflight_scope(client: TestClient, tm
     assert session_init_denied.status_code == 403
     assert session_init_denied.json() == {"detail": "excluded_project"}
 
-    # A direct path exclusion applies below the excluded root, while a symlink
-    # is invalid rather than being resolved into a potentially surprising scope.
+    # A direct path exclusion applies below the excluded root, and a symlink
+    # into it is followed to its real location and refused there.
     nested = repo / "private" / "transcript.jsonl"
     nested.parent.mkdir()
     nested.write_text("fixture", encoding="utf-8")
@@ -251,7 +253,7 @@ def test_project_path_and_linked_worktree_preflight_scope(client: TestClient, tm
     invalid = client.post("/controls/check", json={
         "action": "capture", "automatic": True, "source_path": str(link),
     }).json()
-    assert invalid == {"allowed": False, "reason": "invalid_scope", "policy_version": 1, "project": None}
+    assert invalid == {"allowed": False, "reason": "excluded_path", "policy_version": 1, "project": None}
     # A caller with no usable project/path cannot bypass configured automatic
     # exclusions, and a resolver failure is equally unknown rather than allow.
     unknown = client.post("/controls/check", json={"action": "capture", "automatic": True}).json()
@@ -324,16 +326,103 @@ def test_unverifiable_path_still_fails_closed_when_exclusions_exist(
         assert check == {"allowed": False, "reason": "invalid_scope", "policy_version": 1, "project": None}
 
 
-def test_unverifiable_cwd_is_dropped_not_resolved_through(
+def test_a_symlinked_cwd_is_scoped_by_the_path_as_written(
     client: TestClient, tmp_path: Path
 ) -> None:
+    """A checkout reached through a link keeps the name the user sees."""
     real = tmp_path / "real-project"
     real.mkdir()
     link = tmp_path / "linked-cwd"
     link.symlink_to(real)
     decision = evaluate_capture_policy("capture", automatic=True, cwd=str(link))
     assert decision.allowed is True
-    assert decision.project is None  # never scoped through the symlink
+    assert decision.project == "linked-cwd"
+
+
+def _exclude(client: TestClient, *paths: Path) -> None:
+    assert client.post("/controls", json={
+        "excluded_paths": [str(p) for p in paths], "excluded_projects": [],
+    }).status_code == 200
+
+
+def test_a_symlinked_cwd_into_an_excluded_directory_is_refused(
+    client: TestClient, tmp_path: Path
+) -> None:
+    secret = tmp_path / "secret"
+    (secret / "repo").mkdir(parents=True)
+    _exclude(client, secret)
+    link = tmp_path / "work-link"
+    link.symlink_to(secret / "repo")
+    for action in ("capture", "recall"):
+        decision = evaluate_capture_policy(action, automatic=True, cwd=str(link))
+        assert (decision.allowed, decision.reason) == (False, "excluded_path")
+
+
+def test_a_symlinked_cwd_elsewhere_is_allowed_while_exclusions_exist(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """The case that refused every automatic hook: exclusions plus a linked cwd."""
+    secret, work = tmp_path / "secret", tmp_path / "work"
+    secret.mkdir()
+    work.mkdir()
+    _exclude(client, secret)
+    link = tmp_path / "work-link"
+    link.symlink_to(work)
+    decision = evaluate_capture_policy("recall", automatic=True, cwd=str(link))
+    assert decision.allowed is True and decision.project == "work-link"
+
+
+@pytest.mark.parametrize("make", ["dotdot", "dangling", "loop"])
+def test_an_unverifiable_request_path_is_still_refused_while_exclusions_exist(
+    client: TestClient, tmp_path: Path, make: str
+) -> None:
+    secret = tmp_path / "secret"
+    secret.mkdir()
+    _exclude(client, secret)
+    if make == "dotdot":
+        cwd = str(tmp_path / "work" / ".." / "secret")
+    elif make == "dangling":
+        (tmp_path / "gone").symlink_to(tmp_path / "never-existed")
+        cwd = str(tmp_path / "gone" / "repo")
+    else:
+        (tmp_path / "a").symlink_to(tmp_path / "b")
+        (tmp_path / "b").symlink_to(tmp_path / "a")
+        cwd = str(tmp_path / "a")
+    decision = evaluate_capture_policy("capture", automatic=True, cwd=cwd)
+    assert (decision.allowed, decision.reason) == (False, "invalid_scope")
+
+
+def test_a_path_missing_on_this_server_is_checked_as_written(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Another host's path: no component exists here, so it is compared literally."""
+    secret = tmp_path / "secret"
+    secret.mkdir()
+    _exclude(client, secret)
+    inside = evaluate_capture_policy("capture", automatic=True, source_path=str(secret / "later.jsonl"))
+    assert inside.reason == "excluded_path"
+    elsewhere = evaluate_capture_policy(
+        "capture", automatic=True, cwd="/nonexistent-host-path/project-x", project="project-x",
+    )
+    assert elsewhere.allowed is True
+
+
+@pytest.mark.skipif(
+    not Path("/tmp").is_symlink(), reason="/tmp is a symlink on macOS, not on most Linux",
+)
+def test_macos_tmp_is_followed(client: TestClient) -> None:
+    import tempfile
+
+    with tempfile.TemporaryDirectory(dir="/tmp") as raw:
+        workspace = Path(raw) / "workspace-tmp"
+        workspace.mkdir()
+        real = Path(os.path.realpath(raw))
+        _exclude(client, real / "excluded-elsewhere")
+        allowed = evaluate_capture_policy("recall", automatic=True, cwd=str(workspace))
+        assert allowed.allowed is True and allowed.project == "workspace-tmp"
+        _exclude(client, real)
+        refused = evaluate_capture_policy("recall", automatic=True, cwd=str(workspace))
+        assert refused.reason == "excluded_path"
 
 
 def test_path_exclusions_apply_to_automatic_capture_and_recall(

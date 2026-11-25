@@ -97,22 +97,18 @@ def _cli_param_names(cmd: click.Command) -> set[str]:
     # Click uses `is_ps` as the dest for `--ps`; expose under "ps" too.
     if "is_ps" in names:
         names.add("ps")
-    # Click uses `memory_type` as the dest for `--type` (avoid keyword
-    # collision); expose under "type" too.
-    if "memory_type" in names:
-        names.add("type")
-    # Click uses `entities` (multiple=True) for `--entity` repeated.  Same
-    # canonical name; nothing to do.
-    # Click uses `external_ref_pairs` as dest for `--external-ref` (multiple);
-    # expose under the canonical "external_refs" name too.
-    if "external_ref_pairs" in names:
-        names.add("external_refs")
+    # A param the CLI takes under another dest is recorded once, on its
+    # operation's `cli_dests` (`--type` → `memory_type`, a keyword clash).
+    for op in REGISTRY:
+        for canonical, dest in op.cli_dests.items():
+            if dest in names:
+                names.add(canonical)
     return names
 
 
 def _cli_param_enum(cmd: click.Command, param_name: str) -> tuple[str, ...] | None:
     """Return a Click option's choices, normalized to the canonical name."""
-    aliases = {"type": "memory_type"}
+    aliases = {name: dest for op in REGISTRY for name, dest in op.cli_dests.items()}
     click_name = aliases.get(param_name, param_name)
     for param in cmd.params:
         if param.name != click_name or not isinstance(param.type, click.Choice):
@@ -345,6 +341,9 @@ def _flatten_cases() -> list[tuple[Operation, Surface, CanonicalParam]]:
         # the corresponding plugin cases from the same registry dump.
         for surface in sorted(required_surfaces(op) - {"plugin"}):
             for cp in op.canonical_params:
+                # A param the spec limits to some surfaces is not owed by the others.
+                if cp.surfaces is not None and surface not in cp.surfaces:
+                    continue
                 cases.append((op, surface, cp))  # type: ignore[arg-type]
     return cases
 

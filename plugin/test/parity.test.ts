@@ -296,7 +296,10 @@ describe("ADR-010 plugin canonical params", () => {
 });
 
 // ---------------------------------------------------------------------------
-// ADR-015 §5 (#480) — update_policy + include_telemetry first-class parity
+// ADR-015 §5 — update_policy first-class parity
+//
+// (Search params, include_telemetry among them, are checked per param
+// against the operation spec in operation-spec.test.ts.)
 //
 // Schema-declaration check: the params must appear in the TypeBox schema so
 // that plugin callers see them in tool-listing (not buried in metadata).
@@ -320,13 +323,6 @@ describe("ADR-015 §5 plugin parity (#480)", () => {
     expect(params.has("update_policy")).toBe(true);
   });
 
-  it("palinode_search declares include_telemetry in schema", () => {
-    const tool = tools.get("palinode_search");
-    expect(tool).toBeDefined();
-    const params = pluginParamNames(tool!);
-    expect(params.has("include_telemetry")).toBe(true);
-  });
-
   it("palinode_save update_policy schema has enum [append, replace]", () => {
     const tool = tools.get("palinode_save");
     expect(tool).toBeDefined();
@@ -338,15 +334,6 @@ describe("ADR-015 §5 plugin parity (#480)", () => {
     const serialised = JSON.stringify(prop);
     expect(serialised).toContain("append");
     expect(serialised).toContain("replace");
-  });
-
-  it("palinode_search include_telemetry schema has boolean type", () => {
-    const tool = tools.get("palinode_search");
-    expect(tool).toBeDefined();
-    const prop = (tool!.parameters.properties as Record<string, any>)["include_telemetry"];
-    expect(prop).toBeDefined();
-    const serialised = JSON.stringify(prop);
-    expect(serialised).toContain("boolean");
   });
 
   it("palinode_save forwards update_policy in API request body", async () => {
@@ -528,47 +515,6 @@ describe("ADR-015 §5 plugin parity (#480)", () => {
     }
   });
 
-  it("palinode_search forwards include_telemetry in API request body", async () => {
-    const captured: any[] = [];
-    const origFetch = global.fetch;
-    global.fetch = async (_url: string, opts?: any) => {
-      captured.push(JSON.parse(opts?.body ?? "{}"));
-      return { ok: true, json: async () => [] } as any;
-    };
-
-    try {
-      let capturedExecute: ((id: string, params: any) => Promise<any>) | null = null;
-      const fakeApi3: any = {
-        pluginConfig: {
-          palinodeDir: path.join(process.env.HOME || "/tmp", "palinode"),
-          promptsDir: "specs/prompts",
-          autoRecall: false,
-          autoCapture: false,
-          midTurnMode: "none",
-        },
-        logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
-        registerTool: (toolDef: any) => {
-          if (typeof toolDef === "function") toolDef = toolDef({});
-          if (toolDef.name === "palinode_search") capturedExecute = toolDef.execute;
-        },
-        on: () => undefined,
-        registerCli: () => undefined,
-        registerService: () => undefined,
-      };
-      palinodePlugin.register(fakeApi3);
-
-      expect(capturedExecute).not.toBeNull();
-      await capturedExecute!("call-2", {
-        query: "test query",
-        include_telemetry: true,
-      });
-
-      expect(captured).toHaveLength(1);
-      expect(captured[0].include_telemetry).toBe(true);
-    } finally {
-      global.fetch = origFetch;
-    }
-  });
 });
 
 it("blame forwards combined options and preserves structured session output", async () => {

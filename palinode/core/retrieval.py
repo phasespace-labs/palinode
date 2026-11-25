@@ -1,7 +1,6 @@
 """Observable retrieval mode and derived-index readiness, without model probes."""
 from __future__ import annotations
 
-from sqlite3 import Row
 from typing import Any
 
 from palinode.core import store
@@ -15,12 +14,9 @@ def diagnostics() -> dict[str, Any]:
     These counts describe derived rows, not a filesystem freshness scan. Database
     errors propagate: an unavailable index must not look like an empty corpus.
     """
-    db = store.get_db()
-    try:
-        chunks = db.execute("SELECT count(*) FROM chunks").fetchone()[0]
-        vectors = db.execute("SELECT count(*) FROM chunks_vec").fetchone()[0]
-    finally:
-        db.close()
+    with store.reader() as reader:
+        chunks = reader.chunk_count()
+        vectors = reader.vector_count()
     state = "not_indexed" if chunks == 0 else "ready"
     if chunks and config.search.retrieval_mode != "lexical" and vectors < chunks:
         state = "embeddings_pending"
@@ -51,34 +47,21 @@ def search_diagnostics(
     different question from ``outcome``: ``matched`` says rows came back,
     the verdict says whether any of them is worth treating as the answer.
     """
-    import json
     from palinode.core.visibility import is_visible
 
     ready = matched
     pending = False
     cache: dict[str, dict[str, Any]] = {}
 
-    def visible(row: Row) -> bool:
-        meta = json.loads(row["metadata"]) if row["metadata"] else {}
-        return is_visible(chain, row["file_path"], fallback_metadata=meta, cache=cache)
+    def visible(file: tuple[str, dict[str, Any]]) -> bool:
+        file_path, meta = file
+        return is_visible(chain, file_path, fallback_metadata=meta, cache=cache)
 
-    db = store.get_db()
-    try:
+    with store.reader() as reader:
         if not ready:
-            ready = any(visible(row) for row in db.execute(
-                "SELECT file_path, metadata FROM chunks GROUP BY file_path"
-            ))
+            ready = any(visible(file) for file in reader.indexed_files())
         if ready and config.search.retrieval_mode != "lexical":
-            # NOT IN over one read of the vec ids, not a correlated NOT EXISTS:
-            # vec0 has no index for a per-row id probe, so the correlated form
-            # scanned the vector table once per chunk (2.7 s on a 12k-chunk
-            # store, paid by every /resolve and receipt search).
-            pending = any(visible(row) for row in db.execute(
-                "SELECT c.file_path, c.metadata FROM chunks c "
-                "WHERE c.id NOT IN (SELECT id FROM chunks_vec) GROUP BY c.file_path"
-            ))
-    finally:
-        db.close()
+            pending = any(visible(file) for file in reader.indexed_files(vectorless=True))
     value = {
         "configured_mode": config.search.retrieval_mode,
         "active_mode": active_mode,

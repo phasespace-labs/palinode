@@ -5,7 +5,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from palinode.api._util import _safe_500, effective_project_scope
+from palinode.api._util import _safe_500
+from palinode.core.scope import effective_project_scope
 from palinode.api.path_safety import _open_memory_file_text, _resolve_memory_path
 from palinode.core import embedder, expiry, parser, store
 from palinode.core.lifecycle import eligibility
@@ -131,10 +132,10 @@ def delete_trigger_api(trigger_id: str) -> dict[str, str]:
 @router.post("/check-triggers")
 def check_triggers_api(req: CheckTriggersRequest) -> list[dict[str, Any]]:
     """Check context against prospective triggers in the client's scope."""
-    from palinode.api.routers.search import _resolve_scope_chain
+    from palinode.core.scope import search_scope_chain
 
     scope = effective_project_scope(None, cwd=req.cwd, project=req.project)
-    chain = _resolve_scope_chain(context=scope.context, session_id=req.session_id)
+    chain = search_scope_chain(context=scope.context, session_id=req.session_id)
     try:
         emb = embedder.embed(req.query)
         if not emb:

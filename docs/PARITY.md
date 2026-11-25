@@ -1,9 +1,9 @@
 # PARITY.md — Cross-Surface Contract
 
 **Status:** Active (ADR-010 accepted 2026-04-26)
-**Source of truth:** `palinode/core/parity.py` — the registry
+**Source of truth:** `palinode/core/operations.py` for migrated operations; `palinode/core/parity.py` — the registry — for the rest
 **Forcing function:** `tests/test_surface_parity.py` — CI-blocking
-**Defaults:** `palinode/core/defaults.py` — single-place values for thresholds, cooldowns, source headers
+**Defaults:** the server's configuration for migrated operations; `palinode/core/defaults.py` for the rest
 
 ## The contract
 
@@ -17,7 +17,113 @@ When you add a parameter, add it to all three surfaces (modulo exemptions below)
 
 **Plugins are opt-in, not a fourth mandatory surface.** Under ADR-019 a plugin (OpenClaw today, Pi, and any future harness adapter) is a thin delivery adapter over the REST API — non-implementation of an operation is the expected case, not drift. An operation joins the plugin parity obligations only by setting `plugin_tool` in the registry; for those operations, the plugin must expose the same canonical params (enforced by `plugin/test/parity.test.ts`). New plugins add **no** registry obligations.
 
+## Operation specs (generated)
+
+Migrated operations are defined once, in `palinode/core/operations.py`. Their params are not restated in `parity.py`: its entry is derived from the spec. MCP's `inputSchema` properties and the MCP and CLI request bodies are generated from the spec, and the click options, the REST model and the plugin tool are checked against it (`tests/test_operation_spec.py`, `plugin/test/operation-spec.test.ts`). **The server owns defaults:** a surface sends only what the caller set.
+
+To change one of these params, edit the spec, implement it on each surface, and regenerate the table below with `uv run python scripts/render-parity-doc.py`. A test fails while it is stale.
+
+<!-- BEGIN GENERATED: operation specs (scripts/render-parity-doc.py) -->
+
+### `search` — `/search`
+
+| Param | Type | Enum | Required | Server default (out of the box) | Forwarding |
+|---|---|---|---|---|---|
+| `query` | string |  | yes |  | sent when set |
+| `category` | string | `people`, `projects`, `decisions`, `insights`, `research` |  |  | not sent when empty |
+| `limit` | integer |  |  | `search.default_limit` (15) | sent when set |
+| `date_after` | string |  |  |  | not sent when empty |
+| `date_before` | string |  |  |  | not sent when empty |
+| `include_daily` | boolean |  |  |  | sent only when true |
+| `include_telemetry` | boolean |  |  |  | sent only when true |
+| `include_other_projects` | boolean |  |  |  | sent only when true |
+| `since_days` | integer |  |  |  | sent when set |
+| `types` | array of enum | `PersonMemory`, `Decision`, `ProjectSnapshot`, `Insight`, `ResearchRef`, `ActionItem` |  |  | not sent when empty |
+| `where` | array of string |  |  |  | not sent when empty |
+| `min_priority` | integer |  |  |  | sent when set |
+| `threshold` | number |  |  | `search.mcp_threshold` (0.4) for MCP callers, else `search.api_threshold` (0.5) | sent when set |
+| `tier` | string | `abstract`, `overview`, `full` |  |  | not sent when empty |
+| `resolve` | string | `none`, `linked`, `full` |  |  | not sent when `none` |
+| `include_retired` | boolean |  |  |  | sent only when true |
+
+Display overrides (shown to a person; programs get the server default):
+
+- **cli** `limit` = 3: A person reading a terminal. The server's 15 was measured for agent consumers (the k-sweep behind search.default_limit); JSON and piped output send nothing and get the server default.
+
+### `list` — `/list`
+
+| Param | Type | Enum | Required | Server default (out of the box) | Forwarding |
+|---|---|---|---|---|---|
+| `category` | string | `people`, `projects`, `decisions`, `insights`, `research` |  |  | not sent when empty |
+| `core_only` | boolean |  |  |  | sent only when true |
+| `where` | array of string |  |  |  | not sent when empty |
+| `include_inbox` | boolean |  |  |  | sent only when true |
+| `include_other_projects` | boolean |  |  |  | sent only when true |
+
+### `read` — `/read`
+
+| Param | Type | Enum | Required | Server default (out of the box) | Forwarding |
+|---|---|---|---|---|---|
+| `file_path` | string |  | yes |  | sent when set |
+| `meta` | boolean |  |  |  | sent only when true |
+| `tier` | string | `abstract`, `overview`, `full` |  |  | not sent when empty |
+
+### `save` — `/save`
+
+| Param | Type | Enum | Required | Server default (out of the box) | Forwarding |
+|---|---|---|---|---|---|
+| `content` | string |  | yes |  | sent when set |
+| `type` | string | `PersonMemory`, `Decision`, `ProjectSnapshot`, `Insight`, `ResearchRef`, `ActionItem` | yes |  | sent when set |
+| `slug` | string |  |  |  | not sent when empty |
+| `path` | string |  |  |  | sent when set |
+| `core` | boolean |  |  |  | sent when set |
+| `entities` | array of string |  |  |  | sent when set |
+| `project` | string |  |  |  | not sent when empty |
+| `title` | string |  |  |  | not sent when empty |
+| `metadata` | object |  |  |  | sent when set |
+| `confidence` | number |  |  |  | sent when set |
+| `priority` | integer |  |  |  | sent when set |
+| `epistemic` | string | `fact`, `inference`, `open_question`, `unverified` |  |  | sent when set |
+| `external_refs` | object |  |  |  | sent when set |
+| `source` | string |  |  |  | not sent when empty |
+| `update_policy` | string | `append`, `replace` |  |  | sent when set |
+| `sources` | array of object |  |  |  | sent when set |
+| `contradicts` | array of string |  |  |  | sent when set |
+| `backed_by` | array of string |  |  |  | sent when set |
+| `claims` | array of object |  |  |  | sent when set |
+
+Shorthands (a surface fills a required param from its own sugar):
+
+- **mcp, cli** `ps` → `type`: `ps` is shorthand for type=ProjectSnapshot; the surface sends the type.
+- **cli** `--file` → `content`: `palinode save --file PATH` reads the content from a file.
+
+### `session_end` — `/session-end`
+
+| Param | Type | Enum | Required | Server default (out of the box) | Forwarding |
+|---|---|---|---|---|---|
+| `summary` | string |  | yes |  | sent when set |
+| `decisions` | array of string |  |  |  | sent when set |
+| `blockers` | array of string |  |  |  | sent when set |
+| `project` | string |  |  |  | not sent when empty |
+| `source` | string |  |  |  | not sent when empty |
+| `push` | boolean |  |  |  | sent when set |
+| `dry_run` | boolean |  |  |  | sent only when true |
+| `harness` | string |  |  |  | not sent when empty; cli, api only |
+| `cwd` | string |  |  |  | not sent when empty; cli, api only |
+| `model` | string |  |  |  | not sent when empty; cli, api only |
+| `trigger` | string |  |  |  | not sent when empty; cli, api only |
+| `session_id` | string |  |  |  | not sent when empty; cli, api only |
+| `duration_seconds` | integer |  |  |  | cli, api only |
+
+Surface limits (a param only some surfaces advertise):
+
+- `harness`, `cwd`, `model`, `trigger`, `session_id`, `duration_seconds` on cli, api only: Provenance a harness supplies about its own session: the session-end hook and `palinode session-end` fill it; an agent calling the MCP tool would have to invent it.
+
+<!-- END GENERATED: operation specs -->
+
 ## Adding or changing a parameter
+
+For an operation not yet in `operations.py`:
 
 1. Add the `CanonicalParam` to the relevant `Operation` in `palinode/core/parity.py`.
 2. If the parameter has a default that's shared across surfaces, add it to `palinode/core/defaults.py` and reference via `default_key`.
@@ -129,7 +235,7 @@ Singular variants (`person`, `project`, etc.) are **entity-ref prefixes**, not c
 PersonMemory, Decision, ProjectSnapshot, Insight, ResearchRef, ActionItem
 ```
 
-Stored at `palinode/core/parity.py:MEMORY_TYPES`. The Python surfaces import
+Stored at `palinode/core/operations.py:MEMORY_TYPES`. The Python surfaces import
 that tuple directly; the plugin mirrors it as a TypeBox literal union, with the
 cross-language parity test guarding against drift.
 
@@ -139,7 +245,7 @@ cross-language parity test guarding against drift.
 compaction, extraction, update, classification, nightly-consolidation
 ```
 
-Stored at `palinode/core/parity.py:PROMPT_TASKS`. The ADR-010 parity pass fixed the duplicate-`enum` bug; the canonical list now lives in `parity.py`.
+Stored at `palinode/core/operations.py:PROMPT_TASKS`. The ADR-010 parity pass fixed the duplicate-`enum` bug; the canonical list now lives in the operation spec.
 
 ## Surface sugar — opt-in convenience, not parity
 

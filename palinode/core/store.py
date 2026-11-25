@@ -1,8 +1,19 @@
 """
 Palinode Store — SQLite-vec persistent vector database.
 
-Manages connection to the .palinode.db database to perform 
+Manages connection to the .palinode.db database to perform
 semantic memory chunk updates, deletions, and search retrieval.
+
+Before restructuring this module, note what is deliberate:
+
+* The cursor-level writers (``write_chunk_row``, ``write_chunk_meta``,
+  ``write_chunk_projection``, ``prune_chunk_ids``) have one caller,
+  ``indexer/reconcile.py``, which runs them inside :func:`transaction`. The
+  write ordering is owned there, not left to arbitrary callers.
+* Diagnostics checks query the schema directly by design. A doctor check that
+  went through a query helper would stop inspecting what it exists to inspect.
+* Trigger fire counts are observed state (ADR-021); their atomicity belongs to
+  that event log, not to a connection change here.
 
 # Some patterns in this file are adapted from NousResearch/hermes-agent (MIT License)
 # https://github.com/NousResearch/hermes-agent
@@ -1288,6 +1299,127 @@ def get_stats() -> dict[str, int]:
     row = cursor.fetchone()
     db.close()
     return {"total_files": row["files"], "total_chunks": row["chunks"]}
+
+
+# ── named reads ──────────────────────────────────────────────────────────────
+#
+# The read questions the recall path, the evidence layer and the inspector ask
+# of the derived index, each answered here so no caller writes SQL against the
+# ``chunks`` tables. ``reader()`` holds one connection for a caller that asks
+# several (the evidence layer, per run).
+
+_REVERSE_LINKS_SQL = """
+SELECT DISTINCT c.file_path AS file_path, 'superseded_by' AS field, j.value AS value
+  FROM chunks c, json_each(c.metadata, '$.superseded_by') j
+ WHERE c.metadata LIKE '%"superseded_by"%' AND j.type = 'text'
+UNION ALL
+SELECT DISTINCT c.file_path, 'contradicts', j.value
+  FROM chunks c, json_each(c.metadata, '$.contradicts') j
+ WHERE c.metadata LIKE '%"contradicts"%' AND j.type = 'text'
+UNION ALL
+SELECT DISTINCT c.file_path, 'backed_by', j.value
+  FROM chunks c, json_each(c.metadata, '$.backed_by') j
+ WHERE c.metadata LIKE '%"backed_by"%' AND j.type = 'text'
+"""
+
+
+class ChunkReader:
+    """Named reads over the derived index, on one connection."""
+
+    def __init__(self, db: sqlite3.Connection) -> None:
+        self._db = db
+
+    def section_hashes(
+        self, paths: Sequence[str],
+    ) -> list[tuple[str, str | None, str | None]]:
+        """``(file_path, section_id, content_hash)`` for every chunk stored under ``paths``."""
+        if not paths:
+            return []
+        placeholders, params = _parameterize_in_clause(list(paths))
+        rows = self._db.execute(
+            "SELECT file_path, section_id, content_hash FROM chunks "  # nosec B608
+            f"WHERE file_path IN ({placeholders})",
+            params,
+        ).fetchall()
+        return [(row["file_path"], row["section_id"], row["content_hash"]) for row in rows]
+
+    def reverse_links(self) -> list[tuple[str, str, str]]:
+        """``(citing file_path, field, cited value)`` for every link-field entry.
+
+        The fields are ``superseded_by``, ``contradicts`` and ``backed_by``.
+        """
+        rows = self._db.execute(_REVERSE_LINKS_SQL).fetchall()
+        return [(row["file_path"], row["field"], row["value"]) for row in rows]
+
+    def stored_vector(self, chunk_id: str) -> list[float] | None:
+        """The embedding stored for ``chunk_id``, or ``None`` when it has none."""
+        row = self._db.execute(
+            "SELECT vec_to_json(embedding) AS v FROM chunks_vec WHERE id = ?", (chunk_id,)
+        ).fetchone()
+        if not row or not row["v"]:
+            return None
+        try:
+            vec = json.loads(row["v"])
+        except ValueError:
+            return None
+        return vec if isinstance(vec, list) and vec else None
+
+    def indexed_files(self, *, vectorless: bool = False) -> Iterator[tuple[str, dict[str, Any]]]:
+        """``(file_path, metadata)`` once per indexed file, lazily.
+
+        ``vectorless`` keeps only files with a chunk that has no vector yet.
+        Lazy so a caller that stops at the first file it wants reads no further.
+        """
+        if vectorless:
+            # NOT IN over one read of the vec ids, not a correlated NOT EXISTS:
+            # vec0 has no index for a per-row id probe, so the correlated form
+            # scanned the vector table once per chunk (2.7 s on a 12k-chunk
+            # store, paid by every /resolve and receipt search).
+            sql = ("SELECT c.file_path, c.metadata FROM chunks c "
+                   "WHERE c.id NOT IN (SELECT id FROM chunks_vec) GROUP BY c.file_path")
+        else:
+            sql = "SELECT file_path, metadata FROM chunks GROUP BY file_path"
+        for row in self._db.execute(sql):
+            yield row["file_path"], json.loads(row["metadata"]) if row["metadata"] else {}
+
+    def chunk_count(self) -> int:
+        (count,) = self._db.execute("SELECT count(*) FROM chunks").fetchone()
+        return int(count)
+
+    def vector_count(self) -> int:
+        (count,) = self._db.execute("SELECT count(*) FROM chunks_vec").fetchone()
+        return int(count)
+
+    def indexed_paths(self) -> list[str]:
+        """Every distinct ``file_path`` the index holds."""
+        return [row[0] for row in self._db.execute("SELECT DISTINCT file_path FROM chunks")]
+
+    def recall_for_file(self, file_path: str) -> tuple[int, str | None]:
+        """Summed ``recall_count`` and the latest ``last_recalled`` over a file's chunks."""
+        rows = self._db.execute(
+            "SELECT recall_count, last_recalled FROM chunks WHERE file_path = ?", (file_path,),
+        ).fetchall()
+        total = sum((row["recall_count"] or 0) for row in rows)
+        recalls = [row["last_recalled"] for row in rows if row["last_recalled"]]
+        return total, (max(recalls) if recalls else None)
+
+    def file_chunk_summary(self) -> list[tuple[str, int, str | None]]:
+        """``(file_path, chunk count, newest created_at)`` per file, newest first."""
+        rows = self._db.execute(
+            "SELECT file_path, COUNT(*) AS chunks, MAX(created_at) AS recent "
+            "FROM chunks GROUP BY file_path ORDER BY recent DESC, file_path"
+        ).fetchall()
+        return [(row["file_path"], int(row["chunks"]), row["recent"]) for row in rows]
+
+
+@contextmanager
+def reader() -> Iterator[ChunkReader]:
+    """A :class:`ChunkReader` on one connection, closed on exit."""
+    db = get_db()
+    try:
+        yield ChunkReader(db)
+    finally:
+        db.close()
 
 def sanitize_fts_query(query: str) -> str:
     """
@@ -2795,10 +2927,14 @@ def search_associative(
         # Get the most relevant chunk from this file
         try:
             with open(fp, encoding="utf-8") as f:
-                content = f.read()[:1500]
+                text = f.read()
         except Exception:
             continue
-        
+        # The row's metadata is the file's live frontmatter, so the type
+        # filters that read ``metadata`` apply to associative rows as they do
+        # to search rows.
+        metadata, _ = _parser.parse_frontmatter(text)
+
         rel_path = to_rel_path(fp)
         entity_score = activation.get(
             next((e for e in activated_entities if e.split("/")[-1] in fp), ""), 0.5
@@ -2807,9 +2943,9 @@ def search_associative(
         results.append({
             "file_path": fp,
             "section_id": "root",
-            "content": content[:700],
+            "content": text[:700],
             "category": rel_path.split("/")[0] if "/" in rel_path else "general",
-            "metadata": {},
+            "metadata": metadata,
             "score": min(entity_score, 1.0),
             "recall_type": "associative",
         })

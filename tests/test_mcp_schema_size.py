@@ -66,9 +66,15 @@ async def test_search_limit_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
         "context cost unbounded too."
     )
     assert limit["maximum"] == MCP_SEARCH_LIMIT_MAX
-    assert limit["default"] <= limit["maximum"], (
-        f"default ({limit['default']}) exceeds maximum ({limit['maximum']}) — "
-        "the documented default would be rejected by the schema."
+    # ADR-022: the server owns the default, so the schema advertises none. An
+    # omitted limit gets the server's, which out of the box must fit the cap.
+    assert "default" not in limit
+    from palinode.core.config import SearchConfig
+
+    out_of_box = SearchConfig().default_limit
+    assert out_of_box <= limit["maximum"], (
+        f"the server's default limit ({out_of_box}) exceeds MCP's maximum "
+        f"({limit['maximum']}): an omitted limit would return more than the cap."
     )
 
 

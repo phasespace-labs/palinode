@@ -10,7 +10,12 @@ from palinode.core.defaults import (
     SESSION_END_TIMEOUT_SECONDS,
     _SESSION_END_TIMEOUT_SENTINEL,
 )
-from palinode.core.write_input import SAVE_PARAMS, SESSION_END_PARAMS, build_payload
+from palinode.core.operations import LIST as LIST_SPEC
+from palinode.core.operations import READ as READ_SPEC
+from palinode.core.operations import SAVE as SAVE_SPEC
+from palinode.core.operations import SEARCH as SEARCH_SPEC
+from palinode.core.operations import SESSION_END as SESSION_END_SPEC
+from palinode.core.operations import build_payload
 
 # Cross-surface drift guard: all three entry points (CLI, MCP, hook) must
 # use SESSION_END_TIMEOUT_SECONDS from defaults.  If the sentinel changes without
@@ -115,7 +120,7 @@ class PalinodeAPI:
     def search(
         self,
         query: str,
-        limit: int = 3,
+        limit: int | None = None,
         category: str | None = None,
         context: list[str] | None = None,
         threshold: float | None = None,
@@ -131,7 +136,7 @@ class PalinodeAPI:
         resolve: str | None = None,
         receipt: bool = False,
         include_other_projects: bool | None = None,
-        include_retired: bool = False,
+        include_retired: bool | None = None,
     ) -> list[dict[str, Any]] | tuple[list[dict[str, Any]], dict[str, Any] | None, dict[str, Any]]:
         """Search memory. ``receipt=True`` returns ``(results, receipt, applied)`` instead.
 
@@ -141,42 +146,26 @@ class PalinodeAPI:
         server means an API older than receipts: the receipt is then ``None``,
         ``applied`` is empty, and callers render without them.
         """
-        # ADR-010: forward the full canonical search surface.
-        # Non-None params land in the body verbatim; None means "API default".
-        payload: dict = {"query": query, "limit": limit}
-        if tier:
-            payload["tier"] = tier
-        if resolve and resolve != "none":
-            payload["resolve"] = resolve
-        if category:
-            payload["category"] = category
-        # An empty list is a scope the caller decided on ("no project"), not an
-        # unset parameter: it must reach the server, because an absent context
-        # is what tells the server to apply its own pinned project instead.
+        # ADR-022: the search spec decides what reaches the API, the same rule
+        # MCP uses. Unset (None) params are absent, so the server's defaults
+        # apply, including `limit` when the caller did not set one.
+        payload = build_payload(SEARCH_SPEC.params, {
+            "query": query, "limit": limit, "category": category,
+            "threshold": threshold, "since_days": since_days, "types": types,
+            "min_priority": min_priority, "date_after": date_after,
+            "date_before": date_before, "include_daily": include_daily,
+            "where": where, "include_telemetry": include_telemetry,
+            "tier": tier, "resolve": resolve,
+            "include_other_projects": include_other_projects,
+            "include_retired": include_retired,
+        })
+        # Not search parameters: the scope this surface resolved and the
+        # receipt request. An empty context is a scope the caller decided on
+        # ("no project"), not an unset parameter: it must reach the server,
+        # because an absent context is what tells the server to apply its own
+        # pinned project instead.
         if context is not None:
             payload["context"] = context
-        if threshold is not None:
-            payload["threshold"] = threshold
-        if since_days is not None:
-            payload["since_days"] = since_days
-        if types:
-            payload["types"] = list(types)
-        if min_priority is not None:
-            payload["min_priority"] = min_priority
-        if where:
-            payload["where"] = list(where)
-        if date_after:
-            payload["date_after"] = date_after
-        if date_before:
-            payload["date_before"] = date_before
-        if include_daily:
-            payload["include_daily"] = True
-        if include_telemetry:
-            payload["include_telemetry"] = True
-        if include_other_projects:
-            payload["include_other_projects"] = True
-        if include_retired:
-            payload["include_retired"] = True
         if receipt:
             payload["receipt"] = True
 
@@ -213,41 +202,38 @@ class PalinodeAPI:
         contradicts: list[str] | None = None,
         backed_by: list[str] | None = None,
     ) -> dict[str, Any]:
-        # One inclusion rule, shared with MCP via core/write_input.py: a param
+        # One inclusion rule, shared with MCP via the operation spec: a param
         # is sent when it is not None, so an explicitly-empty ``contradicts=[]``
         # reaches the server as the assertion the caller made rather than being
         # elided into "never specified". This used to read ``if contradicts:``
         # here and ``is not None`` in MCP — the same divergence the session_end
         # method below already carries a post-mortem for.
-        payload: dict = {
-            "content": content,
-            "type": memory_type,
-        }
-        payload.update(
-            build_payload(
-                SAVE_PARAMS,
-                {
-                    "entities": entities,
-                    "title": title,
-                    # ADR-010: project is API-side sugar; the API expands it
-                    # into entities.
-                    "project": project,
-                    "source": source,
-                    "slug": slug,
-                    "path": path,
-                    "core": core,
-                    "confidence": confidence,
-                    "priority": priority,
-                    "metadata": metadata,
-                    "external_refs": external_refs,
-                    "update_policy": update_policy,
-                    "epistemic": epistemic,
-                    "sources": sources,
-                    "claims": claims,
-                    "contradicts": contradicts,
-                    "backed_by": backed_by,
-                },
-            )
+        # ADR-022: the save spec's inclusion rule (sent when not None).
+        payload: dict = build_payload(
+            SAVE_SPEC.params,
+            {
+                "content": content,
+                "type": memory_type,
+                "entities": entities,
+                "title": title,
+                # ADR-010: project is API-side sugar; the API expands it
+                # into entities.
+                "project": project,
+                "source": source,
+                "slug": slug,
+                "path": path,
+                "core": core,
+                "confidence": confidence,
+                "priority": priority,
+                "metadata": metadata,
+                "external_refs": external_refs,
+                "update_policy": update_policy,
+                "epistemic": epistemic,
+                "sources": sources,
+                "claims": claims,
+                "contradicts": contradicts,
+                "backed_by": backed_by,
+            },
         )
         params = {"sync": "true"} if sync else None
         response = self.client.post(
@@ -303,11 +289,9 @@ class PalinodeAPI:
         """
         from palinode.core.context_prime import ambient_cwd, resolve_context
 
-        params: dict = {"file_path": file_path, "project": resolve_context(cwd=ambient_cwd()).project or ""}
-        if meta:
-            params["meta"] = "true"
-        if tier:
-            params["tier"] = tier
+        # ADR-022: the spec decides what reaches the API; an unset param is absent.
+        params: dict = build_payload(READ_SPEC.params, {"file_path": file_path, "meta": meta, "tier": tier})
+        params["project"] = resolve_context(cwd=ambient_cwd()).project or ""
         response = self.client.get("/read", params=params)
         response.raise_for_status()
         return response.json()
@@ -351,21 +335,16 @@ class PalinodeAPI:
         """
         from palinode.core.defaults import LIST_OTHER_PROJECTS_WITHHELD_HEADER
 
-        params: dict = {}
-        if category:
-            params["category"] = category
-        if core_only:
-            params["core_only"] = "true"
+        # ADR-022: the spec decides what reaches the API; an unset param is absent.
+        params: dict = build_payload(LIST_SPEC.params, {
+            "category": category, "core_only": core_only,
+            "where": list(where) if where else None, "include_inbox": include_inbox,
+            "include_other_projects": include_other_projects,
+        })
         if include_retired_core:
-            params["include_retired_core"] = "true"
-        if where:
-            params["where"] = list(where)
-        if include_inbox:
-            params["include_inbox"] = "true"
+            params["include_retired_core"] = True
         if project:
             params["project"] = project
-        if include_other_projects:
-            params["include_other_projects"] = "true"
         response = self.client.get("/list", params=params)
         response.raise_for_status()
         try:
@@ -565,27 +544,25 @@ fields, the session-end hook audit push)."""
         # to report"; eliding it makes the server read a parameter the caller
         # did send as one that never arrived, which is the signature its
         # envelope guard treats as a corrupted call. This method is where that
-        # was first worked out; core/write_input.py is where it now lives, so
+        # was first worked out; the operation spec is where it now lives, so
         # `save` above and MCP get it too instead of re-deriving it per-param.
-        payload: dict = {"summary": summary}
-        payload.update(
-            build_payload(
-                SESSION_END_PARAMS,
-                {
-                    "decisions": None if decisions is None else list(decisions),
-                    "blockers": None if blockers is None else list(blockers),
-                    "project": project,
-                    "source": source,
-                    "harness": harness,
-                    "cwd": cwd,
-                    "model": model,
-                    "trigger": trigger,
-                    "session_id": session_id,
-                    "duration_seconds": duration_seconds,
-                    "push": push,
-                    "dry_run": dry_run,
-                },
-            )
+        payload: dict = build_payload(
+            SESSION_END_SPEC.params,
+            {
+                "summary": summary,
+                "decisions": None if decisions is None else list(decisions),
+                "blockers": None if blockers is None else list(blockers),
+                "project": project,
+                "source": source,
+                "harness": harness,
+                "cwd": cwd,
+                "model": model,
+                "trigger": trigger,
+                "session_id": session_id,
+                "duration_seconds": duration_seconds,
+                "push": push,
+                "dry_run": dry_run,
+            },
         )
         response = self.client.post("/session-end", json=payload, timeout=SESSION_END_TIMEOUT_SECONDS)
         response.raise_for_status()

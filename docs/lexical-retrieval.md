@@ -163,7 +163,7 @@ unchanged and retrieval and ranking are untouched.
 **Results are not withheld for a `none` verdict.** The MCP rendering leads with
 `No confident match.` and the weak results follow underneath, because an empty
 slate cannot be told apart from an empty store by the reader. Operators who
-want the stricter behaviour can set:
+want the stricter behaviour can set, in the API server's config:
 
 ```yaml
 search:
@@ -171,7 +171,10 @@ search:
 ```
 
 which empties the slate **on the MCP surface only** when the verdict is `none`;
-the rendering then says how many results were withheld. REST, CLI, the
+the rendering then says how many results were withheld. The server reports the
+setting as `receipt.retrieval.abstain_on_no_confident_match` and MCP follows it,
+so an MCP process on another machine applies the server's choice, not its own
+config. REST, CLI, the
 inspector and the plugin keep returning their rows either way, and the receipt
 and retrieval log always record what the store delivered, so the switch changes
 what is shown and never what is measured.

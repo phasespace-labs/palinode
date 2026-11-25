@@ -54,18 +54,19 @@ describe("PROFILES catalog", () => {
     ]);
   });
 
-  it("monitoring denies past-tense memory types", () => {
-    expect(PROFILES.monitoring.typeDeny).toBeDefined();
-    expect(PROFILES.monitoring.typeDeny).toEqual(
-      expect.arrayContaining(["RCA", "Postmortem", "Incident", "Reflection"]),
-    );
+  it("monitoring is trigger-only and carries no type filter", () => {
+    // Type filters apply only to the semantic and associative sources, so a
+    // trigger-only profile has nothing for one to act on.
+    expect(PROFILES.monitoring).toEqual({
+      sources: ["triggers"],
+      triggersLimit: 3,
+      triggersMaxCharsEach: 1000,
+      totalBudget: 3000,
+    });
   });
 
-  it("investigation explicitly allows postmortem-class memories", () => {
-    expect(PROFILES.investigation.typeAllow).toBeDefined();
-    expect(PROFILES.investigation.typeAllow).toEqual(
-      expect.arrayContaining(["RCA", "Postmortem", "Incident", "Decision"]),
-    );
+  it("investigation allows decisions and insights, memory types only", () => {
+    expect(PROFILES.investigation.typeAllow).toEqual(["Decision", "Insight"]);
   });
 
   it("monitoring totalBudget is much smaller than coding", () => {
@@ -91,7 +92,7 @@ describe("resolveProfile", () => {
       recallProfile: "monitoring",
     });
     expect(out.sources).toEqual(["triggers"]);
-    expect(out.typeDeny).toEqual(PROFILES.monitoring.typeDeny);
+    expect(out.triggersLimit).toBe(PROFILES.monitoring.triggersLimit);
   });
 
   it("recallProfileConfig overrides individual fields on the base preset", () => {
@@ -104,7 +105,6 @@ describe("resolveProfile", () => {
     expect(out.triggersLimit).toBe(5);
     // Base preserved for non-overridden fields
     expect(out.sources).toEqual(["triggers"]);
-    expect(out.typeDeny).toEqual(PROFILES.monitoring.typeDeny);
     expect(out.totalBudget).toBe(PROFILES.monitoring.totalBudget);
   });
 

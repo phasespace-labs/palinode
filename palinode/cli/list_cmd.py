@@ -4,7 +4,7 @@ from rich.markup import escape
 from palinode.cli._api import api_client
 from palinode.cli._format import console, print_result, get_default_format, OutputFormat
 from palinode.cli._options import validate_where
-from palinode.core.parity import CATEGORIES
+from palinode.core.operations import CATEGORIES
 
 
 @click.command()

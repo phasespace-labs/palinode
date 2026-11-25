@@ -66,14 +66,14 @@ const DEFAULTS = {
 //
 // Pre-composed points in the (sources × types × per-source caps × total budget)
 // space. The plugin owns "which profile" via the OpenClaw config; the Palinode
-// server exposes primitives (max_chars, type_allow/deny). Profile names are a
+// server exposes primitives (max_chars, types, type_deny). Profile names are a
 // plugin-level vocabulary — Palinode does not need to know what "monitoring"
 // means.
 //
 // Modal taxonomy the presets sit on:
-//   - acting     (probe/deploy/ingest) — operational state, deny past-tense reflection
+//   - acting     (probe/deploy/ingest) — operational state, from triggers alone
 //   - deciding   (architecture/design) — past decisions + rationale
-//   - investigating (diagnosis) — RCAs, postmortems, incidents
+//   - investigating (diagnosis) — past decisions and insights
 //   - composing  (writing/code) — patterns, voice, style
 //   - conversing (open chat) — people/preferences, recent state
 // ----------------------------------------------------------------------------
@@ -90,7 +90,7 @@ export type RecallProfileConfig = {
   associativeMaxChars?: number;
   triggersLimit?: number;
   triggersMaxCharsEach?: number;
-  typeAllow?: string[];     // forwarded to /search via type_allow once server supports it
+  typeAllow?: string[];     // sent to /search as `types`; only memory types apply, others are dropped
   typeDeny?: string[];
   totalBudget?: number;     // hard cap across all sources; injection clipped here
 };
@@ -121,7 +121,6 @@ export const PROFILES: Record<RecallProfileName, RecallProfileConfig> = {
     sources: ["triggers"],
     triggersLimit: 3,
     triggersMaxCharsEach: 1000,
-    typeDeny: ["RCA", "Postmortem", "Incident", "Reflection"],
     totalBudget: 3000,
   },
   investigation: {
@@ -130,7 +129,7 @@ export const PROFILES: Record<RecallProfileName, RecallProfileConfig> = {
     semanticMaxChars: 1500,
     associativeLimit: 5,
     associativeMaxChars: 1000,
-    typeAllow: ["RCA", "Postmortem", "Incident", "Decision", "Insight"],
+    typeAllow: ["Decision", "Insight"],
     totalBudget: 25000,
   },
   writing: {
@@ -150,6 +149,31 @@ export const PROFILES: Record<RecallProfileName, RecallProfileConfig> = {
   minimal: { sources: [], totalBudget: 0 },
   off:     { sources: [], totalBudget: 0 },
 };
+
+// Values already reported as dropped, so a misconfigured typeAllow warns once
+// per process rather than on every recall.
+const warnedDroppedTypes = new Set<string>();
+
+/** The memory types in `typeAllow`; warns once about any value that is not one. */
+function recallTypes(
+  typeAllow: string[] | undefined,
+  logger: { warn: (message: string) => void },
+): string[] {
+  if (!typeAllow) return [];
+  const known: readonly string[] = PALINODE_MEMORY_TYPES;
+  const valid = typeAllow.filter((value) => known.includes(value));
+  const unreported = typeAllow.filter(
+    (value) => !known.includes(value) && !warnedDroppedTypes.has(value),
+  );
+  if (unreported.length > 0) {
+    for (const value of unreported) warnedDroppedTypes.add(value);
+    logger.warn(
+      `openclaw-palinode: typeAllow ignores ${unreported.join(", ")}: ` +
+        `not memory types (${PALINODE_MEMORY_TYPES.join(", ")})`,
+    );
+  }
+  return valid;
+}
 
 type PalinodeConfig = {
   palinodeApiUrl: string;
@@ -552,13 +576,13 @@ const palinodePlugin = {
             }),
           ),
           limit: Type.Optional(
-            Type.Number({ description: "Max results (default 5)" }),
+            Type.Integer({ description: "Max results (server default; 15 out of the box)." }),
           ),
           threshold: Type.Optional(
             Type.Number({ description: "Vector similarity floor (0.0–1.0); ignored in lexical mode." }),
           ),
           since_days: Type.Optional(
-            Type.Number({ description: "Only return memories from the last N days." }),
+            Type.Integer({ description: "Only return memories from the last N days." }),
           ),
           types: Type.Optional(
             Type.Array(literalUnion(PALINODE_MEMORY_TYPES), {
@@ -580,7 +604,7 @@ const palinodePlugin = {
             Type.Boolean({ description: "Include daily session notes in results (default false)." }),
           ),
           min_priority: Type.Optional(
-            Type.Number({ description: "Only return memories with priority >= this value (1–5)." }),
+            Type.Integer({ description: "Only return memories with priority >= this value (1–5)." }),
           ),
           include_telemetry: Type.Optional(
             Type.Boolean({
@@ -628,10 +652,10 @@ const palinodePlugin = {
         }),
         async execute(_toolCallId: string, params: any) {
           try {
-            const body: Record<string, any> = {
-              query: params.query,
-              limit: params.limit || 5,
-            };
+            // ADR-022: send only what the caller set; the server owns the
+            // defaults (limit included). Switches are sent only when true.
+            const body: Record<string, any> = { query: params.query };
+            if (params.limit !== undefined) body.limit = params.limit;
             const project = await resolveClientProject(
               cfg.palinodeApiUrl, automaticScope(undefined, toolContext),
             );
@@ -643,12 +667,12 @@ const palinodePlugin = {
             if (params.where !== undefined) body.where = params.where;
             if (params.date_after !== undefined) body.date_after = params.date_after;
             if (params.date_before !== undefined) body.date_before = params.date_before;
-            if (params.include_daily !== undefined) body.include_daily = params.include_daily;
+            if (params.include_daily === true) body.include_daily = true;
             if (params.min_priority !== undefined) body.min_priority = params.min_priority;
-            if (params.include_telemetry !== undefined) body.include_telemetry = params.include_telemetry;
+            if (params.include_telemetry === true) body.include_telemetry = true;
             if (params.tier !== undefined) body.tier = params.tier;
             if (params.resolve !== undefined && params.resolve !== "none") body.resolve = params.resolve;
-            if (params.include_other_projects) body.include_other_projects = true;
+            if (params.include_other_projects === true) body.include_other_projects = true;
             if (params.include_retired === true) body.include_retired = true;
             body.receipt = true;
             const payload = await palinodeFetch(
@@ -804,7 +828,7 @@ const palinodePlugin = {
             Type.String({ description: "Source surface that created this memory (e.g. 'claude-code'). Auto-detected if omitted." }),
           ),
           priority: Type.Optional(
-            Type.Number({ description: "Memory priority (1–5). Higher values surface in priority-filtered recall." }),
+            Type.Integer({ minimum: 1, maximum: 5, description: "Memory priority (1–5). Higher values surface in priority-filtered recall." }),
           ),
           epistemic: Type.Optional(
             Type.Union(
@@ -1462,8 +1486,11 @@ const palinodePlugin = {
                 limit: profile.semanticLimit ?? 5,
               };
               if (project) semBody.context = [`project/${project}`];
-              // Forward type filters defensively — older Palinode servers ignore unknown keys.
-              if (profile.typeAllow) semBody.type_allow = profile.typeAllow;
+              // The server validates `types` against the memory-type enum and
+              // rejects the whole request on one unknown value, so only valid
+              // values go out; none valid means no filter, never "match nothing".
+              const types = recallTypes(profile.typeAllow, api.logger);
+              if (types.length > 0) semBody.types = types;
               if (profile.typeDeny)  semBody.type_deny  = profile.typeDeny;
               const results = await palinodeFetch(cfg.palinodeApiUrl, "/search", {
                 method: "POST",
@@ -1498,7 +1525,10 @@ const palinodePlugin = {
                 seed_entities: [],
                 limit: profile.associativeLimit ?? 3,
               };
-              if (profile.typeAllow) assocBody.type_allow = profile.typeAllow;
+              // The same type filters as /search, under the same rule: only
+              // valid memory types go out as `types`.
+              const types = recallTypes(profile.typeAllow, api.logger);
+              if (types.length > 0) assocBody.types = types;
               if (profile.typeDeny)  assocBody.type_deny  = profile.typeDeny;
               let assoc = await palinodeFetch(cfg.palinodeApiUrl, "/search-associative", {
                   method: "POST",

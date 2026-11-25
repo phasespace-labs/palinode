@@ -16,7 +16,7 @@ import click
 
 from palinode.cli._api import HTTPStatusError, api_client
 from palinode.cli._format import OutputFormat, get_default_format
-from palinode.core.parity import TIERS
+from palinode.core.operations import TIERS
 from palinode.core.parser import split_frontmatter
 
 

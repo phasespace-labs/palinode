@@ -3,7 +3,8 @@ from rich.markup import escape
 from palinode.cli._api import HTTPStatusError, api_client
 from palinode.cli._format import print_result, console, OutputFormat, get_default_format
 from palinode.cli._options import validate_where
-from palinode.core.parity import CATEGORIES, MEMORY_TYPES, RESOLVE_MODES, TIERS
+from palinode.core.operations import CATEGORIES, MEMORY_TYPES, RESOLVE_MODES, TIERS
+from palinode.core.operations import SEARCH as SEARCH_SPEC
 from palinode.core.scoring import describe_match
 
 #: How one evidence record reads, by (relation, direction) — same wording as
@@ -150,7 +151,15 @@ def _status_labels(res: dict) -> str:
 
 @click.command()
 @click.argument("query")
-@click.option("--limit", default=3, help="Number of results (default: 3)")
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help=(
+        "Number of results. Default: 3 in a terminal; JSON and piped output "
+        "get the server default (15 out of the box)."
+    ),
+)
 @click.option(
     "--category",
     type=click.Choice(CATEGORIES),
@@ -281,6 +290,11 @@ def search(
         # context is the API's cue to apply its own pinned project, so
         # --no-context (and a shell where nothing resolved) has to say so.
         context = scope.context or []
+        output_fmt = OutputFormat(fmt) if fmt else get_default_format()
+        if limit is None and output_fmt != OutputFormat.JSON:
+            # The spec's declared display override: a person reading a
+            # terminal sees 3; a program gets the server's default.
+            limit = SEARCH_SPEC.display_default("cli", "limit")
         results, receipt, applied = api_client.search(
             query,
             limit=limit,
@@ -302,8 +316,6 @@ def search(
             include_retired=include_retired,
         )
         scope = scope.to_applied(applied)
-
-        output_fmt = OutputFormat(fmt) if fmt else get_default_format()
 
         if output_fmt == OutputFormat.JSON:
             # The piped shape is the results array, unchanged — a script that

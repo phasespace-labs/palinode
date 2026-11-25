@@ -27,23 +27,19 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from palinode.cli.hooks import (
-    STATE_CURRENT,
-    STATE_STALE,
-    hook_statuses,
-    hooks,
-    packaged_hooks,
-)
-from palinode.cli.init import (
-    CURSOR_HOOK_SCRIPT,
-    SESSION_START_HOOK_SCRIPT,
-    USER_PROMPT_SUBMIT_HOOK_SCRIPT,
-    init,
-)
+from palinode.cli.hooks import hooks
+from palinode.hooks.installed import hook_statuses, STATE_CURRENT, STATE_STALE
+from palinode.cli.init import init
+from palinode.hooks import script as _hook_script
 from palinode.diagnostics.checks.hooks_current import hooks_current
 from palinode.diagnostics.types import DoctorContext
 from tests import test_resolve_bundle as scenarios
 from tests import test_resolve_hook_live as live
+from tests._hook_helpers import ship
+
+CURSOR_HOOK_SCRIPT = _hook_script("palinode-cursor-hook.sh")
+SESSION_START_HOOK_SCRIPT = _hook_script("palinode-session-start.sh")
+USER_PROMPT_SUBMIT_HOOK_SCRIPT = _hook_script("palinode-user-prompt-submit.sh")
 
 mem = scenarios.mem
 live_api = live.live_api
@@ -258,11 +254,6 @@ def cursor_project(tmp_path, monkeypatch):
     return home, project
 
 
-def test_the_adapter_is_a_packaged_hook():
-    assert packaged_hooks()[ADAPTER] == CURSOR_HOOK_SCRIPT
-    assert CURSOR_HOOK_SCRIPT == (REPO_ROOT / "examples" / "hooks" / ADAPTER).read_text()
-
-
 def test_discovery_finds_both_scripts_on_each_cursor_command(cursor_project):
     home, project = cursor_project
     statuses = {s.path: s for s in hook_statuses(home, project)}
@@ -272,10 +263,12 @@ def test_discovery_finds_both_scripts_on_each_cursor_command(cursor_project):
     assert all(s.settings == [str(project / ".cursor" / "hooks.json")] for s in statuses.values())
 
 
-def test_doctor_warns_on_a_stale_cursor_hook_and_update_refreshes_it(cursor_project):
+def test_doctor_warns_on_a_stale_cursor_hook_and_update_refreshes_it(cursor_project, monkeypatch):
     home, project = cursor_project
     stale = project / ".cursor" / "hooks" / ADAPTER
-    stale.write_text("#!/bin/bash\n# palinode-cursor-hook.sh — an older release\nexit 0\n")
+    old = "#!/bin/bash\n# palinode-cursor-hook.sh — an older release\nexit 0\n"
+    ship(monkeypatch, ADAPTER, old)
+    stale.write_text(old)
 
     result = hooks_current(DoctorContext(config=None))
     assert not result.passed and result.severity == "warn"

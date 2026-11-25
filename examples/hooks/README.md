@@ -18,6 +18,16 @@ and per-prompt scripts; see [Codex](#codex) below.
 | `palinode-cursor-hook.sh` | Cursor adapter — runs `palinode-session-start.sh` on Cursor's `sessionStart` and `palinode-user-prompt-submit.sh` on `beforeSubmitPrompt`, translating Cursor's payload and answer (see "Cursor" below) |
 | `palinode-agy-hook.sh` | Antigravity adapter — runs `palinode-session-start.sh` on `SessionStart` and `palinode-user-prompt-submit.sh` on the first `PreInvocation` of each turn, answering with `injectSteps` (see "Antigravity" below) |
 
+**These files are generated; edit the source.** The scripts are part of the
+palinode package, under `palinode/hooks/scripts/`, and `settings.json` and
+`codex-hooks.json` are the registrations `palinode init` writes. To change a
+hook, edit its file under `palinode/hooks/scripts/`, bump its
+`# palinode-hook-version:` line, then run
+`uv run python scripts/regen-hook-hashes.py` and
+`uv run python scripts/render-hook-examples.py`. The test suite fails if
+`examples/hooks/` is stale, or if a changed script still carries a version a
+release shipped.
+
 ## Zero-friction install
 
 From your project root:
@@ -57,7 +67,10 @@ palinode hooks update             # refresh; old copies kept as <name>.bak-<time
 It refreshes the palinode hooks registered in `~/.claude/settings.json`, in
 the current project's `.claude/settings*.json`, and in Codex's `hooks.json` and
 `config.toml` (under `$CODEX_HOME` or `~/.codex`, and the project's `.codex/`).
-It leaves every other hook alone. Each script's second line, `# palinode-hook-version: X.Y.Z`, names the
+It also repairs registrations an earlier release wrote, and registers a hook a
+newer release added in the files `palinode init` writes. A script or
+registration you changed yourself, and a hook you removed, are reported and
+left alone unless you pass `--force`. It leaves every other hook alone. Each script's second line, `# palinode-hook-version: X.Y.Z`, names the
 release in which it last changed. `palinode doctor` (check `hooks_current`)
 warns when an installed copy has drifted.
 

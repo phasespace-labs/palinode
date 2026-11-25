@@ -133,7 +133,7 @@ Register in `~/.claude/settings.json`:
       "hooks": [{
         "type": "command",
         "command": "~/.claude/hooks/palinode-session-end.sh",
-        "timeout": 15
+        "timeout": 35
       }]
     }]
   }

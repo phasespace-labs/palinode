@@ -70,7 +70,7 @@ import frontmatter
 
 from palinode.core import path_guard
 from palinode.core.config import config
-from palinode.core.parity import CORRECTION_APPLIED_PARTIAL
+from palinode.core.operations import CORRECTION_APPLIED_PARTIAL
 from palinode.core.revalidation import normalize_ref
 from palinode.core.skip_dirs import is_skipped_path
 from palinode.corrections.content import content_loss
@@ -104,7 +104,7 @@ ACTOR = "reviewed-correction"
 SAVE_SOURCE = "correction-review"
 
 #: ``applied`` when the replacement was saved and the original was not
-#: retired. The canonical value lives in :mod:`palinode.core.parity` with the
+#: retired. The canonical value lives in :mod:`palinode.core.operations` with the
 #: other cross-surface enums; it is bound here so this module's callers read it
 #: from the contract they already import.
 APPLIED_PARTIAL = CORRECTION_APPLIED_PARTIAL

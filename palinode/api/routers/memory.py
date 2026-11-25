@@ -12,10 +12,12 @@ from palinode.core.defaults import LIST_OTHER_PROJECTS_WITHHELD_HEADER
 from palinode.core.capture_policy import (
     automatic_note_processing_allowed, resolve_processing_policy,
 )
-from palinode.core.parity import CATEGORIES, MEMORY_TYPES, TIERS
+from palinode.core.operations import CATEGORIES, MEMORY_TYPES, TIERS
 from palinode.core.tiers import apply_tier
 from palinode.core.parser import VALID_EPISTEMICS, VALID_UPDATE_POLICIES
-from palinode.core.scope import ScopeChain, other_project, resolve_scope_chain
+from palinode.core.scope import (
+    ScopeChain, effective_project_scope, other_project, resolve_scope_chain,
+)
 from palinode.core.cross_refs import filter_read_cross_refs
 from palinode.core.skip_dirs import SKIP_FOR_LISTING, is_skipped_path
 from palinode.core.expiry import core_has_expired
@@ -24,7 +26,6 @@ from palinode.core.visibility import is_visible, other_project_refs, withheld_as
 from palinode.core.where import matches_where, parse_where
 from palinode.api._util import (
     WhereEntries, _auto_summary_state, _retrieval_logger, _safe_500, _utc_now,
-    effective_project_scope,
 )
 from palinode.api.path_safety import (
     _memory_base_dir, _open_memory_file_text, _resolve_memory_path,
@@ -534,7 +535,7 @@ def list_api(
     ``/read``: a caller that sends no project gets the classic listing.
 
     With ``project`` the listing is scoped as search scopes: the same chain
-    (:func:`palinode.api.routers.search._resolve_scope_chain`) through the
+    (:func:`palinode.core.scope.search_scope_chain`) through the
     same choke point, so records tagged to another project are left out and
     counted in the ``X-Palinode-Other-Projects-Withheld`` response header.
     ``include_other_projects`` keeps them, each row naming its own projects
@@ -544,13 +545,13 @@ def list_api(
     ``where`` keeps the records whose frontmatter matches every ``key=value``
     entry; ``include_inbox`` lists ``inbox/``, where ActionItems are saved.
     """
-    from palinode.api.routers.search import _resolve_scope_chain
+    from palinode.core.scope import search_scope_chain
 
     chain = None
     if project:
         scope = effective_project_scope(None, project=project)
         if scope.project:
-            chain = _resolve_scope_chain(
+            chain = search_scope_chain(
                 context=scope.context, include_other_projects=include_other_projects,
             )
     withheld: set[str] = set()

@@ -30,21 +30,27 @@ import pytest
 from click.testing import CliRunner
 
 from palinode.cli.controls import _observed_project_setup
-from palinode.cli.hooks import STATE_CURRENT, STATE_STALE, hook_statuses, hooks, packaged_hooks
-from palinode.cli.init import (
-    CODEX_HOOKS_BLOCK,
-    HOOK_SCRIPT,
-    SESSION_START_HOOK_SCRIPT,
-    USER_PROMPT_SUBMIT_HOOK_SCRIPT,
-    init,
-)
+from palinode.cli.hooks import hooks
+from palinode.hooks.installed import hook_statuses, STATE_CURRENT, STATE_STALE
+from palinode.hooks import packaged_scripts as packaged_hooks, script as _hook_script
+from palinode.cli.init import init
+from pathlib import Path as _Path
+from palinode.hooks.codex import CODEX as _CODEX
 from palinode.diagnostics.checks.hooks_current import hooks_current
 from palinode.diagnostics.types import DoctorContext
 from tests import test_session_start_hook as start_stub
+from tests._hook_helpers import ship
+
+CODEX_HOOKS_BLOCK = _CODEX.registration_block(_Path("."))
+HOOK_SCRIPT = _hook_script("palinode-session-end.sh")
+SESSION_START_HOOK_SCRIPT = _hook_script("palinode-session-start.sh")
+USER_PROMPT_SUBMIT_HOOK_SCRIPT = _hook_script("palinode-user-prompt-submit.sh")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 START = "palinode-session-start.sh"
 PROMPT = "palinode-user-prompt-submit.sh"
+#: An older release's copy of the per-prompt script, recorded as shipped.
+OLD_PROMPT = "#!/bin/bash\n# palinode-user-prompt-submit.sh — older\nexit 0\n"
 END = "palinode-session-end.sh"
 
 needs_shell_tools = pytest.mark.skipif(
@@ -138,11 +144,6 @@ def test_codex_registration_carries_no_matcher_and_all_three_events():
     for event, groups in hooks_block.items():
         assert "matcher" not in groups[0]
         assert groups[0]["hooks"][0]["timeout"] == (3 if event == "SessionEnd" else 20)
-
-
-def test_example_codex_hooks_json_is_the_registration_init_writes():
-    example = json.loads((REPO_ROOT / "examples" / "hooks" / "codex-hooks.json").read_text())
-    assert example == CODEX_HOOKS_BLOCK
 
 
 def test_merge_appends_after_existing_entries_and_moves_nothing(env):
@@ -398,7 +399,7 @@ def test_user_prompt_submit_sends_an_explicit_project(tmp_path):
 # -- hooks update / doctor / controls status --------------------------------
 
 
-def test_doctor_and_update_cover_the_codex_copies(env):
+def test_doctor_and_update_cover_the_codex_copies(env, monkeypatch):
     _, project = env
     hooks_json = project / ".codex" / "hooks.json"
     hooks_json.parent.mkdir()
@@ -413,7 +414,8 @@ def test_doctor_and_update_cover_the_codex_copies(env):
     assert hooks_current(DoctorContext(config=None)).passed
 
     stale = project / ".codex" / "hooks" / PROMPT
-    stale.write_text("#!/bin/bash\n# palinode-user-prompt-submit.sh — older\nexit 0\n")
+    ship(monkeypatch, PROMPT, OLD_PROMPT)
+    stale.write_text(OLD_PROMPT)
     result = hooks_current(DoctorContext(config=None))
     assert not result.passed
     assert str(stale) in result.message
@@ -443,13 +445,14 @@ def test_user_level_codex_hooks_honour_codex_home(env, tmp_path, monkeypatch):
     assert status.path == str(script) and status.state == STATE_CURRENT
 
 
-def test_hooks_in_codex_config_toml_are_discovered(env):
+def test_hooks_in_codex_config_toml_are_discovered(env, monkeypatch):
     """Codex also takes ``[[hooks.<Event>]]`` tables in config.toml; the
     ``[hooks.state]`` trust table beside them is not a registration."""
     home, project = env
     script = home / "bin" / PROMPT
     script.parent.mkdir()
-    script.write_text("#!/bin/bash\n# palinode-user-prompt-submit.sh — older\nexit 0\n")
+    ship(monkeypatch, PROMPT, OLD_PROMPT)
+    script.write_text(OLD_PROMPT)
     (home / ".codex").mkdir()
     (home / ".codex" / "config.toml").write_text(
         '[[hooks.UserPromptSubmit]]\n'

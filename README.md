@@ -435,7 +435,7 @@ Every search delivery also reports a **match-confidence verdict** — `confident
 `weak` or `none` — in `receipt.retrieval`, read from each arm's own pre-fusion
 score rather than the fused rank, with the arm evidence beside it. Results are
 never withheld for it by default; `search.abstain_on_no_confident_match: true`
-opts the MCP surface into withholding a `none` slate. See
+in the API server's config opts the MCP surface into withholding a `none` slate. See
 [docs/lexical-retrieval.md](docs/lexical-retrieval.md#match-confidence).
 
 To re-check the search floors against your configured embedding endpoint, run

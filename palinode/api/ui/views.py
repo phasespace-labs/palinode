@@ -4,7 +4,7 @@ Store-agnostic by intent: each ``build_*`` function takes plain inputs (or
 calls an injected capability callable) and returns template-ready dicts/lists.
 They contain no business logic the store/API doesn't already expose — they
 *shape* the output of existing capabilities (``collect_memory_files`` — the
-same walk + visibility gate behind ``GET /list`` — ``search_api``,
+same walk + visibility gate behind ``GET /list`` — ``core.search``,
 ``git_tools.recent_commits``/``diff``, ``run_lint_pass``) for rendering.
 Keeping them here (not in the router) lets ``weir`` reuse the same
 list/search/diff/quality shaping against equivalent inputs.

@@ -62,23 +62,17 @@ def indexed_discovery(memories: list[dict[str, Any]]) -> tuple[int, list[dict[st
     if not visible:
         return 0, []
     try:
-        db = store.get_db()
-        try:
-            rows = db.execute(
-                "SELECT file_path, COUNT(*) AS chunks, MAX(created_at) AS recent "
-                "FROM chunks GROUP BY file_path ORDER BY recent DESC, file_path"
-            ).fetchall()
-        finally:
-            db.close()
+        with store.reader() as reader:
+            rows = reader.file_chunk_summary()
     except Exception:
         return 0, []
     total = 0
     recent = []
-    for row in rows:
-        memory = visible.get(row["file_path"])
+    for file_path, chunks, _recent in rows:
+        memory = visible.get(file_path)
         if memory is None:
             continue
-        total += row["chunks"]
+        total += chunks
         if len(recent) < 12:
             recent.append({"path": memory["path"], "type": memory["type"]})
     return total, recent

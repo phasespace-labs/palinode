@@ -3,7 +3,7 @@ from rich.console import Console
 
 from palinode.cli._api import HTTPStatusError, RequestError, api_client
 from palinode.cli._format import OutputFormat, emit_json, get_default_format
-from palinode.core.parity import RESOLVE_INTENTS
+from palinode.core.operations import RESOLVE_INTENTS
 
 console = Console()
 

@@ -26,7 +26,8 @@ import pytest
 from click.testing import CliRunner
 
 from palinode.cli import main
-from palinode.cli.init import USER_PROMPT_SUBMIT_HOOK_SCRIPT
+from palinode.hooks import script as _hook_script
+USER_PROMPT_SUBMIT_HOOK_SCRIPT = _hook_script("palinode-user-prompt-submit.sh")
 
 _PROMPT = "how did we decide to handle the deploy rollback for the api?"
 
@@ -778,7 +779,9 @@ def test_embedded_copy_matches_canonical_example():
 def test_settings_timeout_matches_canonical_example():
     """init.py's registered timeout must match examples/hooks/settings.json —
     the same parity the session hooks keep."""
-    from palinode.cli.init import SETTINGS_HOOK_BLOCK
+    from pathlib import Path as _Path
+    from palinode.cli.init import settings_block as _settings_block
+    SETTINGS_HOOK_BLOCK = _settings_block(_Path("."))
 
     canonical = json.loads(
         (Path(__file__).parent.parent / "examples" / "hooks" / "settings.json")

@@ -8,7 +8,7 @@ without ``core`` importing ``api``.
 ``api/memory_write.py`` re-exports every name defined here, so the historical
 import paths (``palinode.api.memory_write`` and ``palinode.api.server``) keep
 working unchanged — the same define-low / re-export-high shape
-``core/parity.py`` uses for its enums.
+``core/parity.py`` uses to re-export the enums from ``core/operations.py``.
 
 The one helper that did *not* move is ``_resolve_source``: it reads an HTTP
 header, so it belongs to the transport layer.

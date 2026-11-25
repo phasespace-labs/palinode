@@ -8,9 +8,12 @@ import sys
 
 import pytest
 
-from palinode.cli.init import HOOK_SCRIPT, POST_COMPACT_HOOK_SCRIPT
+from palinode.hooks import script as _hook_script
 from palinode.core.capture_policy import update_capture_policy
 from palinode.core.config import config
+
+HOOK_SCRIPT = _hook_script("palinode-session-end.sh")
+POST_COMPACT_HOOK_SCRIPT = _hook_script("palinode-post-compact.sh")
 
 SECRET = "sk-ant-THISISAHARMLESSNEGATIVEFIXTURE0123456789"
 ROOT = Path(__file__).resolve().parents[1]
