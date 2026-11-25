@@ -283,9 +283,13 @@ class FilePlan:
 
 
 def _scopes(spec: HarnessSpec, home: Path, project_dir: Path) -> dict[Path, list[ConfigFile]]:
-    """The spec's inspected config files, grouped by the hooks folder they share."""
+    """The spec's inspected config files, grouped by the hooks folder they share.
+
+    A file that is both a user and a project file (run from the home
+    directory) is taken once, under its user entry (``distinct_config_files``).
+    """
     groups: dict[Path, list[ConfigFile]] = {}
-    for config in spec.config_files:
+    for config in spec.distinct_config_files(home, project_dir):
         if config.inspected:
             groups.setdefault(config.hooks_dir(home, project_dir), []).append(config)
     return groups

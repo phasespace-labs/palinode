@@ -50,15 +50,10 @@ def _observed_hooks(spec: HarnessSpec, home: Path, project_dir: Path) -> list[di
     the project scope. Codex's ``config.toml`` layers are not read here.
     """
     found: list[dict[str, Any]] = []
-    seen: set[Path] = set()
-    for config in spec.config_files:
+    for config in spec.distinct_config_files(home, project_dir):
         path = config.path(home, project_dir)
         if path.suffix != ".json":
             continue
-        resolved = path.resolve()
-        if resolved in seen:
-            continue
-        seen.add(resolved)
         registrations = spec.palinode_events(path, home, project_dir)
         hooks_dir = config.hooks_dir(home, project_dir)
         for reg in spec.registrations:

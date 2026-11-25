@@ -268,3 +268,133 @@ def test_a_fresh_init_install_has_nothing_to_report(env):
     assert out["registrations"] == [] and out["registrations_kept"] == []
     assert all(h["action"] == "skipped" for h in out["hooks"])
     assert {s.state for s in hook_statuses(*env)} == {"current"}
+
+
+# -- run from the home directory: a user file is not a project file ------------
+#
+# From $HOME, a harness's project config file and its user config file can be
+# the same file. It keeps its user-level rules: nothing is added unasked, an
+# added registration uses the user form, and a user file palinode never walks
+# is not walked under its project name either.
+
+
+def _home_install(home: Path, monkeypatch) -> tuple[Path, str]:
+    """The hand-assembled user-level Claude Code install, with cwd = $HOME."""
+    hooks_dir = home / ".claude" / "hooks"
+    hooks_dir.mkdir(parents=True)
+    events = {"SessionEnd": END, "UserPromptSubmit": PROMPT, "PostCompact": POST}
+    for name in events.values():
+        (hooks_dir / name).write_text(packaged_scripts()[name])
+        (hooks_dir / name).chmod(0o755)
+    settings = home / ".claude" / "settings.json"
+    timeouts = {"SessionEnd": 35, "UserPromptSubmit": 20, "PostCompact": 35}
+    settings.write_text(json.dumps({"hooks": {
+        event: [{"hooks": [{"type": "command", "command": f"~/.claude/hooks/{name}",
+                            "timeout": timeouts[event]}]}]
+        for event, name in events.items()
+    }}))
+    monkeypatch.chdir(home)
+    return settings, settings.read_text()
+
+
+def _doctor_at(home: Path):
+    return hooks_current(DoctorContext(config=None, home=home, cwd=home))
+
+
+def test_from_home_the_user_settings_file_is_not_extended_unasked(env, monkeypatch):
+    home, _ = env
+    settings, before = _home_install(home, monkeypatch)
+
+    result = _doctor_at(home)
+    assert result.passed and "SessionStart" in result.message, result.message
+    out = _update()
+    assert out["registrations"] == []
+    assert [(k["event"], k["state"]) for k in out["registrations_kept"]] == [("SessionStart", "not registered")]
+    assert settings.read_text() == before
+    assert not (home / ".claude" / "hooks" / START).exists()
+
+
+def test_from_home_force_adds_the_user_form_not_the_project_form(env, monkeypatch):
+    home, _ = env
+    settings, _ = _home_install(home, monkeypatch)
+
+    [reg] = _update("--force")["registrations"]
+    assert reg["changes"] == ["registered SessionStart"]
+    [start] = _handlers(settings, "SessionStart")
+    assert start["command"] == f"~/.claude/hooks/{START}"
+    assert "CLAUDE_PROJECT_DIR" not in settings.read_text()
+
+
+def _from_project(home: Path, flag: str, rel_config: str, drop: str, drop_script: str,
+                  monkeypatch) -> tuple[Path, str]:
+    """Copy a project install of one harness into $HOME, minus one registration and its script."""
+    project = home.parent / "proj"
+    project.mkdir()
+    monkeypatch.chdir(project)
+    _init(project, flag)
+    config_rel, hooks_rel = rel_config.rsplit("/", 1)[0], rel_config.rsplit("/", 1)[0] + "/hooks"
+    (home / config_rel).mkdir(parents=True, exist_ok=True)
+    (home / hooks_rel).mkdir(parents=True, exist_ok=True)
+    data = json.loads((project / rel_config).read_text())
+    del data["hooks"][drop]
+    (home / rel_config).write_text(json.dumps(data, indent=2))
+    for script in (project / hooks_rel).iterdir():
+        if script.name != drop_script:
+            (home / hooks_rel / script.name).write_text(script.read_text())
+            (home / hooks_rel / script.name).chmod(0o755)
+    monkeypatch.chdir(home)
+    return home / rel_config, (home / rel_config).read_text()
+
+
+def test_from_home_codex_user_hooks_json_is_not_extended(env, monkeypatch):
+    """Codex's user hooks.json is the project one when CODEX_HOME is unset and cwd is $HOME."""
+    home, _ = env
+    hooks_json, before = _from_project(home, "--codex-hook", ".codex/hooks.json", "SessionEnd", END,
+                                       monkeypatch)
+    for args in ((), ("--force",)):
+        out = _update(*args)
+        assert out["registrations"] == [], args
+        assert hooks_json.read_text() == before, args
+    assert not (home / ".codex" / "hooks" / END).exists()
+
+
+def test_from_home_cursor_user_hooks_json_is_not_walked(env, monkeypatch):
+    """~/.cursor/hooks.json is never walked; from $HOME it must not be walked as a project file."""
+    home, _ = env
+    hooks_json, before = _from_project(home, "--cursor-hooks", ".cursor/hooks.json", "beforeSubmitPrompt", PROMPT,
+                                       monkeypatch)
+    out = _update("--force")
+    assert out["registrations"] == [] and out["registrations_kept"] == []
+    assert hooks_json.read_text() == before
+
+
+@pytest.mark.parametrize("spec", __import__("palinode.hooks.harnesses", fromlist=["HARNESSES"]).HARNESSES,
+                         ids=lambda s: s.name)
+def test_distinct_config_files_take_each_path_once_and_the_user_entry_wins(spec, tmp_path, monkeypatch):
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    home = tmp_path
+    files = spec.distinct_config_files(home, home)
+    paths = [c.path(home, home) for c in files]
+    assert len(paths) == len(set(paths))
+    by_path = {}
+    for c in spec.config_files:
+        by_path.setdefault(c.path(home, home), c)
+    assert files == list(by_path.values())  # first declared wins
+    for c in files:
+        if any(u.scope == "user" and u.path(home, home) == c.path(home, home) for u in spec.config_files):
+            assert c.scope == "user" and not c.init_writes
+
+
+def test_from_home_force_after_removing_a_project_form_entry_writes_the_user_form(env, monkeypatch):
+    """The cleanup the changelog gives for an install v0.25.0 damaged from $HOME."""
+    home, _ = env
+    settings, _ = _home_install(home, monkeypatch)
+    data = json.loads(settings.read_text())
+    data["hooks"]["SessionStart"] = [{"hooks": [{"type": "command", "timeout": 20,
+        "command": f'"${{CLAUDE_PROJECT_DIR}}"/.claude/hooks/{START}'}]}]
+    settings.write_text(json.dumps(data))
+    del data["hooks"]["SessionStart"]          # the user removes it
+    settings.write_text(json.dumps(data))
+    _update("--force")
+    [start] = _handlers(settings, "SessionStart")
+    assert start["command"] == f"~/.claude/hooks/{START}"

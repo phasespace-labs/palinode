@@ -92,3 +92,63 @@ def test_the_committed_manifest_carries_the_history(generated: dict) -> None:
     assert committed["schema"] == generated["schema"]
     assert committed["hash_domain"] == generated["hash_domain"]
     assert sorted(committed["prompts"]) == sorted(generated["prompts"])
+
+
+def _load_script():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("regen_prompt_hashes", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _git_at(repo: Path, *args: str) -> str:
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+           "GIT_COMMITTER_EMAIL": "t@t", "HOME": str(repo), "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin"}
+    return subprocess.run(["git", *args], cwd=repo, env=env, capture_output=True, text=True, check=True).stdout.strip()
+
+
+def test_batched_blob_reads_match_one_git_show_per_commit(tmp_path: Path) -> None:
+    """The batched reader returns exactly what `git show <commit>:<path>` would.
+
+    Covered: the same blob at many commits (the shallow-boundary case that
+    made the per-commit loop time out on a reused CI checkout), a commit
+    without the file, the commit that deleted it, and a non-UTF-8 revision.
+    """
+    regen = _load_script()
+    repo = tmp_path / "r"
+    repo.mkdir()
+    _git_at(repo, "init", "-q", "-b", "main")
+    path = "specs/prompts/p.md"
+    (repo / "README").write_text("x\n")
+    _git_at(repo, "add", "README")
+    _git_at(repo, "commit", "-qm", "no prompt yet")
+    commits = [_git_at(repo, "rev-parse", "HEAD")]
+    (repo / "specs/prompts").mkdir(parents=True)
+    for body in ("one\n", "two\n", "two\n"):          # a repeated blob
+        (repo / path).write_text(body)
+        _git_at(repo, "add", path)
+        _git_at(repo, "commit", "-qm", body.strip(), "--allow-empty")
+        commits.append(_git_at(repo, "rev-parse", "HEAD"))
+    (repo / path).write_bytes(b"\xff\xfe not utf-8\n")
+    _git_at(repo, "add", path)
+    _git_at(repo, "commit", "-qm", "binary")
+    commits.append(_git_at(repo, "rev-parse", "HEAD"))
+    _git_at(repo, "rm", "-q", path)
+    _git_at(repo, "commit", "-qm", "delete")
+    commits.append(_git_at(repo, "rev-parse", "HEAD"))
+
+    def one_show(commit: str) -> str | None:
+        result = subprocess.run(["git", "show", f"{commit}:{path}"], cwd=repo, capture_output=True, check=False)
+        if result.returncode:
+            return None
+        try:
+            return result.stdout.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+
+    expected = {c: t for c in commits if (t := one_show(c)) is not None}
+    assert regen._blobs_at(repo, commits, path) == expected
+    assert set(expected.values()) == {"one\n", "two\n"}
+    assert regen._blobs_at(repo, [], path) == {}

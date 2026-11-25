@@ -74,22 +74,50 @@ def _git(repo: Path, *args: str) -> str:
     ).stdout
 
 
-def _blob_at(repo: Path, commit: str, path: str) -> str | None:
-    """The text of *path* at *commit*, or None when it is not there.
+def _blobs_at(repo: Path, commits: list[str], path: str) -> dict[str, str]:
+    """The text of *path* at each of *commits*: two git processes, each blob read once.
 
-    ``git log -- <path>`` lists the commit that deleted the file too, and a
-    merge commit can list a path it does not contain; both are "no revision
-    here", not an error.
+    A commit where *path* is absent is left out. ``git log -- <path>`` lists
+    the commit that deleted the file too, and a merge commit can list a path
+    it does not contain; both are "no revision here", not an error. A blob
+    that is not UTF-8 is left out as well.
+
+    Batched because the commit count is not bounded by the prompt's history:
+    in a shallow clone every boundary commit lists every file as added, and a
+    CI runner that reuses its checkout gains one per pull request it has
+    fetched. Those commits share a handful of blobs.
     """
-    result = subprocess.run(  # noqa: S603 — fixed argv, no shell
-        ["git", "show", f"{commit}:{path}"], cwd=repo, capture_output=True, check=False
-    )
-    if result.returncode != 0:
-        return None
-    try:
-        return result.stdout.decode("utf-8")
-    except UnicodeDecodeError:
-        return None
+    if not commits:
+        return {}
+    check = subprocess.run(  # noqa: S603 — fixed argv, no shell
+        ["git", "cat-file", "--batch-check=%(objectname) %(objecttype)"],
+        cwd=repo, input="".join(f"{c}:{path}\n" for c in commits),
+        capture_output=True, text=True, check=True,
+    ).stdout.splitlines()
+    blob_of: dict[str, str] = {}
+    for commit, line in zip(commits, check, strict=True):
+        sha, _, kind = line.partition(" ")
+        if kind == "blob":
+            blob_of[commit] = sha
+    unique = list(dict.fromkeys(blob_of.values()))
+    if not unique:
+        return {}
+    raw = subprocess.run(  # noqa: S603 — fixed argv, no shell
+        ["git", "cat-file", "--batch"], cwd=repo,
+        input="".join(f"{s}\n" for s in unique).encode(), capture_output=True, check=True,
+    ).stdout
+    text_of: dict[str, str] = {}
+    pos = 0
+    for sha in unique:
+        header_end = raw.index(b"\n", pos)
+        _sha, _kind, size = raw[pos:header_end].split()
+        body = raw[header_end + 1: header_end + 1 + int(size)]
+        pos = header_end + 1 + int(size) + 1  # the body is followed by a newline
+        try:
+            text_of[sha] = body.decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+    return {c: text_of[s] for c, s in blob_of.items() if s in text_of}
 
 
 def historical_body_hashes(repo: Path, name: str) -> list[str]:
@@ -103,9 +131,10 @@ def historical_body_hashes(repo: Path, name: str) -> list[str]:
     for directory in PROMPT_DIRS:
         path = f"{directory}/{name}"
         log = _git(repo, "log", "--all", "--format=%H %ct", "--", path)
-        for line in log.splitlines():
-            commit, _, timestamp = line.partition(" ")
-            text = _blob_at(repo, commit, path)
+        entries = [line.partition(" ") for line in log.splitlines()]
+        texts = _blobs_at(repo, [commit for commit, _, _ in entries], path)
+        for commit, _, timestamp in entries:
+            text = texts.get(commit)
             if text is None:
                 continue
             digest = prompt_body_hash(text)

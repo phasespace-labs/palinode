@@ -25,6 +25,7 @@ groups, flat entries, a named hook) is one of three :class:`Layout` values.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import tomllib
@@ -273,9 +274,28 @@ class HarnessSpec:
 
     # -- reading -------------------------------------------------------------
 
+    def distinct_config_files(self, home: Path, project_dir: Path) -> list[ConfigFile]:
+        """The config files as they are on disk: each path once, the first declared winning.
+
+        Run from the home directory, a project file and a user file can be the
+        same file (``~/.claude/settings.json``, Codex's ``~/.codex/hooks.json``
+        with ``CODEX_HOME`` unset, ``~/.cursor/hooks.json``). Each spec lists its
+        user files first, so that file keeps its user-level rules: added
+        registrations use the user form and need ``--force``, and a user file
+        that is not inspected is not inspected under its project name either.
+        """
+        seen: set[str] = set()
+        distinct = []
+        for config in self.config_files:
+            key = os.path.realpath(config.path(home, project_dir))
+            if key not in seen:
+                seen.add(key)
+                distinct.append(config)
+        return distinct
+
     def config_paths(self, home: Path, project_dir: Path, *, inspected_only: bool = True) -> list[Path]:
         return [
-            c.path(home, project_dir) for c in self.config_files
+            c.path(home, project_dir) for c in self.distinct_config_files(home, project_dir)
             if c.inspected or not inspected_only
         ]
 

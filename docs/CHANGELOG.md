@@ -14,6 +14,22 @@ All notable changes to Palinode. Format follows [Keep a Changelog](https://keepa
 
 ### Security
 
+## [0.25.1] — 2026-11-25
+
+**Hooks from your home directory.** Patch release. On v0.25.0, `palinode hooks update` and `palinode doctor`, run from your home directory, treated `~/.claude/settings.json` as a project file. `hooks update` could register a SessionStart hook there that fails in any project without its own copy of palinode's session-start script. This release fixes that, and the entry below says how to check an install that was affected.
+
+### Added
+
+### Changed
+
+### Fixed
+
+- **`palinode hooks update` and `palinode doctor` no longer treat your user settings as a project file when run from your home directory.** From `$HOME`, `~/.claude/settings.json` is both the user-level file and the project's `.claude/settings.json`. v0.25.0 applied the project rules to it, which caused two problems. `hooks update` registered a hook a newer release added (SessionStart, for an install assembled by hand) without being asked. It also wrote that hook in the per-project form, `"${CLAUDE_PROJECT_DIR}"/.claude/hooks/…`, which fails in any project without its own `.claude/hooks/palinode-session-start.sh`. `palinode doctor` run from `$HOME` reported it as a failure and suggested that command. A file that is both a user and a project file now keeps its user-level rules. The missing hook is reported, and `--force` adds it in the documented user form, `~/.claude/hooks/…`. Codex's `~/.codex/hooks.json` (when `CODEX_HOME` is unset) keeps its user-level rules too: `hooks update` adds nothing to it, even with `--force`. `~/.cursor/hooks.json`, which `hooks update` and doctor skip, is no longer walked under its project name. **If you ran `palinode hooks update` from `$HOME` on v0.25.0,** check `~/.claude/settings.json` for a SessionStart entry using `${CLAUDE_PROJECT_DIR}`. Remove that entry, or restore the `settings.json.bak-*` backup the update left beside the file. Then, if you want the hook, run `palinode hooks update --force` from `$HOME` to add it in the user form.
+
+### Removed
+
+### Security
+
 ## [0.25.0] — 2026-11-22
 
 **Compatibility:** upgrade the palinode API before, or together with, the MCP servers and CLIs that use it. The API now chooses search's limit and threshold, so `palinode_search` and `palinode search` send them only when the caller sets them (a terminal `palinode search` still asks for its display count of 3). Against an API older than this release, a new MCP search therefore gets the API's general threshold (`search.api_threshold`, 0.5 out of the box) instead of the MCP floor (`search.mcp_threshold`, 0.4), and returns fewer results; and `search.abstain_on_no_confident_match` set only in the MCP client's config has no effect, so set it on the API. Older clients against this API are unaffected. Search defaults change: the OpenClaw plugin's `palinode_search` and `palinode search --format json` (or piped) return the server's default count, 15 out of the box, instead of 5 and 3; MCP's search schema advertises no defaults. `palinode hooks update` no longer overwrites a hook script that matches no palinode release, resets a registration timeout you changed, or rewrites a registration in a form palinode never wrote: it reports them, and `--force` changes the first two, keeping backups. It now also registers a hook a newer release added, with its script, in the files `palinode init` writes. Its `--format json` output adds `registrations_kept`, `fix_by_hand` and `notes`. The session-end hook shows as stale until refreshed, because its version stamp moves from 0.24.2 to 0.25.0. An automatic request's cwd or transcript path is now followed through a symlink and checked against path exclusions at its real location, where it was refused or left unscoped before; `/status` states the new rule. **Upgrading:** run `palinode hooks update`.
